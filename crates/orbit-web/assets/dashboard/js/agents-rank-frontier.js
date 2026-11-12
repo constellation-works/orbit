@@ -2,7 +2,9 @@
 // point is a ranked model's unsmoothed tier score (100 + 10 × z on that tier's
 // tasks) against its list-price cost per task there, on a log cost axis; this
 // module decides the frontier. A tier switch picks the tier and keeps the
-// reader's choice across polls. HTML uses `el()`, the chart inline SVG.
+// reader's choice across polls. HTML uses `el()`, the chart inline SVG. The SVG
+// is drawn 1:1 in CSS px at the panel's real width and redrawn when it
+// resizes, so its text stays the size of the dashboard text around it.
 
 import { el, pinnedInfoHint } from './common.js';
 import * as rankFormat from './agents-rank-format.js';
@@ -112,7 +114,7 @@ export function rankFrontierNode(payload, rows) {
 function chartCard(chart, minCoverage) {
   const label = rankFormat.tierLabel(chart.tier);
   const body = chart.plot.length
-    ? el("div", { class: "agents-rank-plot-wrap", role: "region", "aria-label": `${label} chart` }, [scatterPlot(chart)])
+    ? plotWrap(chart, label)
     : el("p", { class: "agents-rank-note", text: `No ranked model on ${label} has both a tier score and a recorded cost to plot.` });
   if (chart.plot.length) body.tabIndex = 0;
   return el("div", { class: "agents-rank-box agents-rank-chart" }, [
@@ -130,10 +132,57 @@ function chartCard(chart, minCoverage) {
 }
 
 const LOG_TICKS = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250];
+const MIN_PLOT_WIDTH = 560;
+const FALLBACK_PLOT_WIDTH = 760;
 
-function scatterPlot(chart) {
-  const width = 760;
-  const height = 460;
+// The scroll region holding the plot. The plot is drawn at the region's pixel
+// width, and drawn again whenever that width changes, so text never scales.
+function plotWrap(chart, label) {
+  const wrap = el("div", { class: "agents-rank-plot-wrap", role: "region", "aria-label": `${label} chart` });
+  let drawn = 0;
+  const draw = () => {
+    const available = Math.floor(wrap.clientWidth);
+    const width = Math.max(MIN_PLOT_WIDTH, available || FALLBACK_PLOT_WIDTH);
+    if (width === drawn) return;
+    drawn = width;
+    wrap.replaceChildren(scatterPlot(chart, width, wrap));
+  };
+  draw();
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(() => {
+      if (!wrap.isConnected) { observer.disconnect(); return; }
+      if (wrap.clientWidth > 0) draw();
+    });
+    observer.observe(wrap);
+  }
+  // First paint happens before the node is attached and measurable.
+  requestAnimationFrame(() => { if (wrap.isConnected && wrap.clientWidth > 0) draw(); });
+  return wrap;
+}
+
+const NAME_FONT = "500 12.5px";
+const CAPTION_FONT = "11.5px";
+const LABEL_HEIGHT = 30;
+const MARK_PAD = 12;
+
+let measureContext = null;
+// Rendered width of `text` in the dashboard font; an estimate without canvas.
+function textWidth(text, font, family) {
+  if (!measureContext && typeof document !== "undefined") {
+    const canvas = document.createElement("canvas");
+    measureContext = canvas.getContext ? canvas.getContext("2d") : null;
+  }
+  if (measureContext) {
+    measureContext.font = `${font} ${family}`;
+    return measureContext.measureText(text).width + 2;
+  }
+  const size = parseFloat(font.split(" ").pop());
+  return text.length * size * 0.58 + 2;
+}
+
+function scatterPlot(chart, width, host) {
+  const family = host && host.isConnected ? getComputedStyle(host).fontFamily : "sans-serif";
+  const height = Math.min(480, Math.max(400, Math.round(width * 0.55)));
   const left = 52;
   const right = 24;
   const top = 20;
@@ -156,10 +205,13 @@ function scatterPlot(chart) {
   const sortedFront = [...chart.front].sort((a, b) => a.cost_per_task - b.cost_per_task);
   const svg = svgEl("svg", {
     class: "agents-rank-plot",
+    width,
+    height,
     viewBox: `0 0 ${width} ${height}`,
     role: "img",
     "aria-label": `${rankFormat.tierLabel(chart.tier)} tier score against cost per task. Frontier: ${sortedFront.map((point) => point.model).join(", ") || "none"}.`,
   });
+  const fixed = [];
   for (let v = y0; v <= y1 + 1e-9; v += step) {
     const y = yOf(v);
     svg.append(svgEl("line", { class: "agents-rank-gridline", x1: left, y1: y, x2: width - right, y2: y }));
@@ -171,18 +223,22 @@ function scatterPlot(chart) {
     svg.append(svgEl("line", { class: "agents-rank-gridline", x1: x, y1: top, x2: x, y2: height - bottom }));
     svg.append(svgText(dollars(tick), { class: "agents-rank-tick", x, y: height - bottom + 16, "text-anchor": "middle" }));
   }
+  const cornerText = "↖ HIGHER SCORE, LOWER COST";
   svg.append(
     svgEl("line", { class: "agents-rank-axisline", x1: left, y1: top, x2: left, y2: height - bottom }),
     svgEl("line", { class: "agents-rank-axisline", x1: left, y1: height - bottom, x2: width - right, y2: height - bottom }),
     svgText("cost per task", { class: "agents-rank-axis-title", x: left + plotW / 2, y: height - 8, "text-anchor": "middle" }),
     svgText("tier score", { class: "agents-rank-axis-title", x: 14, y: top + plotH / 2, "text-anchor": "middle", transform: `rotate(-90 14 ${top + plotH / 2})` }),
-    svgText("↖ HIGHER SCORE, LOWER COST", { class: "agents-rank-corner", x: left + 10, y: top + 14 }),
+    svgText(cornerText, { class: "agents-rank-corner", x: left + 10, y: top + 14 }),
   );
+  fixed.push({ x0: left + 10, x1: left + 10 + textWidth(cornerText, "11px", family) * 1.1, y0: top + 2, y1: top + 18 });
   if (100 >= y0 && 100 <= y1) {
+    const fleetW = textWidth("fleet = 100", "11.5px", family);
     svg.append(
       svgEl("line", { class: "agents-rank-fleet", x1: left, y1: yOf(100), x2: width - right, y2: yOf(100) }),
       svgText("fleet = 100", { class: "agents-rank-tick", x: width - right - 6, y: yOf(100) - 6, "text-anchor": "end" }),
     );
+    fixed.push({ x0: width - right - 6 - fleetW, x1: width - right - 6, y0: yOf(100) - 19, y1: yOf(100) - 3 });
   }
   if (sortedFront.length >= 2) {
     svg.append(svgEl("polyline", {
@@ -190,8 +246,20 @@ function scatterPlot(chart) {
       points: sortedFront.map((point) => `${xOf(point.cost_per_task).toFixed(1)},${yOf(point.score).toFixed(1)}`).join(" "),
     }));
   }
-  const labels = placeLabels(chart.plot.map((point) => ({ point, x: xOf(point.cost_per_task), y: yOf(point.score) })), left + plotW * 0.68, top, height - bottom);
-  for (const { point, x, y, ly, flip } of labels) {
+  const items = chart.plot.map((point) => {
+    const caption = `${rankFormat.num(point.score, 1)} · ${dollars(point.cost_per_task, true)} · ${point.tasks || 0} tasks${point.underpriced ? ` · ${rankFormat.num((point.cost_coverage || 0) * 100, 0)}% priced` : ""}`;
+    const name = point.model || "—";
+    return {
+      point,
+      caption,
+      name,
+      x: xOf(point.cost_per_task),
+      y: yOf(point.score),
+      w: Math.max(textWidth(name, NAME_FONT, family), textWidth(caption, CAPTION_FONT, family)),
+    };
+  });
+  const labels = placeLabels(items, { left: left + 4, right: width - 4, top: top + 15, bottom: height - bottom - 15, fixed });
+  for (const { point, name, caption, x, y, ly, flip } of labels) {
     const group = svgEl("g", {
       class: `agents-rank-point${point.frontier ? " is-frontier" : ""}${point.underpriced ? " is-underpriced" : ""}`,
       "data-model": point.model || "",
@@ -200,32 +268,60 @@ function scatterPlot(chart) {
     const title = svgEl("title", {});
     title.textContent = `${point.model}: tier score ${rankFormat.num(point.score, 1)}, ${dollars(point.cost_per_task, true)} per task, ${rankFormat.plural(point.tasks || 0, "task")}, ${rankFormat.num((point.cost_coverage || 0) * 100, 0)}% priced${point.frontier ? ", frontier" : ""}`;
     group.append(title, svgEl("circle", { class: "agents-rank-mark", cx: x.toFixed(1), cy: y.toFixed(1), r: point.frontier ? 7 : 5.5 }));
-    const tx = flip ? x - 12 : x + 12;
+    const tx = flip ? x - MARK_PAD : x + MARK_PAD;
     const anchor = flip ? "end" : "start";
     if (Math.abs(ly - y) > 4) group.append(svgEl("line", { class: "agents-rank-leader", x1: x, y1: y, x2: tx - (flip ? -4 : 4), y2: ly - 4 }));
     group.append(
-      svgText(point.model || "—", { class: "agents-rank-point-name", x: tx, y: ly - 3, "text-anchor": anchor }),
-      svgText(`${rankFormat.num(point.score, 1)} · ${dollars(point.cost_per_task, true)} · ${point.tasks || 0} tasks${point.underpriced ? ` · ${rankFormat.num((point.cost_coverage || 0) * 100, 0)}% priced` : ""}`,
-        { class: "agents-rank-point-caption", x: tx, y: ly + 11, "text-anchor": anchor }),
+      svgText(name, { class: "agents-rank-point-name", x: tx, y: ly - 3, "text-anchor": anchor }),
+      svgText(caption, { class: "agents-rank-point-caption", x: tx, y: ly + 11, "text-anchor": anchor }),
     );
     svg.append(group);
   }
   return svg;
 }
 
-// Labels sit right of their point, or left past `flipAt`, and are pushed
-// apart vertically so two never overlap on the same side.
-function placeLabels(items, flipAt, top, bottom) {
-  const gap = 30;
-  const placed = items.map((item) => ({ ...item, flip: item.x > flipAt, ly: item.y }));
-  for (const side of [false, true]) {
-    const group = placed.filter((item) => item.flip === side).sort((a, b) => a.y - b.y);
-    for (let i = 1; i < group.length; i += 1) {
-      const prev = group[i - 1];
-      if (Math.abs(group[i].x - prev.x) < 200 && group[i].ly - prev.ly < gap) group[i].ly = prev.ly + gap;
+const overlaps = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+
+// Each label sits beside its point, on whichever side holds its whole text
+// inside the plot, and slides vertically to the nearest slot free of the other
+// labels, every mark and the fixed hints. `area` bounds the label centres.
+function placeLabels(items, area) {
+  const half = LABEL_HEIGHT / 2;
+  const marks = items.map((item) => ({ x0: item.x - 9, x1: item.x + 9, y0: item.y - 9, y1: item.y + 9 }));
+  const obstacles = [...area.fixed];
+  const placed = [];
+  // Top to bottom, so each label slides away from those already placed.
+  const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const item of order) {
+    const index = items.indexOf(item);
+    const others = [...obstacles, ...marks.filter((_, i) => i !== index)];
+    let best = null;
+    for (const flip of [false, true]) {
+      const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
+      const x1 = x0 + item.w;
+      // Past the plot edge costs more than any vertical slide could.
+      const clip = Math.max(0, area.left - x0) + Math.max(0, x1 - area.right);
+      for (let offset = 0; offset <= 240; offset += 3) {
+        let found = null;
+        for (const sign of offset === 0 ? [1] : [1, -1]) {
+          const ly = item.y + sign * offset;
+          if (ly < area.top || ly > area.bottom) continue;
+          const box = { x0, x1, y0: ly - half - 1, y1: ly + half + 1 };
+          if (others.some((other) => overlaps(box, other))) continue;
+          found = { flip, ly, box, cost: offset + clip * 10 };
+          break;
+        }
+        if (found) { if (!best || found.cost < best.cost) best = found; break; }
+      }
     }
-    const overflow = group.length ? group[group.length - 1].ly - (bottom - 14) : 0;
-    if (overflow > 0) for (const item of group) item.ly = Math.max(top + 10, item.ly - overflow);
+    if (!best) {
+      // No free slot: keep the point's own height on the roomier side.
+      const flip = item.x > (area.left + area.right) / 2;
+      const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
+      best = { flip, ly: Math.min(area.bottom, Math.max(area.top, item.y)), box: { x0, x1: x0 + item.w, y0: item.y - half, y1: item.y + half } };
+    }
+    obstacles.push(best.box);
+    placed.push({ ...item, flip: best.flip, ly: best.ly });
   }
   return placed;
 }
