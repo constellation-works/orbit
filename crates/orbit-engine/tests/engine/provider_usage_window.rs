@@ -111,6 +111,7 @@ fn dispatch_with_prelude_and_launcher(
         agent_env,
         DispatchOptions {
             stderr: "",
+            exit_code: 0,
             prelude,
             launcher,
             conversation_ref,
@@ -120,6 +121,7 @@ fn dispatch_with_prelude_and_launcher(
 
 struct DispatchOptions<'a> {
     stderr: &'a str,
+    exit_code: i32,
     prelude: &'a str,
     launcher: Option<(&'a str, &'a [String])>,
     conversation_ref: Option<&'a str>,
@@ -139,6 +141,7 @@ fn dispatch_with_streams(
         agent_env,
         DispatchOptions {
             stderr,
+            exit_code: 0,
             prelude: "",
             launcher: None,
             conversation_ref: None,
@@ -153,8 +156,14 @@ fn dispatch_with_options(
     agent_env: &[(&str, &Path)],
     options: DispatchOptions<'_>,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
-    let fake =
-        FakeProvider::with_usage_command(binary, stdout, options.stderr, 0, "", options.prelude);
+    let fake = FakeProvider::with_usage_command(
+        binary,
+        stdout,
+        options.stderr,
+        options.exit_code,
+        "",
+        options.prelude,
+    );
     let audit = tempfile::tempdir().unwrap();
     let mut host = CapacityHost::new(&fake.path, audit.path());
     host.agent_env = agent_env
@@ -1268,6 +1277,71 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
     );
 }
 
+/// One Claude terminal result that carries `envelope` as its `result` text,
+/// the shape a finished turn prints.
+fn claude_result_frame(envelope: &str) -> String {
+    json!({
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "stop_reason": "end_turn",
+        "terminal_reason": "completed",
+        "total_cost_usd": 0.25,
+        "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 100,
+            "output_tokens": 42
+        },
+        "result": envelope
+    })
+    .to_string()
+}
+
+// [ORB-24216] A well-formed `status: failed` envelope that exits 0 fails exit
+// alignment, yet the invocation spent its tokens. The step stays a protocol
+// violation, and the dispatch outcome still carries the reported usage.
+fn a_failed_envelope_that_exits_zero_keeps_its_invocation_usage() {
+    let envelope = r#"{"schemaVersion":1,"status":"failed","result":null,"error":{"code":"TASK_BLOCKED","message":"cannot proceed"}}"#;
+    let (outcome, _) = dispatch(
+        "claude",
+        Provider::Claude,
+        &claude_result_frame(envelope),
+        &[],
+    );
+    assert!(
+        !outcome.success,
+        "exit 0 with a failed envelope stays a protocol violation: {outcome:?}"
+    );
+    let trace = invocation_trace(&outcome);
+    assert_eq!(trace.usage.input, 3);
+    assert_eq!(trace.usage.output, 42);
+}
+
+// [ORB-24216] The telemetry fallback is not a verdict: a success envelope under
+// a non-zero exit stays rejected, and the usage it spent is still recorded.
+fn a_success_envelope_under_a_nonzero_exit_stays_rejected_with_its_usage() {
+    let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+    let (outcome, _) = dispatch_with_options(
+        "claude",
+        Provider::Claude,
+        &claude_result_frame(envelope),
+        &[],
+        DispatchOptions {
+            stderr: "",
+            exit_code: 1,
+            prelude: "",
+            launcher: None,
+            conversation_ref: None,
+        },
+    );
+    assert!(
+        !outcome.success,
+        "a non-zero exit cannot report status=success: {outcome:?}"
+    );
+    assert_eq!(invocation_trace(&outcome).usage.output, 42);
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn usage_window_contracts_1() {
@@ -1312,6 +1386,14 @@ fn usage_window_contracts_1() {
             (
                 "a_claude_rate_limit_event_marks_rejected_and_overage_windows",
                 a_claude_rate_limit_event_marks_rejected_and_overage_windows,
+            ),
+            (
+                "a_failed_envelope_that_exits_zero_keeps_its_invocation_usage",
+                a_failed_envelope_that_exits_zero_keeps_its_invocation_usage,
+            ),
+            (
+                "a_success_envelope_under_a_nonzero_exit_stays_rejected_with_its_usage",
+                a_success_envelope_under_a_nonzero_exit_stays_rejected_with_its_usage,
             ),
         ]);
     });
