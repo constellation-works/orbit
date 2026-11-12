@@ -1,7 +1,8 @@
 // Browser regressions for ui.pill-consistency. Fixture pages use inline CSS so
 // the assertions do not depend on dashboard styling; one case loads the shipped
-// dashboard CSS with the task row's triaging and repairing pills and only
-// records what the rule reports. Needs the browser kit (PLAYWRIGHT_MODULE).
+// dashboard CSS with the task row's triaging and repairing pills (the classes
+// task-readiness.js emits) and asserts the rule measures all four. Needs the
+// browser kit (PLAYWRIGHT_MODULE).
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
