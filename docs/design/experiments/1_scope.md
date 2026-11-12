@@ -271,9 +271,10 @@ truncated invocation leaves a complete first invocation's first edit measured
 ([ORB-20590]).
 
 `first_pass_acceptance` and `review_repairs` are review-derived: they read a
-task's review gate settlement comments. `review_repairs` counts a task's
-`accept_with_fixes` settlements, and that count (zero included) is measured
-only for a task with at least one settlement; a terminal task with no review
+task's typed review gate settlements in its history, decoding settlement
+comments only for records written before that event. `review_repairs` counts
+a task's `accept_with_fixes` settlements, and that count (zero included) is
+measured only for a task with at least one settlement; a terminal task with no review
 gate settlement is `unmeasured` for `review_repairs`, not a measured zero,
 because no review happened. A non-terminal task stays open.
 
