@@ -47,7 +47,9 @@ pub struct TaskFacts {
 }
 
 /// The `board` aggregates. A count left `None` could not be read and makes
-/// any expression that reads it unknown.
+/// any expression that reads it unknown, `has()` included. That is not
+/// absence: a missing optional `self` or step field is absence, and `has()`
+/// of it is false.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BoardFacts {
     pub by_status: BTreeMap<String, i64>,
@@ -133,7 +135,8 @@ pub struct ResultFacts {
 pub struct JobWaitFacts {
     pub now: DateTime<Utc>,
     pub board: BoardFacts,
-    /// `board.empty`; `None` when a count it needs could not be read.
+    /// `board.empty`; `None` when a count it needs could not be read, which
+    /// makes a read of `board.empty`, `has()` included, unknown.
     pub board_empty: Option<bool>,
     pub tasks: BTreeMap<String, TaskFacts>,
     pub job_started_at: DateTime<Utc>,
@@ -257,7 +260,7 @@ impl ConditionEvaluator {
                     .map(|(name, history)| (name.clone(), accepted_history_value(history))),
             ),
         );
-        let mut unavailable = Vec::new();
+        let mut unavailable = unread_board_aggregates(&facts.board);
         if let Some(why) = &facts.self_facts.last_succeeded_unreadable {
             unavailable.push((SELF_LAST_SUCCEEDED.to_string(), why.clone()));
         }
@@ -325,9 +328,16 @@ impl ConditionEvaluator {
         if let Some(result) = &facts.result {
             context.add_variable_from_value("result", result_value(result));
         }
+        let mut unavailable = unread_board_aggregates(&facts.board);
+        if facts.board_empty.is_none() {
+            unavailable.push((
+                "board.empty".to_string(),
+                UNREAD_BOARD_AGGREGATE.to_string(),
+            ));
+        }
         Self {
             context,
-            unavailable: Vec::new(),
+            unavailable,
         }
     }
 
@@ -377,6 +387,31 @@ impl ConditionEvaluator {
 
 /// The definition's own accepted-result history, as `self` reads it.
 const SELF_LAST_SUCCEEDED: &str = "self.last_succeeded_at";
+
+/// Why a board aggregate left `None` could not be read. The concrete store
+/// error stays on the gatherer's unavailable notes; this is the evaluator's
+/// reason, shared by conditions, guards, explain and job waits.
+const UNREAD_BOARD_AGGREGATE: &str = "could not be read";
+
+/// Board aggregates a `None` count leaves unread. The field stays out of the
+/// bound map, and the path is unavailable so `has()` is unknown rather than
+/// false. Optional self, job and step fields are not aggregates: a missing
+/// one is absence, and `has()` of it is false.
+fn unread_board_aggregates(board: &BoardFacts) -> Vec<(String, String)> {
+    [
+        ("board.eligible", board.eligible.is_none()),
+        ("board.backlog", board.backlog.is_none()),
+        ("board.in_progress", board.in_progress.is_none()),
+        ("board.blocked", board.blocked.is_none()),
+        ("board.review", board.review.is_none()),
+        ("board.open_runs", board.open_runs.is_none()),
+        ("board.drain_running", board.drain_running.is_none()),
+    ]
+    .into_iter()
+    .filter(|(_, unread)| *unread)
+    .map(|(path, _)| (path.to_string(), UNREAD_BOARD_AGGREGATE.to_string()))
+    .collect()
+}
 
 /// The read path of one named auto-task's history, as [`path_of`] spells it.
 fn auto_task_history_path(name: &str) -> String {
