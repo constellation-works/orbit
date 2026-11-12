@@ -251,7 +251,25 @@ fn recorded_main_effort(
     launches: &AgentLaunchFacts,
     unit: MainInvocationUnit<'_>,
 ) -> (RecordedEffort, EffortSource) {
-    let unrecorded = || (Some(EFFORT_UNKNOWN.to_string()), EffortSource::Unrecorded);
+    let (effort, _, source) = recorded_main_identity(invocations, launches, unit);
+    (effort, source)
+}
+
+/// [`recorded_main_effort`] with the model of the record that decided it:
+/// the main invocation's model, else the launch record's. `None` when no
+/// record decided the effort.
+fn recorded_main_identity(
+    invocations: &AgentInvocationFacts,
+    launches: &AgentLaunchFacts,
+    unit: MainInvocationUnit<'_>,
+) -> (RecordedEffort, Option<String>, EffortSource) {
+    let unrecorded = || {
+        (
+            Some(EFFORT_UNKNOWN.to_string()),
+            None,
+            EffortSource::Unrecorded,
+        )
+    };
     let MainInvocationUnit {
         run_id: Some(run_id),
         activity,
@@ -299,7 +317,7 @@ fn recorded_main_effort(
     }) {
         return match effort_of_invocation(main) {
             effort if effort.as_deref() == Some(EFFORT_UNKNOWN) => unrecorded(),
-            effort => (effort, EffortSource::Invocation),
+            effort => (effort, main.model.clone(), EffortSource::Invocation),
         };
     }
     // No completed invocation of this unit's run matched: the agent may
@@ -329,6 +347,7 @@ fn recorded_main_effort(
                     .identity
                     .reasoning_effort
                     .map(|effort| effort.to_string()),
+                record.model.clone(),
                 EffortSource::LaunchRecord,
             )
         })
@@ -347,6 +366,17 @@ impl crate::OrbitRuntime {
         &self,
         run: &orbit_types::workflow::JobRun,
     ) -> Option<RecordedEffort> {
+        self.leaf_reported_identity(run).map(|(effort, _)| effort)
+    }
+
+    /// [`Self::leaf_reported_effort`] with the model of the same record (the
+    /// main implementing invocation, else the launch record), when that
+    /// record names one [ORB-24150]. Never derived from a crew name or
+    /// configuration.
+    pub(crate) fn leaf_reported_identity(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<(RecordedEffort, Option<String>)> {
         let store = self.sqlite_store().ok()?;
         let workspace_id = self.stores().jobs().workspace_id().to_string();
         let since = Some(run.created_at);
@@ -372,7 +402,7 @@ impl crate::OrbitRuntime {
                 Vec::new()
             });
         let run_id = run.run_id.to_string();
-        let (effort, _) = recorded_main_effort(
+        let (effort, model, _) = recorded_main_identity(
             &invocations.into(),
             &launches.into(),
             MainInvocationUnit {
@@ -387,6 +417,7 @@ impl crate::OrbitRuntime {
                 crew: None,
             },
         );
-        (effort.as_deref() != Some(EFFORT_UNKNOWN)).then_some(effort)
+        let model = model.filter(|model| !model.trim().is_empty());
+        (effort.as_deref() != Some(EFFORT_UNKNOWN)).then_some((effort, model))
     }
 }

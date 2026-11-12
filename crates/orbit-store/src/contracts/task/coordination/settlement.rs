@@ -541,6 +541,16 @@ pub struct ClaimInspection {
     /// lifecycle state a mutation rewrites.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_run_evidence: Option<LeafRunEvidence>,
+    /// The follower's late effort report for this claim, projected from its
+    /// immutable row. A settlement record holding no effort is filled from
+    /// it; a claim that settled before the owner kept settlement records
+    /// has only this [ORB-24150]. Never part of the lifecycle state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_leaf_effort: Option<LateLeafEffort>,
+    /// The follower's late report of the leaf's implementing model,
+    /// projected from its immutable row like [`Self::late_leaf_effort`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_leaf_model: Option<LateLeafModel>,
 }
 
 /// What a claimed leaf's task-context prompt carried, as the leaf records it
@@ -654,6 +664,54 @@ impl LateLeafEffort {
             && self.run_id == other.run_id
             && self.reasoning_effort == other.reasoning_effort
     }
+}
+
+/// A follower's late report of the model a leaf it already settled ran its
+/// implementing agent on [ORB-24150], read from the follower's own records
+/// by the rule that reads the effort (the leaf's main implementing
+/// invocation, else its latest matching launch record), never from a crew
+/// name or configuration. Kept in its own immutable row beside the claim;
+/// a claim inspection fills an absent [`ClaimSettlementRecord::crew_model`]
+/// from it. Attribution only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafModel {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    pub crew_model: String,
+    pub recorded_at: String,
+}
+
+impl LateLeafModel {
+    /// Whether `other` reports the same model for the same leaf.
+    #[must_use]
+    pub fn same_fact(&self, other: &Self) -> bool {
+        self.machine_id == other.machine_id
+            && self.run_id == other.run_id
+            && self.crew_model == other.crew_model
+    }
+}
+
+/// What recording a late model report for a settled claim did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LateLeafModelWrite {
+    /// The report was recorded.
+    Recorded,
+    /// The claim already holds this model; nothing was written.
+    Replayed,
+    /// The claim already holds a different model, which stands. `held` is
+    /// that model.
+    Conflict { held: String },
+}
+
+/// What a late report for a settled claim did: its effort and, when it
+/// carried one, its model. A conflict on either writes neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LateLeafReportWrite {
+    pub effort: LateLeafEffortWrite,
+    pub model: Option<LateLeafModelWrite>,
 }
 
 /// What recording a late effort report for a settled claim did.

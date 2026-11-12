@@ -1,15 +1,17 @@
 //! A follower's late report of the reasoning effort a leaf it already
-//! settled ran at [ORB-24115].
+//! settled ran at [ORB-24115], and of its implementing model [ORB-24150].
 //!
-//! A follower that settled before it reported effort (ORB-23825) holds the
-//! leaf's implementing invocation and its dispatch identity; this owner holds
-//! only the settlement. The follower reads the effort from its own records,
-//! by the rule it reports at settlement, and sends it here. The owner keeps
-//! it beside the claim and its claim inspection fills the settlement's absent
-//! effort from it, so the scorecards count it like a reported settlement.
+//! A follower that settled before it reported effort (ORB-23825) or model
+//! holds the leaf's implementing invocation and its dispatch identity; this
+//! owner holds only the settlement, or nothing at all for a claim that
+//! settled before the owner kept settlement records. The follower reads the
+//! effort and model from its own records, by the rule it reports at
+//! settlement, and sends them here. The owner keeps each beside the claim and
+//! its claim inspection fills the settlement's absent effort and model from
+//! them, so the scorecards count them like a reported settlement.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::LateLeafEffortWrite;
+use orbit_store::contracts::{LateLeafEffortWrite, LateLeafModelWrite};
 use orbit_types::tool::ToolSessionContext;
 use serde::Serialize;
 
@@ -24,21 +26,31 @@ pub struct LateEffortReportResult {
     pub claim_id: String,
     /// `recorded`, or `replayed` when the claim already held this effort.
     pub outcome: &'static str,
+    /// The same for the model, when the report carried one. A follower
+    /// reads its absence as an owner that predates the model report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_outcome: Option<&'static str>,
 }
+
+/// The longest model name a late report may carry.
+const MODEL_NAME_LIMIT: usize = 200;
 
 impl OrbitRuntime {
     /// Record `effort` (`None` for the provider default) as the effort the
-    /// settled claim `claim_id`'s leaf `run_id` ran at, reported by the
-    /// session's machine. Refused unless that machine ran the claim and bound
-    /// `run_id` to it, and refused as `effort_conflict` when the claim already
-    /// holds a different effort, which stands. Attribution only: no claim,
-    /// task, run or settlement outcome changes.
+    /// settled claim `claim_id`'s leaf `run_id` ran at and, when given,
+    /// `model` as its implementing model, reported by the session's machine.
+    /// Refused unless that machine ran the claim and bound `run_id` to it,
+    /// and refused as `effort_conflict` or `model_conflict` when the claim
+    /// already holds a different value, which stands; a refusal records
+    /// neither. Attribution only: no claim, task, run or settlement outcome
+    /// changes.
     pub fn serve_claim_effort(
         &self,
         session: &ToolSessionContext,
         claim_id: &str,
         run_id: &str,
         effort: Option<String>,
+        model: Option<String>,
     ) -> Result<LateEffortReportResult, OrbitError> {
         ensure_distributed_mutation_available("orbit.drain.claim.effort")?;
         self.ensure_distributed_owner_workspace()?;
@@ -53,14 +65,26 @@ impl OrbitRuntime {
                  xhigh, max or provider_default"
             )));
         }
+        let model = model
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty());
+        if model
+            .as_deref()
+            .is_some_and(|model| model.len() > MODEL_NAME_LIMIT)
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "`crew_model` is longer than {MODEL_NAME_LIMIT} bytes"
+            )));
+        }
         let claim = self.current_claim(claim_id)?;
-        let write = self.stores().tasks().record_late_leaf_effort(
+        let write = self.stores().tasks().record_late_leaf_report(
             &claim.claim_id,
             &machine,
             run_id.trim(),
             effort.clone(),
+            model.clone(),
         )?;
-        let outcome = match write {
+        let outcome = match write.effort {
             LateLeafEffortWrite::Recorded => "recorded",
             LateLeafEffortWrite::Replayed => "replayed",
             LateLeafEffortWrite::Conflict { held } => {
@@ -79,9 +103,27 @@ impl OrbitRuntime {
                 )));
             }
         };
+        if let Some(LateLeafModelWrite::Conflict { held }) = &write.model {
+            tracing::warn!(
+                claim_id = %claim.claim_id,
+                reported = model.as_deref().unwrap_or_default(),
+                %held,
+                "late model report refused: the claim already holds another model"
+            );
+            return Err(refusal::refused(format!(
+                "model_conflict: the claim already holds model {held}; the report of {} is \
+                 refused and the held model stands",
+                model.as_deref().unwrap_or_default()
+            )));
+        }
+        let model_outcome = write.model.map(|write| match write {
+            LateLeafModelWrite::Recorded => "recorded",
+            _ => "replayed",
+        });
         Ok(LateEffortReportResult {
             claim_id: claim.claim_id,
             outcome,
+            model_outcome,
         })
     }
 }

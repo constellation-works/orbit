@@ -26,7 +26,7 @@ Options:
           Apply pending migrations, then record the reasoning effort each agent invocation without a recorded dispatch identity was launched with, read from its audited launch command, so agent scorecards stop showing it as effort unknown. Invocations whose launch cannot be matched, or whose matching launches disagree, stay unknown; running it again changes nothing
 
       --backfill-claimed-effort
-          On a pull follower: apply pending migrations, then report to the owner the reasoning effort of each claimed leaf this host settled, read from this host's own records, so the owner's agent scorecards stop showing those attempts as effort unknown. Run --backfill-dispatch-effort here first when this host's invocations predate dispatch identity. The owner never overwrites an effort it holds; running it again records nothing new
+          On a pull follower: apply pending migrations, then report to the owner the reasoning effort and implementing model of each claimed leaf this host settled, read from this host's own records, so the owner's agent scorecards stop showing those attempts as effort unknown or model unknown. Run --backfill-dispatch-effort here first when this host's invocations predate dispatch identity. The owner never overwrites an effort or model it holds; running it again records nothing new
 
       --adopt-authority <PATH>
           Record the generation authority this command runs under (its home directory, --root or ORBIT_ROOT; PATH must name it) as the one protecting a workspace that has recorded none. Stop every orbit process using the workspace first; nothing is migrated

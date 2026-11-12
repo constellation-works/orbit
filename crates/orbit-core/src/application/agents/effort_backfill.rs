@@ -1,7 +1,8 @@
 //! The operator's one-shot effort backfills, never run on open: the dispatch
 //! effort of invocations that completed before Orbit recorded a dispatch
-//! identity, and a follower's late report to its owner of the effort of
-//! leaves it settled before followers reported effort [ORB-24115].
+//! identity, and a follower's late report to its owner of the effort
+//! [ORB-24115] and implementing model [ORB-24150] of leaves it settled
+//! before followers reported them.
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{LocalPullPhase, PROVIDER_DEFAULT_REPORTED_EFFORT};
@@ -42,8 +43,8 @@ pub enum ClaimedEffortOutcome {
     Recorded,
     /// The owner already held this effort; nothing changed.
     Replayed,
-    /// The owner holds a different effort for the claim, which stands; the
-    /// report was refused.
+    /// The owner holds a different effort or model for the claim, which
+    /// stands; the report was refused.
     Conflict,
     /// This host holds no matching implementing invocation or launch record
     /// of the leaf, so nothing was sent and the attempt stays effort unknown.
@@ -68,6 +69,13 @@ pub struct ClaimedEffortRow {
     /// The effort sent (`provider_default` for the provider's default), when
     /// this host knew one.
     pub reasoning_effort: Option<String>,
+    /// The implementing model sent with it, when this host's record of the
+    /// same invocation or launch names one.
+    pub crew_model: Option<String>,
+    /// What the owner did with the model: `recorded`, `replayed`, or
+    /// `owner_unsupported` when its build predates the model report and
+    /// ignored it. Absent when no model was sent or the report was refused.
+    pub model_outcome: Option<&'static str>,
     pub outcome: ClaimedEffortOutcome,
     /// Why, for every outcome but `recorded` and `replayed`.
     pub detail: Option<String>,
@@ -87,6 +95,12 @@ pub struct ClaimedEffortBackfill {
     pub owner_unsupported: usize,
     pub refused: usize,
     pub owner_unreachable: usize,
+    /// Reports whose model the owner recorded.
+    pub models_recorded: usize,
+    /// Reports whose model the owner already held.
+    pub models_replayed: usize,
+    /// Reports whose model an owner that predates the model report ignored.
+    pub models_owner_unsupported: usize,
     pub rows: Vec<ClaimedEffortRow>,
 }
 
@@ -103,6 +117,12 @@ impl ClaimedEffortBackfill {
             ClaimedEffortOutcome::OwnerUnreachable => &mut self.owner_unreachable,
         };
         *count += 1;
+        match row.model_outcome {
+            Some("recorded") => self.models_recorded += 1,
+            Some("replayed") => self.models_replayed += 1,
+            Some(_) => self.models_owner_unsupported += 1,
+            None => {}
+        }
         self.examined += 1;
         self.rows.push(row);
     }
@@ -120,13 +140,16 @@ const UNKNOWN_DRAIN_OPERATION_REFUSAL: &str = "unknown internal drain operation"
 
 impl OrbitRuntime {
     /// Report to each owner the reasoning effort of every leaf this follower
-    /// settled for it, read from this host's own records by the rule a
-    /// settlement reports (the leaf's main implementing invocation, else its
-    /// latest matching launch record), so the owner's scorecards count an
-    /// attempt settled before followers reported effort under that effort.
-    /// The owner records a report only for a claim this machine ran, and
-    /// never overwrites an effort it holds: the same effort replays, a
-    /// different one is refused and counted as a conflict. A leaf this host
+    /// settled for it, and the implementing model of the same record, read
+    /// from this host's own records by the rule a settlement reports (the
+    /// leaf's main implementing invocation, else its latest matching launch
+    /// record), so the owner's scorecards count an attempt settled before
+    /// followers reported them under that effort and model. The owner
+    /// records a report only for a claim this machine ran, and never
+    /// overwrites an effort or model it holds: the same value replays, a
+    /// different one is refused and counted as a conflict. An owner that
+    /// predates the model report records the effort and ignores the model,
+    /// which is counted. A leaf this host
     /// holds no matching record of is counted and nothing is sent. Changes
     /// nothing on this host; running it again records nothing new.
     pub fn backfill_claimed_leaf_effort(&self) -> Result<ClaimedEffortBackfill, OrbitError> {
@@ -159,6 +182,8 @@ impl OrbitRuntime {
                 claim_id: claim.claim_id.clone(),
                 leaf_run_id: admission.leaf_run_id.clone(),
                 reasoning_effort: None,
+                crew_model: None,
+                model_outcome: None,
                 outcome: ClaimedEffortOutcome::NoLeafRun,
                 detail: None,
             };
@@ -175,7 +200,7 @@ impl OrbitRuntime {
                 report.push(row);
                 continue;
             };
-            let Some(effort) = self.leaf_reported_effort(&leaf) else {
+            let Some((effort, model)) = self.leaf_reported_identity(&leaf) else {
                 row.outcome = ClaimedEffortOutcome::EffortUnknown;
                 row.detail = Some(
                     "this host holds no implementing invocation or launch record of the leaf \
@@ -187,6 +212,7 @@ impl OrbitRuntime {
             };
             let name = effort.unwrap_or_else(|| PROVIDER_DEFAULT_REPORTED_EFFORT.to_string());
             row.reasoning_effort = Some(name.clone());
+            row.crew_model.clone_from(&model);
             let selector = &admission.destination.selector;
             if unreachable.contains(selector) {
                 row.outcome = ClaimedEffortOutcome::OwnerUnreachable;
@@ -194,17 +220,27 @@ impl OrbitRuntime {
                 report.push(row);
                 continue;
             }
+            let mut input = json!({
+                "claim_id": claim.claim_id,
+                "run_id": leaf.run_id,
+                "reasoning_effort": name,
+            });
+            if let Some(model) = &model {
+                // An owner that predates the model report ignores the field
+                // and still records the effort.
+                input["crew_model"] = json!(model);
+            }
             let answer = transport
-                .call(
-                    selector,
-                    CLAIM_EFFORT_TOOL,
-                    json!({
-                        "claim_id": claim.claim_id,
-                        "run_id": leaf.run_id,
-                        "reasoning_effort": name,
-                    }),
-                )
+                .call(selector, CLAIM_EFFORT_TOOL, input)
                 .map_err(crate::application::distributed::owner_protocol_error);
+            if let (Ok(answer), Some(_)) = (&answer, &model) {
+                row.model_outcome =
+                    Some(match answer.get("model_outcome").and_then(Value::as_str) {
+                        Some("recorded") => "recorded",
+                        Some("replayed") => "replayed",
+                        _ => "owner_unsupported",
+                    });
+            }
             (row.outcome, row.detail) = match answer {
                 Ok(answer) if answer.get("outcome").and_then(Value::as_str) == Some("replayed") => {
                     (ClaimedEffortOutcome::Replayed, None)
@@ -243,7 +279,7 @@ fn refused_outcome(error: &OrbitError) -> ClaimedEffortOutcome {
         )
     {
         ClaimedEffortOutcome::OwnerUnsupported
-    } else if message.contains("effort_conflict") {
+    } else if message.contains("effort_conflict") || message.contains("model_conflict") {
         ClaimedEffortOutcome::Conflict
     } else if crate::application::distributed::is_owner_transport_failure(error) {
         ClaimedEffortOutcome::OwnerUnreachable

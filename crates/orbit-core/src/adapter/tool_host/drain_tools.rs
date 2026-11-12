@@ -172,7 +172,7 @@ fn claim_settle(
 }
 
 /// `orbit.drain.claim.effort`: a follower's late report of a settled leaf's
-/// effort [ORB-24115].
+/// effort [ORB-24115] and model [ORB-24150].
 fn claim_effort(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
@@ -184,7 +184,11 @@ fn claim_effort(
     let effort = reported_effort(input).ok_or_else(|| {
         OrbitError::InvalidInput("`reasoning_effort` is required and must not be empty".into())
     })?;
-    let result = runtime.serve_claim_effort(session, &claim_id, &run_id, effort)?;
+    let model = input
+        .get("crew_model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let result = runtime.serve_claim_effort(session, &claim_id, &run_id, effort, model)?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 

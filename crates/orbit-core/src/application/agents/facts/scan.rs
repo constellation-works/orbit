@@ -49,9 +49,9 @@ pub(in crate::application::agents) fn scan(
 
     let mut runs = implementation_runs(runtime, horizon);
     let run_costs = run_costs(runtime, horizon, computed_at);
-    let leaves = runtime.settled_leaves(false).unwrap_or_else(|error| {
+    let (leaves, late_claims) = runtime.scorecard_claims().unwrap_or_else(|error| {
         tracing::warn!(%error, "agent scorecards: claim settlements unreadable");
-        Vec::new()
+        (Vec::new(), Vec::new())
     });
     let settlements = failed_claim_settlements_of(&leaves);
     let pulled: HashMap<&str, Runner> = leaves
@@ -65,6 +65,15 @@ pub(in crate::application::agents) fn scan(
             };
             (leaf.claim_id.as_str(), runner)
         })
+        .chain(late_claims.iter().map(|late| {
+            let runner = Runner {
+                crew: None,
+                model: late.crew_model.clone(),
+                run_id: None,
+                reported_effort: late.reasoning_effort.clone(),
+            };
+            (late.claim_id.as_str(), runner)
+        }))
         .collect();
     let candidates = Candidates::open(runtime);
     let mut facts = Vec::new();
