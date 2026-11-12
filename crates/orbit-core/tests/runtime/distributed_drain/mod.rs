@@ -364,12 +364,11 @@ impl DrainOwnerTransport for Wire {
             ));
         }
         if name == "orbit.drain.claim.effort" && *self.predates_late_effort.lock().unwrap() {
-            let message = "distributed drain requires the internal runtime route";
-            return Err(OrbitError::RemoteTool {
-                code: "policy_denied".into(),
-                message: message.into(),
-                payload: json!({"code": "policy_denied", "message": message}),
-            });
+            // `DestinationSession` wraps the legacy server's actual JSON-RPC
+            // invalid-params reply in `UnreachableDestination`.
+            return Err(OrbitError::UnreachableDestination(format!(
+                "{OWNER}: 'orbit/internal/drain/call' failed: {{\"code\":-32602,\"message\":\"unknown internal drain operation\"}}"
+            )));
         }
         if name == "orbit.drain.claim.settle" {
             // Operator stop/cancel may itself settle; release the hook lock
