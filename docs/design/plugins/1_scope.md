@@ -1264,10 +1264,13 @@ projection; backend calls receive their admitted environment values unchanged.
   that case. A fixture for an undeclared name refuses the directory. The run never reads the
   host's secret store, and refuses every `secret_updates` entry a backend returns.
 - Configuration is manifest defaults plus an optional `--fixture-config <file>` JSON
-  object of plugin keys, schema-validated before a backend starts. Strings substitute
-  `{{workspace}}` and `{{plugin_root}}`; the same section feeds templates and backend
-  context. Caller global/workspace `[plugins.<ns>]` values are never loaded for conformance,
-  regardless of grants or workspace selection. There is no caller-config execution mode.
+  object of plugin keys, schema-validated before a backend starts. Strings from the fixture
+  file substitute `{{workspace}}` and `{{plugin_root}}` before merging; manifest defaults
+  pass through unchanged, matching installed calls. The same merged section feeds templates
+  and backend context. Template expansion is single-pass, so markers inside a manifest
+  default are not expanded recursively. Caller global/workspace `[plugins.<ns>]` values are
+  never loaded for conformance, regardless of grants or workspace selection. There is no
+  caller-config execution mode.
   Fixture-config runs do not certify the installed plugin's default suite.
 - A temp directory stands in for the global root and workspace. This alone does not isolate
   absolute paths in configuration, explicit permissions or passed environment credentials.
