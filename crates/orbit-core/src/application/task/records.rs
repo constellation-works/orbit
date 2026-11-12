@@ -42,13 +42,41 @@ pub(crate) struct TaskRecordService<'a> {
 
 impl TaskRecordService<'_> {
     pub(crate) fn index_task(&self, task: &Task) {
-        if let Err(error) = self
+        // A lane whose index opened read-only (write-free runtimes, a sandbox
+        // that mounts the search db read-only) cannot index the task it just
+        // saved. Skip without attempting the write: the open already warned
+        // once, and the stale entry is repaired by the next
+        // `orbit search reindex` from writable storage. [ORB-24077]
+        if self.lexical_index.is_read_only() {
+            orbit_common::tracing::debug!(
+                target: "orbit.search.indexer",
+                task_id = %task.id,
+                "search index is read-only; task stays unindexed until the next reindex"
+            );
+            return;
+        }
+        match self
             .lexical_index
             .store()
             .and_then(|index| index.index_task(task))
         {
-            orbit_common::tracing::warn!(task_id = %task.id, %error,
-                "task saved but search indexing failed; run orbit search reindex to repair");
+            Ok(_) => {}
+            // A sandbox can deny the write without the open observing a
+            // read-only mount (a provider-native sandbox under bare
+            // fallback). That is the same stale-until-reindex outcome, not a
+            // per-write alarm.
+            Err(error) if error.is_readonly_or_access_failure() => {
+                orbit_common::tracing::debug!(
+                    target: "orbit.search.indexer",
+                    task_id = %task.id,
+                    %error,
+                    "search index refused the write; task stays unindexed until the next reindex"
+                );
+            }
+            Err(error) => {
+                orbit_common::tracing::warn!(task_id = %task.id, %error,
+                    "task saved but search indexing failed; run orbit search reindex to repair");
+            }
         }
     }
 
