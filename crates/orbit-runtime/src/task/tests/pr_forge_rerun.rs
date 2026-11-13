@@ -105,6 +105,7 @@ pub(crate) fn task_forge_gh_request(
     })
 }
 
+// Crate visibility lets the sibling source module bind this test-only clock.
 pub(crate) fn workflow_rerun_now() -> Instant {
     GH.with_borrow(|gh| {
         let gh = gh.as_ref().expect("fake gh installed");
@@ -112,6 +113,7 @@ pub(crate) fn workflow_rerun_now() -> Instant {
     })
 }
 
+// Crate visibility lets the sibling source module bind this test-only sleep.
 pub(crate) fn workflow_rerun_sleep(duration: Duration) {
     GH.with_borrow_mut(|gh| {
         let gh = gh.as_mut().expect("fake gh installed");
