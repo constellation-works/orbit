@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use crate::application::agents::attribution::{Charge, Credit, Owner};
 use crate::application::agents::effort::{
-    EffortSource, MainActivity, MainInvocationUnit, ModelEffortKey, main_effort_with_source,
-    main_invocation_effort, model_effort_key,
+    EffortSource, MainActivity, MainInvocationUnit, ModelEffortKey, RecordedEffort,
+    main_effort_with_source, model_effort_key,
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
@@ -81,62 +81,67 @@ pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Ke
 
 /// [`key`] and the source that decided the attempt's effort.
 fn key_with_source(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> (Key, EffortSource) {
+    implementer_key_with_source(
+        facts,
+        attempt.runner.run_id.as_deref(),
+        &task.id,
+        attempt.runner.model.as_deref(),
+        attempt.runner.reported_effort.as_ref(),
+        attempt.runner.crew.as_deref(),
+    )
+}
+
+/// The shared implementer effort key and its source, using the attempt,
+/// charge, or credit's own recorded identity and fallback data.
+fn implementer_key_with_source(
+    facts: &AgentFacts,
+    run_id: Option<&str>,
+    task_id: &str,
+    model: Option<&str>,
+    reported: Option<&RecordedEffort>,
+    crew: Option<&str>,
+) -> (Key, EffortSource) {
     let (effort, source) = main_effort_with_source(
         facts,
         MainInvocationUnit {
-            run_id: attempt.runner.run_id.as_deref(),
+            run_id,
             activity: MainActivity::Implement,
-            task_id: Some(&task.id),
-            model: attempt.runner.model.as_deref(),
+            task_id: Some(task_id),
+            model,
             activity_id: None,
             after: None,
             until: None,
-            reported: attempt.runner.reported_effort.as_ref(),
-            crew: attempt.runner.crew.as_deref(),
+            reported,
+            crew,
         },
     );
-    (
-        model_effort_key(attempt.runner.model.as_deref(), effort),
-        source,
-    )
+    (model_effort_key(model, effort), source)
 }
 
 /// A charge's row, from the run it charges.
 fn charge_key(facts: &AgentFacts, charge: &Charge) -> Key {
-    let effort = main_invocation_effort(
+    implementer_key_with_source(
         facts,
-        MainInvocationUnit {
-            run_id: charge.run_id.as_deref(),
-            activity: MainActivity::Implement,
-            task_id: Some(&charge.task_id),
-            model: charge.model.as_deref(),
-            activity_id: None,
-            after: None,
-            until: None,
-            reported: charge.reported_effort.as_ref(),
-            crew: charge.crew.as_deref(),
-        },
-    );
-    model_effort_key(charge.model.as_deref(), effort)
+        charge.run_id.as_deref(),
+        &charge.task_id,
+        charge.model.as_deref(),
+        charge.reported_effort.as_ref(),
+        charge.crew.as_deref(),
+    )
+    .0
 }
 
 /// A credit's row, from the run it credits.
 fn credit_key(facts: &AgentFacts, credit: &Credit) -> Key {
-    let effort = main_invocation_effort(
+    implementer_key_with_source(
         facts,
-        MainInvocationUnit {
-            run_id: credit.run_id.as_deref(),
-            activity: MainActivity::Implement,
-            task_id: Some(&credit.task_id),
-            model: credit.model.as_deref(),
-            activity_id: None,
-            after: None,
-            until: None,
-            reported: credit.reported_effort.as_ref(),
-            crew: credit.crew.as_deref(),
-        },
-    );
-    model_effort_key(credit.model.as_deref(), effort)
+        credit.run_id.as_deref(),
+        &credit.task_id,
+        credit.model.as_deref(),
+        credit.reported_effort.as_ref(),
+        credit.crew.as_deref(),
+    )
+    .0
 }
 
 pub(super) fn tier(task: &TaskFacts) -> &'static str {
