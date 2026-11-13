@@ -191,6 +191,15 @@ checked, and **N workspaces** while the selection narrows the board; its tooltip
 lists the chosen names. Narrowing the checks to one workspace opens that
 workspace's board.
 
+Under **All workspaces**, each status section lists tasks workspace by workspace
+in Workspace-picker order, each workspace pill uses that workspace's colour, and
+paging continues in that order. There is nothing to configure: choose **All
+workspaces** to open the view. The **Workspaces** chip can narrow which
+workspaces appear; the remaining rows stay in picker order. To verify the order,
+open Tasks under **All workspaces** and confirm each status section keeps one
+workspace's rows together in picker order, the pills match the picker's
+colours, and the next page continues in that same order.
+
 Under **All workspaces**, the Tasks dock adds a **Fleet** tab between its **Drain**
 and **Locks held** tabs. Open it to see the **Fleet drains** pane, which
 lists drain rows across the registered hosts and their workspaces. The tab is
