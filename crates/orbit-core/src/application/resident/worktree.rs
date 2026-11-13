@@ -82,9 +82,23 @@ impl OrbitRuntime {
         // A resumed run re-enters its live cycle: keep the worktree it
         // already holds, scratch included, rather than replacing it.
         if path.join(".git").exists() {
-            return path
-                .canonicalize()
-                .map_err(|error| OrbitError::Execution(format!("resolve worktree: {error}")));
+            let registered = worktree_is_registered(&self.paths().repo_root, &path)?;
+            if registered
+                && matches!(
+                    ownership(&self.paths().state_dir, run_id, &path),
+                    Ownership::Proven
+                )
+            {
+                return path
+                    .canonicalize()
+                    .map_err(|error| OrbitError::Execution(format!("resolve worktree: {error}")));
+            }
+            let reason = if registered {
+                "it has no matching owner record"
+            } else {
+                "it is not a registered worktree"
+            };
+            return Err(preserved(&path_text(&path), reason));
         }
         let head = run_git(&self.paths().repo_root, &["rev-parse", "HEAD"])
             .map_err(|error| OrbitError::Execution(error.to_string()))?;
@@ -172,7 +186,7 @@ impl OrbitRuntime {
         if worktree_is_registered(repo_root, &path)? {
             self.remove_registered_worktree(run_id, &path, &target)
         } else {
-            remove_if_owned(repo_root, state_dir, run_id, &path, &target, None)
+            remove_if_owned(repo_root, state_dir, run_id, &path, &target)
         }
     }
 
@@ -193,25 +207,9 @@ impl OrbitRuntime {
             return clear_owner_record(&self.paths().state_dir, run_id);
         }
         let detail = git_failure_detail(&output);
-        match worktree_is_registered(&self.paths().repo_root, path) {
-            Ok(true) => Err(OrbitError::Execution(format!(
-                "refused to remove registered resident cycle worktree {target}: {detail}"
-            ))),
-            Err(error) => Err(preserved(
-                target,
-                &format!(
-                    "git worktree remove failed ({detail}) and registration could not be rechecked: {error}"
-                ),
-            )),
-            Ok(false) => remove_if_owned(
-                &self.paths().repo_root,
-                &self.paths().state_dir,
-                run_id,
-                path,
-                target,
-                Some(detail.as_str()),
-            ),
-        }
+        Err(OrbitError::Execution(format!(
+            "refused to remove registered resident cycle worktree {target}: {detail}"
+        )))
     }
 
     /// Best-effort removal for a superseded cycle: a leftover costs disk,
@@ -271,17 +269,12 @@ fn remove_if_owned(
     run_id: &str,
     path: &Path,
     target: &str,
-    git_detail: Option<&str>,
 ) -> Result<(), OrbitError> {
     let denied = match ownership(state_dir, run_id, path) {
         Ownership::Proven => None,
         Ownership::Denied(reason) => Some(reason),
     };
     if let Some(reason) = denied {
-        let reason = match git_detail {
-            Some(detail) => format!("git worktree remove failed ({detail}) and {reason}"),
-            None => reason,
-        };
         return Err(preserved(target, &reason));
     }
     // A registration that appeared after the first check is Git's to keep.

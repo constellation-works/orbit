@@ -33,6 +33,13 @@ fn skipped(task_id: &str, reason: &str) -> Value {
     json!({"task_id": task_id, "cycle_count": 0, "skip_reason": reason})
 }
 
+fn with_worktree_removal_error(mut result: Value, error: Option<String>) -> Value {
+    if let Some(error) = error {
+        result["worktree_removal_error"] = json!(error);
+    }
+    result
+}
+
 impl OrbitRuntime {
     /// The mandate a resident cycle run serves: the single task id the
     /// scheduler put in its input. Only a `resident_cycle_pipeline` run has one.
@@ -103,12 +110,14 @@ impl OrbitRuntime {
             // `history` is the pre-handoff snapshot, so a dead cycle this
             // handoff just closed is still visible and its checkout can be
             // removed. An unreadable snapshot is kept, not deleted.
-            if let Ok(Some(live)) = live_cycle_from_history(&history)
+            let worktree_removal_error = if let Ok(Some(live)) = live_cycle_from_history(&history)
                 && self.resident_cycle_dead(&live, now)?
             {
-                self.discard_resident_cycle_worktree(&live.run_id);
-            }
-            return Ok(result);
+                self.discard_resident_cycle_worktree(&live.run_id)
+            } else {
+                None
+            };
+            return Ok(with_worktree_removal_error(result, worktree_removal_error));
         }
         let Ok(mandate) = view.mandate.clone() else {
             return Ok(skipped(&task_id, "mandate_invalid"));
@@ -137,32 +146,39 @@ impl OrbitRuntime {
         if (live.is_none() || due.dead_cycle.is_some())
             && let Some(handoff) = self.settle_resident_handoff(&task_id)?
         {
+            let mut worktree_removal_error = None;
             if let Some(dead) = &due.dead_cycle {
                 self.set_resident_live_cycle(&task_id, Some(&dead.cycle), None)?;
                 if dead.run_id != run_id {
-                    self.discard_resident_cycle_worktree(&dead.run_id);
+                    worktree_removal_error = self.discard_resident_cycle_worktree(&dead.run_id);
                 }
             }
             let mut result = skipped(&task_id, "handoff_settled");
             result["handoff"] = json!(handoff);
-            return Ok(result);
+            return Ok(with_worktree_removal_error(result, worktree_removal_error));
         }
         if let Some(reason) = &due.withheld {
             // A dead predecessor may coincide with a withhold (its lease
             // expired before the cadence floor elapsed): its worktree is
             // unreferenced, so discard it as the handoff and recovery
             // paths do rather than leaving it until a later due cycle.
-            if let Some(dead) = &due.dead_cycle
+            let worktree_removal_error = if let Some(dead) = &due.dead_cycle
                 && dead.run_id != run_id
             {
-                self.discard_resident_cycle_worktree(&dead.run_id);
-            }
-            return Ok(skipped(&task_id, reason));
+                self.discard_resident_cycle_worktree(&dead.run_id)
+            } else {
+                None
+            };
+            return Ok(with_worktree_removal_error(
+                skipped(&task_id, reason),
+                worktree_removal_error,
+            ));
         }
         if due.reasons.is_empty() {
             return Ok(skipped(&task_id, "not_due"));
         }
         self.record_resident_cycle_run_crew(run_id, &mandate)?;
+        let mut worktree_removal_error = None;
         let recovery_of = match &due.dead_cycle {
             Some(dead) => {
                 self.synthesize_resident_checkpoint(
@@ -172,7 +188,7 @@ impl OrbitRuntime {
                     None,
                 )?;
                 if dead.run_id != run_id {
-                    self.discard_resident_cycle_worktree(&dead.run_id);
+                    worktree_removal_error = self.discard_resident_cycle_worktree(&dead.run_id);
                 }
                 Some(dead.cycle.clone())
             }
@@ -253,6 +269,9 @@ impl OrbitRuntime {
         )?;
         if let Some(error) = worktree_error {
             brief["worktree_error"] = json!(error);
+        }
+        if let Some(error) = worktree_removal_error {
+            brief["worktree_removal_error"] = json!(error);
         }
         Ok(brief)
     }

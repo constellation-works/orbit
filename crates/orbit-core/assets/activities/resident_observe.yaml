@@ -15,6 +15,8 @@ spec:
     is open in the mandate's scope or its deadline has passed) and returns
     the brief: mandate, grant, recent checkpoints, open requests, comments
     since the last cycle, wake reasons, notices and the recovered actions.
+    Worktree creation and predecessor-removal failures are reported in the
+    brief as `worktree_error` and `worktree_removal_error`.
   input_schema_json:
     type: object
     properties:
@@ -40,5 +42,16 @@ spec:
         type: string
       conversation_ref:
         type: [string, "null"]
+      worktree_error:
+        type: string
+        description: >
+          Present when observe could not create or resume this cycle's managed
+          worktree; the path is preserved when ownership cannot be proven.
+      worktree_removal_error:
+        type: string
+        description: >
+          Present when observe kept a dead predecessor's worktree because Git
+          refused removal or ownership of an unregistered directory could not
+          be proven.
   action: resident_observe
   config: {}
