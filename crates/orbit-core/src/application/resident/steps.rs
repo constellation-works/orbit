@@ -135,6 +135,15 @@ impl OrbitRuntime {
             return Ok(result);
         }
         if let Some(reason) = &due.withheld {
+            // A dead predecessor may coincide with a withhold (its lease
+            // expired before the cadence floor elapsed): its worktree is
+            // unreferenced, so discard it as the handoff and recovery
+            // paths do rather than leaving it until a later due cycle.
+            if let Some(dead) = &due.dead_cycle
+                && dead.run_id != run_id
+            {
+                self.discard_resident_cycle_worktree(&dead.run_id);
+            }
             return Ok(skipped(&task_id, reason));
         }
         if due.reasons.is_empty() {

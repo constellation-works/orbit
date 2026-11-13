@@ -563,6 +563,40 @@ fn a_cycle_launches_in_a_managed_worktree_that_finalize_removes() {
     );
 }
 
+/// [ORB-24301] A dead predecessor's worktree is discarded even when the next
+/// observe is withheld by the cadence floor, so repeated refused cycles
+/// cannot accumulate unreferenced checkouts under
+/// `.orbit/state/worktrees/`.
+#[test]
+fn a_withheld_observe_discards_a_dead_predecessors_worktree() {
+    let fx = isolated_fixture!(a_withheld_observe_discards_a_dead_predecessors_worktree);
+    let (_watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let start = Utc::now();
+    let first = fx.cycle_run(&mandate, "resident-cycle-withheld-1");
+    let brief = fx.begin_cycle(&first, start);
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    let worktree = PathBuf::from(
+        brief["workspace_path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a due cycle names its managed worktree: {brief}")),
+    );
+    assert!(worktree.join(".git").exists(), "the launch checkout exists");
+
+    // The cycle dies before finalizing (its run stops with no checkpoint).
+    fx.stop_run(&first, JobRunState::Failed);
+
+    // The next observe falls inside the 10-minute floor: it starts no
+    // cycle, and still discards the dead predecessor's worktree.
+    let second = fx.cycle_run(&mandate, "resident-cycle-withheld-2");
+    let withheld = fx.begin_cycle(&second, start + Duration::minutes(1));
+    assert_eq!(withheld["cycle_count"], 0, "{withheld}");
+    assert_eq!(withheld["skip_reason"], "cadence_floor", "{withheld}");
+    assert!(
+        !worktree.exists(),
+        "a withheld observe discards the dead cycle's managed worktree"
+    );
+}
+
 #[test]
 fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle() {
     let fx = isolated_fixture!(
