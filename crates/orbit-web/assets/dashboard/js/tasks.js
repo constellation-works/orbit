@@ -457,7 +457,7 @@ function buildHumanCrewBadge(task) {
 
 // A card whose rows the readiness filter hid entirely still says so.
 // The All workspaces row's workspace pill, in its workspace's palette colour
-// (the same one the rail picker's entry shows).
+// (the same one the Tasks workspace filter entry shows).
 function buildWorkspaceBadge(task) {
   const badge = el("span", { class: "ws-badge mono", text: task.workspace_name, title: `Workspace: ${task.workspace_name}` });
   badge.dataset.wsColor = String(workspaceColor(task.workspace_id));

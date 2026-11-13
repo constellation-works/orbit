@@ -197,8 +197,10 @@ paging continues in that order. There is nothing to configure: choose **All
 workspaces** to open the view. The **Workspaces** chip can narrow which
 workspaces appear; the remaining rows stay in picker order. To verify the order,
 open Tasks under **All workspaces** and confirm each status section keeps one
-workspace's rows together in picker order, the pills match the picker's
-colours, and the next page continues in that same order.
+workspace's rows together in picker order, and the next page continues in that
+same order. To verify the colours, open the **Workspaces** chip: each workspace
+pill matches its entry's colour in that list, which is the colour key. The rail
+Workspace picker has no workspace colours, so use it for order only.
 
 Under **All workspaces**, the Tasks dock adds a **Fleet** tab between its **Drain**
 and **Locks held** tabs. Open it to see the **Fleet drains** pane, which
