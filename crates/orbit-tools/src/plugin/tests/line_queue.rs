@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use super::bounded_line_queue;
+use super::super::line_queue::bounded_line_queue;
 
 const TICK: Duration = Duration::from_secs(10);
 
