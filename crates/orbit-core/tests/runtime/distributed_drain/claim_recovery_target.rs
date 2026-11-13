@@ -42,8 +42,7 @@ fn recover(
         status,
         "operator",
         "operator decision after the follower stopped",
-        "operator-recover",
-        key,
+        ("operator-recover", key),
     )
 }
 
@@ -260,8 +259,7 @@ fn an_operator_recovery_key_and_reason_are_bounded_in_core_before_any_claim_chan
                 TaskStatus::Blocked,
                 "operator",
                 reason,
-                "operator-recover",
-                "reason-bound",
+                ("operator-recover", "reason-bound"),
             )
             .unwrap_err();
         assert!(
@@ -289,8 +287,7 @@ fn an_operator_recovery_key_and_reason_are_bounded_in_core_before_any_claim_chan
             TaskStatus::Blocked,
             "operator",
             &"r".repeat(2000),
-            "operator-recover",
-            &format!("  {}  ", "k".repeat(128)),
+            ("operator-recover", &format!("  {}  ", "k".repeat(128))),
         )
         .unwrap();
     assert_eq!(recovered["task_status"], "blocked", "{recovered}");

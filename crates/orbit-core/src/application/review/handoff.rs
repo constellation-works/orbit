@@ -479,7 +479,10 @@ impl OrbitRuntime {
     /// this request is an identical replay of the recovery that moved it:
     /// the phase precondition is enforced inside the store transaction,
     /// after the recorded receipt has had its chance to replay.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `replay` is `(replay_scope, request_key)`: the surface's replay
+    /// namespace (`"operator-recover"` or `"dashboard-recover"`) and the
+    /// caller's key for this one decision.
     pub fn recover_claim_as_operator(
         &self,
         claim_id: &str,
@@ -487,9 +490,9 @@ impl OrbitRuntime {
         status: TaskStatus,
         actor: &str,
         reason: &str,
-        replay_scope: &str,
-        request_key: &str,
+        replay: (&str, &str),
     ) -> Result<serde_json::Value, OrbitError> {
+        let (replay_scope, request_key) = replay;
         let reason = operator_input::reason(reason, "claim recovery")?;
         let request_key = operator_input::replay_key(request_key)?;
         let request_id = operator_input::scoped_replay_key(replay_scope, claim_id, &request_key);
