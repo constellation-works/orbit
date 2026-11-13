@@ -172,15 +172,10 @@ function buildPicker() {
   select.addEventListener("change", () => onSelect(select.value || null));
   const label = el("label", { class: "rail-scope-label", text: "Host" });
   label.htmlFor = "host-select";
-  // The Serving badge rides on the label's row, so the select keeps the rail's
-  // width for the host name (ORB-24280). On phones CSS moves the badge beside
-  // the select instead, because the label is hidden there.
-  const head = el("div", { class: "host-picker-head" });
-  head.appendChild(label);
-  if (!current) head.appendChild(el("span", { class: "host-serving-badge", text: "Serving" }));
   const control = el("div", { class: "host-picker-control" });
   control.appendChild(select);
-  container.replaceChildren(head, control);
+  if (!current) control.appendChild(el("span", { class: "host-serving-badge", text: "Serving" }));
+  container.replaceChildren(label, control);
 }
 
 /// Name the selected host on the provider-usage group, the resource dialog

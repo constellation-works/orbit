@@ -254,16 +254,15 @@
   font-weight: 600;
 }
 .rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
-.rail-host .host-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
 .rail-host .host-picker-control { display: flex; align-items: center; gap: 4px; min-width: 0; }
-/* The select takes the rail's full width under the label row, so a name that
-   still does not fit ends in an ellipsis; its title keeps the whole name. */
-.rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; text-overflow: ellipsis; }
-/* Two pixels of vertical padding keep the badge within the label's line, so the
-   host block does not change height when a remote is picked. */
+/* The select uses the rail width beside the Serving badge. A longer name ends
+   in an ellipsis; its title keeps the whole name. */
+.rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; padding-inline: 7px; text-overflow: ellipsis; }
+/* Keep the badge shorter than the select, so changing hosts does not change
+   the host control's height. */
 .rail-host .host-serving-badge {
   flex: none;
-  padding: 2px 5px;
+  padding: 2px 3px;
   border: 1px solid var(--border);
   border-radius: 5px;
   background: var(--bg-control);
@@ -630,8 +629,6 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   /* Phones keep the select and the Serving badge on one row. The host column
      is wider than the workspace column so a host name fits beside the badge. */
   .rail-host { flex-direction: row; align-items: center; gap: 4px; }
-  .rail-host .host-picker-head { display: contents; }
-  .rail-host .host-serving-badge { order: 2; }
   .rail-host .host-picker-control { order: 1; flex: 1 1 0; min-width: 0; }
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
