@@ -953,7 +953,7 @@ function rankingNode(ranking) {
       class: "agents-row-select",
       type: "button",
       "aria-pressed": isSelected ? "true" : "false",
-      title: `Show ${rowLabel(row)} in the detail column. Crews: ${crewsText(row)}. ${effortSummary(row)}`,
+      title: `Show ${rowLabel(row)} in the detail column. Crews: ${crewsText(row)}. Completed invocations: ${effortSummary(row)}. ${INVOCATION_POPULATION}`,
     }, [
       el("span", { class: "agents-crew", text: rowLabel(row) }),
       el("span", { class: "agents-model", text: crewsText(row) }),
@@ -1266,7 +1266,11 @@ function detailNode(rankedRow) {
       el("span", { class: "agents-detail-rank", text: rankedRow.unjudged ? "unjudged" : rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
       el("h3", { text: rowLabel(row) }),
       el("span", { class: "agents-model", text: crewsText(row) }),
-      el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
+      el("p", { class: "agents-effort" }, [
+        el("span", { text: "Completed invocations" }),
+        common.pinnedInfoHint(INVOCATION_POPULATION),
+        el("span", { class: "agents-effort-values", text: effortSummary(row) }),
+      ]),
     ]),
     el("div", { class: "agents-detail-score" }, [
       el("strong", { text: number(rankedRow.score) }),
@@ -1353,7 +1357,30 @@ function rolePanelNode(panel) {
   return node;
 }
 
+// Completed invocations for this model and the crews that contributed the
+// row's units, at every recorded effort. Not the row's scored units: those
+// count each unit once, under its main invocation. Naming the crew keeps two
+// crews at the same effort apart, and the label keeps another effort from
+// reading as this row's score.
+const INVOCATION_POPULATION = "Completed invocations for this model across the crews that contributed this row's units, at every recorded effort. Not this row's scored units, which count each unit once under its main invocation's effort. Provider default is a dispatch that set no effort; effort unknown has no dispatch record. Current crew settings are not read back into these counts.";
+
+function recordedEffortName(value) {
+  if (value === null) return "provider default";
+  if (value == null || value === "" || value === "unknown") return "effort unknown";
+  return String(value);
+}
+
+function invocationEffortText(item) {
+  const effort = recordedEffortName(item.reasoning_effort);
+  const crew = typeof item.crew === "string" ? item.crew : "";
+  const who = crew ? `${crew} / ${effort}` : effort;
+  if (item.invocations == null) return who;
+  return `${who} (${item.invocations} invocations, ${item.tasks} tasks)`;
+}
+
 function effortSummary(row) {
-  return `Effort: ${(row.effort_breakdown || [{ reasoning_effort: "unknown" }]).map(item =>
-    `${item.reasoning_effort === null ? "provider default" : item.reasoning_effort || "unknown"}${item.invocations == null ? "" : ` (${item.invocations} invocations, ${item.tasks} tasks)`}`).join("; ")}`;
+  const items = Array.isArray(row.effort_breakdown) && row.effort_breakdown.length
+    ? row.effort_breakdown
+    : [{ reasoning_effort: "unknown" }];
+  return items.map(invocationEffortText).join("; ");
 }

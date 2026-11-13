@@ -1240,7 +1240,12 @@ on.
   more the less work backs it; a row below keeps its raw score), how each
   term adds to or takes from
   the score, and context such as active hours that is shown but never scored.
-  Select another row to change it.
+  Under the row label, **Completed invocations** lists completed invocations
+  for that model across the crews that contributed its units, at every
+  recorded effort, and each entry names its crew. Those counts are not the
+  row's scored units: a unit counts once, under its main invocation's effort.
+  Provider default and effort unknown stay separate. The same header is used
+  for Implementers, Reviewers and Pilots. Select another row to change it.
 - **How the score works** lists every term with its weight and definition and
   the smoothing formula. It stays open while the page refreshes.
 
