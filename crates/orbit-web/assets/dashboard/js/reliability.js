@@ -192,10 +192,12 @@ function toggleRelCard(cardKey) {
   }
 }
 
-/// Shared presentation contract for the three attribution tables: the
-/// initial render shows the first `REL_VISIBLE_ROWS` rows in the caller's
-/// order and a Show-all toggle reveals the rest. Rates and ordering are the
-/// caller's; this helper only bounds the presentation.
+/// Shared presentation contract for the two attribution tables that sit in
+/// cards (failure rate by workspace and by job): the initial render shows the
+/// first `REL_VISIBLE_ROWS` rows in the caller's order and a Show-all toggle
+/// reveals the rest. `flatRelTable` applies the same bounds to Recovery
+/// evidence without the card. Rates and ordering are the caller's; these
+/// helpers only bound the presentation.
 function boundedRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote }) {
   if (rows.length <= REL_VISIBLE_ROWS) {
     return card(title, tableFrom(columns, rows, keyFn), cardKey);
@@ -217,6 +219,54 @@ function boundedRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote 
   const footer = el("div", { class: "rel-table-footer" }, [meta, toggle]);
   const wrap = el("div", { class: "rel-table-wrap" }, [table, footer]);
   return card(title, wrap, cardKey);
+}
+
+/// ORB-24282 — Recovery evidence is the panel's only table, so it renders
+/// flat in the panel body instead of inside a second bordered card (STD-07
+/// §R31: an inner container must mark a real distinction, and this one adds
+/// no grouping). The plain caption keeps the table's title meaning without a
+/// second title bar, and the scroll region keeps a wide table inside 375px
+/// with table-local scrolling only. Attribution keeps its cards: two tables,
+/// so the cards group.
+function flatRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote }) {
+  const captionId = `${cardKey}-caption`;
+  const caption = el("div", { id: captionId, class: "rel-flat-caption section-title", text: title });
+  const buildTable = (visibleRows) => {
+    const table = tableFrom(columns, visibleRows, keyFn);
+    table.setAttribute("aria-labelledby", captionId);
+    return table;
+  };
+  const buildScroll = (visibleRows) => {
+    const scroll = el("div", { class: "rel-flat-scroll", role: "region", "aria-label": title }, [
+      buildTable(visibleRows),
+    ]);
+    scroll.tabIndex = 0;
+    return scroll;
+  };
+  if (rows.length <= REL_VISIBLE_ROWS) {
+    const node = el("div", { class: "rel-flat" }, [caption, buildScroll(rows)]);
+    node.dataset.key = cardKey;
+    node.dataset.hash = node.textContent;
+    return node;
+  }
+  const expanded = expandedRelCards.has(cardKey);
+  const visible = expanded ? rows : rows.slice(0, REL_VISIBLE_ROWS);
+  const metaText = expanded
+    ? `Showing all ${rows.length} ${unit}${sortNote ? ` · ${sortNote}` : ""}`
+    : `Showing top ${visible.length} of ${rows.length} ${unit}${sortNote ? ` · ${sortNote}` : ""}`;
+  const meta = el("span", { class: "rel-table-meta", text: metaText });
+  const toggle = el("button", {
+    class: "mx-link-btn",
+    type: "button",
+    text: expanded ? `Show top ${REL_VISIBLE_ROWS}` : `Show all ${rows.length} ${unit}`,
+    "aria-expanded": String(expanded),
+  });
+  toggle.addEventListener("click", () => toggleRelCard(cardKey));
+  const footer = el("div", { class: "rel-table-footer rel-flat-footer" }, [meta, toggle]);
+  const node = el("div", { class: "rel-flat" }, [caption, buildScroll(visible), footer]);
+  node.dataset.key = cardKey;
+  node.dataset.hash = node.textContent;
+  return node;
 }
 
 function tableFrom(columns, rows, keyFn) {
@@ -421,7 +471,8 @@ function renderOverTime(payload) {
 
 /// Per-activity invocation counts with the role each activity was discovered
 /// to play. This is the audit trail for the recovery rate: the numerator's
-/// membership is visible, not asserted.
+/// membership is visible, not asserted. The single table renders flat in the
+/// panel (see `flatRelTable`); only Attribution keeps grouping cards.
 function renderActivities(payload) {
   const host = $("reliability-activities");
   if (!host) return;
@@ -446,7 +497,7 @@ function renderActivities(payload) {
   }
 
   syncNodes(host, [
-    boundedRelTable({
+    flatRelTable({
       title: "Invocations by activity and discovered role",
       columns: [
         { label: "activity", render: (r) => r.activity_id },
