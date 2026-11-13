@@ -985,3 +985,17 @@ td .rel-rate { font-size: 12px; }
   .rp-tip { width: 220px; }
   .rp-notes { padding-left: 0; }
 }
+
+/* ORB-24282 — Recovery evidence renders its single table flat in the panel
+   body: one heading only (STD-07 R31 forbids an inner container that marks no
+   real distinction; R16 shows each thing once). The caption keeps the table's
+   title meaning as plain text with no second title bar or border, and the
+   scroll box keeps a wide table inside 375px with table-local scrolling only.
+   The footer keeps the shared Show-all layout but drops the card band, so it
+   reads as part of the panel rather than a nested card. */
+.rel-flat { min-width: 0; }
+.rel-flat-caption { padding: 0 0 8px; }
+.rel-flat-scroll { min-width: 0; overflow-x: auto; }
+.rel-flat-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rel-flat .rel-table-footer { background: transparent; padding: 10px 0 0; }
+.rel-flat button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
