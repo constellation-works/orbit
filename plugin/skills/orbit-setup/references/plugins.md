@@ -352,9 +352,9 @@ directory are refused. Orbit never creates such a file or widens its grant: crea
 replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
 covers a `write_files` entry only when it names that file or one of its ancestor
 directories. Adding an entry, or changing where a config value resolves, needs consent
-again. Linux binds the existing inode, and on macOS an ordinary file name becomes a literal
-file rule. Neither grants sibling files. Do not request a file whose name contains `*` or
-`?`: macOS reads those characters as wildcards, so the grant can reach other files.
+again. Linux binds the existing inode, and macOS uses a file-rooted `subpath` rule.
+Neither grants sibling files. Admission refuses a path with `*` or `?` in any component,
+whether the file name or an ancestor directory: macOS reads those characters as wildcards.
 
 A plugin that requests a grant the host has not given registers its tools
 **inactive**: a call is refused with a diagnostic naming the grant and the
