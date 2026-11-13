@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-12
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -52,9 +52,13 @@ manager does four things for the human: files and scopes mandates; relays grants
 directions verbatim; posts fleet notices; and summarises residents on request or on the digest
 cadence ([§11.4](#114-the-manager-digest)).
 
-A resident owns **coordination only**. It has no worktree, no pinned drain slot and no admission
-path of its own; leaf tasks it dispatches run on the normal pipeline under the normal footprint
-rule. The epic-is-a-tag decision of [ORB-12488] stands
+A resident owns **coordination only**. When the workspace `HEAD` can be checked out, its
+reviewer-profile agent receives a disposable, read-only managed checkout for the live cycle, passed
+as `workspace_path`. This is a cycle inspection checkout, not a leaf implementation worktree: the
+resident acts through Orbit tools rather than editing source files, and checkout changes are not
+committed or delivered. The resident has no pinned drain slot or admission path of its own; leaf
+tasks it dispatches run on the normal pipeline under the normal footprint rule. The
+epic-is-a-tag decision of [ORB-12488] stands
 ([4_decisions.md](./4_decisions.md#coordination-only-the-resident-owns-no-execution)).
 
 ## 2. The mandate
@@ -335,11 +339,20 @@ maintenance notice in a covered workspace (or the global scope) empties the righ
 unreadable notice store narrows too. The brief carries the mandate, the grant, the last 5
 checkpoints, open requests, comments since the last cycle, the wake, the notices (title and body as
 `untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
-reference arrive with [ORB-21250]. A resumed run that already holds its cycle re-enters it.
+reference arrive with [ORB-21250]. Observe also makes a detached managed checkout of the registered
+workspace's current `HEAD` for this cycle and includes its path in the brief; the job forwards that
+path to the cycle activity as `workspace_path`. A resumed run that already holds its cycle reuses
+that checkout, including its scratch. If the workspace has no checkoutable `HEAD` or checkout
+creation fails, observe logs a warning and leaves `workspace_path` null, so the activity falls back
+to the registered checkout; a direct launch there can still be refused when the sandbox cannot
+enforce its filesystem policy.
 
 **Finalize.** `resident_finalize` writes the synthesized `incomplete` checkpoint when the agent wrote
-none (its `actions[]` from the ledger rows under the cycle's keys) and clears the live cycle. A cycle
-whose finalize never ran is closed the same way by the next observe.
+none (its `actions[]` from the ledger rows under the cycle's keys), clears the live cycle and
+discards its managed checkout. If finalize never runs, the next observe treats the predecessor as
+dead, synthesizes its checkpoint and discards its checkout during recovery before starting a new
+cycle. Removal is best-effort: failures are logged and may leave a checkout on disk, but its contents
+are never committed or delivered.
 
 **Tool guard.** Core, not the activity's tool list, scopes the cycle. A tool call carries the run id
 from the trusted managed-run binding, never from input. For a `resident_cycle_pipeline` run, reads
