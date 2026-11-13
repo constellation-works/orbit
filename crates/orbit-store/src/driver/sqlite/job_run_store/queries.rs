@@ -946,7 +946,3 @@ fn parse_job_target_type(raw: &str) -> rusqlite::Result<JobTargetType> {
         )
     })
 }
-
-#[cfg(test)]
-#[path = "tests/queries.rs"]
-mod tests;
