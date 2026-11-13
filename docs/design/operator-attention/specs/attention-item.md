@@ -256,9 +256,12 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   is instead `No items found; N sources could not be read` followed by that same scope, so an
   empty list is never read as all clear while a source was blind. An accepted cursor with
   nothing new uses `No new or changed items (N unchanged)` and the same scope.
-- Output follows the global `--format` / `--json` modes: `table` shows
-  `SEVERITY KIND WORKSPACE REF AGE REASON`, with `next.command` on a second line under
-  `--format plain` and `--verbose`; `json` and `ndjson` emit the envelope (ndjson emits one
+- Output follows the global `--format` / `--json` modes: `table` shows each item as a block
+  headed by its severity, kind, workspace, reference and age, then `Reason:` and, when the item
+  has one, `Next:` lines carrying `next.command`; `plain` (and piped output) emits one
+  tab-separated record per item, `SEVERITY KIND [HOST] WORKSPACE REF AGE REASON`, with
+  `next.command` as a final field present only when the item has one, and the global `--header`
+  adds the labelled header row; `json` and `ndjson` emit the envelope (ndjson emits one
   item per line, then a final `{"summary": …}` line carrying `counts`, `cursor`, `degraded`).
 
 ## Agent Signature

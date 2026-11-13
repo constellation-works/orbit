@@ -205,6 +205,21 @@ impl AttentionRow {
         }
         fields
     }
+
+    /// The tab-separated plain-form header for `rows`: one label per field
+    /// that [`Self::attention_plain_fields`] emits, so the global `--header`
+    /// labels attention the way it labels every other plain table.
+    pub(crate) fn attention_plain_header(rows: &[AttentionRow]) -> String {
+        let mut labels = vec!["SEVERITY", "KIND"];
+        if rows.iter().any(|row| row.host.is_some()) {
+            labels.push("HOST");
+        }
+        labels.extend(["WORKSPACE", "REF", "AGE", "REASON"]);
+        if rows.iter().any(|row| !row.next_command.is_empty()) {
+            labels.push("NEXT");
+        }
+        labels.join("\t")
+    }
 }
 
 impl Block {

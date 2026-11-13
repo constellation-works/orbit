@@ -17,7 +17,7 @@ use std::io::Write;
 use orbit_core::OrbitError;
 use serde_json::Value;
 
-use crate::output::payload::{Block, CommandOutput, ConfigShow, View};
+use crate::output::payload::{AttentionRow, Block, CommandOutput, ConfigShow, View};
 use crate::output::sink::{OutputMode, OutputSink};
 
 /// Project a command's output into the resolved mode and write it to stdout.
@@ -170,6 +170,9 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                                 println!("{}", sink.wrap_prose(&row.attention_terminal_text()));
                             }
                         } else {
+                            if sink.plain_header() && !rows.is_empty() {
+                                println!("{}", AttentionRow::attention_plain_header(&rows));
+                            }
                             for row in rows {
                                 let fields = row
                                     .attention_plain_fields()

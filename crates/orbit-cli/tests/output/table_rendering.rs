@@ -140,6 +140,31 @@ fn attention_items_keep_the_reason_and_next_command_together() {
             "next command is a separate final field"
         );
     }
+
+    let header_output = workspace.run_as_operator(
+        &[
+            "attention",
+            "--kind",
+            "pilot_warning",
+            "--format",
+            "plain",
+            "--header",
+        ],
+        "read plain attention with header",
+    );
+    let stdout = String::from_utf8(header_output.stdout).expect("plain attention output");
+    let records = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(records.len(), 3, "summary, header and one item: {stdout:?}");
+    assert_eq!(records[0], "1 item needs attention");
+    assert_eq!(
+        records[1], "SEVERITY\tKIND\tWORKSPACE\tREF\tAGE\tREASON\tNEXT",
+        "the global --header labels the plain fields: {stdout:?}"
+    );
+    assert_eq!(
+        records[2].split('\t').count(),
+        records[1].split('\t').count(),
+        "the item record has one field per header label: {stdout:?}"
+    );
 }
 
 /// The CLI exposes a crew-only OS limit in human and projected readouts.
