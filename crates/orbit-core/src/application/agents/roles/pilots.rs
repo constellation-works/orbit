@@ -33,7 +33,7 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
-    Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
+    self, Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
@@ -659,11 +659,7 @@ fn row_input<'a>(
         })
     };
     let mut durations: Vec<f64> = runs.values().filter_map(|seconds| *seconds).collect();
-    durations.sort_by(f64::total_cmp);
-    let median = (!durations.is_empty()).then(|| {
-        let middle = durations.len() / 2;
-        (durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0
-    });
+    let median = score::median(&mut durations);
     let selectors: usize = assessed
         .iter()
         .map(|(graded, _)| graded.pilot.declared)

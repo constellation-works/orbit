@@ -628,6 +628,19 @@ pub(super) fn terms_json(terms: &[Term], units: &[(&str, &str)]) -> Vec<Value> {
         .collect()
 }
 
+/// Median of `values`, or `None` when `values` is empty.
+///
+/// Sorts `values` in place with `f64::total_cmp`. The result is the mean of
+/// the two central samples, which is the middle sample when the count is odd.
+pub(super) fn median(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let len = values.len();
+    Some((values[len / 2] + values[(len - 1) / 2]) / 2.0)
+}
+
 /// A whole number as an integer, anything else rounded to two places.
 pub(super) fn number(value: f64) -> Value {
     if value.fract() == 0.0 && value.abs() < 1e15 {

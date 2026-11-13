@@ -9,16 +9,8 @@ use serde_json::Value;
 
 use super::performance::{ESCAPED_REGRESSIONS, Key, configured_type, tier};
 use crate::application::agents::facts::TaskFacts;
-use crate::application::agents::score::{RowInput, Stat, number};
+use crate::application::agents::score::{self, RowInput, Stat, number};
 use crate::application::agents::{AgentFacts, WindowBounds};
-
-fn median(values: &mut [f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f64::total_cmp);
-    Some((values[values.len() / 2] + values[(values.len() - 1) / 2]) / 2.0)
-}
 
 /// Append diff economy after all rows' tallies exist, so the fleet and the
 /// rows count the same row-task observations, and return each row's
@@ -53,7 +45,7 @@ pub(super) fn append_diff_context(
     }
     let medians: BTreeMap<_, _> = sizes
         .into_iter()
-        .filter_map(|(key, mut values)| median(&mut values).map(|median| (key, median)))
+        .filter_map(|(key, mut values)| score::median(&mut values).map(|median| (key, median)))
         .collect();
     // Size medians include the fleet; regression rates exclude the entire row.
     let bucket = |task: &TaskFacts| {
@@ -132,7 +124,9 @@ pub(super) fn append_diff_context(
         row.stats.push(Stat {
             key: "diff_economy",
             label: "Diff economy (× fleet median)",
-            value: median(&mut ratios).map(number).unwrap_or(Value::Null),
+            value: score::median(&mut ratios)
+                .map(number)
+                .unwrap_or(Value::Null),
         });
     }
     expected_regressions
