@@ -36,6 +36,8 @@ if _mode == "local-cleanup-unverified":
         _evidence["cleanup_verified"] = False
         return _evidence
     qa.run = _run_with_unverified_cleanup
+if _mode == "local-supervisor-lost":
+    qa._PROCESS_SUPERVISOR = "import os, sys; os.close(int(sys.argv[1]))"
 qa.platform.system = lambda: "Darwin"
 qa.inspect_browser_capability = lambda *_: ({"command": ["probe"], "exit_code": 0,
                                             "stdout": "fixture browser", "stderr": ""}, "fixture browser")
@@ -143,28 +145,25 @@ if mode == "seatbelt":
 
 
 # A fixture child that outlives its test can write into the harness scratch
-# tree while TemporaryDirectory cleanup removes it (observed OSError 66,
+# tree while scratch cleanup removes it (observed OSError 66,
 # Directory not empty, from host-resource-pressure.json). The hook below
 # plants those exact leftovers at cleanup time and, unless the harness
 # ignores cleanup errors, raises the observed OSError like the real race.
 RACY_CLEANUP_HOOK = '''
 import os as _os
 if _os.environ.get("QA_SWEEP_RACY_CLEANUP") == "1":
-    _RealTemporaryDirectory = qa.tempfile.TemporaryDirectory
-    class _RacyCleanupTemporaryDirectory(_RealTemporaryDirectory):
-        def cleanup(self):
-            name = getattr(self, "name", None)
-            if name and _os.path.basename(name).startswith("orbit-qa-full-"):
-                self._finalizer.detach()
-                leaf = Path(name) / "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
-                leaf.parent.mkdir(parents=True, exist_ok=True)
-                leaf.write_text('{"pressure": 1}')
-                leaf.with_name(leaf.name + ".lock").write_text("lock")
-                if not getattr(self, "_ignore_cleanup_errors", False):
-                    raise OSError(66, "Directory not empty")
-                return
-            super().cleanup()
-    qa.tempfile.TemporaryDirectory = _RacyCleanupTemporaryDirectory
+    _real_rmtree = qa.shutil.rmtree
+    def _racy_rmtree(name, *args, **kwargs):
+        if _os.path.basename(name).startswith("orbit-qa-full-"):
+            leaf = Path(name) / "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
+            leaf.parent.mkdir(parents=True, exist_ok=True)
+            leaf.write_text('{"pressure": 1}')
+            leaf.with_name(leaf.name + ".lock").write_text("lock")
+            if not kwargs.get("ignore_errors", False):
+                raise OSError(66, "Directory not empty")
+            return
+        return _real_rmtree(name, *args, **kwargs)
+    qa.shutil.rmtree = _racy_rmtree
 '''
 
 
@@ -423,6 +422,15 @@ def self_test():
         assert result["exit_code"] == 0 and result["cleanup_verified"] is True, result
         assert result["stdout"] == "local-command stdout\n", result
         assert result["stderr"] == "local-command stderr\n", result
+        assert report["scratch_cleanup"]["retained"] is False, report
+        assert not Path(report["scratch_cleanup"]["root"]).exists(), report
+        report = sweep([local], "local-supervisor-lost")
+        result = row(report, "local-command")
+        assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", report
+        assert result["exit_code"] is None and result["cleanup_verified"] is False, result
+        assert result["open_descendants"] is None and result["detached_workers"] is None, result
+        assert report["scratch_cleanup"]["retained"] is True, report
+        assert Path(report["scratch_cleanup"]["root"]).is_dir(), report
         report = sweep([local], "local-cleanup-unverified")
         result = row(report, "local-command")
         assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", report
@@ -430,6 +438,8 @@ def self_test():
         assert result["exit_code"] == 0 and result["cleanup_verified"] is False, result
         assert result["stdout"] == "local-command stdout\n", result
         assert result["stderr"] == "local-command stderr\n", result
+        assert report["scratch_cleanup"]["retained"] is True, report
+        assert Path(report["scratch_cleanup"]["root"]).is_dir(), report
         # Cleanup refusal wins over a capability notice: still FAIL, never
         # PASS or NOT_RUN, with the notice retained as a capability gap.
         report = sweep([local_notice], "local-cleanup-unverified")
@@ -1530,7 +1540,8 @@ def native_recorder_prefix_self_test(harness, scratch):
 
         driver = repo / "status-driver.py"
         driver.write_text('''
-import importlib.util, os, sys
+import importlib.util, json, os, signal, sys, time
+from pathlib import Path
 from unittest import mock
 spec = importlib.util.spec_from_file_location("qa", sys.argv[1])
 qa = importlib.util.module_from_spec(spec)
@@ -1545,6 +1556,49 @@ def injected_run(*args, **kwargs):
         with mock.patch.object(qa, "_PROCESS_SUPERVISOR",
                                "import os, sys; os.close(int(sys.argv[1]))"):
             return real_run(*args, **kwargs)
+    if mode in ("unreadable-result", "unfinished-result", "incomplete-result", "invalid-workers"):
+        payload = {"exit_code": 0, "detached_workers": [], "open_descendants": 0, "subreaper": False}
+        if mode == "incomplete-result":
+            payload.pop("open_descendants")
+        if mode == "invalid-workers":
+            payload["detached_workers"] = None
+        raw = "{broken}\\n" if mode == "unreadable-result" else json.dumps(payload)
+        if mode != "unfinished-result" and mode != "unreadable-result":
+            raw += "\\n"
+        program = "import os, sys; os.write(int(sys.argv[1]), " + repr(raw.encode()) + "); os.close(int(sys.argv[1]))"
+        with mock.patch.object(qa, "_PROCESS_SUPERVISOR", program):
+            return real_run(*args, **kwargs)
+    if mode in ("missing-result-timeout", "delayed-result"):
+        # A real no-command supervisor waits for owner cancellation. Model a
+        # record available after the old ten-second result window, without
+        # wall-clock delay or live escaped workers. The public recorder still
+        # performs its actual group sweep, wait and empty cwd settlement.
+        ready = Path(sys.argv[sys.argv.index("--repo-root") + 1]) / (mode + "-ready")
+        program = ("import json, os, signal, sys; from pathlib import Path; "
+                   "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                   "Path(" + repr(str(ready)) + ").touch(); "
+                   "print('settlement stdout', flush=True); "
+                   "os.read(int(sys.argv[2]), 1); ")
+        if mode == "delayed-result":
+            program += ("os.write(int(sys.argv[1]), "
+                        "json.dumps(dict(exit_code=0, detached_workers=[], open_descendants=0, subreaper=False)).encode() + bytes([10])); ")
+        program += "os.close(int(sys.argv[1]))"
+        real_select = qa.select.select
+        calls = 0
+        def settlement_select(read, write, error, timeout):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                deadline = time.monotonic() + 5
+                while not ready.exists():
+                    assert time.monotonic() < deadline, "fixture supervisor did not become ready"
+                    time.sleep(.01)
+                return [], [], []
+            if mode == "delayed-result" and timeout < 16:
+                return [], [], []
+            return real_select(read, write, error, timeout)
+        with mock.patch.object(qa, "_PROCESS_SUPERVISOR", program), mock.patch.object(qa.select, "select", settlement_select):
+            return real_run(*args, **{**kwargs, "timeout": 0})
     if mode == "unverified-cleanup":
         # Closing the owner pipe still lets the supervisor sweep and join its
         # group. The caller cannot verify its own sweep and must retain FAIL.
@@ -1553,7 +1607,6 @@ def injected_run(*args, **kwargs):
     if mode == "unverified-settlement":
         # The child exits 0. Settlement then fails, so cleanup is unverified
         # while the raw exit and output stay on the record.
-        from pathlib import Path
         repo = Path(sys.argv[sys.argv.index("--repo-root") + 1])
         settle_root = repo / "settle-tmp"
         settle_root.mkdir(parents=True, exist_ok=True)
@@ -1572,6 +1625,9 @@ qa.main()
             ("numeric-zero", 0, 0), ("numeric-seven", 7, 7), ("numeric-127", 127, 127),
             ("timeout", 0, 1), ("lost-result", 0, 1), ("unverified-cleanup", 0, 1),
             ("unverified-settlement", 0, 1),
+            ("unreadable-result", 0, 1), ("unfinished-result", 0, 1),
+            ("incomplete-result", 0, 1), ("invalid-workers", 0, 1),
+            ("missing-result-timeout", 0, 1), ("delayed-result", 0, 1),
         ]:
             print(f"native recorder status regression: {mode}", flush=True)
             command = [sys.executable, "-c",
@@ -1582,11 +1638,13 @@ qa.main()
                 [sys.executable, str(driver), str(harness), mode, "--repo-root", str(repo),
                  "--native-execution-dir", str(records), "--record-native-command", *command],
                 cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+            assert list(records.glob("*.json")), (mode, child.returncode, child.stdout, child.stderr)
             recorded = json.loads(next(records.glob("*.json")).read_text())
             assert child.returncode == expected_status, (mode, child.returncode, recorded)
-            expected_code = 0 if mode == "unverified-settlement" else code if mode.startswith("numeric-") else None
+            expected_code = (0 if mode in ("unverified-settlement", "incomplete-result", "invalid-workers")
+                             else code if mode.startswith("numeric-") else None)
             assert recorded["exit_code"] == expected_code, (mode, recorded)
-            expect_pass = expected_code == 0 and mode != "unverified-settlement"
+            expect_pass = mode == "numeric-zero"
             assert recorded["outcome"] == ("PASS" if expect_pass else "FAIL"), (mode, recorded)
             assert child.stdout == recorded["stdout"] and child.stderr == recorded["stderr"], (mode, recorded)
             assert recorded["command"] == command, (mode, recorded)
@@ -1597,9 +1655,18 @@ qa.main()
                 assert "timeout after 0s" in recorded["stderr"], recorded
             elif mode == "lost-result":
                 assert "supervisor exited without a command result" in recorded["stderr"], recorded
+                assert recorded["cleanup_verified"] is False, recorded
             elif mode == "unverified-cleanup":
                 assert not recorded["cleanup_verified"] and "fixture cleanup refusal" in recorded["stderr"], recorded
             elif mode == "unverified-settlement":
                 assert recorded["cleanup_verified"] is False, recorded
                 assert "fixture settlement refusal" in recorded["stderr"], recorded
                 assert recorded["exit_code"] == 0 and recorded["stdout"] == "retained stdout\n", recorded
+            elif mode == "delayed-result":
+                assert recorded["cleanup_verified"] is True, recorded
+                assert recorded["stdout"] == "settlement stdout\n", recorded
+            elif mode in ("unreadable-result", "unfinished-result", "incomplete-result", "invalid-workers",
+                          "missing-result-timeout"):
+                assert recorded["cleanup_verified"] is False, recorded
+                assert recorded["open_descendants"] is None and recorded["detached_workers"] is None, recorded
+                assert "supervisor cleanup record" in recorded["stderr"], recorded

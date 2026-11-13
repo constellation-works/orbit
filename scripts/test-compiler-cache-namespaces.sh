@@ -239,7 +239,7 @@ pid_running() {
 }
 
 # The supervisor enforces the deadline and reaps its complete tree before this
-# wait can return, including when cleanup requests cancellation with SIGTERM.
+# wait can return, including when cleanup publishes its cancellation marker.
 bounded_wait() {
   BOUNDED_STATUS=0
   wait "$1" || BOUNDED_STATUS=$?
@@ -258,14 +258,17 @@ wait_participants() {
 }
 
 cleanup() {
-  local exit_status=$? pid i
+  local exit_status=$? i
   if [[ -n "${HOLD_RELEASE:-}" ]]; then
     : >"$HOLD_RELEASE" 2>/dev/null || true
   fi
   reap_port_allocator
   HOLD_RELEASE=""
-  for pid in "${PIDS[@]:-}"; do
-    kill "$pid" >/dev/null 2>&1 || true
+  # Bash may already have reaped a completed job. Its saved number grants no
+  # signal authority: request cancellation through the participant's private
+  # marker, then use wait only to collect this shell's child status.
+  for ((i=0; i<${#PIDS[@]}; i++)); do
+    : >"${LOGFILES[$i]}.cancel" 2>/dev/null || true
   done
   for ((i=0; i<${#PIDS[@]}; i++)); do
     STATUSES[$i]=0
@@ -322,7 +325,8 @@ def descendants(pid):
 
 
 deadline = time.monotonic() + int(sys.argv[1])
-process = subprocess.Popen(sys.argv[2:], process_group=0)
+cancel_path = Path(sys.argv[2])
+process = subprocess.Popen(sys.argv[3:], process_group=0)
 anchor = None
 status = None
 try:
@@ -335,6 +339,9 @@ try:
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, process_group=process.pid,
         preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))
     while status is None and not cancelled and time.monotonic() < deadline:
+        if cancel_path.exists():
+            cancelled = signal.SIGTERM
+            break
         status = process.poll()
         if status is None:
             time.sleep(0.02)
@@ -456,7 +463,7 @@ run_ns() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" "$logfile.cancel" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -508,7 +515,7 @@ run_ns_hold() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" "$logfile.cancel" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \

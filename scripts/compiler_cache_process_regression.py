@@ -153,7 +153,7 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None,
                         state["child_reaped"] = True
                     return (102, 0) if not state["child"] else (0, 0)
 
-                argv = ([name, "1", "transport"] if name == "supervisor" else
+                argv = ([name, "1", str(Path(tmp) / "cancel"), "transport"] if name == "supervisor" else
                         [name, "namespace-script", tmp, "home", "bin", "sccache"])
                 with patch.multiple(os, create=True, **{
                         key: getattr(os, key, fallback) for key, fallback in
@@ -265,11 +265,61 @@ def _assert_no_delivered_signal(trace, message):
     assert not delivered, f"{message}\n" + "\n".join(delivered)
 
 
+def participant_identity_regression(root, scratch, home, fixture_bin, sccache):
+    """EXIT after a completed/reused participant must never signal its number.
+
+    Drive the public namespace script with the same transport fixtures as its
+    diagnostic controls. Bash's environment hook models reuse immediately
+    after waiting for the first real participant. Every shell signal is
+    intercepted; no PID churn or foreign process is involved.
+    """
+    fixture = scratch / "participant-identity"
+    (fixture / "scratch").mkdir(parents=True)
+    hook = fixture / "bash-env"
+    hook.write_text(r'''
+if [[ "$0" == */test-compiler-cache-namespaces.sh ]]; then
+  kill() { printf 'SIGNAL %s\n' "$*" >>"$NS_IDENTITY_TRACE"; return 0; }
+  wait() {
+    if [[ "${1:-}" == 424242 ]]; then
+      printf 'wait foreign-number marker=%s\n' "$(test -f "${LOGFILES[0]}.cancel" && echo present)" >>"$NS_IDENTITY_TRACE"
+      return 127
+    fi
+    local status=0
+    builtin wait "$@" || status=$?
+    if [[ -z "${identity_reused:-}" ]]; then
+      identity_reused=1
+      PIDS[0]=424242
+      printf 'completed participant reaped; number now foreign\n' >>"$NS_IDENTITY_TRACE"
+      exit 1
+    fi
+    return "$status"
+  }
+fi
+''')
+    env = dict(HOME=str(home), PATH=f"{fixture_bin}:/usr/bin:/bin",
+               TMPDIR=str(fixture / "scratch"), ORBIT_COMPILER_CACHE_BIN=str(sccache),
+               ORBIT_COMPILER_CACHE_REQUIRE_NS="1", NS_REAL_CARGO=os.environ["NS_REAL_CARGO"],
+               NS_REAL_HOME=os.environ["NS_REAL_HOME"], NS_DIAGNOSTIC_EVENTS=str(fixture / "events"),
+               BASH_ENV=str(hook), NS_IDENTITY_TRACE=str(fixture / "trace"),
+               ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS="2")
+    child = subprocess.run([str(root / "scripts/test-compiler-cache-namespaces.sh")],
+                           env=env, capture_output=True, text=True, timeout=10)
+    trace = (fixture / "trace").read_text()
+    assert child.returncode == 1, (child.returncode, child.stdout, child.stderr)
+    assert "completed participant reaped; number now foreign" in trace, trace
+    _assert_no_delivered_signal(trace, "namespace EXIT cleanup signaled a reused participant number")
+    assert "wait foreign-number marker=present" in trace, trace
+    assert "stage=isolated-daemon participant=C exit_status=127" in child.stderr, child.stderr
+    assert "participant=D exit_status=" in child.stderr, child.stderr
+    assert not list((fixture / "scratch").iterdir()), "namespace scratch survived cleanup"
+    print("participant-identity: public namespace EXIT after completed/reused participant passed")
+
+
 def allocator_identity_regression(root):
     """Exited or reused allocator PIDs are never signaled.
 
     The intercepted kill admits numeric reuse. Release still publishes the
-    marker and reaps the owned child. Cleanup still signals participants.
+    marker and reaps the owned child. Participant cleanup uses markers too.
     A live allocator must close its socket and exit within a finite bound.
     """
     source_path = root / "scripts/test-compiler-cache-namespaces.sh"
@@ -351,6 +401,7 @@ kill() {{
 HOLD_RELEASE="$CASE_DIR/release-marker"
 HOLD_PID={foreign}
 PIDS=({participant})
+LOGFILES=("$CASE_DIR/participant")
 STATUSES=()
 WORKDIR="$CASE_DIR/owned-scratch"
 mkdir -p "$WORKDIR"
@@ -365,7 +416,7 @@ fi
 """
     stdout, trace = _run_allocator_shell(root, functions, cleanup_model, timeout=10)
     assert "marker=present" in stdout, stdout + trace
-    assert any(line.startswith("SIGNAL ") and _line_mentions_pid(line, participant) for line in trace.splitlines()), trace
+    _assert_no_delivered_signal(trace, "cleanup must cancel participants without numeric signals")
     assert not any(line.startswith("SIGNAL ") and _line_mentions_pid(line, foreign) for line in trace.splitlines()), trace
     assert "report-participants" in trace, trace
     assert any(line.startswith("rm ") and "owned-scratch" in line for line in trace.splitlines()), trace
@@ -396,6 +447,7 @@ alloc_port
 saved="$HOLD_PID"
 port="$ALLOC_PORT"
 PIDS=(424243)
+LOGFILES=("$CASE_DIR/participant")
 STATUSES=()
 cleanup
 python3 -c 'import socket,sys
@@ -423,5 +475,5 @@ printf 'cleanup-reaped pid=%s port=%s\n' "$saved" "$port"
     assert allocator_pids and allocator_pids[0].isdigit(), stdout
     owned = allocator_pids[0]
     assert not any(line.startswith("SIGNAL ") and _line_mentions_pid(line, owned) for line in trace.splitlines()), trace
-    assert any(line.startswith("SIGNAL ") and _line_mentions_pid(line, participant) for line in trace.splitlines()), trace
+    _assert_no_delivered_signal(trace, "live allocator cleanup must not signal participant numbers")
     print(f"allocator-identity: shared-tcp release and cleanup passed elapsed={elapsed:.3f}s")

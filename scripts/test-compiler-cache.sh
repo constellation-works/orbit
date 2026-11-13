@@ -895,16 +895,19 @@ assert_ns_skip "namespaces refused with Python 3.10"
 # transport leader alone reserves its process group. The same entrypoint
 # runs the port allocator's release and EXIT cleanup against an exited PID
 # that has been reused: the model intercepts every signal.
-python3 - "$ROOT" <<'PYIDENTITY'
+python3 - "$ROOT" "$ns_fixture_root" "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYIDENTITY'
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
 from compiler_cache_process_regression import (
     allocator_identity_regression,
     group_lifetime_regression,
+    participant_identity_regression,
 )
 root = Path(sys.argv[1])
 group_lifetime_regression(root)
+participant_identity_regression(root, Path(sys.argv[2]), Path(sys.argv[3]),
+                                Path(sys.argv[4]), Path(sys.argv[5]))
 allocator_identity_regression(root)
 PYIDENTITY
 

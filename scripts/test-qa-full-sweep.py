@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -121,6 +122,12 @@ def darwin_snapshot(with_cmdline=True):
 # result. Hosts without subreaper support (macOS) reparent such a worker to
 # PID 1 instead, so the supervisor cannot see it; run() and main() then find it
 # by working directory under the root they own (settle_detached_workers_under).
+_SUPERVISOR_TERM_SECONDS = 10
+_SUPERVISOR_KILL_GRACE_SECONDS = 5
+_SUPERVISOR_COMMAND_KILL_SECONDS = 1
+# Include the command's final wait and time to publish the settled record.
+_SUPERVISOR_RESULT_SECONDS = (_SUPERVISOR_COMMAND_KILL_SECONDS + _SUPERVISOR_TERM_SECONDS
+                              + _SUPERVISOR_KILL_GRACE_SECONDS + 1)
 _PROCESS_SUPERVISOR = r"""import json, os, signal, subprocess, sys, threading, time
 result_fd = int(sys.argv[1])
 owner_fd = int(sys.argv[2])
@@ -291,7 +298,7 @@ def signal_confirmed(info, sig):
         except OSError:
             pass
 
-def reap(root, deadline_s=10, kill_grace_s=5):
+def reap(root, deadline_s=REAP_TERM_SECONDS, kill_grace_s=REAP_KILL_GRACE_SECONDS):
     records = {}
     signaled = set()
     deadline = time.monotonic() + deadline_s
@@ -387,7 +394,7 @@ else:
         except OSError:
             pass
         try:
-            command.wait(timeout=1)
+            command.wait(timeout=COMMAND_KILL_SECONDS)
         except subprocess.TimeoutExpired:
             pass
     detached, open_descendants = reap(os.getpid())
@@ -404,7 +411,11 @@ while not stop.is_set():
     signal.pause()
 os._exit(0)
 """
-_PROCESS_SUPERVISOR = _PROCESS_SUPERVISOR.replace("# @DARWIN_PROC_TABLE@\n", _DARWIN_PROC_TABLE)
+_PROCESS_SUPERVISOR = (
+    f"REAP_TERM_SECONDS = {_SUPERVISOR_TERM_SECONDS}\n"
+    f"REAP_KILL_GRACE_SECONDS = {_SUPERVISOR_KILL_GRACE_SECONDS}\n"
+    f"COMMAND_KILL_SECONDS = {_SUPERVISOR_COMMAND_KILL_SECONDS}\n"
+    + _PROCESS_SUPERVISOR.replace("# @DARWIN_PROC_TABLE@\n", _DARWIN_PROC_TABLE))
 # Same source, loaded here so the outer settlement and the supervisor agree.
 _DARWIN_PROC = {}
 if sys.platform == "darwin":
@@ -732,22 +743,24 @@ def _merge_worker_records(existing, extra):
 
 
 def _workers_clear(evidence):
-    if evidence.get("open_descendants") not in (0, None):
+    if type(evidence.get("open_descendants")) is not int or evidence["open_descendants"] != 0:
         return False
-    workers = evidence.get("detached_workers") or []
-    return all(isinstance(worker, dict) and worker.get("exited") is True for worker in workers)
+    workers = evidence.get("detached_workers")
+    return isinstance(workers, list) and all(
+        isinstance(worker, dict) and worker.get("exited") is True for worker in workers)
 
 
 def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
     evidence = {"command": argv, "started_at": started, "exit_code": None,
                 "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False,
-                "cleanup_verified": False, "detached_workers": [], "open_descendants": 0,
+                "cleanup_verified": False, "detached_workers": None, "open_descendants": None,
                 "subreaper": False}
     if os.name != "posix":
         evidence["stderr"] = "QA process-group supervision requires a POSIX host"
         return evidence
     read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
     owner_read_fd, owner_write_fd = os.pipe()
     process = None
     threads = []
@@ -793,35 +806,49 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
         result_consumed = True
         chunks = []
         remaining = _OUTPUT_LIMIT
+        deadline = time.monotonic() + _SUPERVISOR_RESULT_SECONDS
+        complete = False
         while remaining > 0:
             try:
+                ready, _, _ = select.select([read_fd], [], [], max(0, deadline - time.monotonic()))
+                if not ready:
+                    break
                 chunk = os.read(read_fd, min(65_536, remaining))
-            except OSError:
+            except (OSError, ValueError):
                 chunk = b""
             if not chunk:
                 break
             chunks.append(chunk)
             remaining -= len(chunk)
             if b"\n" in chunk:
+                complete = True
                 break
         raw = b"".join(chunks).split(b"\n", 1)[0].strip()
-        if not raw:
-            if adopt_exit_code and not evidence["stderr"]:
-                evidence["stderr"] = "QA supervisor exited without a command result"
+        if not complete or not raw:
+            evidence["stderr"] += "\nQA supervisor cleanup record unavailable or unfinished"
+            if adopt_exit_code:
+                evidence["stderr"] += "\nQA supervisor exited without a command result"
             return
         try:
             payload = json.loads(raw.decode())
         except (json.JSONDecodeError, UnicodeError, TypeError):
             payload = None
         if not isinstance(payload, dict):
-            if adopt_exit_code and not evidence["stderr"]:
-                evidence["stderr"] = "QA supervisor exited without a command result"
+            evidence["stderr"] += "\nQA supervisor cleanup record unreadable"
+            if adopt_exit_code:
+                evidence["stderr"] += "\nQA supervisor exited without a command result"
             return
         workers = payload.get("detached_workers")
-        evidence["detached_workers"] = workers if isinstance(workers, list) else []
         open_descendants = payload.get("open_descendants")
-        evidence["open_descendants"] = open_descendants if type(open_descendants) is int else 0
-        evidence["subreaper"] = bool(payload.get("subreaper"))
+        if (isinstance(workers, list)
+                and all(isinstance(worker, dict) and type(worker.get("exited")) is bool for worker in workers)
+                and type(open_descendants) is int and open_descendants >= 0
+                and type(payload.get("subreaper")) is bool):
+            evidence["detached_workers"] = workers
+            evidence["open_descendants"] = open_descendants
+            evidence["subreaper"] = payload["subreaper"]
+        else:
+            evidence["stderr"] += "\nQA supervisor cleanup record incomplete"
         if not adopt_exit_code:
             return
         code = payload.get("exit_code")
@@ -832,7 +859,7 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
 
     def await_supervisor_result():
         """Ask the supervisor to reap, then read its record without a status."""
-        nonlocal owner_write_fd, result_consumed
+        nonlocal owner_write_fd
         if result_consumed or process is None:
             return
         if owner_write_fd is not None:
@@ -841,14 +868,9 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             except OSError:
                 pass
             owner_write_fd = None
-        try:
-            ready_fds, _, _ = select.select([read_fd], [], [], 10)
-        except (OSError, ValueError):
-            ready_fds = []
-        if ready_fds:
-            consume_result(False)
-        else:
-            result_consumed = True
+        # The bounded reader includes the supervisor's TERM and KILL settlement
+        # windows. An expired or partial record leaves descendant facts unknown.
+        consume_result(False)
 
     try:
         process = subprocess.Popen(
@@ -920,7 +942,10 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 # even when the supervisor has already exited.
                 evidence["cleanup_verified"] = bool(swept and workers_clear)
                 if not workers_clear:
-                    evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
+                    if evidence["open_descendants"] is None:
+                        evidence["stderr"] += "\ndescendant cleanup is unverified without a supervisor cleanup record"
+                    else:
+                        evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
             except subprocess.TimeoutExpired:
                 evidence["exit_code"] = None
                 evidence["cleanup_verified"] = False
@@ -4235,13 +4260,12 @@ def main():
     }
     scratch = repo / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
-    # A fixture child that outlives its test can write into this tree while it
-    # is removed (observed OSError 66 from host-resource-pressure.json). That
-    # cleanup failure must never take the report with it, so ignore it here
-    # and record anything left behind as a warning below instead.
+    # Retain roots on unknown cleanup, including an exception before settlement.
+    # Register removal only after every command and the final cwd scan establish
+    # cleanup. Ordinary removal errors must still never take the report with them.
     detached_worker_settlement = {"workers": []}
-    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
-                                     ignore_cleanup_errors=True) as tmp:
+    with ExitStack() as scratch_cleanup:
+        tmp = tempfile.mkdtemp(prefix="orbit-qa-full-", dir=scratch)
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
@@ -4392,8 +4416,16 @@ def main():
             detached_worker_settlement = settle_detached_workers_under(temp)
         except OSError as error:
             detached_worker_settlement = {"workers": [], "error": str(error)}
+        scratch_retained = (
+            any(result.get("cleanup_verified") is False for result in results)
+            or detached_worker_settlement.get("cwd_visible") is not True
+            or bool(detached_worker_settlement.get("error"))
+            or any(worker.get("exited") is not True
+                   for worker in detached_worker_settlement.get("workers") or []))
+        if not scratch_retained:
+            scratch_cleanup.callback(shutil.rmtree, tmp, ignore_errors=True)
 
-    # The scratch TemporaryDirectory above ignores cleanup errors, so a late
+    # Scratch removal above ignores cleanup errors, so a late
     # fixture write can leave paths behind. They are evidence of the race,
     # not of a scenario outcome, so record them as a warning on the report.
     scratch_leftovers = []
@@ -4405,7 +4437,9 @@ def main():
         except OSError as error:
             scratch_leftover_error = str(error)
     scratch_cleanup_warning = None
-    if scratch_leftover_error:
+    if scratch_retained:
+        scratch_cleanup_warning = "harness scratch retained because command or descendant cleanup is unverified"
+    elif scratch_leftover_error:
         scratch_cleanup_warning = ("harness scratch cleanup did not finish; leftover walk failed: "
                                    f"{scratch_leftover_error}")
     elif scratch_leftovers:
@@ -4451,7 +4485,8 @@ def main():
         "environment": {"os":platform.system(), "release":platform.release(), "architecture":platform.machine(),
                         "capabilities":capabilities},
         "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
-        "scratch_cleanup": {"leftover_paths": scratch_leftovers,
+        "scratch_cleanup": {"root": str(temp), "retained": scratch_retained,
+                            "leftover_paths": scratch_leftovers,
                             "warning": scratch_cleanup_warning,
                             "detached_workers": detached_workers},
         "results": results, "findings": decision_failures,

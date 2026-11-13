@@ -557,10 +557,18 @@ detached worker, so the run reports
 `cleanup_verified` false with `detached worker cleanup NOT_RUN` in its output,
 and the report's `scratch_cleanup.warning` says the same. On macOS a worker
 whose working directory is outside that root is not found. The report records
-whether cleanup was verified. A refused group signal or expired reap deadline fails
+whether cleanup was verified. Verification requires a complete, readable supervisor
+record with explicit descendant counts and worker exit observations. A missing,
+malformed or unfinished record leaves descendant facts `null` and cleanup unverified,
+even when the group sweep succeeds and a working-directory scan finds no workers.
+The bounded result reader allows the supervisor's command wait, ten-second TERM
+window and five-second KILL grace, plus time to publish its record; it also bounds
+partial-record reads. A refused group signal or expired reap deadline fails
 with an explicit unverified cleanup outcome; timeout and lost-supervisor
-outcomes also fail. The harness scratch directory is removed only after owned
-workers whose working directory is still under that root have exited.
+outcomes also fail. The harness scratch directory is removed only after every
+executed command has verified cleanup and a final working-directory scan confirms
+its known workers have exited. Unknown cleanup retains the root and evidence,
+named by `scratch_cleanup.root` and `scratch_cleanup.retained`, for inspection.
 Removal still ignores ordinary cleanup errors, so a late fixture write during
 removal cannot lose the report. Leftover paths and any detached worker that
 is still alive are recorded on the report's `scratch_cleanup` field
