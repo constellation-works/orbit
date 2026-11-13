@@ -192,10 +192,12 @@ function toggleRelCard(cardKey) {
   }
 }
 
-/// Shared presentation contract for the three attribution tables: the
-/// initial render shows the first `REL_VISIBLE_ROWS` rows in the caller's
-/// order and a Show-all toggle reveals the rest. Rates and ordering are the
-/// caller's; this helper only bounds the presentation.
+/// Shared presentation contract for the two attribution tables that sit in
+/// cards (failure rate by workspace and by job): the initial render shows the
+/// first `REL_VISIBLE_ROWS` rows in the caller's order and a Show-all toggle
+/// reveals the rest. `flatRelTable` applies the same bounds to Recovery
+/// evidence without the card. Rates and ordering are the caller's; these
+/// helpers only bound the presentation.
 function boundedRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote }) {
   if (rows.length <= REL_VISIBLE_ROWS) {
     return card(title, tableFrom(columns, rows, keyFn), cardKey);
