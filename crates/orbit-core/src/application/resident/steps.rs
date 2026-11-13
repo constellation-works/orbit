@@ -97,6 +97,9 @@ impl OrbitRuntime {
             if view.state().0 == ResidentMandateState::Ended {
                 result["handoff"] = json!(self.hand_off_stopped_resident_at(&task_id, now)?);
             }
+            if let Ok(Some(live)) = live_cycle_from_history(&history) {
+                self.discard_resident_cycle_worktree(&live.run_id);
+            }
             return Ok(result);
         }
         let Ok(mandate) = view.mandate.clone() else {
@@ -111,7 +114,8 @@ impl OrbitRuntime {
             && let Some(grant) = cycle_grant(&history, &live.cycle)
         {
             self.record_resident_cycle_run_crew(run_id, &mandate)?;
-            return self.resident_brief(&task_id, &mandate, &grant, &history, None);
+            let worktree = self.create_resident_cycle_worktree(run_id);
+            return self.resident_brief(&task_id, &mandate, &grant, &history, None, worktree);
         }
         let due = self.resident_due(&task, mandate.clone(), &history, now)?;
         // A `handoff` checkpoint whose finalize never ran (the agent step
@@ -122,12 +126,24 @@ impl OrbitRuntime {
         {
             if let Some(dead) = &due.dead_cycle {
                 self.set_resident_live_cycle(&task_id, Some(&dead.cycle), None)?;
+                if dead.run_id != run_id {
+                    self.discard_resident_cycle_worktree(&dead.run_id);
+                }
             }
             let mut result = skipped(&task_id, "handoff_settled");
             result["handoff"] = json!(handoff);
             return Ok(result);
         }
         if let Some(reason) = &due.withheld {
+            // A dead predecessor may coincide with a withhold (its lease
+            // expired before the cadence floor elapsed): its worktree is
+            // unreferenced, so discard it as the handoff and recovery
+            // paths do rather than leaving it until a later due cycle.
+            if let Some(dead) = &due.dead_cycle
+                && dead.run_id != run_id
+            {
+                self.discard_resident_cycle_worktree(&dead.run_id);
+            }
             return Ok(skipped(&task_id, reason));
         }
         if due.reasons.is_empty() {
@@ -142,6 +158,9 @@ impl OrbitRuntime {
                     "the cycle died before it wrote a checkpoint (process killed or lease expired)",
                     None,
                 )?;
+                if dead.run_id != run_id {
+                    self.discard_resident_cycle_worktree(&dead.run_id);
+                }
                 Some(dead.cycle.clone())
             }
             None => None,
@@ -210,7 +229,15 @@ impl OrbitRuntime {
         // A mandate attached before core owned this status starts here.
         self.activate_resident_assignment(&task_id);
         let history = self.get_task_history(&task_id)?;
-        self.resident_brief(&task_id, &mandate, &grant, &history, Some(&due.notices))
+        let worktree = self.create_resident_cycle_worktree(run_id);
+        self.resident_brief(
+            &task_id,
+            &mandate,
+            &grant,
+            &history,
+            Some(&due.notices),
+            worktree,
+        )
     }
 
     pub(crate) fn crew_supports_continuity(&self, crew_name: &str) -> bool {
@@ -243,6 +270,10 @@ impl OrbitRuntime {
     }
 
     /// The brief a cycle's agent reads, in the checkpoint contract's order.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the brief is assembled from the mandate, grant, history, notices and launch worktree together"
+    )]
     fn resident_brief(
         &self,
         task_id: &str,
@@ -250,6 +281,7 @@ impl OrbitRuntime {
         grant: &ResidentCycleGrant,
         history: &[TaskHistoryEntry],
         notices: Option<&[orbit_types::record::Notice]>,
+        worktree: Option<std::path::PathBuf>,
     ) -> Result<Value, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
         let all = checkpoints(task_id, &comments);
@@ -336,6 +368,9 @@ impl OrbitRuntime {
         Ok(json!({
             "task_id": task_id,
             "cycle_count": 1,
+            // The managed worktree the cycle's agent launches in, removed
+            // by `resident_finalize`. Null when none could be created.
+            "workspace_path": worktree.map(|path| path.display().to_string()),
             "cycle": grant.cycle,
             "crew": mandate.crew,
             "continuity": continuity,
@@ -511,6 +546,8 @@ impl OrbitRuntime {
             Some(handoff) => handoff,
             None => self.hand_off_stopped_resident(&task_id)?,
         };
+        // The cycle is closed; its managed worktree is discarded.
+        self.discard_resident_cycle_worktree(run_id);
         Ok(json!({
             "task_id": task_id,
             "finalized": true,

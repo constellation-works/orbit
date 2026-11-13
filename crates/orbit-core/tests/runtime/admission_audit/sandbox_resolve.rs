@@ -1,6 +1,8 @@
 use orbit_engine::RuntimeHost;
 #[cfg(target_os = "linux")]
-use orbit_exec::{linux_bwrap_write_grant_diagnostic, prepare_linux_bwrap_write_grants};
+use orbit_exec::{
+    compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, prepare_linux_bwrap_write_grants,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -682,10 +684,74 @@ crate::scenario_table!(
     macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree
 );
 
+/// [ORB-24301] The resident cycle launches in a managed worktree under
+/// `.orbit/state/worktrees/`, which sandbox resolution marks managed, so
+/// linux-bwrap can enforce the non-subtree `**/.env` deny with its
+/// post-run guard. A reviewer launch in the registered checkout stays a
+/// direct invocation, and a direct invocation with a writable directory
+/// under the deny still refuses.
+#[cfg(target_os = "linux")]
+fn resident_cycle_worktree_launch_is_enforceable_while_direct_reviewer_refuses() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let repo = repo_root.canonicalize().expect("canonical repo");
+    seed_executor(
+        &runtime,
+        "claude",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+    let worktree = repo.join(".orbit/state/worktrees/resident-jrun-fixture");
+    std::fs::create_dir_all(worktree.join("src")).expect("cycle worktree layout");
+
+    let direct = runtime
+        .resolve_executor_sandbox("claude", Some("reviewer"), Some(&repo))
+        .expect("resolve direct reviewer sandbox")
+        .expect("sandbox");
+    assert!(
+        !direct.managed_worktree,
+        "a reviewer launch in the registered checkout stays direct"
+    );
+
+    let resident = runtime
+        .resolve_executor_sandbox("claude", Some("reviewer"), Some(&worktree))
+        .expect("resolve resident reviewer sandbox")
+        .expect("sandbox");
+    assert!(
+        resident.managed_worktree,
+        "the resident cycle's worktree launch is managed"
+    );
+    compile_linux_bwrap_argv(
+        &resident.fs_profile,
+        "/bin/true",
+        &[],
+        Some(&worktree),
+        resident.managed_worktree,
+    )
+    .expect("the resident cycle launch compiles without PolicyDenied for **/.env");
+
+    // The same reviewer profile with a writable directory inside the
+    // launch checkout: a direct invocation cannot enforce the
+    // non-subtree deny (a `.env` created after spawn escapes the
+    // mounts), so it still refuses; the managed launch compiles because
+    // the post-run guard catches a created match.
+    let mut profile = resident.fs_profile.clone();
+    profile
+        .modify
+        .push(format!("{}/src/**", worktree.display()));
+    let error = compile_linux_bwrap_argv(&profile, "/bin/true", &[], Some(&worktree), false)
+        .expect_err("a direct reviewer invocation must still refuse");
+    assert!(
+        error.to_string().contains("non-subtree denyModify") && error.to_string().contains(".env"),
+        "{error}"
+    );
+    compile_linux_bwrap_argv(&profile, "/bin/true", &[], Some(&worktree), true)
+        .expect("the managed resident launch is enforceable");
+}
+
 #[cfg(target_os = "linux")]
 crate::scenario_table!(
     linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority_scenarios,
     linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority,
     resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor,
-    a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target
+    a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target,
+    resident_cycle_worktree_launch_is_enforceable_while_direct_reviewer_refuses
 );

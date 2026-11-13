@@ -4,7 +4,13 @@ metadata:
   name: resident_cycle
 spec:
   type: agent_loop
-  # Read-only checkout: the resident acts through Orbit tools, never files.
+  # Read-only managed worktree of the workspace HEAD, created by
+  # `resident_observe` and removed by `resident_finalize`: the resident
+  # acts through Orbit tools, never files, and nothing it writes in the
+  # checkout is committed or delivered. Launching in the registered
+  # checkout instead is a direct invocation linux-bwrap refuses, because
+  # it cannot enforce the non-subtree `denyModify **/.env` there without
+  # the managed worktree's post-run guard.
   fsProfile: reviewer
   description: >
     One bounded resident orchestrator cycle. The resident reads its brief,
@@ -57,6 +63,13 @@ spec:
         type: object
       crew:
         type: string
+      workspace_path:
+        type: string
+        description: >
+          The managed worktree `resident_observe` created for this cycle;
+          the agent launches there. Absent when no worktree could be
+          created, in which case the launch stays in the registered
+          checkout.
   # The durable output is the checkpoint the cycle writes; this report is
   # advisory and settles nothing.
   output_schema_json:
