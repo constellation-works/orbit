@@ -7,6 +7,8 @@ use orbit_types::plugin::parse_grants;
 fn fixture_spec(root: &Path, file: &Path) -> PluginBackendSpec {
     let plugin = root.join("plugin");
     std::fs::create_dir_all(&plugin).unwrap();
+    #[cfg(unix)]
+    harden_dir(&plugin);
     let mut permissions = PluginPermissions::default();
     permissions.fs.write_files = vec![file.to_string_lossy().into_owned()];
     (*spec(
@@ -19,12 +21,39 @@ fn fixture_spec(root: &Path, file: &Path) -> PluginBackendSpec {
 }
 
 #[cfg(unix)]
+fn harden_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .unwrap_or_else(|error| panic!("chmod fixture dir {}: {error}", path.display()));
+}
+
+#[cfg(unix)]
+fn write_owner_file(path: &Path, content: impl AsRef<[u8]>) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, content)
+        .unwrap_or_else(|error| panic!("write fixture file {}: {error}", path.display()));
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("chmod fixture file {}: {error}", path.display()));
+}
+
+#[cfg(unix)]
+fn fixture_tempdir() -> tempfile::TempDir {
+    let temp = match std::env::var_os("ORBIT_TEST_EXACT_FILE_PARENT").filter(|s| !s.is_empty()) {
+        Some(parent) => tempfile::tempdir_in(parent).expect("create fixture tempdir"),
+        None => tempfile::tempdir().expect("create fixture tempdir"),
+    };
+    harden_dir(temp.path());
+    temp
+}
+
+#[cfg(unix)]
 #[test]
 fn exact_file_grants_do_not_open_parents_siblings_or_descendants() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = fixture_tempdir();
     let root = temp.path().canonicalize().unwrap();
+    harden_dir(&root);
     let file = root.join("installation_id");
-    std::fs::write(&file, "synthetic-id").unwrap();
+    write_owner_file(&file, "synthetic-id");
     let spec = fixture_spec(&root, &file);
     let profile = spec
         .sandbox_profile(None)
@@ -77,17 +106,19 @@ fn exact_file_grants_do_not_open_parents_siblings_or_descendants() {
 #[cfg(unix)]
 #[test]
 fn exact_file_glob_metacharacters_are_refused_before_the_macos_compiler() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = fixture_tempdir();
     let root = temp.path().canonicalize().unwrap();
+    harden_dir(&root);
 
     let glob_file = root.join("grant?");
-    std::fs::write(&glob_file, "synthetic").unwrap();
+    write_owner_file(&glob_file, "synthetic");
     let star_file = root.join("grant*");
-    std::fs::write(&star_file, "synthetic").unwrap();
+    write_owner_file(&star_file, "synthetic");
     let glob_dir = root.join("dir*");
     std::fs::create_dir(&glob_dir).unwrap();
+    harden_dir(&glob_dir);
     let nested = glob_dir.join("installation_id");
-    std::fs::write(&nested, "synthetic").unwrap();
+    write_owner_file(&nested, "synthetic");
     for refused in [glob_file, star_file, nested] {
         let error = fixture_spec(&root, &refused)
             .sandbox_profile(None)
@@ -102,7 +133,7 @@ fn exact_file_glob_metacharacters_are_refused_before_the_macos_compiler() {
     }
 
     let ordinary = root.join("installation_id");
-    std::fs::write(&ordinary, "synthetic-id").unwrap();
+    write_owner_file(&ordinary, "synthetic-id");
     let profile = fixture_spec(&root, &ordinary)
         .sandbox_profile(None)
         .unwrap();
@@ -120,10 +151,11 @@ fn exact_file_glob_metacharacters_are_refused_before_the_macos_compiler() {
 fn unsafe_exact_files_are_refused_and_changed_files_are_revalidated_before_spawn() {
     use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let temp = tempfile::tempdir().unwrap();
+    let temp = fixture_tempdir();
     let root = temp.path().canonicalize().unwrap();
+    harden_dir(&root);
     let file = root.join("runtime-file");
-    std::fs::write(&file, "original").unwrap();
+    write_owner_file(&file, "original");
     let mut spec = fixture_spec(&root, &file);
     let profile = spec.sandbox_profile(None).unwrap();
     let alias = root.join("alias");
@@ -201,11 +233,9 @@ fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
     ) {
         return;
     }
-    let parent = std::env::var_os("ORBIT_TEST_EXACT_FILE_PARENT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
-    let temp = tempfile::tempdir_in(parent).unwrap();
+    let temp = fixture_tempdir();
     let root = temp.path().canonicalize().unwrap();
+    harden_dir(&root);
     if cfg!(target_os = "macos")
         && (root.starts_with("/private/tmp") || root.starts_with("/private/var/folders"))
     {
@@ -221,7 +251,7 @@ fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
     let sibling = root.join("sibling");
     let auth = root.join("auth.json");
     for path in [&file, &sibling, &auth] {
-        std::fs::write(path, "sentinel").unwrap();
+        write_owner_file(path, "sentinel");
     }
     let spec = fixture_spec(&root, &file);
     let profile = spec.sandbox_profile(None).unwrap();
