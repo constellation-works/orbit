@@ -42,7 +42,7 @@ use crate::application::agents::effort::{
     MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::records::spec_documents;
-use crate::application::agents::score::{Denominator, Occurrence, Stat, Tally, number};
+use crate::application::agents::score::{self, Denominator, Occurrence, Stat, Tally, number};
 use crate::application::agents::{AgentFacts, WindowBounds};
 use crate::application::codebase::PilotRun;
 use crate::application::task::{BLOCKED_TASK_TRIAGED_EVENT, warning_hold_findings};
@@ -222,15 +222,7 @@ impl ModeTally {
         let mut seconds: Vec<f64> = self.runs.values().filter_map(|(s, _)| *s).collect();
         let tokens: Vec<u64> = self.runs.values().filter_map(|(_, t)| *t).collect();
         let total_seconds = (!seconds.is_empty()).then(|| seconds.iter().sum::<f64>());
-        seconds.sort_by(f64::total_cmp);
-        let median_seconds = (!seconds.is_empty()).then(|| {
-            let mid = seconds.len() / 2;
-            if seconds.len().is_multiple_of(2) {
-                (seconds[mid - 1] + seconds[mid]) / 2.0
-            } else {
-                seconds[mid]
-            }
-        });
+        let median_seconds = score::median(&mut seconds);
         json!({
             "assessments": self.assessments,
             "runs": self.runs.len(),

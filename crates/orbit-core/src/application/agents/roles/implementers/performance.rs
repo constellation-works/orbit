@@ -11,7 +11,8 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
-    Denominator, Occurrence, REVIEW_MIN_SUPPORT, RowInput, Stat, Tally, Term, number, sample_units,
+    self, Denominator, Occurrence, REVIEW_MIN_SUPPORT, RowInput, Stat, Tally, Term, number,
+    sample_units,
 };
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
 
@@ -693,13 +694,7 @@ fn row_input<'a>(
                 .map(|cost| total + cost)
         })
     };
-    durations.sort_by(f64::total_cmp);
-    let median = if durations.is_empty() {
-        None
-    } else {
-        let middle = durations.len() / 2;
-        Some((durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0)
-    };
+    let median = score::median(&mut durations);
     RowInput {
         escaped_regressions_fallback: None,
         denominators: REVIEW_TERM_UNITS

@@ -31,7 +31,7 @@ use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
 use crate::application::agents::score::{
-    Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
+    self, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem, WindowBounds};
 use crate::application::task::FindingVerdict;
@@ -693,23 +693,12 @@ fn stats(row: &Row<'_>, peers: Option<PeerComparison>) -> Vec<Stat> {
             json!(row.outcomes.get(key).copied().unwrap_or(0)),
         ));
     }
-    stats.push(stat(
-        "median_review_minutes",
-        "Median review minutes",
-        median(&row.seconds).map_or(Value::Null, |seconds| number(seconds / 60.0)),
-    ));
+    stats.push(stat("median_review_minutes", "Median review minutes", {
+        // Fresh buffer: median sorts in place, and this row keeps its seconds.
+        let mut seconds: Vec<f64> = row.seconds.iter().map(|seconds| *seconds as f64).collect();
+        score::median(&mut seconds).map_or(Value::Null, |seconds| number(seconds / 60.0))
+    }));
     stats
-}
-
-fn median(values: &[u64]) -> Option<f64> {
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let middle = sorted.len() / 2;
-    match sorted.len() {
-        0 => None,
-        len if len % 2 == 1 => Some(sorted[middle] as f64),
-        _ => Some((sorted[middle - 1] + sorted[middle]) as f64 / 2.0),
-    }
 }
 
 fn stat(key: &'static str, label: &'static str, value: Value) -> Stat {
