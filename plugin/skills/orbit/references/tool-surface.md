@@ -648,6 +648,9 @@ MCP it is in the `analytics` toolset.
 - **Recorded effort.** Each ranking/detail row includes `effort_breakdown` of
   completed invocations by immutable dispatch crew, model and reasoning effort,
   with counts, linked tasks, duration, tokens and provider-reported cost.
+  The dashboard detail header and `orbit agents show` label that list as
+  completed invocations and name each contributing crew, so another effort's
+  invocations are not read as the selected row's scored units.
   A rendered effort is its wire name (`low`, `medium`, `high`, `xhigh`, `max`);
   a present dispatch identity with no rendered effort is `null` and is labelled **provider default**;
   a historical invocation with no dispatch identity is `"unknown"` and is labelled **effort unknown**.

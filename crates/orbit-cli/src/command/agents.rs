@@ -427,7 +427,7 @@ fn show_blocks(value: &Value) -> Vec<Block> {
     ))];
 
     blocks.push(Block::text(format!(
-        "Recorded effort: {}",
+        "Completed invocations by crew and effort, not this row's scored units: {}",
         effort_labels(&row["effort_breakdown"])
     )));
     if let Some(sources) = effort_source_labels(&row["effort_sources"]) {
@@ -737,22 +737,50 @@ fn effort_source_labels(value: &Value) -> Option<String> {
     )
 }
 
+/// A breakdown entry's effort in the same words as the dashboard: a null
+/// effort is the provider default, and `"unknown"` (or a missing name) is
+/// effort unknown. The two stay distinct.
+fn recorded_effort_name(value: &Value) -> String {
+    if value.is_null() {
+        return "provider default".to_string();
+    }
+    let name = text(value);
+    if name.is_empty() || name == "unknown" {
+        "effort unknown".to_string()
+    } else {
+        name
+    }
+}
+
+/// Completed invocations by contributing crew and recorded effort. This is
+/// not the row's scored units, so each entry names its crew.
 fn effort_labels(value: &Value) -> String {
     let labels = value
         .as_array()
         .into_iter()
         .flatten()
         .map(|row| {
-            if row["reasoning_effort"].is_null() {
-                "provider default".to_string()
+            let effort = recorded_effort_name(&row["reasoning_effort"]);
+            let crew = text(&row["crew"]);
+            let who = if crew.is_empty() {
+                effort
             } else {
-                text(&row["reasoning_effort"])
+                format!("{crew} / {effort}")
+            };
+            if row.get("invocations").is_some_and(|count| !count.is_null()) {
+                format!(
+                    "{who} ({} invocations, {} tasks)",
+                    number(&row["invocations"]),
+                    number(&row["tasks"])
+                )
+            } else {
+                who
             }
         })
         .collect::<Vec<_>>();
     if labels.is_empty() {
-        "unknown".into()
+        "effort unknown".into()
     } else {
-        labels.join(", ")
+        labels.join("; ")
     }
 }

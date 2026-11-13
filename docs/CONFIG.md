@@ -1333,11 +1333,14 @@ crew never changes these records, and audit history is not backfilled.
 on the run and its displayed steps, including retries and interrupted launches.
 The dashboard shows the same provenance on run detail and step rows.
 
-Scorecard rows keep their compatible crew/model ranking and include an
-`effort_breakdown` of recorded invocation counts, linked tasks, duration, tokens
-and provider-reported cost. The score itself still describes the whole row. The top-level scorecard
-`effort_breakdown` covers completed workspace invocations in the selected
-window (`effort_population` names that population).
+Scorecard rows are one per model and recorded effort. Each row's
+`effort_breakdown` lists completed invocations for that model and its
+contributing crews at every recorded effort: counts, linked tasks, duration,
+tokens and provider-reported cost. Those counts are not the row's scored
+units, which count each unit once under its main invocation's effort. The
+dashboard and `orbit agents show` label the list that way and name each
+crew. The top-level scorecard `effort_breakdown` covers completed workspace
+invocations in the selected window (`effort_population` names that population).
 Experiment arms include the completed invocations
 linked to their enrolled tasks; managed usage buckets break down by actual
 crew, model and effort. Null/default and historical unknown remain separate.

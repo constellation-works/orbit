@@ -676,8 +676,16 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   .agents-rank-tier-table th:nth-child(4) { width: 44px; }
 }
 
-/* Recorded effort populations wrap inside the existing crew identity column. */
-.agents-effort { display: block; white-space: normal; max-width: 30ch; overflow-wrap: anywhere; }
+/* Completed-invocation usage sits on its own line under the row label and
+   spans the detail column. The label is prose; the crew/effort counts are mono. */
+.agents-effort {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+  color: var(--fg-mute);
+  font: 12px/1.45 var(--font-sans);
+  overflow-wrap: anywhere;
+}
+.agents-effort-values { font-family: var(--font-mono); font-size: 11px; }
 
 /* Implementers: regression rate by change size. Twenty categorical series
    colours, assigned by a series' place in the window's list so toggling one
