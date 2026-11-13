@@ -666,8 +666,16 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
 .info-hint:hover,
 .info-hint:focus-visible { color: var(--fg); border-color: var(--fg-dim); }
 .info-hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* ORB-24279: the hidden hint text is absolutely positioned but has no offsets,
+   so its static position is wherever the icon sits in the flow. Inside a
+   horizontally scrolled table that can be hundreds of px past the pane edge,
+   which widens the tab pane's scrollable area sideways (STD-07 R4). Pinning it
+   to its containing block's origin keeps it inside while shown bubbles (which
+   set their own left/right/top below) are unaffected. */
 .info-hint-text {
   position: absolute;
+  left: 0;
+  top: 0;
   width: 1px;
   height: 1px;
   margin: -1px;
