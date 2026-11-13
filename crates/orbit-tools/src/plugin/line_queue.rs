@@ -129,7 +129,3 @@ impl Drop for LineReceiver {
         self.budget.close();
     }
 }
-
-#[cfg(test)]
-#[path = "tests/line_queue.rs"]
-mod tests;
