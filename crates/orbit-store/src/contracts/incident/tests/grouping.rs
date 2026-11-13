@@ -1,8 +1,8 @@
 // Admitted unit test: combinatorial pure grouping logic. The frozen merger
 // is an oracle for fold precedence, ambiguous ownership, and moving windows.
 use super::super::grouping::{
-    collapse_cited_run_cascades, group_failure_incidents, group_run_cascades, push_unique,
-    sort_samples,
+    group_failure_incidents, probe_collapse_cited_run_cascades, probe_group_run_cascades,
+    probe_push_unique, probe_sort_samples,
 };
 use super::super::types::{CASCADE_WINDOW_SECS, FailureIncident, PropagationLink};
 use chrono::{DateTime, Duration};
@@ -35,9 +35,9 @@ fn event(id: i64, run: &str, second: i64, message: &str, role: &str, denied: boo
 }
 
 fn assert_equivalent(rows: &[AuditEvent], label: &str) {
-    let before = group_run_cascades(rows);
+    let before = probe_group_run_cascades(rows);
     assert_eq!(
-        collapse_cited_run_cascades(before.clone()),
+        probe_collapse_cited_run_cascades(before.clone()),
         legacy_collapse(before),
         "{label}"
     );
@@ -216,13 +216,13 @@ fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
     root.event_count += child.event_count;
     root.last_ts = root.last_ts.max(child.last_ts);
     for run_id in &child.run_ids {
-        push_unique(&mut root.run_ids, Some(run_id));
+        probe_push_unique(&mut root.run_ids, Some(run_id));
     }
     for task_id in &child.task_ids {
-        push_unique(&mut root.task_ids, Some(task_id));
+        probe_push_unique(&mut root.task_ids, Some(task_id));
     }
     root.events.extend(child.events.iter().cloned());
-    sort_samples(&mut root.events);
+    probe_sort_samples(&mut root.events);
     let child_root_last = child
         .sample_events
         .iter()

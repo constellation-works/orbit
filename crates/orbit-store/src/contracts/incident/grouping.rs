@@ -142,8 +142,7 @@ impl Cluster {
     }
 }
 
-// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
-pub(super) fn push_unique(target: &mut Vec<String>, value: Option<&str>) {
+fn push_unique(target: &mut Vec<String>, value: Option<&str>) {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return;
     };
@@ -173,9 +172,8 @@ fn event_ref(event: &AuditEvent) -> IncidentEventRef {
     }
 }
 
-// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
 /// Newest raw evidence first, ties broken by id so a page is stable.
-pub(super) fn sort_samples(samples: &mut [IncidentEventRef]) {
+fn sort_samples(samples: &mut [IncidentEventRef]) {
     samples.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
 }
 
@@ -191,8 +189,7 @@ pub fn group_failure_incidents(failures: &[AuditEvent]) -> Vec<FailureIncident> 
     incidents
 }
 
-// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
-pub(super) fn group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
+fn group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
     // Pass 1+2 — cluster by (run scope, signature).
     let mut clusters: BTreeMap<(String, String), Cluster> = BTreeMap::new();
     for event in failures {
@@ -340,11 +337,10 @@ fn incident_from(run_scope: &str, root: Cluster, chain: Vec<Cluster>) -> Failure
     }
 }
 
-// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
 /// Fold incidents whose raw messages cite another incident's `job_run_id`
 /// onto that cited incident. Parent/child pipeline guards are the motivating
 /// case; matching is by durable columns only (message tokens ∩ known run ids).
-pub(super) fn collapse_cited_run_cascades(incidents: Vec<FailureIncident>) -> Vec<FailureIncident> {
+fn collapse_cited_run_cascades(incidents: Vec<FailureIncident>) -> Vec<FailureIncident> {
     if incidents.len() < 2 {
         return incidents;
     }
@@ -563,4 +559,29 @@ fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
         sample_events: child.sample_events,
     });
     root.propagation.extend(child.propagation);
+}
+
+// Test-only seams for the sibling tests/ directory. Production builds never compile
+// these, so the helpers above stay private (STD-02 R19; test_layout.md "Layout shapes"
+// describes the #[cfg(test)] probe).
+#[cfg(test)]
+pub(super) fn probe_push_unique(target: &mut Vec<String>, value: Option<&str>) {
+    push_unique(target, value);
+}
+
+#[cfg(test)]
+pub(super) fn probe_sort_samples(samples: &mut [IncidentEventRef]) {
+    sort_samples(samples);
+}
+
+#[cfg(test)]
+pub(super) fn probe_group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
+    group_run_cascades(failures)
+}
+
+#[cfg(test)]
+pub(super) fn probe_collapse_cited_run_cascades(
+    incidents: Vec<FailureIncident>,
+) -> Vec<FailureIncident> {
+    collapse_cited_run_cascades(incidents)
 }
