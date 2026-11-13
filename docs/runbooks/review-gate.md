@@ -643,8 +643,9 @@ denied:` notices from an owner-run or non-macOS implementer and the other
 required commands are not deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
-`host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside
-the agent sandbox when it settles
+`host_sandbox_test` evidence for an OS and reports `incomplete` when that is
+the only gap. A claimed leaf's host, or an owner host settling a before-landing
+review, runs it outside the agent sandbox when it settles
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)). The certificate's
 `host_evidence` lists each attempt with its typed `reason`. The run's output
 and validation environment are in the log artifact beside the named result
@@ -655,6 +656,21 @@ orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","pa
   | jq '.content | fromjson | .host_evidence'
 orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"<artifact>.log.json"}'
 ```
+
+Owner landing settlement uses this immediate replay because the published
+task is already in `review`; the fulfilment tick selects only `in-progress`
+holds. Replay still requires an otherwise complete evidence-only report:
+each requirement needs its own required unavailable record, and every
+broader record's deferral must match an exact test filter in the same package
+and integration target. A build-budget wrapper, a whole-crate run without
+`--test`, or a notice naming a different test cannot establish that match.
+These shapes still block; settlement does not infer missing records or erase
+uncovered deferrals. Open findings, failed required checks and an explicit
+owner `reject` also block without running anything. A refused command, OS
+mismatch, self-skipped or zero-test host run never becomes passing evidence.
+When immediate replay cannot establish the checks, the owner landing review
+keeps the PR open and follows the recorded-decision route below; it does not
+create an `in-progress` hold or approve the candidate through fulfilment.
 
 A workspace `[[review.host_evidence]]` rule makes this deterministic for a
 claimed leaf. A Rust change on a macOS leaf owes the Linux CodeQL run (before

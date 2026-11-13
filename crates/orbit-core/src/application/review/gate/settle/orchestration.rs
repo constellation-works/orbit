@@ -401,8 +401,8 @@ fn settle(
         let gates = admitted_host_gates(admitted, &reviewed.head.commit);
         judgement.adopt_host_gates(&gates, &reviewed.base.commit, repair.is_some());
     }
-    // [ORB-14478] A claimed leaf's host runs the sandbox-gated checks its
-    // reviewer named, before the verdict counts the evidence.
+    // A claimed leaf or owner landing host runs the sandbox-gated checks
+    // its reviewer named, before the verdict counts the evidence.
     let host = judgement.fulfil_host_evidence(
         runtime,
         context,
