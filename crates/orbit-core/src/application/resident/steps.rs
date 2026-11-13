@@ -92,12 +92,20 @@ impl OrbitRuntime {
             // A stopped mandate never starts another cycle, but its live
             // cycle may have died before finalizing: recover that handoff
             // (final checkpoint, live entry cleared, assignment to review)
-            // instead of only skipping.
+            // instead of only skipping. The checkout stays while that cycle
+            // can still act, so pause, takeover and stop do not pull the
+            // worktree out from under a running owner. A liveness lookup
+            // error is returned and the checkout is kept.
             let mut result = skipped(&task_id, "mandate_not_active");
             if view.state().0 == ResidentMandateState::Ended {
                 result["handoff"] = json!(self.hand_off_stopped_resident_at(&task_id, now)?);
             }
-            if let Ok(Some(live)) = live_cycle_from_history(&history) {
+            // `history` is the pre-handoff snapshot, so a dead cycle this
+            // handoff just closed is still visible and its checkout can be
+            // removed. An unreadable snapshot is kept, not deleted.
+            if let Ok(Some(live)) = live_cycle_from_history(&history)
+                && self.resident_cycle_dead(&live, now)?
+            {
                 self.discard_resident_cycle_worktree(&live.run_id);
             }
             return Ok(result);
