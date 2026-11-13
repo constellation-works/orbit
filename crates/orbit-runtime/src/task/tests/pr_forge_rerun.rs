@@ -63,7 +63,8 @@ impl Drop for Fixture {
     }
 }
 
-pub(super) fn task_forge_gh_request(
+// Crate visibility lets the sibling source module bind this test-only double.
+pub(crate) fn task_forge_gh_request(
     request: ExecRequest,
     _repo_root: &Path,
     _label: &str,
@@ -104,14 +105,14 @@ pub(super) fn task_forge_gh_request(
     })
 }
 
-pub(super) fn workflow_rerun_now() -> Instant {
+pub(crate) fn workflow_rerun_now() -> Instant {
     GH.with_borrow(|gh| {
         let gh = gh.as_ref().expect("fake gh installed");
         gh.epoch + gh.elapsed
     })
 }
 
-pub(super) fn workflow_rerun_sleep(duration: Duration) {
+pub(crate) fn workflow_rerun_sleep(duration: Duration) {
     GH.with_borrow_mut(|gh| {
         let gh = gh.as_mut().expect("fake gh installed");
         assert!(!duration.is_zero(), "polling must never busy loop");

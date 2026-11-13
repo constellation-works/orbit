@@ -11,12 +11,12 @@ use serde_json::Value;
 #[cfg(not(test))]
 use super::pr_forge as gh;
 use super::pr_forge::CheckRerunOutcome;
+#[cfg(test)]
+use super::tests::pr_forge_rerun as gh;
+#[cfg(test)]
+use super::tests::pr_forge_rerun::{workflow_rerun_now, workflow_rerun_sleep};
 #[cfg(not(test))]
 use std::thread::sleep as workflow_rerun_sleep;
-#[cfg(test)]
-use tests as gh;
-#[cfg(test)]
-use tests::{workflow_rerun_now, workflow_rerun_sleep};
 
 // A failed job can be visible before its workflow finishes. Allow the other
 // jobs to settle, but do not hold synchronous recovery indefinitely.
@@ -139,7 +139,3 @@ fn no_rerunnable_workflow(number: u64, head_sha: &str, in_progress: &[String]) -
     }
     OrbitError::Execution(message)
 }
-
-#[cfg(test)]
-#[path = "tests/pr_forge_rerun.rs"]
-mod tests;

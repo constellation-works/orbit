@@ -11,6 +11,8 @@ mod pr_forge_rerun;
 pub mod provider_hold;
 mod reservation_cleanup;
 mod reservation_history;
+#[cfg(test)]
+mod tests;
 
 pub use block_on_run_failure::InfraBlockedTask;
 pub use block_on_run_failure::resumed_task_run_id;
