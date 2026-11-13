@@ -1,6 +1,6 @@
 use orbit_common::OrbitError;
 
-use super::enforce_no_persistent_git_config;
+use super::super::git_config::enforce_no_persistent_git_config;
 
 fn refuse(args: &[&str]) -> String {
     let args: Vec<String> = args.iter().map(ToString::to_string).collect();
