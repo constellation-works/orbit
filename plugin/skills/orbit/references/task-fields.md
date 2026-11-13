@@ -211,8 +211,10 @@ on the operator-only `orbit.run` action `show`.
     Choose the escape by inspecting the tests and gate selection at the culprit
     commit: `no_test` when no test exercises the broken behavior there, and
     `test_not_selected` when a covering test exists but the culprit's gates did
-    not run it. Mere visibility in the diff is not evidence for `review_missed`
-    when no test exercises the broken behavior.
+    not run it. Choose `unclassified` only when the evidence does not settle
+    the escape, and state the unresolved evidence in the finding's description.
+    Mere visibility in the diff is not evidence for `review_missed` when no test
+    exercises the broken behavior.
 - `parent_id` is not an `orbit.task.add` input and is refused as an unknown
   field, like `plan`, `status` and `dependencies`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired

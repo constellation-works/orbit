@@ -2328,6 +2328,31 @@
     },
     {
       "comments": [],
+      "digest": "d8a24ed6c9bd579ab7d33561888c7b55835e96f9eba872ae35dffdc2a2930a9d",
+      "revision": "d5eddc41cb9a78baf61acfa2593d49d8b2e5d143",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
       "digest": "de130ce6a6e0f82e74e4c6627372fb6771a7d110fa18a75d9ce242871f5b9c60",
       "revision": "689139770b3a7bb399d3b4834c2bb355adf803db",
       "settings": {
