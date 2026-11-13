@@ -67,7 +67,7 @@ The nextest phase (in hosted CI, each shard job) runs on a 4-vCPU runner with ev
 `.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh`, the hosted nextest shards and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
 The CI profile also gives priority 100 to the measured long tests, initially
-six: `task_delivery::source_repair::published_completion_scenarios`,
+six: the `task_delivery::source_repair::published_completion_scenarios*` family (its eight carriers, matched by prefix),
 `pr_landing::validation_repairs_and_logs`,
 `pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes`,
 `public_tool_surface::github_log_goldens::every_selected_window_hides_credential_fragments`,
@@ -796,6 +796,48 @@ these artifacts, including failures and queue gaps. The post-landing latest
 20-run nearest-rank p90 check remains operator verification on ORB-23888.
 Neither the scheduling change nor local checks establish a measured hosted
 speedup or compliance with the **400 s** budget.
+
+A 2026-11-12 phase repair (ORB-24231) addresses both lanes in the latest watch:
+the 543 s exemplar's list-build and serial published-completion carrier, and
+the 382–453 s exclusive self-test lane. Required job names, twelve count
+partitions, six nextest slots, zero retries and changed-input self-test
+selection remain intact.
+
+Test build now restores a separate protected-push workspace-output cache.
+The workflow revision's `ci-workspace-cache.py` verifies each current input's
+bytes, size and mode before restoring its cached source mtime. Changed and
+new inputs get a fresh timestamp, including older same-length changed files;
+Cargo still checks dependencies, compiler, features and environment. A real
+Cargo fixture proves both reuse and changed-output rebuilding. Folded
+all-targets Clippy, production Clippy, examples, test binaries and doctests
+retain their existing commands. Cache misses use the original build. See
+[the cache runbook](../runbooks/compiler-cache.md#ordinary-linux-ci) for
+provenance, first-seed behavior, quota and transfer costs.
+
+The 21 published-completion rows retain their bodies, assertions and private
+fixture state. Eight `published_completion_scenarios*` carriers expose their
+independent work to nextest instead of hiding it behind one serial test.
+The CI priority filter covers the whole family; the exact-once partition
+proof still derives its set from the actual test listing. No row is retired.
+The guardrail fixture runner executes every case once with at most four
+workers, each with its own root, environment and result. Its five rendezvous,
+relative-timing and lane-ordering controls run serially before those workers.
+Named-case invocations retain unittest's serial runner. Errors, failures,
+unexpected successes and an empty or lost case set determine the exit status;
+skips remain visible and, as under unittest, do not fail the run.
+
+Task artifacts `ci-budget-timings/before.json`, `after.json` and `report.md`
+record one discarded warmup and three sequential repetitions per phase, the
+host/build, medians, max-minus-min spreads, an unchanged formatter control,
+all logs and the two critical-path projections. The list-build fixture is the
+watch's ten-crate selection, including core, engine and runtime, with changed
+completion-test source against an immutable previous-build cache. This is
+local phase evidence, not a hosted p90. Cache seeding, source churn, extra
+cache transfer, runner setup and the watch's 455 s archive-download outlier
+remain limits. This leaf does not run the live remeasure or claim the budget
+is restored. After merge the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`, retaining the
+executed/gap/failure counts and queue, cache, scope and CPU strata separately.
 
 ## Why
 

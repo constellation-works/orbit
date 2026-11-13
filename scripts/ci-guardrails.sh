@@ -616,6 +616,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     open_done_fifo
     run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
+    run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
     run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"

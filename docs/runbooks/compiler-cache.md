@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, validate before/after builds with it off, and see why hosted CI caches only dependencies.
+summary: Manage the opt-in host Rust compiler cache and understand hosted dependency and content-verified workspace-output caches.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
-paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
+paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", "scripts/ci-workspace-cache.py", "scripts/test-ci-workspace-cache.py", ".cargo/config.toml", ".github/workflows/ci.yml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-29
+last_validated: 2026-11-12
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -50,11 +50,36 @@ beside `shared-key`, so the root digest belongs in `prefix-key`. A root change
 invalidates both the exact key and its fallback prefix; even a comment change
 starts a new namespace. Unchanged root bytes keep the same namespace.
 
-The action additionally keys each archive on the installed compiler versions,
+The action additionally keys each dependency archive on the installed compiler versions,
 `Cargo.lock`, member manifests and the `CARGO*`/`RUST*` environment, and prunes
 `target/` to dependency artifacts before it saves.
-Workspace members are never cached: each run compiles them from the checkout,
-and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
+The separate Test build workspace-output cache retains `target/`, including
+workspace units and `target/.orbit-source-inputs.json`. Its namespace binds the
+runner OS, pinned compiler, Cargo manifests/lock/configuration, lint wrapper,
+workflow and source-manifest helper. Each protected-branch push saves a new
+SHA-keyed entry; PRs restore the newest compatible entry and never save one.
+The helper runs from the workflow-revision checkout at the run's `github.sha`.
+On a pull request that is the merge commit, so the PR's own copy runs in its
+own job, as its other CI code does. Only a protected-branch push writes the
+cache, and the helper it runs is that branch's.
+
+Before compilation, `ci-workspace-cache.py restore` hashes current regular
+tracked and non-ignored untracked files. Only equal bytes, size and file mode
+regain the source mtime recorded after the cached build. Changed or new inputs
+receive a fresh mtime even if their original timestamp was old. Deleted inputs
+remain absent. Links outside the checkout are never followed for rewriting,
+and an incompatible or malformed manifest fails before timestamps change.
+Cargo retains its compiler, feature, environment, dependency and missing-input
+checks; the folded Clippy build and every selected test target still run.
+`capture` records current inputs after a successful build. Each runner owns
+its extracted target directory; workers never share a mutable target.
+
+A cache miss performs the ordinary cold workspace build. The first deployment
+of a namespace needs a protected-branch producer before PRs can benefit. Source
+changes below core can invalidate most cached units, and the extra archive
+uses repository cache quota and download time. Measure those costs and cache
+hit/miss strata in the hosted handoff; local reuse timings do not establish
+the hosted budget. The dependency-only caches and seeders remain available.
 
 - **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
@@ -113,7 +138,7 @@ and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
 - **Test build** sets `ORBIT_COMPILER_CACHE=0`. The repository wrapper
   (`.cargo/config.toml`) then execs `rustc` directly, and no sccache is
   installed.
-- **Check / Clippy / Test** installs the pinned sccache only because the
+- **CI guardrails** installs the pinned sccache because the
   guardrails' live enabled-cache namespace regression
   (`scripts/test-compiler-cache-namespaces.sh` with
   `ORBIT_COMPILER_CACHE_REQUIRE_NS=1`) needs a real binary. While it is
@@ -138,9 +163,10 @@ production Clippy and `cargo clippy --all-targets`. Keep the four native
 delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
 `make ci-test-affected`) and the ordinary hosted required checks.
 
-### Why CI caches only dependencies
+### Earlier dependency-only measurements
 
-Measured on 2026-10-19 over the 100 successful `ci.yml` runs created from
+The dependency-only policy preceded the content-verified workspace layer.
+Its original measurements on 2026-10-19 covered the 100 successful `ci.yml` runs created from
 2026-10-18 17:13 to 2026-10-19 05:03 UTC (78 PR and 22 push runs):
 
 - **Where Test build time goes.** In full-mode PR runs the
@@ -169,7 +195,7 @@ Measured on 2026-10-19 over the 100 successful `ci.yml` runs created from
   `rustc - --print …` (`-`) and `rustc -vV` (`missing input`,
   `missing output_dir`). The heaviest units are test executables, which
   sccache never caches (see [When sccache is ineffective or slower](#when-sccache-is-ineffective-or-slower)).
-- **Why there is no workspace-member cache.** Caching the workspace's own
+- **Original workspace-member cache tradeoff.** Caching the workspace's own
   artifacts per `agent-main` tip would take about 0.5 GiB (zstd) of cache
   quota per push. A PR would restore it and reset the mtimes of files
   unchanged since that tip, so that Cargo keeps those units fresh. Simulated
@@ -581,7 +607,7 @@ remap the provider agent cwd.
 
 | Workload | What sccache 0.17.0 does | What to do |
 | --- | --- | --- |
-| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. Cargo chains this wrapper in front of `clippy-driver` the same way for the folded workspace test build, so its workspace members never hit ([Ordinary Linux CI](#why-ci-caches-only-dependencies)). | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
+| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. Cargo chains this wrapper in front of `clippy-driver` the same way for the folded workspace test build, so its workspace members never hit ([Ordinary Linux CI](#ordinary-linux-ci)). | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
 | Incremental (`CARGO_INCREMENTAL=1` / `-C incremental`) | Pinned sccache `0.17.0` **rejects** the invocation (`incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue`) instead of compiling uncached. | Keep `CARGO_INCREMENTAL=0` on workers. To run incremental rustc, set `ORBIT_COMPILER_CACHE=0`. |
 | Cache cold fill | Extra wrapper/daemon/hash work; measured slower than uncached `ORBIT_COMPILER_CACHE=0` on the same crate | Expected. Judge effectiveness on a *warm* second worktree vs uncached, not vs cold fill. |
 | Tiny crates | Daemon startup can dominate wall time | Hits without a wall-clock drop are not a win. |

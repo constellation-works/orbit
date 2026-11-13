@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise guardrail routing, source registration and dependency policy."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -3015,5 +3017,63 @@ class PythonPreflightTests(unittest.TestCase):
         self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
 
 
+# These cases assert rendezvous, relative completion times or lane ordering.
+# Run them alone, as before. Other cases own independent roots, subprocess
+# environments and result objects; none changes this interpreter's globals.
+SERIAL_CASES = {
+    "test_full_ci_runs_every_self_test_on_crates_only_diff",
+    "test_parallel_guards_rendezvous_and_all_failures_are_named",
+    "test_exclusive_self_tests_run_one_at_a_time_beside_a_lowered_pool",
+    "test_pool_width_is_the_build_budget_cargo_jobs",
+    "test_slow_oldest_guard_does_not_hold_a_finished_slot",
+}
+
+
+def individual_cases(suite):
+    for entry in suite:
+        if isinstance(entry, unittest.TestSuite):
+            yield from individual_cases(entry)
+        else:
+            yield entry
+
+
+def run_guardrail_case(case):
+    result = unittest.TestResult()
+    case(result)
+    return result
+
+
+def run_guardrail_cases():
+    """Run every fixture once; retain serial timing controls and all diagnostics."""
+    cases = list(individual_cases(unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])))
+    serial = [case for case in cases if case._testMethodName in SERIAL_CASES]
+    concurrent = [case for case in cases if case._testMethodName not in SERIAL_CASES]
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    workers = max(1, min(4, cpus))
+    started = time.perf_counter()
+    results = [run_guardrail_case(case) for case in serial]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results.extend(pool.map(run_guardrail_case, concurrent))
+    problems = [(kind, case, trace) for result in results
+                for kind, entries in (("ERROR", result.errors), ("FAIL", result.failures))
+                for case, trace in entries]
+    for kind, case, trace in problems:
+        print(f"{'=' * 70}\n{kind}: {case}\n{'-' * 70}\n{trace}", file=sys.stderr)
+    for result in results:
+        for case, reason in result.skipped:
+            print(f"SKIP: {case}: {reason}", file=sys.stderr)
+        for case in result.unexpectedSuccesses:
+            print(f"UNEXPECTED SUCCESS: {case}", file=sys.stderr)
+    ran = sum(result.testsRun for result in results)
+    passed = bool(cases) and ran == len(cases) and all(result.wasSuccessful() for result in results)
+    print(f"Ran {ran} tests in {time.perf_counter() - started:.3f}s "
+          f"({len(serial)} serial, {workers} fixture workers)", file=sys.stderr)
+    print("OK" if passed else f"FAILED (cases={len(cases)}, ran={ran})", file=sys.stderr)
+    return 0 if passed else 1
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1:
+        unittest.main()
+    else:
+        sys.exit(run_guardrail_cases())
