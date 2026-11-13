@@ -65,11 +65,52 @@ run_orbit() {
 run_orbit init --non-interactive --machine-name visual-fixture \
   --task-prefix VIS --skip-host-prerequisites >/dev/null
 
+# Declared workspaces (`seed.workspaces`): the first name is the primary
+# workspace in $work, each further name is a real second workspace seeded
+# through the same CLI in its own scratch checkout, so the backend's
+# /api/workspaces list (and the dashboard picker built from it) sees them
+# all. Absent key keeps the single-workspace behaviour unchanged.
+workspace_names_file="$scratch/workspace-names"
+node -e '
+  const fs = require("fs");
+  const seed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const rows = seed.workspaces ?? [];
+  if (!Array.isArray(rows)) throw new Error("seed.workspaces must be an array");
+  const seen = new Set();
+  for (const row of rows) {
+    const name = row && row.name;
+    if (typeof name !== "string" || !name.trim() || /[\t\r\n]/.test(name)) {
+      throw new Error("seed workspace names must be non-empty single-line strings");
+    }
+    if (seen.has(name)) throw new Error(`seed workspace name duplicated: ${name}`);
+    seen.add(name);
+  }
+  fs.writeFileSync(process.argv[2], rows.length ? rows.map((row) => row.name).join("\n") + "\n" : "");
+' "$seed" "$workspace_names_file"
+primary_workspace_name="$(head -n 1 "$workspace_names_file" 2>/dev/null || true)"
+
 (
   cd "$work"
   git init -q .
-  run_orbit workspace init >/dev/null
+  if [ -n "$primary_workspace_name" ]; then
+    run_orbit workspace init --name "$primary_workspace_name" >/dev/null
+  else
+    run_orbit workspace init >/dev/null
+  fi
 )
+
+extra_workspace_index=0
+tail -n +2 "$workspace_names_file" | while IFS= read -r extra_workspace_name; do
+  [ -n "$extra_workspace_name" ] || continue
+  extra_workspace_index=$((extra_workspace_index + 1))
+  extra_work="$scratch/work-extra-$extra_workspace_index"
+  mkdir -p "$extra_work"
+  (
+    cd "$extra_work"
+    git init -q .
+    run_orbit workspace init --name "$extra_workspace_name" >/dev/null
+  )
+done
 
 first_task=""
 if [ "$seed_rows" = "1" ]; then
@@ -152,7 +193,7 @@ fi
 # and an optional operator control action. The mandate's
 # workspace and crew are this fixture's registered workspace and default crew.
 if [ "$seed_rows" = "1" ]; then
-  workspace_name="$(basename "$work")"
+  workspace_name="${primary_workspace_name:-$(basename "$work")}"
   default_crew="$(sed -n 's/^default_crew *= *"\([^"]*\)".*/\1/p' "$root/config.toml" | head -n 1)"
   resident_count="$(node -e '
     const seed = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));

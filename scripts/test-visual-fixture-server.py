@@ -20,6 +20,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/visual-fixture-server.sh"
 SEED = ROOT / "crates/orbit-web/visual/fixtures/busy-workspace.json"
+REMOTE_SEED = ROOT / "crates/orbit-web/visual/fixtures/remote-host-workspaces.json"
 SCRATCH = ROOT / ".orbit/tmp"
 LOG_STREAM_PATH = "/api/log/stream"
 # Shipped native gate. One more established stream is refused; sequential
@@ -64,6 +65,71 @@ class VisualFixtureServerTest(unittest.TestCase):
                     if server.poll() is None:
                         os.killpg(server.pid, signal.SIGTERM)
                     server.wait(timeout=15)
+
+    def test_remote_host_and_second_workspace_seed(self):
+        # AC1: a seed declaring one remote host and two workspaces makes
+        # /api/hosts carry the remote row (front-only, the backend's own
+        # list has none) and /api/workspaces list both workspaces, so the
+        # dashboard builds the rail host picker and the workspace picker
+        # (app.js only builds the latter when the owned list exceeds one).
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            env = {**os.environ, "ORBIT_SCRATCH_DIR": tmp}
+            server, output, diagnostics = self._start(SCRIPT, ["remote-host-workspaces"], ROOT, env)
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                declared = json.loads(REMOTE_SEED.read_text())
+                self.assertEqual(len(declared["hosts"]), 1)
+                self.assertEqual(len(declared["workspaces"]), 2)
+                for route in ("/api/hosts?probe=false", "/api/hosts"):
+                    status, _, body = self._fetch(url, route)
+                    self.assertEqual(status, 200, body[:200])
+                    payload = json.loads(body)
+                    hosts = payload["hosts"]
+                    self.assertTrue(hosts[0]["local"], hosts)
+                    remote = [row for row in hosts if not row["local"]]
+                    self.assertEqual(len(remote), 1, hosts)
+                    self.assertEqual(remote[0]["name"], declared["hosts"][0]["name"])
+                    self.assertEqual(remote[0]["machine_id"], declared["hosts"][0]["machine_id"])
+                    self.assertEqual(remote[0]["ssh"], declared["hosts"][0]["ssh"])
+                    self.assertEqual(remote[0]["reachable"], declared["hosts"][0]["reachable"])
+                    self.assertEqual(remote[0]["error"]["code"], "unreachable_destination")
+                status, _, body = self._fetch(url, "/api/workspaces")
+                self.assertEqual(status, 200, body[:200])
+                workspaces = json.loads(body)
+                self.assertEqual(len(workspaces), 2, workspaces)
+                self.assertEqual(
+                    [row["name"] for row in workspaces],
+                    [row["name"] for row in declared["workspaces"]],
+                )
+                self.assertTrue(all(row["status"] == "active" for row in workspaces), workspaces)
+            finally:
+                self._stop(server)
+
+    def test_fixture_hosts_served_with_stub_backend(self):
+        # The front synthesises the serving-host row when the backend
+        # cannot give a JSON host list (the stale stub backend), so the
+        # seeded remote still reaches the picker in mini-checkout runs.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            repo = self._mini_checkout(Path(tmp) / "repo")
+            wrapper, record = self._stale_backend(Path(tmp), "present")
+            env = self._fixture_env(tmp, wrapper, record, "present")
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["remote-host-workspaces"], repo, env,
+            )
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                status, _, body = self._fetch(url, "/api/hosts?probe=false")
+                self.assertEqual(status, 200, body[:200])
+                hosts = json.loads(body)["hosts"]
+                self.assertTrue(hosts[0]["local"], hosts)
+                remote = [row for row in hosts if not row["local"]]
+                self.assertEqual([row["name"] for row in remote], ["fixture-remote"], hosts)
+            finally:
+                self._stop(server)
 
     def test_faketime_launch_uses_frozen_absolute_timestamp(self):
         # Launch-boundary regression for ORB-20505: the script used to run
@@ -486,6 +552,7 @@ class VisualFixtureServerTest(unittest.TestCase):
             'fetch("/api/tasks");\n'
             'globalThis.CANDIDATE_JS = "CANDIDATE-JS-MARKER";\n'
         )
+        shutil.copy(REMOTE_SEED, fixture_dir / "remote-host-workspaces.json")
         (fixture_dir / "experiments.json").write_text(json.dumps({
             "tasks": [{"title": "Fixture experiment task", "complexity": "low", "status": "proposed"}],
             "experiment": {"id": "exp-visual-fixture", "name": "Fixture"},
