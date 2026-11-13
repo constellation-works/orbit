@@ -203,12 +203,12 @@ pub(crate) use validation_tools::positive_validation_tools;
 pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;
 pub(crate) use write_response::task_reference_status_index;
 pub use write_response::{
-    DashboardPageReads, TaskWriteMetadata, TaskWriteResponsePolicy, active_task_triage_map,
-    job_run_is_locally_navigable, link_pull_requests, mark_readiness_preparing,
-    screened_task_write_response_json, summary_status_transitions,
+    DashboardPageReads, TaskFieldProjection, TaskWriteMetadata, TaskWriteResponsePolicy,
+    active_task_triage_map, job_run_is_locally_navigable, link_pull_requests,
+    mark_readiness_preparing, screened_task_write_response_json, summary_status_transitions,
     task_detail_with_dashboard_extras, task_fields_response_json,
-    task_write_response_from_tool_answer, task_write_response_json, tasks_in_pilot_preparation,
-    with_dashboard_extras,
+    task_fields_response_json_projected, task_write_response_from_tool_answer,
+    task_write_response_json, tasks_in_pilot_preparation, with_dashboard_extras,
 };
 
 pub(crate) use external_merge::settled_merge_commit;

@@ -29,6 +29,10 @@ pub(super) fn render(
 ) -> CommandOut {
     match input.get("fields").map(strings) {
         Some(fields) => {
+            // The tool's `fields` projection keys even one field; the CLI
+            // keeps its bare single-field JSON, so unwrap that one key
+            // before rendering either surface.
+            let value = single_field_value(&value, &fields);
             let text = fields_text(&value, &fields)?;
             Ok(Payload::detail(value, text).into())
         }
@@ -464,6 +468,19 @@ fn pr_summary(task: &Map<String, Value>) -> Option<String> {
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     Some(format!("PR: #{number} ({state})"))
+}
+
+/// Unwrap a one-field projection to its bare value, for the CLI's
+/// single-field JSON. `terminal` alone stays keyed, as the tool
+/// answers it; anything already bare is left as it is.
+fn single_field_value(value: &Value, fields: &[&str]) -> Value {
+    let [field] = fields else {
+        return value.clone();
+    };
+    if *field == "terminal" {
+        return value.clone();
+    }
+    value.get(field).cloned().unwrap_or_else(|| value.clone())
 }
 
 /// The text of a `--fields` projection: one field's value bare, several each

@@ -3247,7 +3247,11 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
         ),
         (
             json!({ "id": task_id, "fields": ["status"] }),
-            json!({ "value": "proposed" }),
+            json!({ "status": "proposed" }),
+        ),
+        (
+            json!({ "id": task_id, "fields": ["artifacts"] }),
+            json!({ "artifacts": [] }),
         ),
         (
             json!({
@@ -3282,6 +3286,43 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
             "{input}"
         );
     }
+
+    // Write projections follow the same rule: a one-element `fields`
+    // array stays keyed, while the `field` alias answers bare (carried
+    // on the MCP wire as `{"value": ...}`).
+    assert_eq!(
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({"id": task_id, "priority": "medium", "fields": ["status"]}),
+        ),
+        json!({"status": "proposed", "redactions_applied": false, "redactions": []})
+    );
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "MCP projection write task",
+            "description": "Created to check write projection shapes",
+            "complexity": "low",
+            "fields": ["status"],
+        }),
+    );
+    assert_eq!(added["status"], json!("proposed"), "{added}");
+    assert!(
+        added["warnings"].is_array(),
+        "a one-field `fields` write projection is an object and carries warnings: {added}"
+    );
+    assert_eq!(
+        client.call_tool_ok(
+            "orbit_task_add",
+            json!({
+                "title": "MCP bare-alias write task",
+                "description": "Created to check the field alias shape",
+                "complexity": "low",
+                "field": "status",
+            }),
+        ),
+        json!({"value": "proposed"})
+    );
 
     let output = workspace.run_ok(&["task", "show", &task_id]);
     let stdout = stdout(&output);
@@ -3320,7 +3361,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
         ),
         (
             &["tool", "run", "orbit.task.show", "--input", &status_input],
-            json!("proposed"),
+            json!({"status": "proposed"}),
         ),
         (
             &[
@@ -5980,7 +6021,7 @@ fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
         client.call_tool_ok(
             "orbit_task_show",
             json!({ "id": id, "fields": ["relations"] }),
-        )["items"]
+        )["relations"]
             .clone()
     };
 

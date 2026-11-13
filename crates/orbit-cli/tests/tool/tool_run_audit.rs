@@ -340,7 +340,7 @@ fn read_only_tool_run_persists_audit_while_joining_a_foreign_generation() {
             .get_output()
             .clone();
         let value: Value = serde_json::from_slice(&output.stdout).expect("task status");
-        assert_eq!(value, task["status"]);
+        assert_eq!(value, json!({"status": task["status"].clone()}));
         assert!(
             output.stderr.is_empty(),
             "read-only tool emitted a warning: {}",

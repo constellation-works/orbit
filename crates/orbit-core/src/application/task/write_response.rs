@@ -20,9 +20,10 @@
 //!   OS and crew enrichments, no sidecar hydration. The tool host
 //!   (MCP) and therefore a routed remote CLI answer serve it.
 //! - [`TaskWriteResponsePolicy::Projected`] — the caller's explicit
-//!   `fields`/`field` projection, a bare value for one field. Only
-//!   the tool host selects it; the CLI rehydrates the full record
-//!   and HTTP has no selector.
+//!   `fields`/`field` projection. A `fields` array always answers an
+//!   object keyed by field name, even for one field; the `field`
+//!   alias answers one field's bare value. Only the tool host selects
+//!   it; the CLI rehydrates the full record and HTTP has no selector.
 //!
 //! Writes never carry the show-only `block`, `next_step`,
 //! `final_recovery` or `owed_criteria` guidance: those stay on
@@ -57,16 +58,40 @@ pub enum TaskWriteResponsePolicy {
     DashboardFullRecord,
     /// Base record plus OS/crew enrichments, no sidecars.
     Compact,
-    /// Only the named show fields; one field answers its bare value.
-    Projected(Vec<String>),
+    /// Only the named show fields.
+    Projected(TaskFieldProjection),
+}
+
+/// A caller's `fields`/`field` projection and its single-field shape.
+///
+/// `keyed_single` is true when the fields came from the `fields`
+/// array: even a one-element array then answers an object keyed by
+/// field name. It is false for the `field` alias, which answers one
+/// field's bare value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskFieldProjection {
+    /// The requested field names, in request order.
+    pub fields: Vec<String>,
+    /// Whether a one-element projection stays keyed by field name.
+    pub keyed_single: bool,
+}
+
+impl TaskFieldProjection {
+    /// A projection from the given source shape.
+    pub fn new(fields: Vec<String>, keyed_single: bool) -> Self {
+        Self {
+            fields,
+            keyed_single,
+        }
+    }
 }
 
 impl TaskWriteResponsePolicy {
     /// The tool host's policy for a write: the requested projection
-    /// when `fields` names any, otherwise [`Self::Compact`].
-    pub fn from_fields(fields: Option<&[String]>) -> Self {
+    /// when one was supplied, otherwise [`Self::Compact`].
+    pub fn from_fields(fields: Option<&TaskFieldProjection>) -> Self {
         match fields {
-            Some(fields) => Self::Projected(fields.to_vec()),
+            Some(projection) => Self::Projected(projection.clone()),
             None => Self::Compact,
         }
     }
@@ -176,9 +201,12 @@ pub fn task_write_response_json(
             runtime.task_crew_read(task).insert_into(&mut object);
             Value::Object(object)
         }
-        TaskWriteResponsePolicy::Projected(fields) => {
-            task_fields_response_json(runtime, task, fields)?
-        }
+        TaskWriteResponsePolicy::Projected(projection) => task_fields_response_json_projected(
+            runtime,
+            task,
+            &projection.fields,
+            projection.keyed_single,
+        )?,
     };
     metadata.insert_into(&mut response);
     Ok(response)
@@ -229,6 +257,19 @@ pub fn task_fields_response_json(
     task: &Task,
     fields: &[String],
 ) -> Result<Value, OrbitError> {
+    task_fields_response_json_projected(runtime, task, fields, false)
+}
+
+/// One task reduced to the requested show fields. With
+/// `keyed_single`, even a single field answers an object keyed by
+/// field name (the `fields` array shape); without it a single field
+/// answers its bare value (the `field` alias shape).
+pub fn task_fields_response_json_projected(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    fields: &[String],
+    keyed_single: bool,
+) -> Result<Value, OrbitError> {
     let status_by_id = if fields
         .iter()
         .any(|field| matches!(field.as_str(), "resolved_dependencies" | "relations"))
@@ -237,7 +278,7 @@ pub fn task_fields_response_json(
     } else {
         None
     };
-    if fields.len() == 1 {
+    if fields.len() == 1 && !keyed_single {
         return task_show_field_json(runtime, task, &fields[0], status_by_id.as_ref());
     }
     let mut object = Map::new();

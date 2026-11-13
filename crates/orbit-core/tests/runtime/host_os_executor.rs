@@ -1235,7 +1235,10 @@ fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
         "fields": ["os_requirement"], "model": "codex"}),
         )
         .unwrap();
-    assert_eq!(projected, shown["os_requirement"]);
+    assert_eq!(
+        projected,
+        json!({"os_requirement": shown["os_requirement"].clone()})
+    );
     let tagged = show(&runtime, &linux);
     assert_eq!(tagged["os_requirement"]["any_of"], json!(["linux"]));
     assert_eq!(

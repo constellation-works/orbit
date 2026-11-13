@@ -23,9 +23,9 @@ use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority,
-    TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen, is_operator_rescue_close,
-    screened_task_write_response_json,
+    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskFieldProjection,
+    TaskUpdateAuthority, TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen,
+    is_operator_rescue_close, screened_task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -190,7 +190,7 @@ pub(super) fn add(
         caller.agent,
         caller.model,
     )?;
-    screened_write_response(runtime, written, response_fields.as_deref())
+    screened_write_response(runtime, written, response_fields.as_ref())
 }
 
 /// A status a task may be created in.
@@ -311,7 +311,7 @@ fn update_without_repilot(
                     )?
                 }
             };
-            return screened_write_response(runtime, written, response_fields.as_deref());
+            return screened_write_response(runtime, written, response_fields.as_ref());
         }
     }
     let note = optional_string(input, "note")?;
@@ -324,7 +324,7 @@ fn update_without_repilot(
     params.trusted_artifact_origin = origin;
     let written =
         runtime.update_task_screened_for_tool(&id, params, &screen, agent, model, note)?;
-    screened_write_response(runtime, written, response_fields.as_deref())
+    screened_write_response(runtime, written, response_fields.as_ref())
 }
 
 /// `orbit task update`: the operator command's write. `approve` takes the
@@ -355,7 +355,7 @@ fn cli_update(
             agent,
             model,
         )?;
-        return screened_write_response(runtime, written, response_fields.as_deref());
+        return screened_write_response(runtime, written, response_fields.as_ref());
     }
     if note.is_some() {
         return Err(OrbitError::InvalidInput(
@@ -389,7 +389,7 @@ fn cli_update(
         agent,
         model,
     )?;
-    screened_write_response(runtime, written, response_fields.as_deref())
+    screened_write_response(runtime, written, response_fields.as_ref())
 }
 
 fn reject_fields_for_approve(input: &Value) -> Result<(), OrbitError> {
@@ -538,7 +538,7 @@ fn sync_resident_mandate_crew(
 fn screened_write_response(
     runtime: &OrbitRuntime,
     written: ScreenedTaskWrite,
-    fields: Option<&[String]>,
+    fields: Option<&TaskFieldProjection>,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let persisted_id = written.task.id.clone();
     let response = screened_task_write_response_json(
@@ -714,7 +714,12 @@ pub(super) struct TaskWriteOutput {
 /// Read-only projection controls are accepted by mutating task tools solely
 /// for shaping their response. In particular, `comments` and `history` are
 /// omitted from the default write response and can be requested explicitly.
-pub(super) fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>, OrbitError> {
+/// A `fields` array keeps even one field keyed by name; the `field` alias
+/// answers that field's bare value.
+pub(super) fn write_response_fields(
+    input: &Value,
+) -> Result<Option<TaskFieldProjection>, OrbitError> {
+    let keyed_single = input.get("fields").is_some();
     let fields = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
     if let Some(fields) = &fields
         && let Some(unknown) = fields
@@ -725,5 +730,5 @@ pub(super) fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>
             unknown,
         )));
     }
-    Ok(fields)
+    Ok(fields.map(|fields| TaskFieldProjection::new(fields, keyed_single)))
 }

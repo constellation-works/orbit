@@ -16,8 +16,8 @@ use serde_json::{Map, Value, json};
 use crate::OrbitRuntime;
 use crate::application::contracts::TaskBundleMaintenancePort;
 use crate::application::task::{
-    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, TaskWriteMetadata,
-    TaskWriteResponsePolicy, task_listing_field_json, task_write_response_json,
+    TaskEligibilityQuery, TaskFieldProjection, TaskListFilter, TaskListQuery, TaskOsReadout,
+    TaskWriteMetadata, TaskWriteResponsePolicy, task_listing_field_json, task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -399,7 +399,7 @@ fn reject(
         response: task_write_response_json(
             runtime,
             &task,
-            &TaskWriteResponsePolicy::from_fields(response_fields.as_deref()),
+            &TaskWriteResponsePolicy::from_fields(response_fields.as_ref()),
             &TaskWriteMetadata::default(),
         )?,
         persisted_id: task.id,
@@ -448,7 +448,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         .transpose()?;
     // Validated before the query so an unknown field is refused even when no
     // task matches, instead of only surfacing on the first listed task.
-    let fields = projection_fields(input)?.filter(|fields| !fields.is_empty());
+    let fields = projection_fields(input)?.filter(|fields| !fields.fields.is_empty());
     let schedule_bound =
         |field: &str| -> Result<Option<chrono::DateTime<chrono::Utc>>, OrbitError> {
             input
@@ -532,9 +532,13 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                 );
                 Ok(Value::Object(object))
             }
-            Some(fields) => {
-                project_listed_task(runtime, &row.task, fields, &os_readout, &mut warnings)
-            }
+            Some(fields) => project_listed_task(
+                runtime,
+                &row.task,
+                &fields.fields,
+                &os_readout,
+                &mut warnings,
+            ),
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let total = page.total;
@@ -558,8 +562,8 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
 }
 
 /// One listed task reduced to the requested fields, always as an object keyed by
-/// field name (`orbit.task.show` returns a bare value for a single field, which
-/// would make the list's element shape depend on how many fields were asked for).
+/// field name, so the list's element shape never depends on how many fields
+/// were asked for.
 fn project_listed_task(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -586,11 +590,12 @@ fn project_listed_task(
 }
 
 /// The requested `fields`, or the single-field alias `field`, each checked
-/// against the show vocabulary.
-fn projection_fields(input: &OperationInput) -> Result<Option<Vec<String>>, OrbitError> {
-    let fields = match input.optional_string_list("fields")? {
-        Some(fields) => Some(fields),
-        None => input.optional_string_list("field")?,
+/// against the show vocabulary. `fields` keeps even one field keyed by
+/// name; the `field` alias answers that field's bare value.
+fn projection_fields(input: &OperationInput) -> Result<Option<TaskFieldProjection>, OrbitError> {
+    let (fields, keyed_single) = match input.optional_string_list("fields")? {
+        Some(fields) => (Some(fields), true),
+        None => (input.optional_string_list("field")?, false),
     };
     let Some(fields) = fields else {
         return Ok(None);
@@ -610,7 +615,7 @@ fn projection_fields(input: &OperationInput) -> Result<Option<Vec<String>>, Orbi
         }
         normalized.push(field.to_string());
     }
-    Ok(Some(normalized))
+    Ok(Some(TaskFieldProjection::new(normalized, keyed_single)))
 }
 
 /// `orbit.task.eligible`: candidates whose lock surface overlaps no
@@ -676,11 +681,20 @@ fn eligible_task_json(task: &Task) -> Value {
 fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
     let id = input.required_string("id")?;
     let fields = projection_fields(input)?;
-    if fields
-        .as_ref()
-        .is_some_and(|fields| fields.iter().any(|field| field == TASK_SHOW_DELIVERY_FIELD))
-    {
-        return delivery(runtime, &id, fields.as_deref().unwrap_or_default(), input);
+    if fields.as_ref().is_some_and(|projection| {
+        projection
+            .fields
+            .iter()
+            .any(|field| field == TASK_SHOW_DELIVERY_FIELD)
+    }) {
+        return delivery(
+            runtime,
+            &id,
+            fields
+                .as_ref()
+                .map_or(&[][..], |projection| projection.fields.as_slice()),
+            input,
+        );
     }
     if input.as_value().get("run_id").is_some() {
         return Err(OrbitError::InvalidInput(format!(
@@ -707,13 +721,16 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         }
     };
     match fields {
-        Some(fields) => {
-            let projected = task_fields_to_json(runtime, &task, &fields)?;
-            Ok(if fields.as_slice() == ["terminal"] {
-                json!({ "terminal": projected })
-            } else {
-                projected
-            })
+        Some(projection) => {
+            let projected =
+                task_fields_to_json(runtime, &task, &projection.fields, projection.keyed_single)?;
+            Ok(
+                if projection.fields.as_slice() == ["terminal"] && !projection.keyed_single {
+                    json!({ "terminal": projected })
+                } else {
+                    projected
+                },
+            )
         }
         None => serialize_task_show(runtime, &task),
     }

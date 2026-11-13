@@ -2575,7 +2575,7 @@
       },
       {
         "name": "fields",
-        "description": "Response field names.",
+        "description": "Response fields, keyed (even one).",
         "param_type": "string_list",
         "required": false
       },
@@ -3132,7 +3132,7 @@
       },
       {
         "name": "fields",
-        "description": "Field names to return; `delivery` is selected alone.",
+        "description": "Fields to return, keyed (even one); `delivery` alone.",
         "param_type": "string_list",
         "required": false
       },
@@ -3377,7 +3377,7 @@
       },
       {
         "name": "fields",
-        "description": "Response field names.",
+        "description": "Response fields, keyed (even one).",
         "param_type": "string_list",
         "required": false
       },
