@@ -445,7 +445,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 
 /* The dialog a provider chip opens: anchored under the chip and placed by
-   script (position fixed, so the bar's scrolling row cannot clip it). */
+   script (position fixed, so the top bar cannot clip it). */
 .shell > .usage-dialog { grid-area: 1 / 1; }
 .usage-dialog {
   position: fixed;
@@ -600,11 +600,11 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
 .topbar .notify-btn[hidden] { display: none; }
 
-/* On phones the top bar is one scrolling row: the brand stays at the start,
-   followed by the Tasks controls and Notify (when available), and anything that overflows
-   is reachable by swiping or tabbing across. Scope pickers and
-   navigation keep their own rows below, leaving most of the viewport for the
-   current pane. */
+/* On phones the brand and Notify stay on the first row, Notify at the
+   trailing edge, the same place it occupies on every other view. While Tasks
+   is open, Search and New task take the next row so every control fits at
+   375px without the bar scrolling sideways. Scope pickers and navigation
+   keep their own rows below. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
@@ -699,22 +699,33 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   /* Free scrolling can rest mid-label; the fades above mark it as overflow,
      while the router snaps the strip to an item start after every reveal. */
   .topbar {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     height: auto;
     padding: 4px 8px;
     gap: 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    scroll-padding-inline: 8px;
+    /* Clip a subpixel leftover instead of growing a sideways page scroll.
+       The Tasks row is sized to fit, so this does not hide a control. */
+    overflow-x: clip;
   }
   .topbar :is(button, a):focus-visible { outline-offset: -2px; }
-  .topbar::-webkit-scrollbar { display: none; }
-  .topbar :is(button, a) { scroll-margin-inline: 8px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
-  .topbar .topbar-task-actions { order: 2; flex: 0 0 auto; }
-  .topbar .topbar-task-actions .task-search-wrap { flex: 0 0 180px; width: 180px; }
-  .topbar .refresh-btn { order: 3; }
+  /* Notify stays on the first row. The Tasks controls, shown only while
+     Tasks is open, wrap onto their own row at full width. */
+  .topbar .refresh-btn { order: 2; }
+  .topbar .topbar-task-actions {
+    order: 3;
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+  }
+  .topbar .topbar-task-actions .task-search-wrap {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+  .topbar .topbar-task-actions #task-search { min-width: 0; }
   /* A scope note takes room only while it says something. */
   .rail-workspace .workspace-scope-note.is-inactive { display: none; }
   /* Tighter readings keep all three in view at 375px. */
