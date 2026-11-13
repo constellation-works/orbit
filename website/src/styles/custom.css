@@ -247,7 +247,8 @@ body {
 
 .sl-markdown-content table.orbit-config-keys code:not(pre code) {
   overflow-x: visible;
-  font-size: 0.72em;
+  /* DESIGN.md §3.2: code is 14px. 0.72em of the 0.92rem table size was 10.6px. */
+  font-size: 0.875rem;
   white-space: normal;
 }
 
@@ -374,10 +375,30 @@ body {
    wrap at token boundaries instead, like the specialized tables. Prose
    outside tables keeps the punctuation reservation and scroll behavior, and
    the config-keys and cli-commands overrides above stay authoritative. */
-.sl-markdown-content table:not(.orbit-config-keys):not(.orbit-cli-commands) code:not(pre code) {
+.sl-markdown-content table:not(.orbit-config-keys):not(.orbit-cli-commands):not(.orbit-config-paths) code:not(pre code) {
   max-width: 100%;
   overflow-x: visible;
   white-space: normal;
+}
+
+/* File locations (Path | Scope on /reference/config/): path chips must not
+   split inside a file name (config. / toml). Keep the whole path on one line
+   at the DESIGN.md §3.2 code size; the table itself scrolls in its wrapper. */
+.sl-markdown-content table.orbit-config-paths {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.sl-markdown-content table.orbit-config-paths code:not(pre code) {
+  font-size: 0.875rem;
+  max-width: 100%;
+  overflow-x: visible;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.sl-markdown-content table.orbit-config-paths code:not(pre code) wbr {
+  display: none;
 }
 
 .sl-markdown-content table th,
@@ -385,6 +406,13 @@ body {
   border-bottom: 1px solid var(--sl-color-hairline-light);
   border-right: 1px solid var(--sl-color-hairline-light);
   padding: 0.6rem 1rem;
+  /* Cells in a row start at the same top edge. Without this the Scope text
+     baseline/bottom-aligned against a multi-line path chip. */
+  vertical-align: top;
+}
+
+.sl-markdown-content table code:not(pre code) {
+  vertical-align: top;
 }
 
 .sl-markdown-content table th {

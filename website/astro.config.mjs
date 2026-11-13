@@ -100,6 +100,13 @@ const tablePlugin = defineHastPlugin({
           addClasses(node, ctx, 'orbit-config-keys');
           wrapTableCode(node, ctx, 'config');
         }
+        if (
+          headers.length === 2 &&
+          ctx.textContent(headers[0]).trim() === 'Path' &&
+          ctx.textContent(headers[1]).trim() === 'Scope'
+        ) {
+          addClasses(node, ctx, 'orbit-config-paths');
+        }
       }
     },
   },
