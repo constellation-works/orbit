@@ -239,7 +239,8 @@ export function findConfiguredCrew(value) {
   const agentCrew = crews.find((crew) => crew.name === name || crew.name === base);
   if (agentCrew) return agentCrew;
   const humanCrews = Array.isArray(taskState.lastCrewPayload.human_crews) ? taskState.lastCrewPayload.human_crews : [];
-  const humanCrew = humanCrews.find((crew) => crew.name === name || crew.name === base);
+  // Human crew names have no `@<effort>` form, unlike agent crew references.
+  const humanCrew = humanCrews.find((crew) => crew.name === name);
   if (humanCrew) return humanCrew;
   return null;
 }
