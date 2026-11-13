@@ -20,10 +20,36 @@ ASSETS = Path("crates/orbit-core/assets/auto_tasks")
 OUTPUT = ROOT / ASSETS / "body-history.json"
 SOURCES = ROOT / "crates/orbit-cli/tests/fixtures/auto-task-body-history/sources.json"
 PLACEHOLDER = "__ORBIT_BASE_BRANCH__"
+# A revision counts as landed only when reachable from an integration
+# branch. Task-branch commits are reachable from HEAD but, after a squash
+# merge, never become ancestors of the integration branch, so recording
+# them makes `--check` fail there. Prefer the remote integration branch;
+# fall back to HEAD's first-parent history when no integration ref exists
+# (e.g. the isolated fixtures in the generator's test).
+INTEGRATION_REF_GROUPS = (
+    ("origin/agent-main", "agent-main"),
+    ("origin/main", "main"),
+    ("origin/master", "master"),
+)
 
 
 def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True)
+
+
+def ref_available(ref):
+    return not subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=ROOT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode
+
+
+def integration_refs():
+    for group in INTEGRATION_REF_GROUPS:
+        refs = [ref for ref in group if ref_available(ref)]
+        if refs:
+            return refs
+    return []
 
 
 def commit_available(revision):
@@ -112,6 +138,7 @@ def main():
     history = json.loads(OUTPUT.read_text()) if OUTPUT.exists() else {}
     sources = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
     parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
+    refs = integration_refs()
     snapshots = {}
     names = set(history) | {asset.stem for asset in (ROOT / ASSETS).glob("*.yaml")}
     for name in sorted(names):
@@ -130,6 +157,16 @@ def main():
         for start in [*reversed(starts), "HEAD"]:
             revisions.extend(git("log", "--first-parent", "--format=%H", start, "--", path).splitlines())
         revisions = list(dict.fromkeys(revisions))
+        if refs:
+            # Keep only revisions landed on an integration branch. This
+            # still includes merged-base history at a PR head that merges
+            # its base: those commits are ancestors of the integration
+            # branch even though HEAD's first parent is the task branch.
+            landed_revisions = set()
+            for ref in refs:
+                landed_revisions.update(
+                    git("log", "--first-parent", "--format=%H", ref, "--", path).splitlines())
+            revisions = [revision for revision in revisions if revision in landed_revisions]
         landed = set(revisions)
         # Reject available draft bodies absent from these histories. Retain
         # unavailable revisions via their fixture, as in a shallow checkout.
