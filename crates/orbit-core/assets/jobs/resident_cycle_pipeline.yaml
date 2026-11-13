@@ -14,11 +14,17 @@
 # 2. cycle is the resident's agent. Core scopes every tool call it makes to
 #    the cycle's grant and keys each write `resident:<mandate>:<cycle>:<n>`.
 #    It ends by writing one checkpoint through `orbit.resident.checkpoint`.
+#    Observe creates a detached managed worktree of the workspace HEAD and
+#    the cycle launches in it (`workspace_path`): a direct launch in the
+#    registered checkout cannot enforce the policy's non-subtree
+#    `denyModify **/.env` under linux-bwrap, so the sandbox refused it
+#    before the agent ran.
 # 3. finalize synthesizes an `incomplete` checkpoint when the agent wrote
-#    none, clears the live cycle, and moves the assignment to `review` on a
-#    `handoff` checkpoint or a stop. When the agent step fails, finalize does
-#    not run; the next observe treats the cycle as dead and recovers it,
-#    settling a `handoff` checkpoint instead of starting another cycle.
+#    none, clears the live cycle, removes the cycle's worktree, and moves
+#    the assignment to `review` on a `handoff` checkpoint or a stop. When
+#    the agent step fails, finalize does not run; the next observe treats
+#    the cycle as dead, removes its worktree and recovers it, settling a
+#    `handoff` checkpoint instead of starting another cycle.
 
 schemaVersion: 2
 kind: Job
@@ -45,6 +51,7 @@ spec:
       default_input:
         brief: "{{ steps.observe.output }}"
         crew: "{{ steps.observe.output.crew }}"
+        workspace_path: "{{ steps.observe.output.workspace_path }}"
 
     - id: finalize
       target: activity:resident_finalize

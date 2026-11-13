@@ -32,6 +32,7 @@ mod routine_status_port;
 mod steps;
 mod task_port;
 mod view;
+mod worktree;
 
 #[cfg(feature = "test-support")]
 pub use cycle::test_support::with_resident_cycle_admission_checkpoint;
