@@ -142,7 +142,8 @@ impl Cluster {
     }
 }
 
-fn push_unique(target: &mut Vec<String>, value: Option<&str>) {
+// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
+pub(super) fn push_unique(target: &mut Vec<String>, value: Option<&str>) {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return;
     };
@@ -172,8 +173,9 @@ fn event_ref(event: &AuditEvent) -> IncidentEventRef {
     }
 }
 
+// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
 /// Newest raw evidence first, ties broken by id so a page is stable.
-fn sort_samples(samples: &mut [IncidentEventRef]) {
+pub(super) fn sort_samples(samples: &mut [IncidentEventRef]) {
     samples.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
 }
 
@@ -189,7 +191,8 @@ pub fn group_failure_incidents(failures: &[AuditEvent]) -> Vec<FailureIncident> 
     incidents
 }
 
-fn group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
+// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
+pub(super) fn group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
     // Pass 1+2 — cluster by (run scope, signature).
     let mut clusters: BTreeMap<(String, String), Cluster> = BTreeMap::new();
     for event in failures {
@@ -337,10 +340,11 @@ fn incident_from(run_scope: &str, root: Cluster, chain: Vec<Cluster>) -> Failure
     }
 }
 
+// Widened to pub(super) purely for sibling tests/ access; see docs/design-patterns/test_layout.md.
 /// Fold incidents whose raw messages cite another incident's `job_run_id`
 /// onto that cited incident. Parent/child pipeline guards are the motivating
 /// case; matching is by durable columns only (message tokens ∩ known run ids).
-fn collapse_cited_run_cascades(incidents: Vec<FailureIncident>) -> Vec<FailureIncident> {
+pub(super) fn collapse_cited_run_cascades(incidents: Vec<FailureIncident>) -> Vec<FailureIncident> {
     if incidents.len() < 2 {
         return incidents;
     }
@@ -560,7 +564,3 @@ fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
     });
     root.propagation.extend(child.propagation);
 }
-
-#[cfg(test)]
-#[path = "tests/grouping.rs"]
-mod tests;
