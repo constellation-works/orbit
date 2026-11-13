@@ -532,7 +532,28 @@ function signed(value) {
   return value < 0 ? `−${text}` : `+${text}`;
 }
 
-function statText(value) {
+// Monetary stats (USD) keep mill-dollar precision so measured sub-dollar
+// costs stay visibly nonzero and comparable; anything smaller reads as a
+// nonzero bound. Scores, rates and counts keep the shared one-decimal format.
+const MONEY_STAT_KEYS = new Set(["cost_per_assessment", "cost_per_weighted_landed"]);
+
+function isMoneyStat(entry) {
+  if (!entry || typeof entry !== "object") return false;
+  if (typeof entry.key === "string" && MONEY_STAT_KEYS.has(entry.key)) return true;
+  return typeof entry.label === "string" && entry.label.includes("(USD)");
+}
+
+function money(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  if (value === 0) return "$0.000";
+  const sign = value < 0 ? "-" : "";
+  const magnitude = Math.abs(value);
+  if (magnitude.toFixed(3) === "0.000") return `${sign}<$0.001`;
+  return `${sign}$${magnitude.toFixed(3)}`;
+}
+
+function statText(value, entry) {
+  if (isMoneyStat(entry)) return money(value);
   if (typeof value === "number") return number(value);
   if (typeof value === "boolean") return value ? "yes" : "no";
   return String(value ?? "—");
@@ -1255,7 +1276,7 @@ function detailNode(rankedRow) {
     // Structured stats render in the role panel (the pilots' tier matrix); a
     // role without one skips them.
     if (entry.value !== null && typeof entry.value === "object") continue;
-    stat(entry.label, statText(entry.value));
+    stat(entry.label, statText(entry.value, entry));
   }
   if (row.runs_without_model) stat("Runs with no model", String(row.runs_without_model));
   if (row.provisional != null) stat("Provisional", String(row.provisional));
