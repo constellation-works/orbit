@@ -20,11 +20,14 @@
 #    `denyModify **/.env` under linux-bwrap, so the sandbox refused it
 #    before the agent ran.
 # 3. finalize synthesizes an `incomplete` checkpoint when the agent wrote
-#    none, clears the live cycle, removes the cycle's worktree, and moves
-#    the assignment to `review` on a `handoff` checkpoint or a stop. When
-#    the agent step fails, finalize does not run; the next observe treats
-#    the cycle as dead, removes its worktree and recovers it, settling a
-#    `handoff` checkpoint instead of starting another cycle.
+#    none, clears the live cycle, removes the cycle's worktree when Git
+#    accepts, and moves the assignment to `review` on a `handoff`
+#    checkpoint or a stop. A locked or otherwise refused registered
+#    worktree is kept and reported (`worktree_removal_error`) rather than
+#    deleted. When the agent step fails, finalize does not run; the next
+#    observe treats the cycle as dead, removes its worktree under the same
+#    rule and recovers it, settling a `handoff` checkpoint instead of
+#    starting another cycle.
 
 schemaVersion: 2
 kind: Job

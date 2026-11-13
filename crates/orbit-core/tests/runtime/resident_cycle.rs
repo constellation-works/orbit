@@ -597,6 +597,119 @@ fn a_withheld_observe_discards_a_dead_predecessors_worktree() {
     );
 }
 
+/// [ORB-24317] Git refuses `worktree remove --force` for a locked registered
+/// worktree. Finalize must keep the checkout, its registration and the
+/// investigation file, and report Git's refusal.
+#[test]
+fn a_locked_resident_worktree_stays_and_finalize_reports_gits_refusal() {
+    let fx = isolated_fixture!(a_locked_resident_worktree_stays_and_finalize_reports_gits_refusal);
+    let (_watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let run = fx.cycle_run(&mandate, "resident-cycle-locked");
+    let brief = fx.begin_cycle(&run, Utc::now());
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    let worktree = PathBuf::from(
+        brief["workspace_path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a due cycle names its managed worktree: {brief}")),
+    );
+    std::fs::write(worktree.join("investigation.txt"), "keep-this").unwrap();
+    let lock = crate::git_test_support::command()
+        .args([
+            "worktree",
+            "lock",
+            "--reason",
+            "preserve cycle investigation",
+            worktree.to_str().unwrap(),
+        ])
+        .current_dir(&fx.repo)
+        .status()
+        .unwrap();
+    assert!(lock.success(), "git worktree lock");
+
+    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    assert_eq!(finished["finalized"], true, "{finished}");
+    let error = finished["worktree_removal_error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("finalize reports the refusal: {finished}"));
+    assert!(
+        error.contains("cannot remove a locked working tree"),
+        "the report quotes Git's refusal: {error}"
+    );
+    assert!(
+        error.contains("preserve cycle investigation"),
+        "the report keeps the lock reason: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("investigation.txt")).unwrap(),
+        "keep-this",
+        "a refused removal leaves the checkout contents in place"
+    );
+    assert!(
+        worktree.join(".git").exists(),
+        "the locked worktree is still a checkout"
+    );
+    let listed = crate::git_test_support::command()
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&fx.repo)
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "git worktree list");
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    assert!(
+        listed.contains(&worktree.display().to_string()),
+        "Git still registers the locked worktree: {listed}"
+    );
+}
+
+/// [ORB-24317] A directory already at `resident-<run>` is not this run's
+/// interrupted checkout. Observe and finalize preserve it and say so,
+/// instead of deleting it because of the name.
+#[test]
+fn a_preexisting_resident_directory_is_preserved_without_ownership_proof() {
+    let fx =
+        isolated_fixture!(a_preexisting_resident_directory_is_preserved_without_ownership_proof);
+    let (_watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let run = fx.cycle_run(&mandate, "resident-cycle-planted");
+    let planted = fx
+        .repo
+        .join(format!(".orbit/state/worktrees/resident-{run}"));
+    std::fs::create_dir_all(&planted).unwrap();
+    std::fs::write(planted.join("not-ours"), "preserve").unwrap();
+
+    let brief = fx.begin_cycle(&run, Utc::now());
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    assert!(
+        brief["workspace_path"].is_null(),
+        "observe does not adopt a directory it cannot prove it created: {brief}"
+    );
+    let error = brief["worktree_error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("observe reports the preserved directory: {brief}"));
+    assert!(
+        error.contains("preserved"),
+        "the report says the directory was preserved: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(planted.join("not-ours")).unwrap(),
+        "preserve"
+    );
+
+    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    assert_eq!(finished["finalized"], true, "{finished}");
+    let removal = finished["worktree_removal_error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("finalize reports the preserved directory: {finished}"));
+    assert!(
+        removal.contains("preserved"),
+        "finalize reports preservation: {removal}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(planted.join("not-ours")).unwrap(),
+        "preserve",
+        "finalize does not delete a directory this run did not create"
+    );
+}
+
 #[test]
 fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle() {
     let fx = isolated_fixture!(

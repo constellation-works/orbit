@@ -122,8 +122,13 @@ impl OrbitRuntime {
             && let Some(grant) = cycle_grant(&history, &live.cycle)
         {
             self.record_resident_cycle_run_crew(run_id, &mandate)?;
-            let worktree = self.create_resident_cycle_worktree(run_id);
-            return self.resident_brief(&task_id, &mandate, &grant, &history, None, worktree);
+            let (worktree, worktree_error) = self.create_resident_cycle_worktree(run_id);
+            let mut brief =
+                self.resident_brief(&task_id, &mandate, &grant, &history, None, worktree)?;
+            if let Some(error) = worktree_error {
+                brief["worktree_error"] = json!(error);
+            }
+            return Ok(brief);
         }
         let due = self.resident_due(&task, mandate.clone(), &history, now)?;
         // A `handoff` checkpoint whose finalize never ran (the agent step
@@ -237,15 +242,19 @@ impl OrbitRuntime {
         // A mandate attached before core owned this status starts here.
         self.activate_resident_assignment(&task_id);
         let history = self.get_task_history(&task_id)?;
-        let worktree = self.create_resident_cycle_worktree(run_id);
-        self.resident_brief(
+        let (worktree, worktree_error) = self.create_resident_cycle_worktree(run_id);
+        let mut brief = self.resident_brief(
             &task_id,
             &mandate,
             &grant,
             &history,
             Some(&due.notices),
             worktree,
-        )
+        )?;
+        if let Some(error) = worktree_error {
+            brief["worktree_error"] = json!(error);
+        }
+        Ok(brief)
     }
 
     pub(crate) fn crew_supports_continuity(&self, crew_name: &str) -> bool {
@@ -376,8 +385,11 @@ impl OrbitRuntime {
         Ok(json!({
             "task_id": task_id,
             "cycle_count": 1,
-            // The managed worktree the cycle's agent launches in, removed
-            // by `resident_finalize`. Null when none could be created.
+            // The managed worktree the cycle's agent launches in. Null when
+            // none could be created; `worktree_error` then says why.
+            // Finalize removes it when Git accepts, and reports
+            // `worktree_removal_error` when a registered worktree is refused
+            // or the directory is not one this run can prove it created.
             "workspace_path": worktree.map(|path| path.display().to_string()),
             "cycle": grant.cycle,
             "crew": mandate.crew,
@@ -554,15 +566,21 @@ impl OrbitRuntime {
             Some(handoff) => handoff,
             None => self.hand_off_stopped_resident(&task_id)?,
         };
-        // The cycle is closed; its managed worktree is discarded.
-        self.discard_resident_cycle_worktree(run_id);
-        Ok(json!({
+        // The cycle is closed. Git's refusal of a registered worktree, or an
+        // unregistered directory this run cannot prove it created, keeps the
+        // directory and is reported; it does not fail finalization.
+        let worktree_removal_error = self.discard_resident_cycle_worktree(run_id);
+        let mut finished = json!({
             "task_id": task_id,
             "finalized": true,
             "cycle": live.cycle,
             "synthesized": synthesized,
             "handoff": handoff,
-        }))
+        });
+        if let Some(error) = worktree_removal_error {
+            finished["worktree_removal_error"] = json!(error);
+        }
+        Ok(finished)
     }
 
     /// Write the `incomplete` checkpoint for `cycle` unless it already has

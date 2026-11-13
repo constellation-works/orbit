@@ -5,12 +5,14 @@ metadata:
 spec:
   type: agent_loop
   # Read-only managed worktree of the workspace HEAD, created by
-  # `resident_observe` and removed by `resident_finalize`: the resident
-  # acts through Orbit tools, never files, and nothing it writes in the
-  # checkout is committed or delivered. Launching in the registered
-  # checkout instead is a direct invocation linux-bwrap refuses, because
-  # it cannot enforce the non-subtree `denyModify **/.env` there without
-  # the managed worktree's post-run guard.
+  # `resident_observe`. `resident_finalize` removes it when Git accepts;
+  # a locked or otherwise refused registered worktree, and any directory
+  # this run cannot prove it created, stays in place and the refusal is
+  # reported. The resident acts through Orbit tools, never files, and
+  # nothing it writes in the checkout is committed or delivered. Launching
+  # in the registered checkout instead is a direct invocation linux-bwrap
+  # refuses, because it cannot enforce the non-subtree `denyModify **/.env`
+  # there without the managed worktree's post-run guard.
   fsProfile: reviewer
   description: >
     One bounded resident orchestrator cycle. The resident reads its brief,
