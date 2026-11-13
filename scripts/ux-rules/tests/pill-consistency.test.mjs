@@ -72,7 +72,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
   }
 
   for (const width of [1440, 375]) {
-    test(`matching pills in one list pass at ${width}`, { skip: !ENABLED }, async () => {
+    test(`matching pills in one list pass at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       const { page, result } = await measure(width, list("pill", "pill"));
       try {
         assert.equal(result.status, "pass", JSON.stringify(result.measurements));
@@ -91,7 +91,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       ["border-radius", "square"],
     ];
     for (const [property, variant] of cases) {
-      test(`a pill whose ${property} differs fails at ${width}`, { skip: !ENABLED }, async () => {
+      test(`a pill whose ${property} differs fails at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
         const { page, result } = await measure(width, list("pill", `pill ${variant}`));
         try {
           assert.equal(result.status, "fail", JSON.stringify(result.measurements));
@@ -108,7 +108,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       });
     }
 
-    test(`a one-pixel height difference is within tolerance at ${width}`, { skip: !ENABLED }, async () => {
+    test(`a one-pixel height difference is within tolerance at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       const { page, result } = await measure(width, list("pill", "pill") + `<style>#list li:first-child .pill:last-child { height: 23px; }</style>`);
       try {
         assert.equal(result.status, "pass", JSON.stringify(result.measurements));
@@ -117,7 +117,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       }
     });
 
-    test(`filter chips are neither grouped with nor failed against status pills at ${width}`, { skip: !ENABLED }, async () => {
+    test(`filter chips are neither grouped with nor failed against status pills at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       const markup = `
         <div class="filters" role="toolbar" id="filters">
           <button class="chip" aria-pressed="true">All</button>
@@ -135,7 +135,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       }
     });
 
-    test(`two distinct same-selector pills in one group are both measured and both reported at ${width}`, { skip: !ENABLED }, async () => {
+    test(`two distinct same-selector pills in one group are both measured and both reported at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       // Three short and two tall pills share selector, top and width within
       // their kind; each tall pill must count and fail on its own.
       const markup = `<div style="display:flex;align-items:center;gap:8px">${
@@ -151,7 +151,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       }
     });
 
-    test(`an element in both a row group and a list group is reported once at ${width}`, { skip: !ENABLED }, async () => {
+    test(`an element in both a row group and a list group is reported once at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       const { page, result } = await measure(width, list("pill", "pill tall"));
       try {
         assert.equal(result.status, "fail", JSON.stringify(result.measurements));
@@ -163,7 +163,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       }
     });
 
-    test(`filter chips alone are skipped, not measured, at ${width}`, { skip: !ENABLED }, async () => {
+    test(`filter chips alone are skipped, not measured, at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       const { page, result } = await measure(
         width,
         `<div class="filters"><button class="chip">All</button><button class="chip" style="height:40px;font-size:11px">Review</button></div>`,
@@ -175,7 +175,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       }
     });
 
-    test(`pills of different data-ux-pill kinds are not compared at ${width}`, { skip: !ENABLED }, async () => {
+    test(`pills of different data-ux-pill kinds are not compared at ${width}`, { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
       const markup = `<ul>${[1, 2].map(() => `<li><span class="pill" data-ux-pill="state">alpha</span><span class="pill tall" data-ux-pill="count">bravo</span></li>`).join("")}</ul>`;
       const { page, result } = await measure(width, markup);
       try {
@@ -186,7 +186,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
     });
   }
 
-  test("a square-cornered box is not a pill and is never compared", { skip: !ENABLED }, async () => {
+  test("a square-cornered box is not a pill and is never compared", { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
     const { page, result } = await measure(1440, list("pill", "pill boxy"));
     try {
       assert.equal(result.status, "pass", JSON.stringify(result.measurements));
@@ -196,7 +196,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
     }
   });
 
-  test("pills in one row without a repeated list are compared with each other", { skip: !ENABLED }, async () => {
+  test("pills in one row without a repeated list are compared with each other", { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
     const { page, result } = await measure(1440, `<header><span class="pill">alpha</span><span class="pill tall">bravo</span></header>`);
     try {
       assert.equal(result.status, "fail", JSON.stringify(result.measurements));
@@ -206,7 +206,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
     }
   });
 
-  test("shipped CSS: two active triages on one task row are two pills, not one", { skip: !ENABLED }, async () => {
+  test("shipped CSS: two active triages on one task row are two pills, not one", { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
     // buildActiveTriageBadges emits one triaging link per active triage; both
     // share selector, top and width, so they must still count separately.
     const markup = `<ul class="rows"><li class="row" style="display:flex;gap:8px"><span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r1">triaging</a><a class="live-state-pill active-triage-chip" href="#r2">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span></li></ul>`;
@@ -218,7 +218,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
     }
   });
 
-  test("shipped CSS: records the triaging and repairing pills of one task list", { skip: !ENABLED }, async () => {
+  test("shipped CSS: records the triaging and repairing pills of one task list", { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
     const task = (inner) => `<li class="row" style="display:flex;gap:8px">${inner}</li>`;
     const markup = `<ul class="rows">
       ${task(`<span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r1">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span>`)}
