@@ -28,5 +28,12 @@ spec:
         type: string
       synthesized:
         type: boolean
+      worktree_removal_error:
+        type: string
+        description: >
+          Present when the cycle's managed worktree was kept. Git refused
+          to remove a registered worktree, or an unregistered directory had
+          no proof this run created it. Absent when the worktree was
+          removed or was not there.
   action: resident_finalize
   config: {}
