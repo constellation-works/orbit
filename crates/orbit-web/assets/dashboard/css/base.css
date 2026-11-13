@@ -85,8 +85,8 @@
   --ag-grok-low:   rgba(76, 195, 138, 0.12);
   --ag-muse-low:   rgba(240, 140, 192, 0.12);
 
-  /* Workspace identity colours: the All workspaces task pills and the rail
-     picker's entries (common.js workspaceColor picks the slot). Every hue
+  /* Workspace identity colours: the All workspaces task pills and the Tasks
+     workspace filter entries (common.js workspaceColor picks the slot). Every hue
      sits in a band no status, state, priority, accent or agent colour uses
      (lime, teal, orchid), at least 15 degrees of OKLCH hue and 0.09 OKLab
      away from each of them, and each reads at 4.5:1 or better on its own
