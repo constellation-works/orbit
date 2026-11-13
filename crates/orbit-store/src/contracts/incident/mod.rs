@@ -49,6 +49,9 @@ mod grouping;
 mod signature;
 mod types;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use classify::classify_failure;
 pub use classify::{classify, has_tool_identity, is_failure_only_diagnostic_surface};
 pub use grouping::{build_report, group_failure_incidents};

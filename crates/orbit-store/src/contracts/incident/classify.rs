@@ -125,7 +125,3 @@ pub(super) fn surface_of(event: &AuditEvent) -> String {
         None => "unknown".to_string(),
     }
 }
-
-#[cfg(test)]
-#[path = "tests/classify.rs"]
-mod tests;
