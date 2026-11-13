@@ -876,15 +876,20 @@ fn clap_help_wraps_to_the_terminal_width_with_a_hanging_indent() {
     }
 }
 
-/// Footer example blocks must keep one shared description column on narrow
-/// terminals instead of collapsing its padding to one space [ORB-23871]. The
-/// piped goldens freeze the wide layout, so this PTY check is the guard for
-/// the 60/80-column fallback: every over-wide aligned row keeps the piped
-/// column with a hanging indent, continuations hang at that column, and no
-/// command runs into its explanation.
+/// Footer example blocks keep one readable layout on narrow terminals. The
+/// piped goldens freeze the wide layout, so this PTY check guards the 60/80
+/// column fallback. While the piped description column leaves room for the
+/// explanation, every over-wide aligned row keeps that column with a hanging
+/// indent and no command runs into its explanation [ORB-23871]. When it leaves
+/// less than `MIN_EXPLANATION_WIDTH` columns, the block stacks every explanation
+/// two columns under its command instead, so no explanation wraps a word per
+/// line beside a squeezed column [ORB-24274].
 #[cfg(unix)]
 #[test]
-fn footer_example_columns_stay_aligned_on_narrow_terminals() {
+fn footer_example_blocks_keep_one_layout_on_narrow_terminals() {
+    // Fewest columns an aligned explanation needs; mirrors the CLI renderer.
+    const MIN_EXPLANATION_WIDTH: usize = 24;
+
     use std::io::Read;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::process::{Command, Stdio};
@@ -1056,6 +1061,8 @@ fn footer_example_columns_stay_aligned_on_narrow_terminals() {
         (&["task"][..], "--help", "Lifecycle:"),
         (&["task"][..], "-h", "Lifecycle:"),
         (&["task", "lint"][..], "--help", "Examples:"),
+        (&["task", "recheck-blocked"][..], "--help", "Examples:"),
+        (&["task", "settle-merged"][..], "--help", "Examples:"),
     ] {
         let piped = read_help_with_flag(args, flag, &home, &work);
         let piped_block = block_lines(&piped, heading);
@@ -1073,10 +1080,20 @@ fn footer_example_columns_stay_aligned_on_narrow_terminals() {
             counts.get(&shared).is_some_and(|count| *count >= 2),
             "piped block `{heading}` needs an aligned example column"
         );
-        let single_rows: Vec<String> = piped_block
+        // Command text of every piped row. A narrow render may wrap or stack a
+        // command, so its visible lines are leading parts of these.
+        let piped_commands: Vec<String> = piped_block
             .iter()
-            .filter(|line| description_column(line).is_none())
-            .cloned()
+            .filter(|line| line.starts_with("  orbit"))
+            .map(|line| match description_column(line) {
+                Some(column) => line
+                    .chars()
+                    .take(column)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string(),
+                None => line.clone(),
+            })
             .collect();
 
         for width in [80u16, 60u16] {
@@ -1089,31 +1106,69 @@ fn footer_example_columns_stay_aligned_on_narrow_terminals() {
                     args.join(" ")
                 );
             }
+            // Stacked when the shared column leaves too little room; then no row
+            // keeps the column and every explanation hangs under its command.
+            let room = usize::from(width).saturating_sub(shared);
+            let stacked = room < MIN_EXPLANATION_WIDTH;
+            let mut explained = false;
+            let mut command_indent = 0;
             for line in &block {
+                let indent = line.chars().take_while(|c| *c == ' ').count();
                 if line.starts_with("  orbit") {
-                    if let Some(column) = description_column(line) {
-                        assert_eq!(
-                            column,
-                            shared,
-                            "`orbit {} {flag}` at {width}: explanation drifted from column {shared}: {line:?}",
-                            args.join(" ")
-                        );
-                    } else if !single_rows.iter().any(|single| single == line) {
-                        panic!(
+                    command_indent = indent;
+                    explained = false;
+                    match description_column(line) {
+                        Some(column) => {
+                            assert!(
+                                !stacked,
+                                "`orbit {} {flag}` at {width}: explanation kept beside column {shared} with {room} columns: {line:?}",
+                                args.join(" ")
+                            );
+                            assert_eq!(
+                                column,
+                                shared,
+                                "`orbit {} {flag}` at {width}: explanation drifted from column {shared}: {line:?}",
+                                args.join(" ")
+                            );
+                            explained = true;
+                        }
+                        // A command without an explanation: stacked, or wrapped
+                        // because it is too long for the width.
+                        None => assert!(
+                            piped_commands
+                                .iter()
+                                .any(|command| command.starts_with(line.as_str())),
                             "`orbit {} {flag}` at {width}: command runs into its explanation with one space: {line:?}",
                             args.join(" ")
-                        );
+                        ),
                     }
-                } else {
-                    let indent = line.chars().take_while(|c| *c == ' ').count();
+                } else if explained {
                     assert_eq!(
                         indent,
                         shared,
                         "`orbit {} {flag}` at {width}: continuation not at column {shared}: {line:?}",
                         args.join(" ")
                     );
+                } else {
+                    assert_eq!(
+                        indent,
+                        command_indent + 2,
+                        "`orbit {} {flag}` at {width}: wrapped line not under its command: {line:?}",
+                        args.join(" ")
+                    );
                 }
             }
+            assert_eq!(
+                block.iter().any(|line| description_column(line).is_some()),
+                !stacked,
+                "`orbit {} {flag}` at {width}: {room} columns beside column {shared} must {}",
+                args.join(" "),
+                if stacked {
+                    "stack the block"
+                } else {
+                    "keep the aligned layout"
+                }
+            );
         }
     }
 }
