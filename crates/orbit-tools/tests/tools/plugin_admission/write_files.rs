@@ -70,6 +70,51 @@ fn exact_file_grants_do_not_open_parents_siblings_or_descendants() {
     );
 }
 
+/// [ORB-24211] The macOS compiler reads a granted path containing `*` or `?`
+/// as a glob, so `grant?` would also allow the sibling `grantX`. Admission must
+/// refuse such a file or ancestor before any profile reaches the compiler, and
+/// an ordinary name must still compile to a rule for that one file only.
+#[cfg(unix)]
+#[test]
+fn exact_file_glob_metacharacters_are_refused_before_the_macos_compiler() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+
+    let glob_file = root.join("grant?");
+    std::fs::write(&glob_file, "synthetic").unwrap();
+    let star_file = root.join("grant*");
+    std::fs::write(&star_file, "synthetic").unwrap();
+    let glob_dir = root.join("dir*");
+    std::fs::create_dir(&glob_dir).unwrap();
+    let nested = glob_dir.join("installation_id");
+    std::fs::write(&nested, "synthetic").unwrap();
+    for refused in [glob_file, star_file, nested] {
+        let error = fixture_spec(&root, &refused)
+            .sandbox_profile(None)
+            .unwrap_err();
+        // Name the reason, so an unrelated ancestor refusal cannot pass this check.
+        assert!(
+            matches!(error, orbit_common::OrbitError::PolicyDenied(_))
+                && error.to_string().contains("`*` or `?`"),
+            "{} must be refused for its glob metacharacters [ORB-24211]: {error}",
+            refused.display()
+        );
+    }
+
+    let ordinary = root.join("installation_id");
+    std::fs::write(&ordinary, "synthetic-id").unwrap();
+    let profile = fixture_spec(&root, &ordinary)
+        .sandbox_profile(None)
+        .unwrap();
+    let sbpl = orbit_exec::compile_macos_sandbox_profile(&profile.macos_fs_rules(), "plugin")
+        .expect("compile SBPL");
+    let file_rule = format!("(allow file-write* (subpath \"{}\"))", ordinary.display());
+    assert!(
+        sbpl.lines().any(|line| line == file_rule),
+        "an ordinary exact file compiles to a rule for that file: {sbpl}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn unsafe_exact_files_are_refused_and_changed_files_are_revalidated_before_spawn() {
