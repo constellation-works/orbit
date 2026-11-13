@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, el, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
 import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
-import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle, aggregateCrewPayload, aggregateCrewUnavailable } from './task-crew.js';
+import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, findConfiguredCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle, aggregateCrewPayload, aggregateCrewUnavailable } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
 import { collapseTask, stopRowInteraction } from './task-nav.js';
 
@@ -160,6 +160,16 @@ function buildScopedCrewUpdateControl(task, context, { withChip = true, registry
     const option = el("option", {
       text: `${currentValue} (missing)`,
       title: "Configured crew no longer found",
+    });
+    option.value = currentValue;
+    select.appendChild(option);
+  } else if (currentValue && !Array.from(select.options).some((option) => option.value === currentValue)) {
+    const baseCrew = findConfiguredCrew(currentValue);
+    const option = el("option", {
+      text: currentValue,
+      title: baseCrew
+        ? (baseCrew.model != null ? crewOptionTitle(baseCrew) : (baseCrew.description || "Operator work: no drain or task pilot picks it up"))
+        : "",
     });
     option.value = currentValue;
     select.appendChild(option);

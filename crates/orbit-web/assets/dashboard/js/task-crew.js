@@ -224,10 +224,28 @@ export function explicitCrewValue(task) {
   return task && task.crew ? String(task.crew) : "";
 }
 
+// Strip an `@<effort>` suffix from a crew reference (e.g. `luna@xhigh` -> `luna`).
+export function crewReferenceBase(reference) {
+  const str = reference ? String(reference).trim() : "";
+  const at = str.indexOf("@");
+  return at >= 0 ? str.slice(0, at).trim() : str;
+}
+
+export function findConfiguredCrew(value) {
+  const name = value ? String(value).trim() : "";
+  if (!name) return null;
+  const base = crewReferenceBase(name);
+  const crews = Array.isArray(taskState.lastCrewPayload.crews) ? taskState.lastCrewPayload.crews : [];
+  const agentCrew = crews.find((crew) => crew.name === name || crew.name === base);
+  if (agentCrew) return agentCrew;
+  const humanCrews = Array.isArray(taskState.lastCrewPayload.human_crews) ? taskState.lastCrewPayload.human_crews : [];
+  const humanCrew = humanCrews.find((crew) => crew.name === name || crew.name === base);
+  if (humanCrew) return humanCrew;
+  return null;
+}
+
 export function isConfiguredCrewValue(value) {
-  const name = value ? String(value) : "";
-  return Boolean(name) && (taskState.lastCrewPayload.crews.some((crew) => crew.name === name)
-    || (taskState.lastCrewPayload.human_crews || []).some((crew) => crew.name === name));
+  return Boolean(findConfiguredCrew(value));
 }
 
 export function hasStaleExplicitCrew(task) {
