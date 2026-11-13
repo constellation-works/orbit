@@ -126,7 +126,9 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   /* ORB-24279: the wrapper is the containing block for the hint text hidden
      in scrolled ranking-table headers, so the 1px text scrolls with the table
      instead of escaping to the tab pane and widening it sideways (STD-07 R4).
-     Pinned bubbles are position:fixed, so tooltips are unaffected. */
+     Pinned bubbles are position:fixed and escape the wrapper. A plain
+     (non-pinned) info hint bubble inside this wrapper is clipped by it, so
+     table headers use pinnedInfoHint(). */
   position: relative;
   overflow-x: auto;
   border: 1px solid var(--border);
