@@ -79,6 +79,7 @@ fn table_notices(view: &View) -> Vec<&str> {
             | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Notice(_)
+            | Block::Attention(_)
             | Block::DoctorFindings(_) => None,
         })
         .flatten()
@@ -101,6 +102,7 @@ fn block_notices(view: &View) -> Vec<&str> {
             | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Table(_)
+            | Block::Attention(_)
             | Block::DoctorFindings(_) => None,
         })
         .collect()
@@ -162,6 +164,23 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                     Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
                     Block::Notice(text) => eprintln!("{}", sink.wrap_prose(&text)),
                     Block::Table(table) => truncated |= table.emit(sink),
+                    Block::Attention(rows) => {
+                        if sink.mode() == OutputMode::Table {
+                            for row in rows {
+                                println!("{}", sink.wrap_prose(&row.attention_terminal_text()));
+                            }
+                        } else {
+                            for row in rows {
+                                let fields = row
+                                    .attention_plain_fields()
+                                    .into_iter()
+                                    .map(crate::output::table::escape_plain)
+                                    .collect::<Vec<_>>()
+                                    .join("\t");
+                                println!("{fields}");
+                            }
+                        }
+                    }
                     Block::DoctorFindings(rows) => {
                         if sink.mode() == OutputMode::Table {
                             let findings = doctor_findings(&rows, sink.width());
