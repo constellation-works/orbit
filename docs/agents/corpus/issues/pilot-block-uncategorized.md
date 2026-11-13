@@ -32,3 +32,15 @@ Proposed 2026-11-07 by ORB-22481 from the fixed resume window `2026-10-21T14:44:
 | 2026-11-02T22:07:55Z | ORB-21251 | jrun-20261102-2202-c13 | final_recovery decision=escalate: no mandate or grant, baseline metrics `task_not_found`; decision request `Done - requeue`; source ORB-21251 history:final_recovery_escalated | requeued with nothing changed |
 | 2026-11-02T22:19:48Z | ORB-21251 | jrun-20261102-2216-c6 | final_recovery decision=decide: person must set up the mandate; the prior requeue answer changed nothing; options include `re_pilot`; source ORB-21251 history:final_recovery_escalated | task-pilot re-run at 22:25:53Z restored a host-operational hold |
 | 2026-11-03T00:05:08Z | ORB-21251 | jrun-20261103-0004-t1 | final_recovery decision=escalate after `jrun-20261102-2359-c3` failed `pilot_prerequisites_unmet` (recovery at 00:03:20Z was refused as stale); source ORB-21251 history:final_recovery_decided, workflow_run_failed | task archived 2026-11-03T02:14Z |
+
+### ORB-24239 owner scan, 2026-11-13
+
+Resume pass continuing ORB-24093 in the fixed window `2026-10-28T14:54:43Z` through `2026-11-11T14:54:43Z`, after the ORB-21229 boundary. This slice counts 3 source occurrences on 1 task; route `setup`, disposition `counted` (below the distinct-task recurrence threshold). Change vs prior pass (ORB-24093): new, because that pass had not read ORB-21251. Rows below confirm the episodes already recorded in the sections above; they are not additional incidents beyond this slice count.
+
+Durable sources: ORB-21251 `history` and `comments` read with `orbit.task.show` in ORB-24239, and `orbit run show jrun-20261102-2202-c13 --no-reconcile --json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-02T22:07:55Z | ORB-21251 | jrun-20261102-2202-c13 | final_recovery decision=escalate: no mandate or grant, baseline metrics `task_not_found`; source ORB-21251 history:final_recovery_escalated | requeued with nothing changed |
+| 2026-11-02T22:19:48Z | ORB-21251 | jrun-20261102-2216-c6 | final_recovery decision=decide: person must set up the mandate; source ORB-21251 history:final_recovery_escalated | task-pilot restored host-operational hold 22:25:53Z |
+| 2026-11-03T00:05:08Z | ORB-21251 | jrun-20261103-0004-t1 | final_recovery decision=escalate after `pilot_prerequisites_unmet`; source ORB-21251 history:final_recovery_decided | task archived 2026-11-03T02:14Z |
