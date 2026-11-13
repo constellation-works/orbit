@@ -41,9 +41,11 @@ is JSONL.
 
 ### Step indexes, selectors and units
 
-- `step_index` in JSON is zero-based (`steps[]`, `provider_processes[]` and
-  the `-s` step record). The table's `STEP` column is one-based
-  (`step_index + 1`).
+- In the `orbit run show` summary table, `#` is one-based
+  (`step_index + 1`); `step_index` in JSON is zero-based (`steps[]`,
+  `provider_processes[]` and the `-s` step record).
+- In the `orbit run events` table, `STEP` is the event's textual `step_id`
+  (the activity ID, or `-` when absent), not a one-based step number.
 - `duration_ms` and `lock_wait_ms` are milliseconds. The table prints
   formatted durations.
 - `-s`/`--step` on `show`, `logs` and `events` accepts an activity `step.id`
