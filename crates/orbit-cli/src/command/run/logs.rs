@@ -16,7 +16,7 @@ use super::steps::{RunRead, resolve_run, resolve_step_filter};
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run_id\":\"...\",\"job_id\":\"...\",\"records\":[{\"step_id\":...,\"stdout_blob_ref\":...,\"stderr_blob_ref\":...,\"stdout\":\"...\",\"stderr\":\"...\"}]}\nWith --follow, JSON modes emit JSONL records {run_id, provider, stream, text}. Live provider lines come from the retained redacted tracing feed; completed captures supply remaining output. With --step, captures are emitted as each invocation finishes. Stops at any terminal outcome; Ctrl-C stops observing without cancelling.\nExamples:\n  orbit run logs\n  orbit run logs jrun-20260426-0631 --follow\n  orbit run logs jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape and --follow records: installed orbit-orchestrate skill `references/run-debugging.md`.\n\nExamples:\n  orbit run logs\n  orbit run logs jrun-20260426-0631 --follow\n  orbit run logs jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunLogsArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.

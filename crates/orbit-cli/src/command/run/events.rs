@@ -11,7 +11,7 @@ use super::steps::{RunRead, resolve_run, resolve_step_filter};
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run_id\":\"...\",\"job_id\":\"...\",\"events\":[<raw-v2-audit-event-with-step_id>]}\nExamples:\n  orbit run events\n  orbit run events jrun-20260426-0631\n  orbit run events jrun-20260426-0631 -s implement_one --type cli.invocation.finished --json"
+    after_help = "JSON shape: installed orbit-orchestrate skill `references/run-debugging.md`.\n\nExamples:\n  orbit run events\n  orbit run events jrun-20260426-0631\n  orbit run events jrun-20260426-0631 -s implement_one --type cli.invocation.finished --json"
 )]
 pub struct RunEventsArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.

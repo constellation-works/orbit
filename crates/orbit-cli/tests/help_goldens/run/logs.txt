@@ -26,8 +26,8 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-JSON shape: {"run_id":"...","job_id":"...","records":[{"step_id":...,"stdout_blob_ref":...,"stderr_blob_ref":...,"stdout":"...","stderr":"..."}]}
-With --follow, JSON modes emit JSONL records {run_id, provider, stream, text}. Live provider lines come from the retained redacted tracing feed; completed captures supply remaining output. With --step, captures are emitted as each invocation finishes. Stops at any terminal outcome; Ctrl-C stops observing without cancelling.
+JSON shape and --follow records: installed orbit-orchestrate skill `references/run-debugging.md`.
+
 Examples:
   orbit run logs
   orbit run logs jrun-20260426-0631 --follow
