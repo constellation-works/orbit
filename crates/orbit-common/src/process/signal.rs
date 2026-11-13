@@ -319,5 +319,11 @@ fn darwin_info(pid: u32) -> io::Result<Option<DarwinInfo>> {
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-#[path = "tests/signal.rs"]
-mod tests;
+impl BoundProcess {
+    /// Test-only PID substitution to simulate numeric PID reuse without
+    /// exhausting host PIDs. Exists only in test builds for the sibling
+    /// `process::tests::signal` harness; production keeps `pid` private.
+    pub(super) fn set_pid_for_test(&mut self, pid: u32) {
+        self.pid = pid;
+    }
+}
