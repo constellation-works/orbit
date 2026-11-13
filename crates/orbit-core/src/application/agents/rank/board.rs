@@ -6,7 +6,9 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use super::measures::{MEASURE_COUNT, Totals, composite, observe, review_supported, totals};
+use super::measures::{
+    MEASURE_COUNT, MEASURES, Totals, composite, observe, review_supported, totals, weighted_terms,
+};
 use super::sample::{BOOTSTRAP_SEED, DRAWS, Record, Rng, by_tier, draw, percentile};
 use crate::application::agents::roles::LedgerRow;
 use crate::application::agents::{CREW_UNKNOWN, MODEL_UNKNOWN};
@@ -144,6 +146,9 @@ pub(super) struct Placed {
     pub(super) z_loo: Option<f64>,
     pub(super) z_shrunk: Option<f64>,
     pub(super) eligible: bool,
+    /// Why the model cannot hold the top band, when it lacks a measure the
+    /// board's best-covered eligible models were scored on.
+    pub(super) top_band_reason: Option<String>,
     pub(super) interval: Option<(f64, f64)>,
     /// Shared rank of the model's band on a qualified board.
     pub(super) band: Option<usize>,
@@ -193,6 +198,15 @@ fn shrink(z: f64, units: f64, z_loo: Option<f64>) -> f64 {
 
 pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) -> Board {
     let units: Vec<f64> = rows.iter().map(|row| row.units() as f64).collect();
+    // Per row: which measures scored it, and their weight.
+    let (scored, measured): (Vec<[bool; MEASURE_COUNT]>, Vec<f64>) = rows
+        .iter()
+        .map(|row| {
+            let totals = row.totals();
+            let (terms, weight) = weighted_terms(&totals, scales, review_supported(&totals));
+            (terms.map(|term| term.is_some()), weight)
+        })
+        .unzip();
     let z: Vec<Option<f64>> = rows
         .iter()
         .map(|row| {
@@ -284,6 +298,7 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
                 z_loo,
                 z_shrunk: z[index].map(|z| shrink(z, units[index], z_loo)),
                 eligible: eligible[index],
+                top_band_reason: None,
                 interval,
                 band: None,
                 band_size: 0,
@@ -327,16 +342,61 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
     rest.sort_by(by_score);
     let mut order = Vec::with_capacity(rows.len());
     if qualified {
-        let mut bands: Vec<Vec<usize>> = Vec::new();
-        for (position, &index) in ranked.iter().enumerate() {
-            let joins = position > 0
-                && paired
-                    .get(&(ranked[position - 1], index))
-                    .is_some_and(|p| *p < BAND_PROBABILITY);
-            match bands.last_mut() {
-                Some(band) if joins => band.push(index),
-                _ => bands.push(vec![index]),
+        let best_weight = eligible_rows
+            .iter()
+            .map(|&index| measured[index])
+            .fold(0.0, f64::max);
+        let full_weight = |index: usize| measured[index] >= best_weight;
+        let reference = eligible_rows
+            .iter()
+            .copied()
+            .find(|&index| full_weight(index));
+        for &index in &ranked {
+            if full_weight(index) {
+                continue;
             }
+            // Measures the best-covered model was scored on and this one was not.
+            let lacking: Vec<&str> = (0..MEASURE_COUNT)
+                .filter(|&m| reference.is_some_and(|r| scored[r][m]) && !scored[index][m])
+                .map(|m| MEASURES[m].label)
+                .collect();
+            placed[index].top_band_reason = Some(format!(
+                "measured weight {} of {best_weight} points, without {}: the top band takes only models scored on the best-covered set",
+                measured[index],
+                lacking.join(", ")
+            ));
+        }
+        // Each band is the leading run of the models still unbanded, joined
+        // while each joins the one above it. The top band draws only from
+        // models at the board's full measured weight: a model scored on fewer
+        // measures (review outcome unmeasured) is not comparable with them and
+        // can still rank in a lower band.
+        let joins = |above: usize, below: usize| {
+            paired
+                .get(&(above, below))
+                .is_some_and(|p| *p < BAND_PROBABILITY)
+        };
+        let mut bands: Vec<Vec<usize>> = Vec::new();
+        let mut remaining = ranked.clone();
+        while !remaining.is_empty() {
+            let pool: Vec<usize> = if bands.is_empty() {
+                remaining
+                    .iter()
+                    .copied()
+                    .filter(|&index| full_weight(index))
+                    .collect()
+            } else {
+                remaining.clone()
+            };
+            let mut band = vec![pool[0]];
+            for pair in pool.windows(2) {
+                if !joins(pair[0], pair[1]) {
+                    break;
+                }
+                band.push(pair[1]);
+            }
+            remaining.retain(|index| !band.contains(index));
+            bands.push(band);
         }
         for (band_index, mut band) in bands.into_iter().enumerate() {
             // Dense band ranks: each band takes the next rank, however many

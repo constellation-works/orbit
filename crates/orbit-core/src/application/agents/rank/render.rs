@@ -85,6 +85,7 @@ pub(super) fn row_json(
         "ineligible_reason": row.ineligibility().or_else(|| {
             (!placed.eligible).then(|| "no measure with units and a scale".to_string())
         }),
+        "top_band_ineligible_reason": placed.top_band_reason,
         "units": units,
         "tasks_by_tier": row.tiers(),
         "score": placed.score().map(round),

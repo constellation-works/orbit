@@ -1,7 +1,7 @@
 //! The model ranking over fixture facts at its public API: pooling, the
 //! settled window, eligibility, shrinkage, bands, within-band order, unmeasured
 //! measures, parity with the implementer scorecard's expectations and
-//! calibrated seasons.
+//! calibrated seasons, and the top band reserved for fully measured models.
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -21,7 +21,8 @@ use super::super::{
 
 /// One model's fixture work: crews it runs under, tasks per tier (low and
 /// medium alternate), each task's first verdict by index, how many of its
-/// tasks regress, its cost per task, and how many days ago it started.
+/// tasks regress, its cost per task, how many days ago it started, and
+/// whether its tasks carry a settled review (`false` leaves them unreviewed).
 struct Work<'a> {
     model: Option<&'a str>,
     crews: &'a [&'a str],
@@ -30,6 +31,7 @@ struct Work<'a> {
     regressed: usize,
     cost: f64,
     days_ago: i64,
+    reviewed: bool,
 }
 
 fn facts(work: &[Work<'_>]) -> AgentFacts {
@@ -102,7 +104,11 @@ fn facts(work: &[Work<'_>]) -> AgentFacts {
                 execution: ExecutionMode::Managed,
                 landed_at: Some(start + chrono::Duration::hours(2)),
                 records: Vec::new(),
-                reviews: vec![review],
+                reviews: if work.reviewed {
+                    vec![review]
+                } else {
+                    Vec::new()
+                },
                 filed: None,
                 warnings: Default::default(),
             });
@@ -165,6 +171,7 @@ fn fleet() -> AgentFacts {
             regressed: 0,
             cost: 1.0,
             days_ago: settled,
+            reviewed: true,
         },
         Work {
             model: Some("middle"),
@@ -174,6 +181,7 @@ fn fleet() -> AgentFacts {
             regressed: 4,
             cost: 2.0,
             days_ago: settled,
+            reviewed: true,
         },
         // Same score as middle but cheaper, so it wins an exact-score tie.
         Work {
@@ -184,6 +192,7 @@ fn fleet() -> AgentFacts {
             regressed: 4,
             cost: 1.0,
             days_ago: settled,
+            reviewed: true,
         },
         // A slightly higher score but a higher cost stays first in the band.
         Work {
@@ -194,6 +203,7 @@ fn fleet() -> AgentFacts {
             regressed: 4,
             cost: 4.0,
             days_ago: settled,
+            reviewed: true,
         },
         // Same score and cost as twin: the final tie-break is model name.
         Work {
@@ -204,6 +214,7 @@ fn fleet() -> AgentFacts {
             regressed: 4,
             cost: 1.0,
             days_ago: settled,
+            reviewed: true,
         },
         Work {
             model: Some("weak"),
@@ -213,6 +224,7 @@ fn fleet() -> AgentFacts {
             regressed: 12,
             cost: 1.0,
             days_ago: settled,
+            reviewed: true,
         },
         Work {
             model: Some("small"),
@@ -222,6 +234,7 @@ fn fleet() -> AgentFacts {
             regressed: 0,
             cost: 1.0,
             days_ago: settled,
+            reviewed: true,
         },
         Work {
             model: None,
@@ -231,6 +244,7 @@ fn fleet() -> AgentFacts {
             regressed: 0,
             cost: 1.0,
             days_ago: settled,
+            reviewed: true,
         },
         // Inside the settle lag: only the live board sees it.
         Work {
@@ -241,6 +255,7 @@ fn fleet() -> AgentFacts {
             regressed: 0,
             cost: 1.0,
             days_ago: 3,
+            reviewed: true,
         },
     ])
 }
@@ -420,6 +435,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
             regressed: 0,
             cost: 1.0,
             days_ago: days,
+            reviewed: true,
         },
         Work {
             model: Some("strong"),
@@ -429,6 +445,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
             regressed: 0,
             cost: 1.0,
             days_ago: days,
+            reviewed: true,
         },
         Work {
             model: Some("middle"),
@@ -438,6 +455,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
             regressed: 4,
             cost: 2.0,
             days_ago: days,
+            reviewed: true,
         },
         Work {
             model: Some("weak"),
@@ -447,6 +465,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
             regressed: 12,
             cost: 1.0,
             days_ago: days,
+            reviewed: true,
         },
         // Enough tasks overall but no assessed tier: stays ineligible.
         Work {
@@ -457,6 +476,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
             regressed: 0,
             cost: 1.0,
             days_ago: days,
+            reviewed: true,
         },
     ]);
     // Solo works only the hard tier; unassessed-only has no assessed tier.
@@ -509,6 +529,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
         regressed: 0,
         cost: 1.0,
         days_ago: days,
+        reviewed: true,
     }]);
     for task in &mut homogeneous.tasks {
         task.complexity = Some(TaskComplexity::Hard);
@@ -542,6 +563,7 @@ fn rank_credits_each_crew_only_its_own_pooled_tasks() {
         regressed: 0,
         cost: 1.0,
         days_ago: 20,
+        reviewed: true,
     }]);
     let payload = agent_rank(&facts, &settled(), &RankSeasons::default(), Duration::ZERO);
     let pooled = row(&payload, "pooled");
@@ -653,4 +675,96 @@ fn calibrated_season_stores_window_and_reference_size_and_drives_the_board() {
     assert_eq!(payload["season"]["season"], 1);
     let live = RankQuery::parse(None, None, None, None, true).unwrap();
     assert!(agent_rank_calibration(&facts, &live, &seasons).is_err());
+}
+
+/// A model whose tasks predate review recording has no reviewed deliveries,
+/// so review outcome leaves its weight denominator and its score rests on
+/// escaped regressions alone. Its zero escapes sit in an era with few recorded
+/// regressions, which reads as a large favourable residual. Such a row must
+/// not hold the top band over a model with the board's full measure coverage.
+#[test]
+fn rank_keeps_partly_measured_model_out_of_top_band() {
+    let facts = facts(&[
+        // This older cohort has no escapes; each newer model has a 10% escape
+        // rate, so whole-window expectations favor the unreviewed early row.
+        Work {
+            model: Some("early"),
+            crews: &["early"],
+            tasks: 40,
+            verdict: accept,
+            regressed: 0,
+            cost: 1.0,
+            days_ago: 28,
+            reviewed: false,
+        },
+        Work {
+            model: Some("full"),
+            crews: &["full"],
+            tasks: 40,
+            verdict: mixed,
+            regressed: 4,
+            cost: 1.0,
+            days_ago: 20,
+            reviewed: true,
+        },
+        Work {
+            model: Some("peer"),
+            crews: &["peer"],
+            tasks: 40,
+            verdict: mixed,
+            regressed: 4,
+            cost: 2.0,
+            days_ago: 20,
+            reviewed: true,
+        },
+        Work {
+            model: Some("other"),
+            crews: &["other"],
+            tasks: 40,
+            verdict: mixed,
+            regressed: 4,
+            cost: 3.0,
+            days_ago: 20,
+            reviewed: true,
+        },
+    ]);
+    let payload = agent_rank(&facts, &settled(), &RankSeasons::default(), Duration::ZERO);
+    assert_eq!(payload["qualified"], true);
+
+    let early = row(&payload, "early");
+    assert_eq!(
+        f(&early["measures"]["escaped_regressions"]["actual"]),
+        0.0,
+        "the older cohort has no recorded escapes"
+    );
+    assert!(
+        f(&row(&payload, "full")["measures"]["escaped_regressions"]["actual"]) > 0.0,
+        "the newer cohort has recorded escapes"
+    );
+    assert_eq!(early["eligible"], true, "early is ranked, only not on top");
+    assert_ne!(early["rank"], 1, "a partly measured model holds band 1");
+    assert!(
+        early["top_band_ineligible_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("without Review outcome")),
+        "the row states why it is kept out of the top band: {early}"
+    );
+
+    let full_weight = f(&row(&payload, "full")["weights_measured"]);
+    let top: Vec<&Value> = payload["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["rank"] == 1)
+        .collect();
+    assert!(!top.is_empty(), "the board has a top band");
+    for row in top {
+        assert_eq!(
+            f(&row["weights_measured"]),
+            full_weight,
+            "{} ranks first on less measured weight",
+            row["model"]
+        );
+        assert!(row["top_band_ineligible_reason"].is_null());
+    }
 }

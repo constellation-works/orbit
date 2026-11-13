@@ -191,7 +191,9 @@ orbit agents rank --json
   `residual` and `contribution`.
 - Per row: `eligible`, `single_tier` and `ineligible_reason`, `units`,
   `tasks_by_tier`, `crews`, `score` against `raw_score`, `rank`,
-  `rank_label` and `band_size`, `interval`, and the `cost` object.
+  `rank_label` and `band_size`, `top_band_ineligible_reason` (non-null when
+  the model is scored on less measured weight than the best-covered models,
+  so it cannot hold rank 1), `interval`, and the `cost` object.
 - `unattributed.tasks`, `execution_split` and `not_scored`: work the
   board saw but did not score, which bounds what the ranking can say.
 
