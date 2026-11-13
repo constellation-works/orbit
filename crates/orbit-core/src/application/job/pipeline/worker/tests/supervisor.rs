@@ -19,6 +19,8 @@ fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
         "a spawned worker must never be reported as not started"
     );
     // Reaping matters: an unreaped killed child still has a process identity.
+    // SAFETY: signal 0 sends nothing and only probes whether `pid`, the child spawned
+    // above, still exists; its arguments are plain integers, so no pointer precondition applies.
     assert_eq!(
         unsafe { libc::kill(pid as libc::pid_t, 0) },
         -1,
@@ -415,6 +417,9 @@ sys.exit(7)
             "a startup read fault must retain an observer that retries"
         );
         if fail_at == 0 {
+            // SAFETY: signal 0 sends nothing and only checks that `pid` is still alive; the
+            // child is blocked on the release byte this test has not sent, so it has not
+            // exited, and its arguments are plain integers, so no pointer precondition applies.
             assert_eq!(
                 unsafe { libc::kill(pid as libc::pid_t, 0) },
                 0,
@@ -478,6 +483,9 @@ sys.exit(7)
 }
 
 fn assert_reaped(pid: u32) {
+    // SAFETY: WNOHANG makes waitpid return at once instead of blocking, and a null status
+    // pointer is allowed (waitpid(2) writes status only when it is non-null), so this only
+    // queries whether `pid` is still our child.
     assert_eq!(
         unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG) },
         -1,
@@ -487,6 +495,8 @@ fn assert_reaped(pid: u32) {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::ECHILD)
     );
+    // SAFETY: signal 0 sends nothing and only probes existence; the preceding waitpid found no
+    // child to reap, so ESRCH is the expected result, and its arguments are plain integers.
     assert_eq!(
         unsafe { libc::kill(pid as libc::pid_t, 0) },
         -1,
