@@ -33,19 +33,6 @@ const $ = (id) => document.getElementById(id);
 
 const REMEMBERED_HOST_KEY = "orbit.dashboard.host";
 
-/// The closed picker has room for about 16 characters of its monospace name
-/// (ORB-24280). A longer name keeps its first 8 and last 7 characters, so a
-/// trailing number still reads. The option value and the select's title keep
-/// the whole name.
-const PICKER_NAME_LIMIT = 16;
-const PICKER_NAME_TAIL = 7;
-
-function pickerLabel(name) {
-  if (name.length <= PICKER_NAME_LIMIT) return name;
-  const head = PICKER_NAME_LIMIT - PICKER_NAME_TAIL - 1;
-  return `${name.slice(0, head)}…${name.slice(-PICKER_NAME_TAIL)}`;
-}
-
 /// Codes the forward answers for the host itself rather than for one request.
 /// Any panel failing with one of these means the host cannot be shown.
 const HOST_LEVEL_CODES = new Set([
@@ -154,17 +141,22 @@ function buildPicker() {
     "aria-label": current ? `Host: ${current}` : `Host: ${servingHostLabel}`,
   });
   select.id = "host-select";
-  const servingOption = el("option", { text: pickerLabel(servingName) });
+  // Option text is the full host name, so the open list, keyboard
+  // navigation and each option's accessible name distinguish hosts that
+  // share a prefix and suffix (STD-07 §R32). The native select stays
+  // compact when closed because its rail-constrained width clips the
+  // selected text (STD-07 §R37); the option value is the same full name.
+  const servingOption = el("option", { text: servingName });
   servingOption.value = "";
   select.appendChild(servingOption);
   for (const row of getRegisteredHosts()) {
     if (row.local) continue;
-    const option = el("option", { text: pickerLabel(row.name) });
+    const option = el("option", { text: row.name });
     option.value = row.name;
     select.appendChild(option);
   }
   if (current && !findRegisteredHost(current)) {
-    const option = el("option", { text: `${pickerLabel(current)} (not registered)` });
+    const option = el("option", { text: `${current} (not registered)` });
     option.value = current;
     select.appendChild(option);
   }
