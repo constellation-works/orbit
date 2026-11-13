@@ -566,9 +566,15 @@ window and five-second KILL grace, plus time to publish its record; it also boun
 partial-record reads. A refused group signal or expired reap deadline fails
 with an explicit unverified cleanup outcome; timeout and lost-supervisor
 outcomes also fail. The harness scratch directory is removed only after every
-executed command has verified cleanup and a final working-directory scan confirms
-its known workers have exited. Unknown cleanup retains the root and evidence,
-named by `scratch_cleanup.root` and `scratch_cleanup.retained`, for inspection.
+command the sweep ran under that root has verified cleanup and a final
+working-directory scan confirms its known workers have exited. That includes
+commands that never become a result row: the browser preflight, sandbox capability
+probes, the built candidate's `--version`, website preparation, builtin setup and
+cargo inventory listings. Unknown cleanup retains the root and evidence, named by
+`scratch_cleanup.root` and `scratch_cleanup.retained`; `scratch_cleanup.unverified_commands`
+lists each such command with its argv, exit code and stderr. Retention is a
+warning and does not change `decision` by itself: a scenario row whose own command
+has unverified cleanup still fails.
 Removal still ignores ordinary cleanup errors, so a late fixture write during
 removal cannot lose the report. Leftover paths and any detached worker that
 is still alive are recorded on the report's `scratch_cleanup` field
