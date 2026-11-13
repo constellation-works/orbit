@@ -70,14 +70,3 @@ Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at t
 Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
 
 1 of these occurrence(s) are already recorded in the rows above (ORB-18052); they are not re-added.
-
-### ORB-24239 owner scan, 2026-11-13
-
-Resume pass continuing ORB-24093 in the fixed window `2026-10-28T14:54:43Z` through `2026-11-11T14:54:43Z`. This slice counts 2 source occurrences across 2 tasks; route `recovery`, disposition `counted`. Correct stale-decision refusals, not escalated blocks. Change vs prior pass (ORB-24093): grew in this slice's reads.
-
-Durable sources: task `history` read with `orbit.task.show` in ORB-24239; the original records remain authoritative.
-
-| Date (UTC) | Task | Run | Matched signature and source | Outcome |
-| --- | --- | --- | --- | --- |
-| 2026-11-03T00:03:20Z | ORB-21251 | jrun-20261102-2359-c3 | final_recovery outcome=refused: task changed after the failure; source ORB-21251 history:final_recovery_decided | later decision stands; no reopening |
-| 2026-11-06T06:08:25Z | ORB-22357 | jrun-20261106-0607-t1 | final_recovery outcome=refused: task changed after the failure (operator scope rewrite); source ORB-22357 history:final_recovery_decided | candidate discarded, fresh run delivered, task done |
