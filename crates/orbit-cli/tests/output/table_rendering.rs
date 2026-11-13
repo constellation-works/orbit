@@ -40,6 +40,133 @@ fn task_list_renders_one_line_per_task() {
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
 }
 
+/// Attention keeps its repair command beside the reason at narrow terminal
+/// widths, and gives pipe consumers a separate final TSV field.
+#[cfg(unix)]
+#[test]
+fn attention_items_keep_the_reason_and_next_command_together() {
+    use assert_cmd::cargo::cargo_bin_cmd;
+    use orbit_common::test_env;
+
+    let workspace = workspace();
+    let task_id = workspace.add_task("Attention output regression");
+    let receipt = format!(
+        "operation_id={}\n{}",
+        "a".repeat(64),
+        serde_json::json!({
+            "assessment": {
+                "utility_warnings": [{
+                    "text": "A reproduced warning needs an operator action.",
+                    "holds_promotion": true
+                }]
+            }
+        })
+    );
+    let mut update = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        update.env_remove(name);
+    });
+    update
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("ORBIT_ACTOR", "task-pilot")
+        .args(["task", "update", &task_id, "--comment", &receipt, "--json"])
+        .assert()
+        .success();
+
+    let json = workspace.run_as_operator(
+        &["attention", "--kind", "pilot_warning", "--json"],
+        "read attention JSON",
+    );
+    let document: Value = serde_json::from_slice(&json.stdout).expect("attention JSON");
+    assert_eq!(document["counts"]["returned"], 1, "{document}");
+    assert_eq!(document["items"][0]["refs"]["task_id"], task_id);
+    let reason = document["items"][0]["reason"]
+        .as_str()
+        .expect("attention reason");
+    let next = document["items"][0]["next"]["command"]
+        .as_str()
+        .expect("next command");
+    assert!(!next.is_empty(), "the fixture has a suggested next command");
+    assert_eq!(document["message"], "1 item needs attention");
+
+    for width in ["60", "80", "120"] {
+        let output = run_cli_on_terminal_at_width_as_operator(
+            &workspace,
+            &["attention", "--kind", "pilot_warning"],
+            width,
+        );
+        let stdout = String::from_utf8(output.stdout)
+            .expect("terminal attention output")
+            .replace("\r\n", "\n");
+        let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized_command = next.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(stdout.starts_with("1 item needs attention\n"), "{stdout:?}");
+        assert!(stdout.contains("Reason:"), "{stdout:?}");
+        assert!(stdout.contains("Next:"), "{stdout:?}");
+        assert!(stdout.contains(reason), "the reason is visible: {stdout:?}");
+        assert!(
+            normalized.contains(&normalized_command),
+            "the complete suggested command is visible at {width} columns: {stdout:?}"
+        );
+    }
+
+    for args in [
+        vec!["attention", "--kind", "pilot_warning"],
+        vec!["attention", "--kind", "pilot_warning", "--format", "plain"],
+    ] {
+        let output = workspace.run_as_operator(&args, "read plain attention");
+        let stdout = String::from_utf8(output.stdout).expect("plain attention output");
+        assert!(
+            !stdout.contains("\\n"),
+            "plain output has no escaped newline: {stdout:?}"
+        );
+        let records = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(records.len(), 2, "one summary plus one item: {stdout:?}");
+        assert_eq!(records[0], "1 item needs attention");
+        let fields = records[1].split('\t').collect::<Vec<_>>();
+        assert!(
+            fields.contains(&reason),
+            "reason has its own field: {fields:?}"
+        );
+        assert!(
+            fields.contains(&next),
+            "next command has its own field: {fields:?}"
+        );
+        assert_eq!(
+            fields.last(),
+            Some(&next),
+            "next command is a separate final field"
+        );
+    }
+
+    let header_output = workspace.run_as_operator(
+        &[
+            "attention",
+            "--kind",
+            "pilot_warning",
+            "--format",
+            "plain",
+            "--header",
+        ],
+        "read plain attention with header",
+    );
+    let stdout = String::from_utf8(header_output.stdout).expect("plain attention output");
+    let records = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(records.len(), 3, "summary, header and one item: {stdout:?}");
+    assert_eq!(records[0], "1 item needs attention");
+    assert_eq!(
+        records[1], "SEVERITY\tKIND\tWORKSPACE\tREF\tAGE\tREASON\tNEXT",
+        "the global --header labels the plain fields: {stdout:?}"
+    );
+    assert_eq!(
+        records[2].split('\t').count(),
+        records[1].split('\t').count(),
+        "the item record has one field per header label: {stdout:?}"
+    );
+}
+
 /// The CLI exposes a crew-only OS limit in human and projected readouts.
 #[test]
 fn task_effective_os_readout_and_filter_use_the_assigned_executor() {
@@ -425,6 +552,25 @@ pub(super) fn run_cli_on_terminal_at_width(
     args: &[&str],
     width: &str,
 ) -> Output {
+    run_cli_on_terminal_at_width_with_operator(workspace, args, width, false)
+}
+
+#[cfg(unix)]
+fn run_cli_on_terminal_at_width_as_operator(
+    workspace: &TestWorkspace,
+    args: &[&str],
+    width: &str,
+) -> Output {
+    run_cli_on_terminal_at_width_with_operator(workspace, args, width, true)
+}
+
+#[cfg(unix)]
+fn run_cli_on_terminal_at_width_with_operator(
+    workspace: &TestWorkspace,
+    args: &[&str],
+    width: &str,
+    operator: bool,
+) -> Output {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     use std::process::Stdio;
@@ -467,6 +613,9 @@ pub(super) fn run_cli_on_terminal_at_width(
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
+    if operator {
+        command.env("ORBIT_OPERATOR", "1");
+    }
     let mut child = command
         .current_dir(&workspace.work)
         .env("HOME", &workspace.home)

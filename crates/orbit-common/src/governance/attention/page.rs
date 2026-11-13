@@ -114,6 +114,8 @@ pub fn attention_public_page(
         format!("No new or changed items ({unchanged} unchanged); {read_scope}")
     } else if returned.is_empty() {
         format!("Nothing needs attention; {read_scope}")
+    } else if returned.len() == 1 {
+        "1 item needs attention".into()
     } else {
         format!("{} items need attention", returned.len())
     };

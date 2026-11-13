@@ -517,7 +517,7 @@ fn cell_at(row: &[Cell], index: usize) -> Cell {
 /// separator: backslash, tab, line feed, and carriage return become `\\`,
 /// `\t`, `\n`, and `\r`. Escaping the backslash keeps the encoding reversible;
 /// a value with none of the four is returned unchanged.
-fn escape_plain(value: &str) -> String {
+pub(crate) fn escape_plain(value: &str) -> String {
     if !value.contains(['\\', '\t', '\n', '\r']) {
         return value.to_string();
     }
