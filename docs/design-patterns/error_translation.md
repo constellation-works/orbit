@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-11-05
+last_validated: 2026-11-12
 ---
 # Crate-Boundary Error Translation
 
@@ -110,7 +110,8 @@ pub enum DispatchError {
 ```
 
 The translator lives next to the error. It preserves protocol skew, validation failures as
-`JobValidation`, recoverable VCS conflicts, live-completion refusals, and delivery refusals; other dispatch errors
+`JobValidation`, recoverable VCS conflicts, live-completion refusals, delivery refusals, and
+owner-route unavailability as a typed `RemoteTool` with its wire code; other dispatch errors
 collapse to `InvalidInput`.
 
 ```rust
@@ -134,6 +135,14 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         } => OrbitError::DeliveryRefused {
             refusal,
             message: format!("deterministic action `{action}` refused: {message}"),
+        },
+        DispatchError::OwnerRouteUnavailable { action, message } => OrbitError::RemoteTool {
+            code: orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE.into(),
+            payload: serde_json::json!({
+                "code": orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+                "message": message,
+            }),
+            message: format!("deterministic action `{action}` failed: {message}"),
         },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
