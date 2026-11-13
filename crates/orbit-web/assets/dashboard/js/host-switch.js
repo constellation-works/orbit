@@ -33,6 +33,19 @@ const $ = (id) => document.getElementById(id);
 
 const REMEMBERED_HOST_KEY = "orbit.dashboard.host";
 
+/// The closed picker has room for about 16 characters of its monospace name
+/// (ORB-24280). A longer name keeps its first 8 and last 7 characters, so a
+/// trailing number still reads. The option value and the select's title keep
+/// the whole name.
+const PICKER_NAME_LIMIT = 16;
+const PICKER_NAME_TAIL = 7;
+
+function pickerLabel(name) {
+  if (name.length <= PICKER_NAME_LIMIT) return name;
+  const head = PICKER_NAME_LIMIT - PICKER_NAME_TAIL - 1;
+  return `${name.slice(0, head)}…${name.slice(-PICKER_NAME_TAIL)}`;
+}
+
 /// Codes the forward answers for the host itself rather than for one request.
 /// Any panel failing with one of these means the host cannot be shown.
 const HOST_LEVEL_CODES = new Set([
@@ -138,20 +151,20 @@ function buildPicker() {
   const select = el("select", {
     class: "workspace-select host-select",
     title: current || servingHostLabel,
-    "aria-label": current ? "Host" : `Host: ${servingHostLabel}`,
+    "aria-label": current ? `Host: ${current}` : `Host: ${servingHostLabel}`,
   });
   select.id = "host-select";
-  const servingOption = el("option", { text: servingName });
+  const servingOption = el("option", { text: pickerLabel(servingName) });
   servingOption.value = "";
   select.appendChild(servingOption);
   for (const row of getRegisteredHosts()) {
     if (row.local) continue;
-    const option = el("option", { text: row.name });
+    const option = el("option", { text: pickerLabel(row.name) });
     option.value = row.name;
     select.appendChild(option);
   }
   if (current && !findRegisteredHost(current)) {
-    const option = el("option", { text: `${current} (not registered)` });
+    const option = el("option", { text: `${pickerLabel(current)} (not registered)` });
     option.value = current;
     select.appendChild(option);
   }
@@ -159,10 +172,15 @@ function buildPicker() {
   select.addEventListener("change", () => onSelect(select.value || null));
   const label = el("label", { class: "rail-scope-label", text: "Host" });
   label.htmlFor = "host-select";
+  // The Serving badge rides on the label's row, so the select keeps the rail's
+  // width for the host name (ORB-24280). On phones CSS moves the badge beside
+  // the select instead, because the label is hidden there.
+  const head = el("div", { class: "host-picker-head" });
+  head.appendChild(label);
+  if (!current) head.appendChild(el("span", { class: "host-serving-badge", text: "Serving" }));
   const control = el("div", { class: "host-picker-control" });
   control.appendChild(select);
-  if (!current) control.appendChild(el("span", { class: "host-serving-badge", text: "Serving" }));
-  container.replaceChildren(label, control);
+  container.replaceChildren(head, control);
 }
 
 /// Name the selected host on the provider-usage group, the resource dialog
