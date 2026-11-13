@@ -81,6 +81,11 @@ pub(crate) fn hang_wrap_footers(mut command: Command, width: usize) -> Command {
 /// line is itself indented.
 const HANG_INDENT: usize = 2;
 
+/// Fewest columns an aligned explanation needs to wrap into readable phrases.
+/// A shared description column that leaves less than this stacks the block's
+/// explanations under their commands instead of wrapping them a word per line.
+const MIN_EXPLANATION_WIDTH: usize = 24;
+
 /// Wrap the lines of `text` that are wider than `width` at word boundaries.
 /// Lines that fit are left exactly as written, so aligned columns survive. A
 /// prose paragraph hard-wrapped in the source (unindented lines, each ending
@@ -91,8 +96,10 @@ const HANG_INDENT: usize = 2;
 /// two-column layout (two or more rows starting their description at the same
 /// column) and any row is too wide, the overflowing aligned rows keep that
 /// shared column: their explanation wraps with continuation lines indented to
-/// the column, or stacks onto its own indented lines when the column leaves no
-/// room. Single-column rows in the same block keep the plain hanging indent.
+/// the column. When the column leaves under `MIN_EXPLANATION_WIDTH` columns,
+/// every aligned row of the block stacks onto its own indented lines instead,
+/// so the block keeps one layout. Single-column rows in the same block keep the
+/// plain hanging indent.
 fn hang_wrap_text(text: &str, width: usize) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut paragraph: Vec<&str> = Vec::new();
@@ -190,12 +197,16 @@ fn hang_wrap_block(block: &[&str], width: usize, out: &mut Vec<String>) {
         }
         return;
     }
+    // Too little room beside the shared column would wrap the explanations a
+    // word per line, so the block stacks all of them: one layout per block.
+    let stack_block = width.saturating_sub(column) < MIN_EXPLANATION_WIDTH;
     for line in block {
-        if line.chars().count() <= width {
+        let aligned = aligned_description_column(line) == Some(column);
+        if aligned && stack_block {
+            out.push(hang_stack_aligned_row(line, column, width));
+        } else if line.chars().count() <= width {
             out.push(line.to_string());
-            continue;
-        }
-        if aligned_description_column(line) == Some(column) {
+        } else if aligned {
             out.push(hang_wrap_aligned_row(line, column, width));
         } else {
             out.push(hang_wrap_line(line, width));
@@ -203,38 +214,65 @@ fn hang_wrap_block(block: &[&str], width: usize, out: &mut Vec<String>) {
     }
 }
 
-/// Wrap one over-wide aligned row keeping its shared description `column`.
-/// The explanation wraps with continuations indented to the column; when the
-/// column leaves no room the explanation stacks onto its own indented lines.
-fn hang_wrap_aligned_row(line: &str, column: usize, width: usize) -> String {
+/// Split an aligned row at its shared description `column` into the command
+/// text, padding included, and the trimmed explanation. `None` when the row has
+/// no explanation at that column.
+fn split_aligned_row(line: &str, column: usize) -> Option<(String, String)> {
     let chars: Vec<char> = line.chars().collect();
-    if column >= chars.len() || column == 0 {
-        return hang_wrap_line(line, width);
+    if column == 0 || column >= chars.len() {
+        return None;
     }
     let prefix: String = chars[..column].iter().collect();
     let explanation: String = chars[column..].iter().collect();
     let explanation = explanation.trim();
     if explanation.is_empty() {
-        return hang_wrap_line(line, width);
+        return None;
     }
-    let lead = chars.iter().take_while(|c| **c == ' ').count();
+    Some((prefix, explanation.to_string()))
+}
+
+/// Stack one aligned row at any width: the command on its own line and its
+/// explanation wrapped beneath it. Used when the shared column leaves too little
+/// room to read the explanation beside the command.
+fn hang_stack_aligned_row(line: &str, column: usize, width: usize) -> String {
+    let Some((prefix, explanation)) = split_aligned_row(line, column) else {
+        return hang_wrap_line(line, width);
+    };
+    let lead = line.chars().take_while(|c| *c == ' ').count();
+    stack_aligned_row(&prefix, &explanation, lead, width)
+}
+
+/// The command on its own line (wrapped itself when it alone overflows), then
+/// the explanation stacked beneath it.
+fn stack_aligned_row(prefix: &str, explanation: &str, lead: usize, width: usize) -> String {
+    let command = prefix.trim_end();
+    let mut stacked = if command.chars().count() > width {
+        hang_wrap_line(command, width)
+    } else {
+        command.to_string()
+    };
+    stacked.push('\n');
+    stacked.push_str(&hang_wrap_stacked_explanation(explanation, lead, width));
+    stacked
+}
+
+/// Wrap one over-wide aligned row keeping its shared description `column`.
+/// The explanation wraps with continuations indented to the column; when the
+/// column leaves no room, or the first word cannot fit beside it, the explanation
+/// stacks onto its own indented lines.
+fn hang_wrap_aligned_row(line: &str, column: usize, width: usize) -> String {
+    let Some((prefix, explanation)) = split_aligned_row(line, column) else {
+        return hang_wrap_line(line, width);
+    };
+    let explanation = explanation.as_str();
+    let lead = line.chars().take_while(|c| *c == ' ').count();
     if width <= column
         || explanation
             .split_whitespace()
             .next()
             .is_none_or(|word| word.chars().count() > width - column)
     {
-        let command = prefix.trim_end().to_string();
-        if command.chars().count() > width {
-            let mut stacked = hang_wrap_line(&command, width);
-            stacked.push('\n');
-            stacked.push_str(&hang_wrap_stacked_explanation(explanation, lead, width));
-            return stacked;
-        }
-        let mut stacked = command;
-        stacked.push('\n');
-        stacked.push_str(&hang_wrap_stacked_explanation(explanation, lead, width));
-        return stacked;
+        return stack_aligned_row(&prefix, explanation, lead, width);
     }
     let available = width - column;
     let mut chunks: Vec<String> = Vec::new();
