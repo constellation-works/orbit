@@ -95,10 +95,43 @@ if [[ -n "$db_path" && "$has_config" == false ]]; then
   fi
 
   temp_cfg="$(mktemp "${TMPDIR:-/tmp}/orbit-deny-XXXXXX.toml")"
-  awk -v db="$target_db_dir" '
+  ORBIT_CARGO_DENY_DB_PATH_FOR_AWK="$target_db_dir" awk '
+    function toml_escape(value, escaped, i, character, code) {
+      escaped = "";
+      for (i = 1; i <= length(value); i++) {
+        character = substr(value, i, 1);
+        if (character == sprintf("%c", 92)) {
+          escaped = escaped sprintf("%c", 92) sprintf("%c", 92);
+        } else if (character == sprintf("%c", 34)) {
+          escaped = escaped sprintf("%c", 92) character;
+        } else if (character == sprintf("%c", 8)) {
+          escaped = escaped sprintf("%c", 92) "b";
+        } else if (character == sprintf("%c", 9)) {
+          escaped = escaped sprintf("%c", 92) "t";
+        } else if (character == sprintf("%c", 10)) {
+          escaped = escaped sprintf("%c", 92) "n";
+        } else if (character == sprintf("%c", 12)) {
+          escaped = escaped sprintf("%c", 92) "f";
+        } else if (character == sprintf("%c", 13)) {
+          escaped = escaped sprintf("%c", 92) "r";
+        } else if (character == sprintf("%c", 127)) {
+          escaped = escaped sprintf("%c", 92) "u007F";
+        } else {
+          for (code = 1; code <= 31; code++) {
+            if (character == sprintf("%c", code)) {
+              escaped = escaped sprintf("%c", 92) sprintf("u%04X", code);
+              character = "";
+              break;
+            }
+          }
+          escaped = escaped character;
+        }
+      }
+      return escaped;
+    }
     /^\[advisories\]/ {
       print;
-      print "db-path = \"" db "\"";
+      print "db-path = \"" toml_escape(ENVIRON["ORBIT_CARGO_DENY_DB_PATH_FOR_AWK"]) "\"";
       in_advisories = 1;
       next;
     }

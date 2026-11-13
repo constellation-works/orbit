@@ -2088,20 +2088,28 @@ class CargoDenyGuardrailTests(unittest.TestCase):
 
     def write_fake_deny(self):
         self.fake_deny.write_text('''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, tomllib
 log = os.environ.get("FAKE_DENY_LOG")
 config_content = None
 config_path = None
+config_parse_error = None
+parsed_db_path = None
 if "--config" in sys.argv:
     idx = sys.argv.index("--config") + 1
     if idx < len(sys.argv):
         config_path = sys.argv[idx]
         if os.path.exists(config_path):
             config_content = open(config_path).read()
+            try:
+                parsed_db_path = tomllib.loads(config_content).get("advisories", {}).get("db-path")
+            except Exception as error:
+                config_parse_error = f"{type(error).__name__}: {error}"
 entry = {
     "argv": sys.argv[1:],
     "config_path": config_path,
     "config_content": config_content,
+    "config_parse_error": config_parse_error,
+    "parsed_db_path": parsed_db_path,
 }
 if log:
     with open(log, "a") as f:
@@ -2146,6 +2154,33 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         self.assertEqual(result.returncode, 0, result.stderr)
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertIn(f'db-path = "{override_dir}"', entries[0]["config_content"])
+
+    def test_override_paths_with_quotes_and_literal_backslashes_round_trip(self):
+        for variable in ("CARGO_DENY_DB_PATH", "ORBIT_CARGO_DENY_DB_PATH"):
+            with self.subTest(variable=variable):
+                override_dir = self.root / f'{variable}-quote"-literal\\n-backslash'
+                override_dir.mkdir()
+                result = self.run_script("check", env_overrides={variable: str(override_dir)})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                entry = json.loads(self.log.read_text().splitlines()[-1])
+                self.assertIsNone(entry["config_parse_error"], entry["config_content"])
+                self.assertEqual(entry["parsed_db_path"], str(override_dir))
+
+    def test_explicit_config_is_not_rewritten_for_database_override(self):
+        config_path = self.root / "explicit.toml"
+        config_path.write_text('[advisories]\ndb-path = "explicit"\n')
+        override_dir = self.root / "ignored_override"
+        override_dir.mkdir()
+        result = self.run_script(
+            "check", "--config", str(config_path),
+            env_overrides={"CARGO_DENY_DB_PATH": str(override_dir)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entry = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual(entry["config_path"], str(config_path))
+        self.assertIsNone(entry["config_parse_error"], entry["config_content"])
+        self.assertEqual(entry["parsed_db_path"], "explicit")
+        self.assertTrue(config_path.exists())
 
     def test_direct_repo_path_resolves_container(self):
         repo_dir = self.root / "advisory-db-3157b0e258782691"
