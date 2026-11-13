@@ -322,7 +322,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Why the task was filed.",
+                "Provenance category, not a free-text reason: operator_request, orchestrator_initiative or automation. Omit it when unsure; put the reason in description.",
                 CliArgKind::flag("origin"),
                 "Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
             ),
@@ -653,7 +653,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Why the task was filed.",
+                "Provenance category, not a free-text reason: operator_request, orchestrator_initiative or automation. Omit it when unsure; put the reason in description.",
                 CliArgKind::flag("origin"),
                 "Replacement task origin (operator_request, orchestrator_initiative, automation)",
             ),

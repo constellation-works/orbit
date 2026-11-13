@@ -986,7 +986,7 @@
           },
           "origin": {
             "type": "string",
-            "description": "Why the task was filed."
+            "description": "Provenance category, not a free-text reason: operator_request, orchestrator_initiative or automation. Omit it when unsure; put the reason in description."
           },
           "fields": {
             "type": "array",
@@ -1661,7 +1661,7 @@
           },
           "origin": {
             "type": "string",
-            "description": "Why the task was filed."
+            "description": "Provenance category, not a free-text reason: operator_request, orchestrator_initiative or automation. Omit it when unsure; put the reason in description."
           },
           "context_files": {
             "type": "array",
