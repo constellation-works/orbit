@@ -123,6 +123,11 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 /* Columns past the score scroll sideways; the edge fades show which side has
    more. The local fades cover the scroll shadows once that edge is reached. */
 .agents-table-wrap {
+  /* ORB-24279: the wrapper is the containing block for the hint text hidden
+     in scrolled ranking-table headers, so the 1px text scrolls with the table
+     instead of escaping to the tab pane and widening it sideways (STD-07 R4).
+     Pinned bubbles are position:fixed, so tooltips are unaffected. */
+  position: relative;
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 3px;
