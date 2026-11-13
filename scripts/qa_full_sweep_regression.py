@@ -211,6 +211,102 @@ def scratch_cleanup_race_self_test(harness, scratch):
             raise AssertionError(f"scratch cleanup warning failed a passing sweep: {child.returncode} {report['decision']} {result}")
 
 
+# Auxiliary commands run under the sweep scratch root but never become scenario
+# rows. The driver replaces only the run() primitive: the browser preflight is a
+# controlled observation (no browser starts), while the candidate version and
+# builtin setup run for real and are then marked unverified after exit zero.
+AUXILIARY_CLEANUP_DRIVER = '''
+import importlib.util, json, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("qa", sys.argv[1])
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+repo = Path(sys.argv[2])
+qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
+qa.validate_inventory = lambda *_: ([], {"cli": []})
+qa.cargo_inventory_errors = lambda *_, **__: []
+qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
+                                "status": [], "diff_sha256": "fixture"}
+_mode = json.loads((repo / "mode.json").read_text())
+if _mode["target"] != "builtin-setup":
+    qa.run_builtins = lambda *_: ([], None)
+_real_run = qa.run
+def _observed_run(argv, **kwargs):
+    if _mode["target"] == "browser-probe" and argv[:1] == ["node"]:
+        # run() reports unverified cleanup as FAIL even when the exit code is zero.
+        return {"command": argv, "exit_code": 0, "stdout": "fixture browser\\n", "stderr": "",
+                "outcome": "PASS" if _mode["verified"] else "FAIL", "output_truncated": False,
+                "cleanup_verified": _mode["verified"],
+                "detached_workers": [] if _mode["verified"] else None,
+                "open_descendants": 0 if _mode["verified"] else None, "subreaper": False}
+    evidence = _real_run(argv, **kwargs)
+    auxiliary = ((_mode["target"] == "built-version" and argv[-1:] == ["--version"])
+                 or (_mode["target"] == "builtin-setup" and argv[:2] == ["git", "init"]))
+    if auxiliary and not _mode["verified"]:
+        evidence["cleanup_verified"] = False
+        evidence["outcome"] = "FAIL"
+    return evidence
+qa.run = _observed_run
+sys.argv = [sys.argv[1], "--repo-root", str(repo), "--orbit-bin", str(repo / "bin/orbit"),
+            "--output", str(repo / ".orbit/tmp/report.json"), *sys.argv[3:]]
+qa.main()
+'''
+
+
+def auxiliary_cleanup_self_test(harness, scratch):
+    """Unverified cleanup in a non-row command retains the sweep root through the public main."""
+    matches = {
+        "browser-probe": lambda argv: argv[:1] == ["node"],
+        "built-version": lambda argv: argv[-1:] == ["--version"],
+        "builtin-setup": lambda argv: argv[:2] == ["git", "init"],
+    }
+    arguments = {
+        "browser-probe": [],
+        "built-version": ["--build-candidate"],
+        "builtin-setup": ["--build-candidate"],
+    }
+    for target in matches:
+        for verified in (False, True):
+            with tempfile.TemporaryDirectory(prefix="qa-auxiliary-cleanup-", dir=scratch) as tmp:
+                repo = Path(tmp)
+                for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
+                    (repo / directory).mkdir(parents=True, exist_ok=True)
+                driver = repo / "driver.py"
+                driver.write_text(AUXILIARY_CLEANUP_DRIVER)
+                (repo / "mode.json").write_text(json.dumps({"target": target, "verified": verified}))
+                (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+                (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
+                playwright = repo / "playwright.mjs"
+                playwright.write_text("// capability seam, no browser launched\n")
+                cargo = repo / "bin/cargo"
+                cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+                cargo.chmod(0o755)
+                orbit = repo / "bin/orbit"
+                orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+                orbit.chmod(0o755)
+                options = (["--playwright-module", str(playwright), "--playwright-browsers-path",
+                            str(repo / "browsers")] if target == "browser-probe" else arguments[target])
+                child = subprocess.run(
+                    [sys.executable, str(driver), str(harness), str(repo), *options],
+                    cwd=repo, env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
+                    capture_output=True, text=True, timeout=120)
+                report_path = repo / ".orbit/tmp/report.json"
+                if not report_path.is_file():
+                    raise AssertionError(f"{target} sweep did not produce a report: {child.stdout}\n{child.stderr}")
+                report = json.loads(report_path.read_text())
+                state = report["scratch_cleanup"]
+                root = Path(state["root"])
+                unverified = state.get("unverified_commands")
+                if verified:
+                    if child.returncode != 0 or state["retained"] is not False or root.exists() or unverified != []:
+                        raise AssertionError(f"verified {target} cleanup did not remove the root: {child.returncode} {state}")
+                    continue
+                if child.returncode != 0 or state["retained"] is not True or not root.is_dir():
+                    raise AssertionError(f"unverified {target} cleanup released the scratch root: {child.returncode} {state}")
+                if not any(matches[target](item.get("command", [])) for item in unverified or []):
+                    raise AssertionError(f"report omits the unverified {target} command: {state}")
+
+
 def report_output_self_test(harness, scratch):
     """Both public entrypoints keep default reports in ignored scratch storage."""
     with tempfile.TemporaryDirectory(prefix="qa-report-output-", dir=scratch) as tmp:
@@ -313,6 +409,7 @@ def self_test():
     retired_cases_orphan_proof_self_test(harness, scratch)
     source_identity_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
+    auxiliary_cleanup_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch, wire=True)
     builtin_refusal_self_test(harness, scratch, nested=True)

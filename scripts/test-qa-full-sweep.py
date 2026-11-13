@@ -750,6 +750,26 @@ def _workers_clear(evidence):
         isinstance(worker, dict) and worker.get("exited") is True for worker in workers)
 
 
+# Cleanup facts for every local command this sweep ran. Scratch retention reads
+# this aggregate, not the displayed rows: a command whose evidence is projected
+# away (browser probe, candidate version, website preparation, builtin setup)
+# still keeps the root when its cleanup is not proven.
+_LOCAL_COMMAND_CLEANUP = []
+
+
+def observe_local_command(evidence):
+    """Keep a reference to one command's record, then return the record unchanged."""
+    _LOCAL_COMMAND_CLEANUP.append(evidence)
+    return evidence
+
+
+def unverified_local_commands():
+    """Diagnostics for each local command whose cleanup is not proven."""
+    return [{"command": item.get("command", []), "exit_code": item.get("exit_code"),
+             "stderr": item.get("stderr", "")}
+            for item in _LOCAL_COMMAND_CLEANUP if item.get("cleanup_verified") is not True]
+
+
 def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
     evidence = {"command": argv, "started_at": started, "exit_code": None,
@@ -1255,9 +1275,10 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
     errors = []
     with tempfile.TemporaryDirectory(prefix="orbit-qa-cargo-inventory-") as tmp:
         env = isolated_environment(Path(tmp))
-        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
-                        *(["--offline"] if offline else [])],
-                       cwd=repo, env=env)
+        metadata = observe_local_command(run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
+             *(["--offline"] if offline else [])],
+            cwd=repo, env=env))
         try:
             if metadata.get("output_truncated"):
                 raise ValueError("Cargo inventory metadata output was truncated")
@@ -1285,7 +1306,7 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
                     if "--" not in listed:
                         listed.append("--")
                     listed.append("--list")
-                    evidence = run(listed, cwd=repo, env=env, timeout=1800)
+                    evidence = observe_local_command(run(listed, cwd=repo, env=env, timeout=1800))
                     selected = validate_cargo_case_listing(evidence, required_tests)
                     body = {"scenario": scenario["id"], "command": listed,
                             "selected_tests": selected, "behavioral_coverage": False}
@@ -1404,7 +1425,7 @@ def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded
         command = case.get("command") if isinstance(case, dict) else None
         if not command:
             continue
-        evidence = run(list(command), cwd=repo, env=env, timeout=1800)
+        evidence = observe_local_command(run(list(command), cwd=repo, env=env, timeout=1800))
         unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
         failure = None if unchanged else "source candidate changed while the scenario ran"
         try:
@@ -1847,10 +1868,10 @@ def website_build_evidence(repo: Path, temp: Path, env: dict, command):
     shutil.copyfile(repo / "CHANGELOG.md", root / "CHANGELOG.md")
     website_env = {**env, "npm_config_cache": str(root / "npm-cache"),
                    "ASTRO_TELEMETRY_DISABLED": "1"}
-    preparation = run(["npm", "--prefix", "website", "ci"],
-                      cwd=root, env=website_env, timeout=1800)
+    preparation = observe_local_command(run(["npm", "--prefix", "website", "ci"],
+                                            cwd=root, env=website_env, timeout=1800))
     if preparation["outcome"] == "PASS":
-        evidence = run(command, cwd=root, env=website_env, timeout=1800)
+        evidence = observe_local_command(run(command, cwd=root, env=website_env, timeout=1800))
     else:
         evidence = {"command": command, "exit_code": preparation["exit_code"],
                     "stdout": "", "stderr": "website dependency preparation failed; build not run",
@@ -1861,14 +1882,14 @@ def website_build_evidence(repo: Path, temp: Path, env: dict, command):
 
 
 def inspect_browser_capability(playwright_module: Path, env: dict, repo: Path):
-    probe = run([
+    probe = observe_local_command(run([
         "node", "--input-type=module", "-e",
         "import { pathToFileURL } from 'node:url'; "
         "const { chromium } = await import(pathToFileURL(process.argv[1]).href); "
         "const browser = await chromium.launch({ headless: true }); "
         "console.log(browser.version()); await browser.close();",
         str(playwright_module),
-    ], cwd=repo, env=env, timeout=180)
+    ], cwd=repo, env=env, timeout=180))
     version = probe["stdout"].strip() if probe["exit_code"] == 0 else None
     return probe, version
 
@@ -1897,7 +1918,7 @@ with tempfile.TemporaryDirectory(prefix="qa-protected-write-", dir=sys.argv[1]) 
 print(json.dumps({"denied": denied}))
 sys.exit(77 if denied else 0)
 """, env["TMPDIR"]]
-    evidence = run(command, cwd=repo, env=env)
+    evidence = observe_local_command(run(command, cwd=repo, env=env))
     unavailable = False
     if capability == "sandbox-apply":
         unavailable = (evidence["exit_code"] == 71 and
@@ -1965,11 +1986,12 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
         for argv in (["git", "init", "-q", "-b", "main"], ["git", "add", "README.md"]):
             if argv[1] == "add":
                 (path / "README.md").write_text("fixture\n")
-            evidence = run(argv, cwd=path, env=env)
+            evidence = observe_local_command(run(argv, cwd=path, env=env))
             if evidence["exit_code"] != 0:
                 raise RuntimeError(f"fixture setup failed: {evidence}")
-        evidence = run(["git", "-c", "user.name=Orbit QA", "-c", "user.email=qa@example.invalid",
-                        "commit", "-qm", "fixture"], cwd=path, env=env)
+        evidence = observe_local_command(run(
+            ["git", "-c", "user.name=Orbit QA", "-c", "user.email=qa@example.invalid",
+             "commit", "-qm", "fixture"], cwd=path, env=env))
         if evidence["exit_code"] != 0:
             raise RuntimeError(f"fixture commit failed: {evidence}")
 
@@ -1979,7 +2001,7 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
         if gated is not None:
             results.append(gated)
             return None
-        evidence = run(argv, cwd=cwd, env=env)
+        evidence = observe_local_command(run(argv, cwd=cwd, env=env))
         if probe is not None:
             evidence["capability_probe"] = probe
         failure = None
@@ -2454,11 +2476,13 @@ spec:
     if enabled:
         plugin_input = {"query": "leakage", "max_depth": 3, "tags": ["rust", "cli"]}
         operator_env = {**env, "ORBIT_OPERATOR": "1"}
-        group = run([*plugin_base, "qashapes", "recommend", "leakage", "--max-depth", "3",
-                     "--tags", "rust", "--tags", "cli", "--format", "json"],
-                    cwd=work, env=operator_env)
-        tool = run([*plugin_base, "tool", "run", "qashapes.recommend", "--input",
-                    json.dumps(plugin_input), "--format", "json"], cwd=work, env=operator_env)
+        group = observe_local_command(run(
+            [*plugin_base, "qashapes", "recommend", "leakage", "--max-depth", "3",
+             "--tags", "rust", "--tags", "cli", "--format", "json"],
+            cwd=work, env=operator_env))
+        tool = observe_local_command(run(
+            [*plugin_base, "tool", "run", "qashapes.recommend", "--input",
+             json.dumps(plugin_input), "--format", "json"], cwd=work, env=operator_env))
         probe = scenario_sandbox_probe("definition-policy-boundary", temp, env, repo, sandbox_probes)
         if probe is not None:
             group["capability_probe"] = tool["capability_probe"] = probe
@@ -2501,9 +2525,10 @@ spec:
         {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"orbit_workspace_list","arguments":{}}},
         {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"orbit_task_show","arguments":{"id":task_id,"workspace":str(work),"model":"codex"}}},
         {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"orbit_task_show","arguments":{"id":task_id,"workspace":str(other),"model":"codex"}}}]
-    mcp_evidence = run([orbit_bin, "mcp", "serve", "--workspace", str(work)], cwd=work,
-                       env=env, input_text="".join(json.dumps(item)+"\n" for item in requests),
-                       timeout=30)
+    mcp_evidence = observe_local_command(run(
+        [orbit_bin, "mcp", "serve", "--workspace", str(work)], cwd=work,
+        env=env, input_text="".join(json.dumps(item)+"\n" for item in requests),
+        timeout=30))
     failure = None
     try:
         responses = {}
@@ -4148,6 +4173,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
 
 
 def main():
+    _LOCAL_COMMAND_CLEANUP.clear()
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--orbit-bin", default=shutil.which("orbit"))
@@ -4277,12 +4303,14 @@ def main():
             browser_record["capability_probe"] = {
                 "command": probe["command"], "exit_code": probe["exit_code"],
                 "stdout": probe["stdout"], "stderr": probe["stderr"],
+                "cleanup_verified": probe.get("cleanup_verified"),
             }
             capabilities["browser"] = probe["exit_code"] == 0
         provenance = None
         if args.build_candidate and not errors:
-            build = run(["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
-                         "--target-dir", str(temp / "candidate-target")], cwd=repo, env=env, timeout=1800)
+            build = observe_local_command(run(
+                ["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
+                 "--target-dir", str(temp / "candidate-target")], cwd=repo, env=env, timeout=1800))
             binary = temp / "candidate-target/debug/orbit"
             binary_record["path"] = "<disposable-candidate-build>"
             unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
@@ -4301,7 +4329,7 @@ def main():
             provenance["scenario"] = "source-binary-provenance"
             results.append(provenance)
         elif binary:
-            evidence = run([str(binary), "--version"], cwd=repo, env=env)
+            evidence = observe_local_command(run([str(binary), "--version"], cwd=repo, env=env))
             binary_record["version"] = evidence["stdout"].strip() if evidence["exit_code"] == 0 else None
             failure = "external binary has no build attestation; use --build-candidate"
             try:
@@ -4312,7 +4340,8 @@ def main():
             results.append({"scenario":"source-binary-provenance",
                 **finalize_result(evidence, [], candidate_id, failure)})
         if provenance and provenance["outcome"] == "PASS" and not errors:
-            binary_record["version"] = run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip()
+            binary_record["version"] = observe_local_command(
+                run([str(binary), "--version"], cwd=repo, env=env))["stdout"].strip()
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
         browser_run_dir = None
@@ -4341,7 +4370,7 @@ def main():
                 if scenario["id"] == "website-build":
                     evidence = website_build_evidence(repo, temp, env, command)
                 else:
-                    evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
+                    evidence = observe_local_command(run(command, cwd=repo, env=scenario_env, timeout=1800))
                 if scenario["capability"] == "browser":
                     scenario_evidence_dir.mkdir(parents=True, exist_ok=True)
                     (scenario_evidence_dir / "harness-result.json").write_text(
@@ -4416,8 +4445,13 @@ def main():
             detached_worker_settlement = settle_detached_workers_under(temp)
         except OSError as error:
             detached_worker_settlement = {"workers": [], "error": str(error)}
+        # The aggregate covers commands whose rows are never displayed. Rows and
+        # settlement remain part of the decision; an empty cwd scan never clears
+        # an unproven command.
+        unverified_commands = unverified_local_commands()
         scratch_retained = (
-            any(result.get("cleanup_verified") is False for result in results)
+            bool(unverified_commands)
+            or any(result.get("cleanup_verified") is False for result in results)
             or detached_worker_settlement.get("cwd_visible") is not True
             or bool(detached_worker_settlement.get("error"))
             or any(worker.get("exited") is not True
@@ -4488,7 +4522,8 @@ def main():
         "scratch_cleanup": {"root": str(temp), "retained": scratch_retained,
                             "leftover_paths": scratch_leftovers,
                             "warning": scratch_cleanup_warning,
-                            "detached_workers": detached_workers},
+                            "detached_workers": detached_workers,
+                            "unverified_commands": unverified_commands},
         "results": results, "findings": decision_failures,
         "capability_gaps": [{"scenario": row["scenario"],
                              "missing_capabilities": row["missing_capabilities"],
