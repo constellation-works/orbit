@@ -122,6 +122,60 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
     ))
 }
 
+/// [ORB-24697] The terminal reason a provider's own `result` frame carries,
+/// read for failure naming on a non-zero exit. Unlike
+/// [`claude_structured_output_exhaustion`], which admits a formatting-only
+/// correction and so must reject any other possible cause, naming only has
+/// to quote the provider's terminal: a real Claude result always carries
+/// fields such as `stop_reason`, so those must not hide its error subtype.
+/// Only the last error `result` frame counts — never assistant/tool text and
+/// never an Orbit envelope (`schemaVersion`).
+pub(super) fn provider_result_terminal_error(provider: &str, stdout: &[u8]) -> Option<String> {
+    let frame = stdout_frames(stdout)
+        .filter(|frame| frame.get("schemaVersion").is_none())
+        .filter(|frame| frame.get("type").and_then(Value::as_str) == Some("result"))
+        .filter(|frame| frame.get("is_error").and_then(Value::as_bool) == Some(true))
+        .last()?;
+    let subtype = frame
+        .get("subtype")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty() && *text != "success");
+    let terminal_reason = frame
+        .get("terminal_reason")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty() && *text != "completed");
+    if subtype.is_none() && terminal_reason.is_none() {
+        return None;
+    }
+    let cause = frame
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| {
+            frame
+                .get("errors")?
+                .as_array()?
+                .iter()
+                .find_map(|error| error.as_str().filter(|text| !text.trim().is_empty()))
+        })
+        .or_else(|| {
+            frame
+                .get("error")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+        });
+    let terminal = match (subtype, terminal_reason) {
+        (Some(subtype), Some(reason)) => format!("{subtype} (terminal_reason={reason})"),
+        (Some(subtype), None) => subtype.to_string(),
+        (None, Some(reason)) => format!("terminal_reason={reason}"),
+        (None, None) => return None,
+    };
+    Some(match cause {
+        Some(cause) => format!("{provider} provider terminal error {terminal}: {cause}"),
+        None => format!("{provider} provider terminal error {terminal}"),
+    })
+}
+
 /// The failure a provider wrote in its own control-plane `frame`, never
 /// assistant or tool text, and never an Orbit envelope, which describes the
 /// work rather than the provider.

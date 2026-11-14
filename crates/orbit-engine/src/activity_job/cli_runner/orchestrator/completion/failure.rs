@@ -49,6 +49,7 @@ pub(super) struct CompletionFailureInput<'a> {
     pub(super) provider_limit: Option<String>,
     pub(super) structured_output_exhaustion: Option<String>,
     pub(super) muse_terminal_failure: Option<String>,
+    pub(super) provider_result_terminal_error: Option<String>,
     pub(super) sandbox_write_diagnostic: &'a Option<String>,
     pub(super) print_timeout: Option<Duration>,
     pub(super) print_timeout_reached: bool,
@@ -89,6 +90,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         provider_limit,
         structured_output_exhaustion,
         muse_terminal_failure,
+        provider_result_terminal_error,
         sandbox_write_diagnostic,
         print_timeout,
         print_timeout_reached,
@@ -181,6 +183,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 "cli subprocess was terminated by a signal and reported no exit code".to_string()
             }
         };
+        let mut result_terminal_diagnostic = false;
         let diagnostic = sandbox_write_diagnostic
             .clone()
             // Ordered first among the provider-output diagnostics: when
@@ -243,6 +246,20 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 structured_output_exhaustion
                     .as_ref()
                     .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
+            })
+            // [ORB-24697] A provider result terminal that the strict
+            // structured-output reader above rejects (a real terminal's
+            // ordinary fields, say) still names the failure; the stderr
+            // tail below stays as secondary detail.
+            .or_else(|| {
+                provider_result_terminal_error.as_ref().map(|diagnostic| {
+                    result_terminal_diagnostic = true;
+                    format!(
+                        "{} {}",
+                        exit_message(),
+                        bounded_diagnostic(diagnostic, redaction)
+                    )
+                })
             })
             // Antigravity writes terminal `ERROR` on stdout and often
             // leaves stderr empty. Read the raw capture: normalization
@@ -359,7 +376,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     bounded_diagnostic(&refusal, redaction)
                 ),
             ))
-        } else if generic_diagnostic {
+        } else if generic_diagnostic || result_terminal_diagnostic {
             // Context only: classify the unchanged exit message, never words,
             // typed markers or check-repair phrases a provider happens to
             // quote on stderr (`failure_classification_text`).

@@ -360,6 +360,11 @@ pub(in super::super) fn project_completion(
     // reason stays with the shared readers above and below.
     let muse_terminal_failure =
         muse_terminal_failure_diagnostic(provider_enum, stdout.protocol_bytes());
+    // [ORB-24697] A provider `result` terminal's error subtype/reason, for
+    // naming a non-zero exit before its stderr tail. Read from the retained
+    // protocol tail, so a truncated capture still names its final frame.
+    let provider_result_terminal_error =
+        frames::provider_result_terminal_error(&provider, stdout.protocol_bytes());
     // Two orthogonal contracts. `require_completion_envelope` gates step
     // completion and its status outcome (above); `require_response_envelope` additionally gates the
     // envelope's *content* for activities whose downstream templates consume it
@@ -599,6 +604,7 @@ pub(in super::super) fn project_completion(
         provider_limit,
         structured_output_exhaustion,
         muse_terminal_failure,
+        provider_result_terminal_error,
         sandbox_write_diagnostic: &sandbox_write_diagnostic,
         print_timeout,
         print_timeout_reached,
