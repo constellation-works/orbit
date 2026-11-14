@@ -70,8 +70,9 @@ const PROVIDER_CAPACITY_PHRASES: &[&str] = &["model is at capacity"];
 /// Phrases a provider CLI prints in its own failure diagnostics when its
 /// account is out of quota/billing credit. Lowercase, matched
 /// case-insensitively. Codex: `Quota exceeded. Check your plan and billing
-/// details.` [ORB-24694]
-const PROVIDER_QUOTA_PHRASES: &[&str] = &["quota exceeded"];
+/// details.` Generic quota errors can describe timed API limits or host disk
+/// exhaustion and do not establish a billing failure.
+const PROVIDER_QUOTA_PHRASES: &[&str] = &["quota exceeded. check your plan and billing details."];
 
 /// Whether a provider's own failure text says its account's quota/billing
 /// is exhausted, so the provider is unavailable on that account until an
@@ -79,14 +80,15 @@ const PROVIDER_QUOTA_PHRASES: &[&str] = &["quota exceeded"];
 ///
 /// Pass only text the provider wrote about itself, as for
 /// [`provider_authentication_failure`]. This is distinct from
-/// [`provider_usage_limit`]: a quota/billing exhaustion carries no reset
-/// the provider named, so it is unavailable rather than a timed limit.
+/// [`provider_usage_limit`]: an explicit usage-limit phrase takes precedence
+/// over the billing diagnostic so its reset remains available to scheduling.
 #[must_use]
 pub fn provider_quota_exceeded(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
-    PROVIDER_QUOTA_PHRASES
-        .iter()
-        .any(|phrase| text.contains(phrase))
+    !provider_usage_limit(&text)
+        && PROVIDER_QUOTA_PHRASES
+            .iter()
+            .any(|phrase| text.contains(phrase))
 }
 
 /// Whether a provider's own failure text says the selected model is at

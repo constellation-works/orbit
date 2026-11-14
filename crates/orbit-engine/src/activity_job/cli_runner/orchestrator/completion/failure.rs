@@ -153,6 +153,10 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             provider.as_str(),
             &bounded_diagnostic(&diagnostic, redaction),
         ))
+    } else if let Some(limit) = provider_limit.as_deref() {
+        // A timed usage limit takes precedence over a billing diagnostic
+        // from another provider-owned frame; retain its reset for scheduling.
+        Some(limit_failure(limit, ""))
     } else if let Some(diagnostic) = provider_quota_error {
         // [ORB-24694] A quota/billing exhaustion is unavailable like an
         // authentication failure: no rerun on the account can succeed.
@@ -172,8 +176,6 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 bounded_diagnostic(&refusal, redaction)
             ),
         ))
-    } else if let Some(limit) = provider_limit.as_deref() {
-        Some(limit_failure(limit, ""))
     } else if !exit_success {
         let stderr_text = String::from_utf8_lossy(stderr.protocol_bytes());
         let exit_message = || match exit_code {
@@ -309,6 +311,16 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 provider.as_str(),
                 &diagnostic,
             ))
+        } else if let Some(limit) = provider_reported(
+            provider.as_str(),
+            stdout.protocol_bytes(),
+            stderr_text.as_ref(),
+            terminal_error.as_deref(),
+            provider_usage_limit,
+        ) {
+            // A usage limit keeps its reported reset even when another
+            // stderr line or provider frame also carries a billing error.
+            Some(limit_failure(&limit, &format!("{diagnostic}: ")))
         } else if let Some(quota) = provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
@@ -327,16 +339,6 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     bounded_diagnostic(&quota, redaction)
                 ),
             ))
-        } else if let Some(limit) = provider_reported(
-            provider.as_str(),
-            stdout.protocol_bytes(),
-            stderr_text.as_ref(),
-            terminal_error.as_deref(),
-            provider_usage_limit,
-        ) {
-            // [ORB-14695] Nor can either outlast an account's usage limit:
-            // the limit holds until the reset the provider reported.
-            Some(limit_failure(&limit, &format!("{diagnostic}: ")))
         } else if let Some(capacity) = provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),

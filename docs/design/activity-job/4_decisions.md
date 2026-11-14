@@ -1788,6 +1788,39 @@ Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `tar
 - A workspace opened by this binary refuses older binaries until they upgrade, even if it holds no auto-task job.
 - `Cost:` an author must change the header to 3 with the first auto-task field, and back to 2 by hand to run the job once the last one is gone; the load error names the key that needs 3.
 
+## Preserve usage-limit resets when quota diagnostics overlap
+
+**Recorded:** 2026-11-14 · [ORB-24744]
+
+### Context
+
+Provider CLI failures do not consistently carry a typed distinction between
+billing exhaustion and a timed usage limit. The generic phrase `quota exceeded`
+also appears in Gemini API rate limits and host filesystem errors. Treating it
+as billing exhaustion incorrectly excludes a provider account and loses the
+usage-limit reset.
+
+### Decision
+
+Retain a narrow text fallback for Codex's `Quota exceeded. Check your plan and
+billing details.` billing diagnostic. This is a scoped deviation from
+STD-02@4 §R10's prohibition on message substring classification: these CLI
+messages lack a consistent typed billing signal, and a nonzero exit alone
+cannot identify account exhaustion. Read only provider-owned failures, never
+assistant/tool output. Generic `quota exceeded` text establishes no billing
+failure, and text that identifies a usage limit is excluded from the billing
+match. Both structured failures and failed-exit diagnostics prefer a recognized
+usage limit over a billing diagnostic, retaining the provider's reset time.
+
+### Consequences
+
+Codex's billing failure remains provider-unavailable. Gemini's timed quota
+failure remains a usage limit, and disk-quota errors keep ordinary subprocess
+failure handling. Changes to the upstream billing wording require updating the
+narrow fallback; unknown wording does not establish provider unavailability.
+
+---
+
 ## Task References
 
 - [T20260418-2018] — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).

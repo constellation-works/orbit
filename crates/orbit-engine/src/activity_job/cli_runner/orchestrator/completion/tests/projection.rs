@@ -24,6 +24,17 @@ pub(super) fn project_stdout(
     stalled: bool,
     timed_out: bool,
 ) -> crate::DispatchOutcome {
+    project_provider_output(provider, stdout, b"", exit_success, stalled, timed_out)
+}
+
+pub(super) fn project_provider_output(
+    provider: &str,
+    stdout: &[u8],
+    stderr: &[u8],
+    exit_success: bool,
+    stalled: bool,
+    timed_out: bool,
+) -> crate::DispatchOutcome {
     let spec: AgentLoopSpec = serde_json::from_value(json!({})).expect("empty agent spec");
     let host = IdleHost;
     let input = json!({});
@@ -56,8 +67,8 @@ pub(super) fn project_stdout(
         stdout_blob_ref: "stdout".to_string(),
         stderr_blob_ref: "stderr".to_string(),
         stdout: CapturedOutput::from_bytes(stdout),
-        stderr: CapturedOutput::empty(),
-        exit_code: exit_success.then_some(0),
+        stderr: CapturedOutput::from_bytes(stderr),
+        exit_code: Some(if exit_success { 0 } else { 1 }),
         duration: Duration::from_millis(700),
         timed_out,
         stalled,
