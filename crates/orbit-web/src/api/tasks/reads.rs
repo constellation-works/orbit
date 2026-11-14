@@ -1,5 +1,6 @@
 //! Task list, detail, locks and completion reads.
 
+use crate::api::helpers;
 use crate::api::pagination::TaskPageQuery;
 use crate::api::{bad_request, blocking, server_error, validate_id};
 use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail_json};
@@ -303,18 +304,15 @@ pub(in crate::api) async fn get_task(
 /// band. Counts come from the generated task index — no per-request YAML reads.
 pub(in crate::api) async fn completion_by_complexity(Ws(runtime): Ws) -> Response {
     let runtime_clone = runtime.clone();
-    let rows =
-        match tokio::task::spawn_blocking(move || runtime_clone.task_completion_by_complexity())
-            .await
-        {
-            Ok(Ok(rows)) => rows,
-            Ok(Err(e)) => return server_error(e),
-            Err(join_err) => {
-                return server_error(orbit_core::OrbitError::Execution(format!(
-                    "completion-by-complexity aggregation panicked: {join_err}"
-                )));
-            }
-        };
+    let rows = match helpers::blocking_join("completion-by-complexity aggregation", move || {
+        runtime_clone.task_completion_by_complexity()
+    })
+    .await
+    {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => return server_error(e),
+        Err(response) => return *response,
+    };
 
     const REQUIRED_STATUSES: &[&str] = &["done", "rejected", "archived"];
     let by_complexity: Vec<Value> = rows

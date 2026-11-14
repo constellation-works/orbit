@@ -1,5 +1,6 @@
 //! Ship and auto-drain workflow actions.
 
+use crate::api::helpers;
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
@@ -404,12 +405,10 @@ async fn start_blocking<F>(label: &'static str, op: F) -> Response
 where
     F: FnOnce() -> Result<Value, orbit_core::OrbitError> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(op).await {
+    match helpers::blocking_join(label, op).await {
         Ok(Ok(started)) => Json(started).into_response(),
         Ok(Err(error)) => map_start_refusal(error),
-        Err(join_error) => super::super::map_runtime_error(orbit_core::OrbitError::Execution(
-            format!("{label} panicked: {join_error}"),
-        )),
+        Err(response) => *response,
     }
 }
 

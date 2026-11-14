@@ -8,6 +8,7 @@
 //! message for the row to render verbatim, and every accepted write records a
 //! `config.set` audit event naming the key, both values, and the file.
 
+use crate::api::helpers;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -24,7 +25,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
-use super::{bad_request, blocking, map_runtime_error, server_error, workspace_label};
+use super::{bad_request, blocking, map_runtime_error, workspace_label};
 use crate::state::{ConfigFileWs, DashboardState, Ws};
 
 /// Audit operation name for every config write, accepted or refused.
@@ -265,7 +266,7 @@ where
     // mapped to its HTTP shape.
     let applied = {
         let runtime = runtime.clone();
-        tokio::task::spawn_blocking(move || write(&runtime)).await
+        helpers::blocking_join("config write", move || write(&runtime)).await
     };
     let outcome = match applied {
         Ok(Ok(outcome)) => outcome,
@@ -274,11 +275,7 @@ where
             audit.failed(&caller, &failure, started).await;
             return map_runtime_error(error);
         }
-        Err(join_error) => {
-            return server_error(orbit_core::OrbitError::Execution(format!(
-                "config write panicked: {join_error}"
-            )));
-        }
+        Err(response) => return *response,
     };
     let mut applied = arguments.clone();
     if let Some(object) = applied.as_object_mut() {

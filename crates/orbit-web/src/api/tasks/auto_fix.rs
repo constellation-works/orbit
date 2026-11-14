@@ -1,5 +1,6 @@
 //! `/tasks/:id/auto-fix`: the details panel's "Fix PR" action.
 
+use crate::api::helpers;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
@@ -10,7 +11,7 @@ use orbit_core::application::job::TaskAutoFixError;
 use serde_json::json;
 
 use crate::api::routines::{authorization_denied, authorized_caller};
-use crate::api::{bad_request, blocking, map_runtime_error, server_error, validate_id};
+use crate::api::{bad_request, blocking, map_runtime_error, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Whether Fix PR would start a repair of this task's pull request now
@@ -81,7 +82,7 @@ pub(in crate::api) async fn start_task_auto_fix(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let started = tokio::task::spawn_blocking(move || {
+    let started = helpers::blocking_join("task auto-fix start", move || {
         runtime.start_task_pr_auto_fix(&id, completion_done, Some("dashboard"))
     })
     .await;
@@ -97,8 +98,6 @@ pub(in crate::api) async fn start_task_auto_fix(
         )
             .into_response(),
         Ok(Err(TaskAutoFixError::Runtime(error))) => map_runtime_error(error),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task auto-fix start panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }

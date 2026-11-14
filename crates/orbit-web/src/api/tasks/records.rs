@@ -3,8 +3,9 @@
 use super::DASHBOARD_ACTOR;
 use super::lifecycle::recovery_refusal;
 use super::request::{PilotAdmissionBody, PostDeployBody};
+use crate::api::helpers;
 use crate::api::routines::{authorization_denied, authorized_caller};
-use crate::api::{OptionalJson, bad_request, server_error, validate_id};
+use crate::api::{OptionalJson, bad_request, validate_id};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -69,7 +70,7 @@ pub(in crate::api) async fn pilot_admission_task_action(
         }
     };
     let verdict = record.verdict_label();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = helpers::blocking_join("task pilot admission", move || {
         runtime.record_pilot_admission_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
     })
     .await;
@@ -81,9 +82,7 @@ pub(in crate::api) async fn pilot_admission_task_action(
         }))
         .into_response(),
         Ok(Err(e)) => recovery_refusal(e, "pilot_admission_no_matching_hold"),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task pilot admission panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 
@@ -123,7 +122,7 @@ async fn record_post_deploy_met(
         }
     };
     let criterion = record.criterion();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = helpers::blocking_join("task post-deploy record", move || {
         runtime.record_post_deploy_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
     })
     .await;
@@ -136,9 +135,7 @@ async fn record_post_deploy_met(
         }))
         .into_response(),
         Ok(Err(e)) => recovery_refusal(e, "post_deploy_criterion_not_owed"),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task post-deploy record panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 

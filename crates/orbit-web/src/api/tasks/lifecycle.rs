@@ -3,10 +3,9 @@
 use super::DASHBOARD_ACTOR;
 use super::request::{ApproveBody, ArchiveBody, RejectBody, RequeueBody};
 use super::writes;
+use crate::api::helpers;
 use crate::api::routines::{authorization_denied, authorized_caller};
-use crate::api::{
-    OptionalJson, bad_request, blocking, map_runtime_error, server_error, validate_id,
-};
+use crate::api::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -99,16 +98,14 @@ pub(in crate::api) async fn requeue_task_action(
             .into_response();
     }
     let discard = body.discard_candidate;
-    let result = tokio::task::spawn_blocking(move || {
+    let result = helpers::blocking_join("task requeue", move || {
         runtime.requeue_blocked_task_as(&id, &reason, discard, Some(DASHBOARD_ACTOR))
     })
     .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(e)) => recovery_refusal(e, "requeue_refused"),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task requeue panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 
@@ -126,7 +123,7 @@ pub(in crate::api) async fn settle_merged_task_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let result = tokio::task::spawn_blocking(move || {
+    let result = helpers::blocking_join("task settle-merged", move || {
         runtime.settle_externally_merged_task_as(&id, Some(DASHBOARD_ACTOR))
     })
     .await;
@@ -135,9 +132,7 @@ pub(in crate::api) async fn settle_merged_task_action(
             Json(settlement.settlement_json(ExternalMergeSettlementProfile::Http)).into_response()
         }
         Ok(Err(e)) => recovery_refusal(e, "settle_merged_refused"),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task settle-merged panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 
