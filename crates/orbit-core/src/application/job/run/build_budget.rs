@@ -6,7 +6,6 @@ use orbit_store::contracts::JobRunQuery;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::contracts::PULL_DRAIN_JOB;
 
 /// The admission wrapper a checkout ships to wait for host build slots. A
 /// checkout without it never waits, so a slot limit governs none of its builds.
@@ -37,7 +36,7 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         let mut warnings = Vec::new();
-        for job_id in ["workspace_auto_pipeline", PULL_DRAIN_JOB] {
+        for job_id in orbit_types::workflow::DRAIN_JOBS.iter().copied() {
             for run in self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
                 job_id: Some(job_id.into()),
                 active_only: true,

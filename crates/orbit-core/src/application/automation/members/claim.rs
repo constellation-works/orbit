@@ -5,12 +5,10 @@ use crate::runtime::engine::crew::BundleCrews;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::workflow::JobRun;
 use orbit_types::workflow::automation::members::*;
+use orbit_types::workflow::{JobRun, TASK_PILOT_PIPELINE_JOB};
 use serde_json::Value;
 
-/// The job a preparation attempt admits; only its runs may mix crews.
-const PILOT_JOB: &str = "task_pilot_pipeline";
 /// The ship dispatcher turns selected task ids into singleton gate runs.
 const AUTO_DISPATCH_JOB: &str = "task_auto_pipeline";
 /// The drain that may dispatch a pilot for repartitioning [ORB-21839].
@@ -105,7 +103,7 @@ pub(crate) fn bundle_crews(runtime: &OrbitRuntime, run: &JobRun, input: &Value) 
     if run.job_id == AUTO_DISPATCH_JOB {
         return BundleCrews::AutoDispatchSingletons;
     }
-    if run.job_id != PILOT_JOB {
+    if run.job_id != TASK_PILOT_PIPELINE_JOB {
         return BundleCrews::Unanimous;
     }
     if verified_drain_pilot(runtime, run, input) {
@@ -175,9 +173,8 @@ fn verified_drain_pilot(runtime: &OrbitRuntime, run: &JobRun, input: &Value) -> 
         .ok()
         .flatten()
         .is_some_and(|state| {
-            state
-                .child_dispatches
-                .iter()
-                .any(|child| child.child_run_id == run.run_id && child.job_name == PILOT_JOB)
+            state.child_dispatches.iter().any(|child| {
+                child.child_run_id == run.run_id && child.job_name == TASK_PILOT_PIPELINE_JOB
+            })
         })
 }

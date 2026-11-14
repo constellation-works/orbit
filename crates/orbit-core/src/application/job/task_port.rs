@@ -28,10 +28,10 @@ impl TaskJobPort for OrbitRuntime {
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
         !matches!(
             run.job_id.as_str(),
-            "task_auto_pipeline"
-                | "task_gate_pipeline"
-                | "workspace_auto_pipeline"
-                | "workspace_pull_pipeline"
+            workflow::TASK_AUTO_PIPELINE_JOB
+                | workflow::TASK_GATE_PIPELINE_JOB
+                | workflow::WORKSPACE_AUTO_PIPELINE_JOB
+                | workflow::WORKSPACE_PULL_PIPELINE_JOB
         ) && (workflow::is_delivery_leaf_job(&run.job_id)
             || run
                 .input

@@ -29,7 +29,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{DRAIN_JOBS, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -50,9 +50,6 @@ const UPGRADE_RESUME_SCAN_LIMIT: usize = 256;
 
 /// Successful run submissions allowed during one clock tick.
 const UPGRADE_RESUME_TICK_LIMIT: usize = 32;
-
-/// Drain coordinators.
-const DRAIN_JOBS: [&str; 2] = ["workspace_auto_pipeline", "workspace_pull_pipeline"];
 
 /// Newest runs of a job scanned for one that supersedes the candidate.
 const SUPERSEDE_SCAN_LIMIT: usize = 50;

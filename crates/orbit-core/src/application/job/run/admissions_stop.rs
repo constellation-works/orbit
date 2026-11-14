@@ -21,7 +21,6 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::{JobDrainPort, JobPullSettlementPort};
-use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 const STOP_REQUEST_AUDIT: &str = "pipeline.run.admissions_stop.requested";
 const STOP_COMPLETION_AUDIT: &str = "pipeline.run.admissions_stop.completed";
@@ -163,7 +162,7 @@ impl OrbitRuntime {
     ) -> Result<DrainAdmissionsStopResult, OrbitError> {
         self.require_workspace_claim(STOP_OPERATION, request.claim_token)?;
         let request_id = audit_execution_id("admissions_stop");
-        let drain_job_id = workflow_job_id(AUTO_WORKFLOW_ALIAS)?;
+        let drain_job_id = orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB;
         let mut coordinators = self
             .stores()
             .jobs()
@@ -462,10 +461,4 @@ fn run_admissions_stop_state_init_hook() {
     if let Some(hook) = hook {
         hook();
     }
-}
-
-fn workflow_job_id(alias: &str) -> Result<&'static str, OrbitError> {
-    find_workflow(alias)
-        .map(|workflow| workflow.job_id)
-        .ok_or_else(|| OrbitError::InvalidInput(format!("unknown workflow '{alias}'")))
 }

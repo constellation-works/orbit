@@ -13,9 +13,9 @@ pub(super) const POOLS_KEY: &str = "auto_crew_pools";
 /// exactly as a drain does. System, review and preparation jobs are absent
 /// from the list and keep their own crew selection.
 pub(super) const POLICY_PIPELINES: [&str; 5] = [
-    "workspace_auto_pipeline",
-    "task_auto_pipeline",
-    "task_gate_pipeline",
+    orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB,
+    orbit_types::workflow::TASK_AUTO_PIPELINE_JOB,
+    orbit_types::workflow::TASK_GATE_PIPELINE_JOB,
     orbit_types::workflow::TASK_LOCAL_PIPELINE_JOB,
     orbit_types::workflow::TASK_PR_PIPELINE_JOB,
 ];

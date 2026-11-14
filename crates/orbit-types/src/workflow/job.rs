@@ -21,6 +21,29 @@ pub const TASK_CLAIMED_PR_PIPELINE_JOB: &str = "task_claimed_pr_pipeline";
 /// Claimed delivery leaf a pull drain runs to land on the local base branch.
 pub const TASK_CLAIMED_LOCAL_PIPELINE_JOB: &str = "task_claimed_local_pipeline";
 
+/// Shipped workspace auto drain job. Run records persist this string.
+pub const WORKSPACE_AUTO_PIPELINE_JOB: &str = "workspace_auto_pipeline";
+
+/// Shipped workspace pull drain job. Run records persist this string.
+pub const WORKSPACE_PULL_PIPELINE_JOB: &str = "workspace_pull_pipeline";
+
+/// Shipped task auto (ship) pipeline job. Run records persist this string.
+pub const TASK_AUTO_PIPELINE_JOB: &str = "task_auto_pipeline";
+
+/// Shipped task gate pipeline job. Run records persist this string.
+pub const TASK_GATE_PIPELINE_JOB: &str = "task_gate_pipeline";
+
+/// Shipped task pilot pipeline job. Run records persist this string.
+pub const TASK_PILOT_PIPELINE_JOB: &str = "task_pilot_pipeline";
+
+/// The drain jobs: the owner's workspace auto drain and a replica's pull drain.
+pub const DRAIN_JOBS: &[&str] = &[WORKSPACE_AUTO_PIPELINE_JOB, WORKSPACE_PULL_PIPELINE_JOB];
+
+/// Whether `job` is one of the drain jobs ([`DRAIN_JOBS`]).
+pub fn is_drain_job(job: &str) -> bool {
+    DRAIN_JOBS.contains(&job)
+}
+
 /// Leaf definitions that only a claim may run; each claimed leaf is a whole
 /// delivery.
 pub const CLAIMED_DELIVERY_LEAF_JOBS: &[&str] = &[
