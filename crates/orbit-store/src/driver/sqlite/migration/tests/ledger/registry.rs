@@ -145,10 +145,12 @@ fn check_schema_prefix_goldens(
 
     let mut previous = std::collections::BTreeSet::new();
     let mut actual = String::new();
-    // Build each prefix independently: its compatibility record and schema
-    // are exactly those of a binary whose registry ended at this version.
+    // Extend one database prefix by prefix. The runner applies migrations one
+    // at a time, each in its own transaction, and writes the compatibility
+    // record from the registry it is given, so after step N the schema and
+    // record are exactly those of a binary whose registry ended at version N.
+    let conn = Connection::open_in_memory().expect("schema fixture");
     for end in 1..=migrations.len() {
-        let conn = Connection::open_in_memory().expect("schema fixture");
         ledger::run_database_migrations(&conn, database, &migrations[..end], None)
             .expect("apply ledger prefix");
         let mut stmt = conn

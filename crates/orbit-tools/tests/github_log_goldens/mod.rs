@@ -180,6 +180,7 @@ fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
     // before the final summary in a multi-megabyte CI log.
     let block = "FAIL [ 0.123s] (2021/2810) suite failing_test\n──────── STDOUT ────────\noutput from the failing test\n──────── STDERR ────────\nthread 'failing_test' panicked at tests/sample.rs:12:3:\nexpected a completed operation\n";
     let padding = "PASS [ 0.001s] suite passing_test\n".repeat(32_768);
+    let mut first_shape = true;
     for (prefix, suffix) in [
         ("##[group]Run cargo nextest run\n##[endgroup]\n".to_string(), "##[error]Process completed with exit code 100.\n"),
         (String::new(), ""),
@@ -188,7 +189,11 @@ fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
     ] {
         let raw = format!("{prefix}{padding}{block}{padding}Summary [ 1.0s] 2810 tests run: 1 failed\n{suffix}");
         assert!(raw.len() > 2_000_000);
-        for chunk in [7, 4096, raw.len()] {
+        // `push` re-batches to a fixed size, so the chunk schedule only needs
+        // to vary once; the other shapes run once over the whole log.
+        let chunks: &[usize] = if first_shape { &[7, 4096, raw.len()] } else { &[4096] };
+        first_shape = false;
+        for &chunk in chunks {
             let mut collector = gh::StreamedLogCollector::new(262_144, 40);
             for bytes in raw.as_bytes().chunks(chunk) {
                 collector.push(bytes);
@@ -371,7 +376,16 @@ fn every_selected_window_hides_credential_fragments() {
                     || (start < *covered_end && *covered_end < end)
             })
             .collect();
-        for (cap, tail_weighted) in [(16_384, false), (16_384, true), (40, false), (40, true)] {
+        // A log shorter than both heads is untruncated and joins head and tail,
+        // so an even and a tail-weighted split render it identically at the
+        // large cap. A window of at most `cap` bytes is untruncated at either
+        // cap, so one shape covers it.
+        let shapes: &[(usize, bool)] = if covered_end - covered_start <= 40 {
+            &[(16_384, false)]
+        } else {
+            &[(16_384, false), (40, false), (40, true)]
+        };
+        for &(cap, tail_weighted) in shapes {
             let mut collector = if tail_weighted {
                 gh::StreamedLogCollector::tail_weighted_scoped(cap, 40, selection.clone())
             } else {

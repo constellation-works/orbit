@@ -38,7 +38,7 @@ path = config.get('controlpath')
 reuse = path and path != 'none'
 cold = not reuse or not os.path.exists(path)
 if cold:
-    time.sleep(0.2)
+    time.sleep(0.01)
     if reuse and config['controlmaster'] != 'false':
         sock = socket.socket(socket.AF_UNIX)
         temporary = path + '.' + 'x' * 16
