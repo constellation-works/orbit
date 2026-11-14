@@ -17,7 +17,6 @@ mod driver;
 mod fs;
 pub(crate) mod json_schema;
 mod repository;
-pub(crate) mod scope;
 pub mod workflow;
 
 /// Operator-only SQLite and coordination-registry access. Ordinary consumers
