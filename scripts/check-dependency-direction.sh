@@ -809,20 +809,19 @@ fi
 # `agent_corpus` implements on `OrbitRuntime` in `agent_corpus.rs` by
 # forwarding to its inherent methods.
 task_upper_modules='search|experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident|notice|evolution|agent_corpus'
-task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::application::backlog_forecast::(BacklogForecastHistory|COMPUTE_BUDGET_ENV);$'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
 task_upper_store_allowed='^task/steering\.rs:[0-9]+:.*stores\(\)\.jobs\(\)\.read_run_state|^task/steering\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|^task/steering\.rs:[0-9]+:\s+\.read_run_state\(&source\.run_id\)|^task/pilot/drain_promotion\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_start_requests\(\)'
 task_upper_paths="$(dependency_matches -n "crate::application::(${task_upper_modules})\\b" \
-  "$app_src/task" -g '*.rs' -g '!**/tests/**' | grep -Ev "$task_forecast_shim_allowed" || true)"
+  "$app_src/task" -g '*.rs' -g '!**/tests/**' || true)"
 if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   dependency_matches -n -U "crate::application::\\{[^}]*\\b(${task_upper_modules})\\b" \
     "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment, notice, evolution and agent_corpus through its task ports, must not route through tag_instructions or search, and names backlog_forecast only in its two task/mod.rs re-exports"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment, notice, evolution and agent_corpus through its task ports, and must not name tag_instructions, search or backlog_forecast"
   fail=1
 fi
 

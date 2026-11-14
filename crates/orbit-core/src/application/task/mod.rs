@@ -4,12 +4,6 @@ mod add;
 mod artifact_export;
 pub mod artifact_put_result;
 mod automation_port;
-// Compatibility shim: the forecast lives above `workspace_auto`, but `lib.rs`
-// and `orbit-web` still name these at this path. Retiring it means re-pointing
-// them. `scripts/check-dependency-direction.sh` allows exactly these two lines.
-pub use crate::application::backlog_forecast::BacklogForecastHistory;
-#[cfg(feature = "test-support")]
-pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV;
 pub(in crate::application) mod base_revision;
 mod baseline_hold;
 pub(crate) use baseline_hold::standing_baseline_hold_from_history;

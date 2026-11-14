@@ -5,8 +5,8 @@ use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
 use crate::state::Ws;
+use orbit_core::BacklogForecastHistory;
 use orbit_core::OrbitError;
-use orbit_core::application::task::BacklogForecastHistory;
 
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct BacklogForecastQuery {
