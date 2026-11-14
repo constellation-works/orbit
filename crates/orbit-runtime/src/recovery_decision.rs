@@ -21,6 +21,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 use orbit_engine::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, StepRecoveryVerdict,
@@ -308,11 +309,7 @@ fn ensure_real_dir(dir: &Path) -> Result<(), OrbitError> {
 }
 
 fn fresh_nonce() -> Result<String, OrbitError> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).map_err(|error| {
-        OrbitError::Execution(format!("draw step-recovery decision nonce: {error}"))
-    })?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    token::random_hex(16)
 }
 
 /// A readable, filesystem-safe fragment of an identifier for the file name.

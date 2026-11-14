@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 
 use super::env::PLUGIN_BUILD_DIR_PREFIX;
 
@@ -84,10 +85,8 @@ pub(super) fn create_build_dir(namespace_dir: &Path) -> Result<PluginBuildDir, O
             }
         }
     }
-    let mut nonce = [0u8; 8];
-    getrandom::fill(&mut nonce)
+    let nonce = token::random_hex(8)
         .map_err(|error| OrbitError::Io(format!("build directory nonce: {error}")))?;
-    let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = namespace.join(format!(
         "{PLUGIN_BUILD_DIR_PREFIX}{}-{nonce}",
         std::process::id()

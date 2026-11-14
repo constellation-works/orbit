@@ -20,7 +20,6 @@ test-support = []
 blake3.workspace = true
 chrono.workspace = true
 fs2.workspace = true
-getrandom.workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }
 orbit-engine = { path = "../orbit-engine" }

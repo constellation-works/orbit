@@ -7,6 +7,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::OrbitError;
+use crate::security::token;
 
 /// Descriptor number, never a credential value. Only local CLI calls read it.
 pub const APPLICATION_CREDENTIAL_FD_ENV: &str = "ORBIT_APPLICATION_CREDENTIAL_FD";
@@ -27,18 +28,11 @@ impl std::fmt::Debug for ApplicationCredential {
 impl ApplicationCredential {
     /// Generate an independent public consent id and 256-bit secret.
     pub fn mint() -> Result<Self, OrbitError> {
-        let mut bytes = [0u8; 48];
-        getrandom::fill(&mut bytes).map_err(|_| {
+        let hex = token::random_hex(48).map_err(|_| {
             OrbitError::Execution("application credential entropy unavailable".into())
         })?;
-        let hex = |bytes: &[u8]| {
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        };
-        let id = hex(&bytes[..16]);
-        let value = format!("{id}.{}", hex(&bytes[16..]));
+        let id = hex[..32].to_string();
+        let value = format!("{id}.{}", &hex[32..]);
         Ok(Self { id, value })
     }
 
@@ -55,12 +49,7 @@ impl ApplicationCredential {
     /// independent of where the strings first differ.
     pub fn matches_fingerprint(&self, stored: &str) -> bool {
         let actual = self.fingerprint();
-        actual.len() == stored.len()
-            && actual
-                .bytes()
-                .zip(stored.bytes())
-                .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-                == 0
+        token::constant_time_eq(actual.as_bytes(), stored.as_bytes())
     }
 
     /// Consume the mint result into a new owner-only credential file. Never

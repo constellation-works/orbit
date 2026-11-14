@@ -19,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::process::ancestry::{ProcessStartKey, process_start_key};
+use orbit_common::security::token;
 
 /// The broker root, relative to the global root.
 pub(crate) const BROKER_DIR: &str = "state/plugin-broker";
@@ -250,11 +251,7 @@ fn check_socket_path_length(socket: &Path) -> Result<(), OrbitError> {
 }
 
 fn random_token() -> Result<String, OrbitError> {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).map_err(|error| {
-        OrbitError::Execution(format!("draw plugin broker socket token: {error}"))
-    })?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    token::random_hex(8)
 }
 
 fn path_error(action: &str, path: &Path, error: io::Error) -> OrbitError {

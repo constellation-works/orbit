@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 flate2.workspace = true
-getrandom.workspace = true
 jsonschema.workspace = true
 orbit-exec = { path = "../orbit-exec" }
 orbit-policy = { path = "../orbit-policy" }
