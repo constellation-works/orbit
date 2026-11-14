@@ -19,12 +19,83 @@ use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
 use crate::application::auto_tasks::settings::classify_bundled_file;
 use crate::application::managed_assets::{
-    ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, load_managed_asset_manifest,
-    resolve_confined_asset_path,
+    ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetOutcome, ManagedAssetReconcileMode,
+    load_managed_asset_manifest, reconcile_managed_assets_in_mode, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::template::{ShippedShape, shipped_shape_of};
 use orbit_automation::auto_tasks::settings::{AutoTaskOverrides, load_settings_table};
+
+/// Inspect legacy workspace copies without adopting user files, reporting
+/// absent defaults or retiring anything. Startup uses the same refresh mode.
+pub(super) fn diagnose_workspace_catalog_copies(
+    runtime: &OrbitRuntime,
+    kind: ArtifactKind,
+) -> Vec<ArtifactFinding> {
+    let (dir, files) = match kind {
+        ArtifactKind::Activity => (
+            &runtime.paths().activities_dir,
+            crate::runtime::assets::DEFAULT_ACTIVITY_FILES,
+        ),
+        ArtifactKind::Job => (
+            &runtime.paths().jobs_dir,
+            crate::application::job::DEFAULT_JOB_FILES,
+        ),
+        _ => return Vec::new(),
+    };
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let global_manifest = runtime
+        .global_root()
+        .join("resources")
+        .join(if kind == ArtifactKind::Activity {
+            "activities"
+        } else {
+            "jobs"
+        })
+        .join(MANAGED_ASSET_MANIFEST_FILE);
+    if same_catalog_file(&manifest_path, &global_manifest) {
+        return Vec::new();
+    }
+    match reconcile_managed_assets_in_mode(
+        dir,
+        kind.asset_kind(),
+        kind.layout(),
+        files,
+        false,
+        ManagedAssetReconcileMode::RefreshExisting { check: true },
+        |_, content| Ok(std::borrow::Cow::Borrowed(content)),
+    ) {
+        Ok(report) => report
+            .actions
+            .into_iter()
+            .filter(|action| action.outcome == ManagedAssetOutcome::Refreshed)
+            .map(|action| {
+                let detail = format!(
+                    "`{}` is a stale managed workspace copy of {} `{}`: its bytes match the recorded Orbit-written digest, but differ from this binary's shipped default; automatic refresh has not persisted",
+                    action.path.display(), kind.singular(), action.name,
+                );
+                ArtifactFinding {
+                    kind,
+                    name: action.name,
+                    path: action.path,
+                    condition: ArtifactCondition::Stale,
+                    provenance: ArtifactProvenance::OrbitWritten,
+                    detail,
+                    remediation: "Make the catalog and its managed manifest writable, then run `orbit workspace sync`; normal workspace opening also refreshes unmodified managed copies.".to_string(),
+                }
+            })
+            .collect(),
+        Err(error) => vec![ArtifactFinding {
+            kind,
+            name: MANAGED_ASSET_MANIFEST_FILE.to_string(),
+            path: manifest_path,
+            condition: ArtifactCondition::Faulty,
+            provenance: ArtifactProvenance::OrbitWritten,
+            detail: format!("cannot inspect managed workspace catalog copies: {error}"),
+            remediation: "Repair the named path or managed manifest, then run `orbit workspace sync`.".to_string(),
+        }],
+    }
+}
 
 pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> ArtifactHealth {
     let kind = catalog.kind;

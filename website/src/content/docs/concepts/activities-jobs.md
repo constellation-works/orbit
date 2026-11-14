@@ -52,10 +52,17 @@ Each step has exactly one body:
 ## Workspace-local copies and retired activities
 
 Activities and jobs may also live under `.orbit/resources/activities/` and
-`.orbit/resources/jobs/` in a workspace. Those files are not managed by
-`orbit workspace sync`, so an upgrade can leave a stale local copy of a
+`.orbit/resources/jobs/` in a workspace. Older releases seeded managed copies
+there. Normal writable workspace opening and `orbit workspace sync` refresh
+an existing copy of a still-shipped default when its bytes match the managed
+manifest's recorded digest. Edited copies and user-authored files stay
+unchanged; missing workspace defaults are not created. Doctor names any
+remaining stale managed copy and asks you to make its catalog and manifest
+writable, then run `orbit workspace sync`.
+
+This refresh does not retire removed definitions. A stale local copy of a
 bundled activity that a release retired, or one declaring a removed key
-(such as `trustedHostExecution: true`).
+(such as `trustedHostExecution: true`), may still need a manual repair.
 
 A stale workspace-local activity file does not take down the workspace:
 Orbit excludes that one file from the catalog, logs a warning naming its

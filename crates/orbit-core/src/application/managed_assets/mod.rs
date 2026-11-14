@@ -46,6 +46,10 @@ pub(crate) enum ManagedAssetReconcileMode {
     /// their recorded provenance, and retirements are left exactly as they
     /// are, so an operator's edits and user-authored files are never touched.
     CreateAbsent,
+    /// Refresh only existing manifest-owned copies of still-shipped defaults.
+    /// Preserve absent files, untracked files, opt-outs and retired provenance.
+    /// Used for legacy workspace activity/job catalogs, which no longer seed.
+    RefreshExisting { check: bool },
     /// Report what `Apply` would do without writing anything.
     Check,
 }
@@ -53,13 +57,17 @@ pub(crate) enum ManagedAssetReconcileMode {
 impl ManagedAssetReconcileMode {
     /// Whether this mode may create or rewrite files and the manifest.
     pub(crate) fn writes(self) -> bool {
-        !matches!(self, Self::Check)
+        !matches!(self, Self::Check | Self::RefreshExisting { check: true })
     }
 
     /// Whether this mode leaves files that already exist, and retirements,
     /// alone.
     pub(crate) fn creates_only(self) -> bool {
         matches!(self, Self::CreateAbsent)
+    }
+
+    pub(crate) fn refreshes_existing(self) -> bool {
+        matches!(self, Self::RefreshExisting { .. })
     }
 }
 

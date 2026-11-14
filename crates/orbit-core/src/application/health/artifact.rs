@@ -64,7 +64,7 @@ pub use super::activity_catalog::{
     FIX_RETIRED_ACTIVITY_BACKENDS_CMD, RetiredActivityBackendRepair, RetiredActivityBackendSkip,
 };
 
-use super::artifact_diagnosis::diagnose_catalog;
+use super::artifact_diagnosis;
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
 
@@ -393,13 +393,19 @@ impl OrbitRuntime {
     pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
         let mut report = Vec::new();
         for mut catalog in managed_catalogs(self) {
-            let mut health = diagnose_catalog(self, &catalog);
+            let mut health = artifact_diagnosis::diagnose_catalog(self, &catalog);
+            health
+                .findings
+                .extend(artifact_diagnosis::diagnose_workspace_catalog_copies(
+                    self,
+                    catalog.kind,
+                ));
             if catalog.kind == ArtifactKind::AutoTask && self.local_root() != self.shared_root() {
                 // Both catalogs can supply an inspected definition. Diagnose
                 // each with its own settings and manifest, retaining local
                 // candidate faults as well as faults in the shared catalog.
                 catalog.dir = auto_tasks_dir(&self.shared_root());
-                let shared = diagnose_catalog(self, &catalog);
+                let shared = artifact_diagnosis::diagnose_catalog(self, &catalog);
                 health.scanned += shared.scanned;
                 health.findings.extend(shared.findings);
             }
