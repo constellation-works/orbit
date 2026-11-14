@@ -1262,6 +1262,87 @@ For provider IDs, dispatch precedence and refusal diagnostics, see
 [Provider identity and resolution](providers.md#provider-identity-and-resolution).
 To add a lane or fix its login, follow [Provider setup](providers.md#provider-setup).
 
+### Human crews
+
+`kind = "human"` declares a crew for operator work: tasks a person does
+themselves, tracked beside agent work but never dispatched. `kind` defaults
+to `"agent"`; any other value fails load.
+
+```toml
+[crews.operator]
+kind = "human"
+description = "Operator's own work"
+tags = ["ops"]
+```
+
+**Supported keys and restrictions.** A human crew takes only `description`
+and `tags` besides `kind`. Setting an agent key (`provider`, `model`,
+`effort`, `env`, `vision`, `enabled`, `backend`, or a retired role table)
+fails load naming the crew. Its name must not match an agent crew,
+built-in ones included. Human crews are kept apart from the agent crews, so
+a `[crews]` table holding only human crews still gets the built-in agent
+crews. Names normalize to lowercase letters, digits, `_` and `-`.
+
+**Seeding and adding another.** When the global config has no human crew,
+`orbit init` adds one named after the OS user. At a terminal it offers the
+OS user as the default; without a terminal, or with `--non-interactive`, it
+takes the OS user as-is; `--human-name <NAME>` chooses another name. A name
+an agent crew already holds is asked again at a terminal and refused
+otherwise, before init writes anything. A re-run keeps an existing human
+crew unchanged and never adds a second one. To track another operator's
+work, hand-author a second `[crews.<name>]` table the same way in the
+global config.
+
+**Never drawn.** `workflow.default_crew`, the complexity, type and purpose
+pools, `purpose_crews.review`, and experiment arm overlays may not name a
+human crew. Config load refuses such a reference, and starting an
+experiment refuses an arm naming one. A redraw never selects a task onto a
+human crew and never moves one there.
+
+**Never admitted.** A drain or pull follower skips a human-crew task even
+when `--allow-crew` names the crew. `--allow-crew` accepts a human crew's
+name but admits nothing. An explicit ship of the task admits nothing, and
+the dashboard shows no Ship control for it.
+
+**Never piloted.** The task pilot excludes the task (reason `human_crew`),
+refuses an explicit request for it (`task_pilot_human_crew`), and records
+no assessment, warning or hold on it. A task-pilot run naming one still
+starts: that crew is not the run's agent crew, preparation leaves the task
+out, and the run keeps an agent crew. An approve-proposed drain does not
+select the task.
+
+**Closed by the operator.** The operator's own
+`orbit task update <id> --status <status>` or the dashboard status control
+(which offers every status for such a task) moves a human-crew task from
+any status to any other, for example proposed to done, with no plan,
+review, completion evidence or `--force`. A note stays optional. Each move
+is recorded as a `forced` status entry with the actor, the from and to
+statuses and a note naming the human crew (`human-crew bypass`). Only the
+operator's CLI and dashboard get this; tool and MCP updates keep the normal
+lifecycle on the same task, so assigning a human crew never lets an agent
+skip review. A non-terminal local run that owns the task still refuses the
+move, and leaving `done` or `archived` still needs `--force`.
+
+**Out of agent analytics.** Crew analytics, performance rankings and
+provider usage leave human crews out. The dashboard tags each human-crew
+task `for <name>`.
+
+**Verify with config and readiness.** A reference that fails load names the
+crew and the offending key before anything dispatches:
+
+```bash
+orbit config show
+orbit config get crews.operator.kind
+orbit config get crews.operator.description
+orbit run readiness --json
+```
+
+`orbit config show` must exit 0 and list the human crew with provider
+`human`; `orbit config get crews.operator.kind` answers `human` (for an
+agent crew, `kind` is absent). `orbit run readiness` reports the task with
+reason `human_crew` and its crew. After an operator move, the task history
+holds the `forced` entry naming the human-crew bypass.
+
 ### Crew names containing a colon
 
 The pool grammar reserves `:` for weights: `workflow.*_complexity_crews` and
