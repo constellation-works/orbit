@@ -496,11 +496,11 @@ function axisNode(axis, parts, className) {
 function windowSegmentsNode() {
   const current = getIncidentWindow();
   const values = INCIDENT_WINDOWS.includes(current) ? INCIDENT_WINDOWS : [...INCIDENT_WINDOWS, current];
-  const group = el("div", { class: "incident-windows", role: "group", "aria-label": "Time window" });
+  const group = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Time window" });
   for (const value of values) {
     const on = value === current;
     const button = el("button", {
-      class: `incident-seg${on ? " on" : ""}`,
+      class: `mx-seg-btn${on ? " on" : ""}`,
       type: "button",
       "aria-pressed": on ? "true" : "false",
       text: value,
@@ -783,9 +783,9 @@ function ensureLayout(body) {
   search.addEventListener("input", () => { searchQuery = search.value; rerender(); });
   const searchLabel = el("label", { class: "visually-hidden", text: "Filter incidents" });
   searchLabel.htmlFor = "incident-search";
-  const modes = el("div", { class: "incident-windows incident-modes", role: "group", "aria-label": "Group rows" });
+  const modes = el("div", { class: "mx-seg mx-seg-wrap incident-modes", role: "group", "aria-label": "Group rows" });
   const modeButtons = GROUP_MODES.map(([mode, text]) => {
-    const button = el("button", { class: "incident-seg", type: "button", text });
+    const button = el("button", { class: "mx-seg-btn", type: "button", text });
     button.dataset.mode = mode;
     button.addEventListener("click", () => {
       if (groupMode === mode) return;
@@ -1220,7 +1220,7 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   }));
   for (const button of view.modeButtons) {
     const on = button.dataset.mode === groupMode;
-    button.className = `incident-seg${on ? " on" : ""}`;
+    button.className = `mx-seg-btn${on ? " on" : ""}`;
     button.setAttribute("aria-pressed", on ? "true" : "false");
   }
   const axisHead = el("div", { class: "incident-axis-row" }, [

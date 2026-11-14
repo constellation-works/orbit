@@ -541,16 +541,16 @@
               <a href="#analytics/codebase/coupling" data-view="coupling" aria-current="false">Coupling &amp; locks</a>
             </nav>
             <div class="codebase-controls" id="codebase-toolbar">
-              <div class="codebase-segs" id="codebase-window" role="group" aria-label="Window">
-                <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
-                <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
-                <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
-                <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
+              <div class="mx-seg mx-seg-wrap" id="codebase-window" role="group" aria-label="Window">
+                <button type="button" class="mx-seg-btn" data-value="7d" aria-pressed="false">7d</button>
+                <button type="button" class="mx-seg-btn" data-value="30d" aria-pressed="false">30d</button>
+                <button type="button" class="mx-seg-btn on" data-value="90d" aria-pressed="true">90d</button>
+                <button type="button" class="mx-seg-btn" data-value="all" aria-pressed="false">All</button>
               </div>
-              <div class="codebase-segs" id="codebase-rollup" role="group" aria-label="Group by">
-                <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
-                <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
-                <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
+              <div class="mx-seg mx-seg-wrap" id="codebase-rollup" role="group" aria-label="Group by">
+                <button type="button" class="mx-seg-btn on" data-value="file" aria-pressed="true">File</button>
+                <button type="button" class="mx-seg-btn" data-value="dir" aria-pressed="false">Directory</button>
+                <button type="button" class="mx-seg-btn" data-value="crate" aria-pressed="false">Crate</button>
               </div>
               <label class="codebase-min">Min. tasks
                 <select class="codebase-select" id="codebase-min-support"><option value="15" selected>15</option></select>

@@ -139,31 +139,8 @@ tr.audit-detail-row td {
 .codebase-views a.on { color: var(--fg); border-bottom-color: var(--accent); }
 .codebase-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding-bottom: 2px; }
 .codebase-controls[hidden] { display: none; }
-.codebase-segs {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  background: var(--bg-sunk);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-.codebase-seg {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-dim);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.codebase-seg:hover { color: var(--fg); background: var(--bg-hover); }
-.codebase-seg.on { background: #1f252d; color: var(--fg); box-shadow: inset 0 0 0 1px #313842; }
-.codebase-segs.small .codebase-seg { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+.codebase-controls .mx-seg-btn { min-height: 34px; }
+.codebase-locks .mx-seg-btn { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
 .codebase-min { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-dim); }
 .codebase-select {
   min-height: 34px;

@@ -1324,10 +1324,10 @@ function locksNode(model) {
     el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: recorded ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
   ]);
   if (rowsByWait(data).length) {
-    const sorts = el("div", { class: "codebase-segs small", role: "group", "aria-label": "Sort locks" });
+    const sorts = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Sort locks" });
     for (const [key, label] of [["wait", "Total wait"], ["rate", "Denial rate"]]) {
       const on = (key === "wait") === byWait;
-      const button = el("button", { class: `codebase-seg${on ? " on" : ""}`, type: "button", text: label, "aria-pressed": String(on) });
+      const button = el("button", { class: `mx-seg-btn${on ? " on" : ""}`, type: "button", text: label, "aria-pressed": String(on) });
       button.dataset.value = key;
       button.addEventListener("click", () => {
         if (view.lockSort === key) return;

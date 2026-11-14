@@ -68,9 +68,9 @@ const INCIDENTS = `
     <label class="visually-hidden" for="incident-search">Filter incidents</label>
     <input class="incident-search" id="incident-search" type="search" placeholder="Filter by message" aria-label="Filter incidents">
   </div>
-  <div class="incident-windows incident-modes" role="group">
-    <button class="incident-seg" type="button">Cause</button>
-    <button class="incident-seg" type="button">Signature</button>
+  <div class="mx-seg mx-seg-wrap incident-modes" role="group">
+    <button class="mx-seg-btn" type="button">Cause</button>
+    <button class="mx-seg-btn" type="button">Signature</button>
   </div>
 </div>`;
 
@@ -186,7 +186,7 @@ test("incidents toolbar does not measure the wrapped count or the hidden label",
       const range = document.createRange();
       range.setStart(title.firstChild, 0);
       range.setEnd(title.firstChild, title.firstChild.textContent.length);
-      const button = document.querySelector(".incident-seg");
+      const button = document.querySelector(".mx-seg-btn");
       const buttonRange = document.createRange();
       buttonRange.selectNodeContents(button);
       return {
