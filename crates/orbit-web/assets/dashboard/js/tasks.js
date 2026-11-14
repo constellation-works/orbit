@@ -103,10 +103,10 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
 }
 // The task row's OS chips, from the parsed requirement the server attaches;
 // a tag outside the namespace reads as the wait it causes.
-function buildScheduledChip(task, context) {
+function buildScheduledChip(task) {
   if (task.status !== "backlog" || !task.not_before || task.scheduled_hold === false || Date.parse(task.not_before) <= Date.now()) return null;
   return el("span", { class: "scheduled-chip", title: "Waiting for the scheduled time; starts on the next admission pass afterwards" }, [
-    "Scheduled ", absTimeNode(context, task.not_before),
+    "Scheduled ", absTimeNode(task.not_before),
   ]);
 }
 
@@ -616,7 +616,7 @@ export function renderTasks(tasks, context) {
             : null,
           ...buildOsBadges(t),
           buildHumanCrewBadge(t),
-          buildScheduledChip(t, context),
+          buildScheduledChip(t),
           ...taskReadiness.buildReadinessBadge(t),
           ...taskReadiness.buildPilotWarningBadge(t),
           ...taskReadiness.buildActiveTriageBadges(t),

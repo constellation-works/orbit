@@ -2,7 +2,7 @@
 // The modules split out of tasks.js import this one, and it imports none of
 // them, so they share state and re-render the list without import cycles.
 
-import { clockStamp, el, getRegisteredHosts, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
+import { clockStamp, el, formatDateTime, getRegisteredHosts, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -147,16 +147,10 @@ export function statusTransition(task, targetStatus) {
   return statusTransitions(task).find((transition) => transition.status === targetStatus) || null;
 }
 
-export function fmtAbsTimeValue(context, value) {
-  return context && typeof context.fmtAbsTime === "function"
-    ? context.fmtAbsTime(value)
-    : (value || "-");
-}
-
 // An absolute time in a task detail. The detail is kept while its task is
 // unchanged, so the time is stamped for a UTC/Local switch to repaint.
-export function absTimeNode(context, value, attrs = {}) {
-  return clockStamp(el("span", { ...attrs, text: fmtAbsTimeValue(context, value) }), value);
+export function absTimeNode(value, attrs = {}) {
+  return clockStamp(el("span", { ...attrs, text: formatDateTime(value) }), value);
 }
 
 export function refreshTasks(context) {

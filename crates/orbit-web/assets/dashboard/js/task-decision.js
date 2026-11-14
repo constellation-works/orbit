@@ -1,7 +1,7 @@
 // Orbit dashboard decision cards: the open human decision request on a task as
 // a summary, one button per option beside its consequence, and a note field.
 
-import { captureWorkspaceVisit, el, fetchJson, postJson } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson } from './common.js';
 import * as taskShared from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 
@@ -125,7 +125,7 @@ export function retireClosedDecisionCards(container, task) {
 // the picked option label, who answered and when. Only a successful empty
 // read removes the enclosing block; failures keep an unavailable note and
 // Retry. Works in the federated view via taskWorkspacePath.
-export function buildAnsweredDecisions(task, context) {
+export function buildAnsweredDecisions(task) {
   const wrap = el("div", { class: "decision-answered-list" });
   const visit = captureWorkspaceVisit();
   const path = taskShared.taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}&include_closed=true`);
@@ -143,7 +143,7 @@ export function buildAnsweredDecisions(task, context) {
         const res = request.resolution;
         const picked = (Array.isArray(request.answers) ? request.answers : []).find((a) => String(a.id) === String(res.answer_id));
         const label = picked ? picked.label : res.answer_id;
-        const when = res.answered_at ? taskShared.fmtAbsTimeValue(context, res.answered_at) : "";
+        const when = res.answered_at ? formatDateTime(res.answered_at) : "";
         wrap.appendChild(el("div", { class: "decision-answered" }, [
           el("span", { class: "decision-answered-option", text: `Answered: ${label}` }),
           el("span", { class: "decision-answered-meta", text: `by ${res.answered_by || "unknown"}${when ? ` · ${when}` : ""}` }),

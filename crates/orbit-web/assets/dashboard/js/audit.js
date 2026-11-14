@@ -2,7 +2,7 @@
 // Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -59,18 +59,6 @@ const AUDIT_COLUMNS = [
 // Context injection helpers (mirror tasks.js pattern; ctx as last arg on public entry points)
 function hasCtx(ctx, key) {
   return ctx && typeof ctx[key] === "function";
-}
-
-function fmtDurationValue(ctx, v) {
-  return hasCtx(ctx, "fmtDuration") ? ctx.fmtDuration(v) : (v == null ? "-" : String(v));
-}
-
-function fmtTimestampValue(ctx, v) {
-  return hasCtx(ctx, "fmtTimestamp") ? ctx.fmtTimestamp(v) : (v || "-");
-}
-
-function fmtAbsTimeValue(ctx, v) {
-  return hasCtx(ctx, "fmtAbsTime") ? ctx.fmtAbsTime(v) : (v || "-");
 }
 
 function doRefresh(ctx) {
@@ -845,8 +833,8 @@ function renderAuditSummary(data, ctx) {
       [
         { key: "tool", label: "tool" },
         { key: "count", label: "count", num: true },
-        { key: "avg", label: "avg", num: true, format: (v) => fmtDurationValue(ctx, v) },
-        { key: "p95", label: "p95", num: true, format: (v) => fmtDurationValue(ctx, v) }
+        { key: "avg", label: "avg", num: true, format: (v) => fmtDuration(v) },
+        { key: "p95", label: "p95", num: true, format: (v) => fmtDuration(v) }
       ],
       filterByTool
     )), durations);
@@ -1034,15 +1022,15 @@ function renderAudit(events, ctx) {
     // the toggle just set.
     // Include the displayed relative age so syncNodes rebuilds the row when
     // the age advances instead of reusing the first-render age forever.
-    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}-${fmtTimestampValue(ctx, ev.timestamp)}`;
-    tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp), title: fmtAbsTimeValue(ctx, ev.timestamp) }));
+    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}-${formatAge(ev.timestamp)}`;
+    tr.appendChild(el("td", { class: "c-time", text: formatAge(ev.timestamp), title: formatDateTime(ev.timestamp) }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
     tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
     tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: ev.tool_name || cmd || "" }));
     tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
-    tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
+    tr.appendChild(el("td", { class: "num c-duration", text: fmtDuration(ev.duration_ms) }));
     tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
     makeToggleRow(tr, {
@@ -1059,14 +1047,14 @@ function renderAudit(events, ctx) {
     frag.appendChild(tr);
 
     if (expandedAuditIds.has(ev.id)) {
-      frag.appendChild(buildAuditDetailRow(ev, ctx));
+      frag.appendChild(buildAuditDetailRow(ev));
     }
   }
   syncNodes(tbody, Array.from(frag.children));
   syncNodes(body, footer ? [table, footer] : [table]);
 }
 
-function buildAuditDetailRow(ev, ctx) {
+function buildAuditDetailRow(ev) {
   const tr = el("tr", { class: "audit-detail-row" });
   tr.dataset.key = `audit-detail-${ev.id}`;
   // The event row's `aria-controls` points here, so the detail needs a real id.
@@ -1112,7 +1100,7 @@ function buildAuditDetailRow(ev, ctx) {
   addMeta("host", ev.host);
   addMeta("pid", ev.pid);
   addMeta("cwd", ev.working_directory);
-  addMeta("timestamp", fmtAbsTimeValue(ctx, ev.timestamp));
+  addMeta("timestamp", formatDateTime(ev.timestamp));
   td.appendChild(meta);
 
   if (ev.arguments_json) {

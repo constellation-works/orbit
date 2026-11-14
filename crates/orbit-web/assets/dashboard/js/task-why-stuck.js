@@ -210,7 +210,7 @@ function buildBlockDetails(task, block, context, detail, summary) {
   }
   const time = el("p", { class: "task-block-time" });
   if (block.at) {
-    time.append("Blocked at ", absTimeNode(context, block.at));
+    time.append("Blocked at ", absTimeNode(block.at));
   } else {
     time.textContent = "Block time not recorded.";
   }
@@ -223,7 +223,7 @@ function buildBlockDetails(task, block, context, detail, summary) {
       const id = taskComments.commentAnchorId(task.id, block.comment_index);
       taskState.expandedComments.add(taskComments.commentKey(task, block.comment_index));
       const panel = detail.querySelector(".comments-panel");
-      if (panel) taskComments.renderCommentsPanel(panel, task, context);
+      if (panel) taskComments.renderCommentsPanel(panel, task);
       taskComments.scrollToComment(`#${id}`);
     });
     actions.appendChild(read);

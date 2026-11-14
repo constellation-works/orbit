@@ -11,12 +11,11 @@
 // Uses `el`, `syncNodes` from `./common.js` (re-defines $ locally, as other
 // extracted modules do).
 //
-// Cross helpers (fmtRelative, fmtDuration, truncate, setActiveTab,
-// navigateToRun) are provided via ctx. The row click uses setActiveTab
-// (preserving the ?step= query for run-detail pre-expansion) rather than
-// navigateToRun to ensure identical behavior to before the split.
+// Cross helpers (setActiveTab, navigateToRun) are provided via ctx. The row
+// click uses setActiveTab (preserving the ?step= query for run-detail
+// pre-expansion) rather than navigateToRun, so it matches the pre-split behavior.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatDateTime, listItems, runHref } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatAge, formatDateTime, listItems, runHref, truncate } from './common.js';
 import { renderIncidents } from './incidents.js';
 
 const $ = (id) => document.getElementById(id);
@@ -57,17 +56,9 @@ function hasCtx(ctx, key) {
 }
 
 // A relative age names its absolute instant in the cell's title.
-function relativeCell(ctx, v, td) {
+function relativeCell(v, td) {
   if (td && v) td.title = formatDateTime(v);
-  return fmtRelativeValue(ctx, v);
-}
-
-function fmtRelativeValue(ctx, v) {
-  return hasCtx(ctx, "fmtRelative") ? ctx.fmtRelative(v) : (v || "-");
-}
-
-function truncateValue(ctx, s, n = 220) {
-  return hasCtx(ctx, "truncate") ? ctx.truncate(s, n) : String(s || "").slice(0, n);
+  return formatAge(v);
 }
 
 // `actor_identity` is the persisted ActorIdentity enum: a flat label string,
@@ -121,7 +112,7 @@ function errorMessageDisclosure(value, row, ctx, td) {
   const summary = el("summary");
   summary.appendChild(el("span", {
     class: "error-message-preview",
-    text: truncateValue(ctx, shortened, 220),
+    text: truncate(shortened, 220),
   }));
   details.appendChild(summary);
   details.appendChild(el("div", { class: "error-message-full", text: full }));
@@ -166,7 +157,7 @@ function loadMoreErrorsLink(payload, ctx) {
 
 function getDiagErrorsColumns(ctx) {
   return [
-    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
+    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(v, td) },
     { key: "source", label: "source", num: false },
     {
       key: "job_run",
@@ -253,7 +244,7 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, 
     tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
     // Include the displayed relative age so syncNodes rebuilds the row when
     // the age advances instead of reusing the first-render age forever.
-    tr.dataset.hash = `${JSON.stringify(row)}|${row.ts ? fmtRelativeValue(ctx, row.ts) : ''}`;
+    tr.dataset.hash = `${JSON.stringify(row)}|${row.ts ? formatAge(row.ts) : ''}`;
     if (row.affiliation === "unaffiliated") {
       tr.classList.add("unaffiliated");
     }
