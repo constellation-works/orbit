@@ -142,6 +142,11 @@ jobs:
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
         run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-tools --locked --test tools plugin_admission::brokered -- --include-ignored
 
+      - name: Run native exact-file confinement test
+        env:
+          ORBIT_REQUIRE_SANDBOX_EXEC: "1"
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-tools --locked --test tools plugin_admission::write_files::a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only
+
       - name: Run orbit-core sandbox and blocked-recovery tests
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
