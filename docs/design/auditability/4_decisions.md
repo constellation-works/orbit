@@ -3,7 +3,7 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-11-10
+last_updated: 2026-11-14
 last_validated: 2026-10-15
 status: Draft
 feature: auditability
@@ -15,7 +15,7 @@ tags: ["auditability"]
 
 This is the decision log for Auditability. Entries stay in historical order and use title-based links. New entries should use the template in [../CONVENTIONS.md](../CONVENTIONS.md) and cite the task that made the decision real.
 
-Entries preserve the storage layouts and behavior at the time of each decision. The [current implementation](./2_design.md) stores v2 envelopes and retained loop events in SQLite, keeps payload blobs under workspace audit state, and rotates the global process JSONL feeds. Earlier references here to run JSONL files or an unrotated process feed describe historical behavior.
+Entries preserve the storage layouts and behavior at the time of each decision. The [current implementation](./2_design.md) writes v2 envelopes to SQLite, retains historical loop-event rows as opaque payloads, keeps payload blobs under workspace audit state, and rotates the global process JSONL feeds. Earlier references here to loop-event writers, run JSONL files or an unrotated process feed describe historical behavior.
 
 ---
 

@@ -328,8 +328,6 @@ pub(super) fn run_with_input(
             store.clone(),
             "ws_final_recovery",
             run_id,
-            "test-agent",
-            None,
             audit_root.path(),
         ));
         Arc::new(V2AuditWriter::new(run_id, "test-agent", inner.clone()).with_envelope_sink(sink))

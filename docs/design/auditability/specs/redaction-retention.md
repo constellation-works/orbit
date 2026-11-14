@@ -2,7 +2,7 @@
 type: design
 summary: Spec: Redaction and Retention Boundaries
 last_validated: 2026-10-29
-last_updated: 2026-11-03
+last_updated: 2026-11-14
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -52,10 +52,10 @@ Command audit rows:
   denials once; subsequent inserts capture the same facts independently of audit GC.
   Unscoped legacy rows are not attributed to a workspace.
 
-Activity/job and loop traces:
+Activity/job traces and historical loop rows:
 
-- Live under `.orbit/state/audit/` for workspace-local run reconstruction.
-- V2 envelope and loop events are persisted through the SQLite-backed v2 audit store.
+- V2 envelope events are persisted through the SQLite-backed v2 audit store; historical `source: loop_event` rows remain opaque payloads in the same table and share its retention policy.
+- Payload blobs live under `.orbit/state/audit/` for workspace-local run reconstruction.
 - Use content-addressed blobs for payload bodies.
 - Are bounded by `orbit gc audit`: it plans by default and, with `--apply`, deletes this workspace's v2 audit rows, and rows whose workspace id is no longer registered, older than `retention.audit_days` (default 60) in batches of 1,000 rows, each its own write transaction, then sweeps the blobs under `.orbit/state/audit/blobs/` that no remaining run audit row, run step or pipeline state names. Another registered workspace keeps its own window. The opt-in `store-gc` routine runs it daily. `VACUUM` stays an operator action; each report shows the freed pages.
 - A blob is protected from the sweep while it is being published. The writer records `.orbit/state/audit/pending/<hash>` before it writes or reuses a blob and retires the marker after the row naming it commits; writing content that is already stored refreshes the blob's mtime. The sweep moves a candidate to `.orbit/state/audit/sweep/`, then rechecks the marker and the mtime (24-hour grace) and moves it back if either is fresh. A marker older than the audit cutoff belongs to a write that never published and is reclaimed with its blob.

@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-use chrono::{DateTime, Utc};
-use orbit_agent::loop_engine::audit::{AuditSink, BlobStore, LoopAuditEvent};
+use orbit_agent::loop_engine::audit::{AuditSink, BlobStore};
 use orbit_common::OrbitError;
 use orbit_common::storage::blob_sweep;
 use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditStoreBackend};
@@ -12,10 +10,7 @@ pub struct V2SqliteSink {
     store: std::sync::Arc<dyn V2AuditStoreBackend>,
     workspace_id: String,
     run_id: String,
-    agent_identity: String,
-    workspace_path: Option<String>,
     blob_store: BlobStore,
-    loop_event_counter: Mutex<u64>,
 }
 
 impl V2SqliteSink {
@@ -23,18 +18,13 @@ impl V2SqliteSink {
         store: std::sync::Arc<dyn V2AuditStoreBackend>,
         workspace_id: impl Into<String>,
         run_id: impl Into<String>,
-        agent_identity: impl Into<String>,
-        workspace_path: Option<String>,
         blob_root: impl Into<PathBuf>,
     ) -> Self {
         Self {
             store,
             workspace_id: workspace_id.into(),
             run_id: run_id.into(),
-            agent_identity: agent_identity.into(),
-            workspace_path,
             blob_store: BlobStore::new(blob_root),
-            loop_event_counter: Mutex::new(0),
         }
     }
 
@@ -42,18 +32,9 @@ impl V2SqliteSink {
         store: std::sync::Arc<dyn V2AuditStoreBackend>,
         workspace_id: impl Into<String>,
         run_id: impl Into<String>,
-        agent_identity: impl Into<String>,
-        workspace_path: Option<String>,
         audit_root: &Path,
     ) -> Self {
-        let mut sink = Self::new(
-            store,
-            workspace_id,
-            run_id,
-            agent_identity,
-            workspace_path,
-            audit_root.join("blobs"),
-        );
+        let mut sink = Self::new(store, workspace_id, run_id, audit_root.join("blobs"));
         // The audit root's blobs are swept by `orbit gc audit`: mark each
         // blob pending until the row that names it is written.
         sink.blob_store = sink
@@ -107,37 +88,6 @@ impl V2SqliteSink {
     pub fn blob_store(&self) -> &BlobStore {
         &self.blob_store
     }
-
-    fn write_loop_event(&self, event: &LoopAuditEvent) -> Result<(), OrbitError> {
-        let event_id = self.next_loop_event_id()?;
-        let payload_json = serde_json::to_string(event)
-            .map_err(|err| OrbitError::Store(format!("serialize loop audit event: {err}")))?;
-        self.store
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
-                workspace_id: self.workspace_id.clone(),
-                event_id,
-                source: "loop_event".to_string(),
-                schema_version: 1,
-                event_type: loop_event_type(event).to_string(),
-                ts: loop_event_ts(event),
-                run_id: loop_event_run_id(event).unwrap_or(&self.run_id).to_string(),
-                agent_identity: self.agent_identity.clone(),
-                parent_event_id: None,
-                workspace_path: self.workspace_path.clone(),
-                payload_json: payload_json.clone(),
-            })?;
-        self.blob_store.clear_published(&payload_json);
-        Ok(())
-    }
-
-    fn next_loop_event_id(&self) -> Result<String, OrbitError> {
-        let mut counter = self
-            .loop_event_counter
-            .lock()
-            .map_err(|err| OrbitError::Store(format!("loop audit mutex poisoned: {err}")))?;
-        *counter += 1;
-        Ok(format!("loopevt-{}-{:08x}", self.run_id, *counter))
-    }
 }
 
 /// What [`AuditSink::write_blob`] returns in place of a ref when the blob
@@ -148,54 +98,9 @@ impl V2SqliteSink {
 pub(crate) const BLOB_WRITE_ERROR_PREFIX: &str = "error:";
 
 impl AuditSink for V2SqliteSink {
-    fn emit(&self, event: &LoopAuditEvent) {
-        if let Err(err) = self.write_loop_event(event) {
-            tracing::warn!("failed to persist loop audit event to sqlite: {err}");
-        }
-    }
-
     fn write_blob(&self, content: &[u8]) -> String {
         self.blob_store
             .write(content)
             .unwrap_or_else(|err| format!("{BLOB_WRITE_ERROR_PREFIX}{err}"))
-    }
-}
-
-fn loop_event_ts(event: &LoopAuditEvent) -> DateTime<Utc> {
-    match event {
-        LoopAuditEvent::SessionSpawn { ts, .. }
-        | LoopAuditEvent::SessionClose { ts, .. }
-        | LoopAuditEvent::HttpRequest { ts, .. }
-        | LoopAuditEvent::HttpResponse { ts, .. }
-        | LoopAuditEvent::ToolCallRequested { ts, .. }
-        | LoopAuditEvent::ToolCallResult { ts, .. }
-        | LoopAuditEvent::IterationBoundary { ts, .. }
-        | LoopAuditEvent::PolicyDenial { ts, .. } => *ts,
-    }
-}
-
-fn loop_event_run_id(event: &LoopAuditEvent) -> Option<&str> {
-    match event {
-        LoopAuditEvent::SessionSpawn { run_id, .. }
-        | LoopAuditEvent::SessionClose { run_id, .. }
-        | LoopAuditEvent::HttpRequest { run_id, .. }
-        | LoopAuditEvent::HttpResponse { run_id, .. }
-        | LoopAuditEvent::ToolCallRequested { run_id, .. }
-        | LoopAuditEvent::ToolCallResult { run_id, .. }
-        | LoopAuditEvent::IterationBoundary { run_id, .. }
-        | LoopAuditEvent::PolicyDenial { run_id, .. } => Some(run_id),
-    }
-}
-
-fn loop_event_type(event: &LoopAuditEvent) -> &'static str {
-    match event {
-        LoopAuditEvent::SessionSpawn { .. } => "session.spawn",
-        LoopAuditEvent::SessionClose { .. } => "session.close",
-        LoopAuditEvent::HttpRequest { .. } => "http.request",
-        LoopAuditEvent::HttpResponse { .. } => "http.response",
-        LoopAuditEvent::ToolCallRequested { .. } => "tool.call.requested",
-        LoopAuditEvent::ToolCallResult { .. } => "tool.call.result",
-        LoopAuditEvent::IterationBoundary { .. } => "iteration.boundary",
-        LoopAuditEvent::PolicyDenial { .. } => "policy.denial",
     }
 }

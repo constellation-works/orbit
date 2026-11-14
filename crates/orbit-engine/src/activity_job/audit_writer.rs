@@ -42,14 +42,11 @@ impl EnvelopeSink for V2SqliteSink {
     }
 }
 
-/// Writes §7 v2 audit envelope events. Nests the existing loop-engine events
-/// underneath an Activity event via `parent_event_id` so the whole tree
-/// (Run → Step → Activity → http.*/tool.call.*) is traversable by ID.
+/// Writes §7 v2 audit envelope events with run and agent identity context.
+/// Parent event IDs connect run, step, activity and invocation events.
 ///
-/// This writer owns the run_id / agent_identity context and emits events both
-/// as structured JSON (for orbit-audit consumers) and as an inner loop sink
-/// passthrough (so loop-level http.* and tool.call.* events continue to flow
-/// through the existing JSONL path).
+/// Envelope events are persisted through the configured envelope sink;
+/// payload blobs are written through the inner audit sink.
 pub struct V2AuditWriter {
     run_id: String,
     agent_identity: String,
@@ -121,10 +118,9 @@ impl V2AuditWriter {
     }
 
     /// High-level constructor for CLI / library callers that don't want to
-    /// name the loop-level sink types directly (orbit-core's primary use
-    /// case). Creates one SQLite-backed sink for both loop events and v2
-    /// envelopes, while preserving content-addressed audit blobs under
-    /// `audit_root/blobs/`.
+    /// name the sink types directly (orbit-core's primary use case).
+    /// Creates one SQLite-backed sink for v2 envelopes and preserves
+    /// content-addressed audit blobs under `audit_root/blobs/`.
     ///
     /// Callers that need a custom sink configuration use `new` +
     /// `with_envelope_sink` directly.
@@ -138,13 +134,10 @@ impl V2AuditWriter {
     ) -> std::io::Result<Arc<Self>> {
         let run_id = run_id.into();
         let agent_identity = agent_identity.into();
-        let workspace_path_string = workspace_path.map(|path| path.display().to_string());
         let sqlite_sink = Arc::new(V2SqliteSink::for_audit_root(
             store,
             workspace_id,
             run_id.clone(),
-            agent_identity.clone(),
-            workspace_path_string.clone(),
             audit_root,
         ));
         let inner: Arc<dyn AuditSink> = sqlite_sink.clone();

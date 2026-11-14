@@ -1960,7 +1960,6 @@ dependencies = [
  "jsonschema",
  "orbit-common",
  "orbit-types",
- "serde",
  "serde_json",
  "tempfile",
  "tracing",

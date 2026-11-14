@@ -205,8 +205,6 @@ fn dispatch_with_audit(yaml: &str, input: Value, host: &ShellHost) -> AuditedDis
         Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
         "ws_local_shell",
         "jrun-local-shell",
-        "test",
-        None,
         audit_root.path(),
     ));
     let writer =

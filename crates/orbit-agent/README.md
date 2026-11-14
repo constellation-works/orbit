@@ -71,18 +71,15 @@ and environment overrides remain engine responsibilities.
 
 ## Audit contracts
 
-`loop_engine::audit` keeps the existing engine import path for `AuditSink`,
-`LoopAuditEvent`, `InMemorySink`, `NullSink`, and the shared blob/redaction
-re-exports. The event variants retain their schema-v1 `event_kind` tags and
-payload fields for historical `v2_audit_events` rows, including session, HTTP,
-tool, iteration and policy records. They support serialization and
-deserialization; removing a runtime does not remove its persisted event shape.
+`loop_engine::audit` provides `AuditSink::write_blob`, `InMemorySink`,
+`NullSink`, and the shared `BlobStore` re-export. The retired HTTP agent loop's
+historical `loop_event` rows remain opaque persisted payloads; these sinks
+only write blobs.
 
 The runtime's SQLite-backed sink lives in `orbit-engine`. Payload bodies are
 stored separately under `.orbit/state/audit/blobs/`, keyed by their redacted
 content hash. Blob writes use the common crate's redaction at write time,
-before hashing and persistence. The boundary tests also verify sink redaction
-and decode fixtures for every historical event variant.
+before hashing and persistence. The boundary tests also verify sink redaction.
 
 The complete redaction contract lives in
 [`artifact-redaction.md`](../../docs/design/auditability/specs/artifact-redaction.md).
