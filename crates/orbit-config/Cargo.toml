@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }

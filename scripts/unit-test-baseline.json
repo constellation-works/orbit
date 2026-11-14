@@ -634,8 +634,8 @@
         "driver/sqlite/migration/tests/ledger/registry.rs::legacy_admission_only_rows_reopen_and_sticky_rows_stay",
         "driver/sqlite/migration/tests/ledger/registry.rs::store_schema_prefix_goldens",
         "driver/sqlite/migration/tests/ledger/registry.rs::task_registry_schema_prefix_goldens",
-        "driver/sqlite/task_reservation_store/tests/plans.rs::active_reservation_statements_seek_an_index",
         "driver/sqlite/task_registry/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
+        "driver/sqlite/task_reservation_store/tests/plans.rs::active_reservation_statements_seek_an_index",
         "driver/sqlite/tests/v2_audit_store.rs::delayed_insert_during_tail_read_keeps_snapshot_ranks_and_the_newest_event",
         "fs/tests/lock.rs::crash_holder_child",
         "fs/tests/lock.rs::sigkilled_holder_releases_lock",
@@ -691,9 +691,7 @@
       ]
     },
     "orbit-types": {
-      "test_function_paths": [
-        "workflow/review/tests/gate_note.rs::legacy_shapes_parse_to_run_and_tree_and_render_historical_bytes"
-      ]
+      "test_function_paths": []
     },
     "orbit-web": {
       "test_function_paths": [

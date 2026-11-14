@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 clap = ["orbit-types/clap"]
 # Test-only hooks for downstream crates' tests (`orbit_core::test_support`).

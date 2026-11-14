@@ -16,6 +16,9 @@ test-release-api-base = []
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 chrono.workspace = true
 flate2.workspace = true

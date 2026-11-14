@@ -1,6 +1,6 @@
 //! [ORB-15834] Review-gate history notes parse to a run and a tree.
 
-use crate::workflow::ReviewGateHistoryNote;
+use orbit_types::workflow::ReviewGateHistoryNote;
 
 /// Legacy comma, semicolon and `candidate_tree`-only notes parse to the run
 /// and the tree a timeout counts, and each producer renders its historical

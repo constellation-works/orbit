@@ -9,9 +9,10 @@
 # clippy still denies them.
 #
 # Cargo fingerprints RUSTC_WORKSPACE_WRAPPER and the CLIPPY_ARGS value that
-# clippy-driver tracks. A later nextest run, doctest build or nextest listing
-# reuses those artifacts only under this exact environment; without it Cargo
-# recompiles every workspace member. Run each of them through this script.
+# clippy-driver tracks. A later nextest run or nextest listing reuses those
+# artifacts only under this exact environment; without it Cargo recompiles
+# every workspace member. Run each of them through this script. Doctests are
+# disabled (`doctest = false` on every library), so there is no doctest build.
 #
 # clippy-driver does not shell-split CLIPPY_ARGS. `cargo clippy` joins each
 # argument with this sentinel, and the driver splits on it. A space-separated

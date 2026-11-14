@@ -50,8 +50,9 @@ env:
   # match it (scripts/test-pr-state-workflows.py).
   NEXTEST_SHARDS: "3"
   # Twelve count partitions run on twelve test runners. The build runner
-  # publishes the archive, then proves exact-once coverage and runs doctests;
-  # it no longer delays a partition behind that post-upload work. Literal
+  # publishes the archive, then proves exact-once coverage; doctests are
+  # disabled (`doctest = false` on every library). It no longer delays a
+  # partition behind that post-upload work. Literal
   # "Test shard k/N" names and the agent-main ruleset remain unchanged.
   # [ORB-21420] Replaying two full runs' logged test durations, a sixth
   # partition cut the slowest partition's summed test time by 27-30%
@@ -987,18 +988,6 @@ jobs:
           CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
         run: ./scripts/ci-guardrails.sh --test-partitions "$RUNNER_TEMP/nextest-archive.tar.zst"
 
-      # Reuse the folded build's linked libraries, instead of rebuilding them
-      # in Check after its metadata-only production Clippy. The shards can
-      # already run, and Check awaits this job's conclusion as well as theirs.
-      - name: Run workspace doctests
-        if: ${{ !cancelled() }}
-        # A PR head can predate the workflow's new guard CLI mode. Use its
-        # existing folded-build wrapper directly, with the same Cargo command.
-        run: |
-          set -euo pipefail
-          TIMEFORMAT='doctests_seconds=%R'
-          time ./scripts/with-test-build-lint.sh cargo test --no-fail-fast --workspace --doc
-
       # Cargo's unit timings identify compilation bottlenecks without hiding
       # them inside the macOS-filter helper's captured Cargo output.
       - name: Upload test build timings
@@ -1369,7 +1358,7 @@ jobs:
     steps: *test-shard-steps
 
   # Prepare beside compilation, like every other shard, so partition 2 no
-  # longer waits for the build runner's proof, doctests and tool setup. Check
+  # longer waits for the build runner's proof and tool setup. Check
   # awaits this literal job even though the ruleset does not name it directly.
   test-partition-2:
     needs: [pr-state, scope]
