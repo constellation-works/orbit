@@ -1,2 +1,1 @@
-mod pool;
 mod session;
