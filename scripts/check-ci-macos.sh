@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 workflow="${CI_MACOS_WORKFLOW:-$repo_root/.github/workflows/ci-macos.yml}"
 evidence_output=""
 # --workspace-build lists the filtered tests from one
-# `cargo test --workspace --lib --bins --tests --examples --no-run` build
+# `cargo test --workspace --bins --tests --examples --no-run` build
 # instead of a `cargo test -p <crate>` build per filter. Per-package
 # invocations resolve features differently from the workspace build (resolver
 # 2), so on a runner that also runs the workspace-wide nextest pass they
@@ -305,11 +305,12 @@ class TestBinary(NamedTuple):
 def workspace_test_executables() -> dict[str, list[TestBinary]]:
     """Map each workspace package to the test binaries of one workspace build.
 
-    The build is what `cargo nextest run --workspace --lib --bins --tests`
+    The build is what `cargo nextest run --workspace --bins --tests`
     runs, plus examples so the folded all-targets lint covers them. Listing
     still selects only the binaries the workflow filters name. Doctests are
     not listed (the per-package path includes them); the guard only needs
-    >= 1 match.
+    >= 1 match. No `--lib`: it overrides `[lib] test = false`; `--tests`
+    selects library unit tests whose test flag is true.
     """
     metadata = run_listing(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
@@ -318,14 +319,9 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
     if metadata is None:
         return {}
     packages = json.loads(metadata)["packages"]
-    selection = ["--workspace", "--lib"]
+    selection = ["--workspace"]
     if selected_packages:
-        # Cargo rejects --lib when no selected crate has a library.
-        has_library = any({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"} & set(target["kind"])
-                          for package in packages if package["name"] in selected_packages
-                          for target in package.get("targets", []))
         selection = [argument for name in selected_packages for argument in ("-p", name)]
-        selection += ["--lib"] if has_library else []
     # The all-targets lint flags come from the shared wrapper. The nextest run,
     # doctests and the sandbox gate use it too, so they reuse these artifacts.
     build = run_listing(

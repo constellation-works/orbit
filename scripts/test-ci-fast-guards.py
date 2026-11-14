@@ -548,7 +548,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
         self.assertIn(production_clippy, calls)
         self.assertFalse(any("--all-targets" in call for call in calls))
         listing = ["nextest", "list", "--list-type", "binaries-only", "--message-format", "json",
-                   "--workspace", "--lib", "--bins", "--tests"]
+                   "--workspace", "--bins", "--tests"]
         self.assertIn(listing, calls)
         runs = [call for call in calls if call[:2] == ["nextest", "run"]]
         self.assertEqual(len(runs), 1, calls)
@@ -1089,7 +1089,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
+        folded = ["test", "--workspace", "--bins", "--tests", "--examples", "--locked",
                   "--no-run", "--timings", "--message-format", "json"]
         self.assertIn(folded, calls)
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
@@ -1177,10 +1177,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.init_ci_git()
         env_log = self.root / "cargo-env.log"
         self.env["GUARD_TEST_ENV_LOG"] = str(env_log)
-        folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
+        folded = ["test", "--workspace", "--bins", "--tests", "--examples", "--locked",
                   "--no-run", "--timings", "--message-format", "json"]
         archive = str(self.root / "nextest-archive.tar.zst")
-        archive_call = ["nextest", "archive", "--locked", "--workspace", "--lib", "--bins", "--tests",
+        archive_call = ["nextest", "archive", "--locked", "--workspace", "--bins", "--tests",
                         "--archive-file", archive]
 
         # --test-archive: the folded build, then the archive the shards run.
@@ -1319,11 +1319,11 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                               'assert sys.argv[1:] == ["--test-build-packages", "orbit-types"], sys.argv\n'
                               'print(os.environ["GUARD_TEST_BUILD_SET"])\n')
         cases = (
-            ("orbit-types\n-p orbit-types --lib --bins --tests\nfeature anchors: none",
-             ["-p", "orbit-types", "--lib"], ["--allow-empty"]),
-            ("workspace\n--workspace --lib --bins --tests\nthis checkout has no crate orbit-types",
-             ["--workspace", "--lib"], []),
-            ("", ["--workspace", "--lib"], []),
+            ("orbit-types\n-p orbit-types --bins --tests\nfeature anchors: none",
+             ["-p", "orbit-types"], ["--allow-empty"]),
+            ("workspace\n--workspace --bins --tests\nthis checkout has no crate orbit-types",
+             ["--workspace"], []),
+            ("", ["--workspace"], []),
         )
         for build_set, selection, partition_options in cases:
             with self.subTest(build_set=build_set.split("\n", 1)[0]):

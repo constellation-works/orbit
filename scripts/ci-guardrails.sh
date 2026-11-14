@@ -218,7 +218,9 @@ fi
 if [[ -n "$archive" ]]; then
   lint="$repo_root/scripts/with-test-build-lint.sh"
   macos_selection=()
-  read -r -a targets <<<"--workspace --lib --bins --tests"
+  # No --lib: it overrides [lib] test=false and builds empty harnesses.
+  # --tests selects library unit tests whose test flag is true.
+  read -r -a targets <<<"--workspace --bins --tests"
   rm -f "$archive.packages"
   if [[ "${CI_TEST_SCOPE:-}" == affected:* ]]; then
     build=$(python3 "$repo_root/scripts/ci-test-affected.py" --test-build-packages "${CI_TEST_SCOPE#affected:}") ||
@@ -741,7 +743,7 @@ elif [[ "$guards" == true ]]; then
   guards_joined=$SECONDS
 elif [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
-  # --workspace-build lists them from the same `--workspace --lib --bins
+  # --workspace-build lists them from the same `--workspace --bins
   # --tests` artifacts the nextest pass below runs, instead of a per-crate
   # `cargo test -p` build that resolves features differently and recompiles
   # the workspace chain a second time. [DANI-10428]
@@ -764,7 +766,7 @@ elif [[ "$fast" == false ]]; then
     # run nextest from that listing. The run invokes no Cargo build and holds
     # no build lock, so the check chain can use Cargo meanwhile.
     run_phase workspace-test-listing "$lint" cargo nextest list --list-type binaries-only \
-      --message-format json --workspace --lib --bins --tests >"$guard_logs/binaries.json"
+      --message-format json --workspace --bins --tests >"$guard_logs/binaries.json"
     cargo metadata --format-version 1 --all-features --no-deps >"$guard_logs/cargo-metadata.json"
     start_check_chain
     # Profile ci raises test-threads above the 4-vCPU runner default.
@@ -777,7 +779,7 @@ elif [[ "$fast" == false ]]; then
     join_check_chain
   else
     echo "cargo-nextest not found; falling back to cargo test" >&2
-    run_phase workspace-tests "$lint" cargo test --no-fail-fast --workspace --lib --bins --tests
+    run_phase workspace-tests "$lint" cargo test --no-fail-fast --workspace --bins --tests
     checks_status=0
     run_check_chain || checks_status=$?
     if [[ "$failed" -eq 0 ]]; then failed="$checks_status"; fi
