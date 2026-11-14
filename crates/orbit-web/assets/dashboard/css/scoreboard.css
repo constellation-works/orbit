@@ -117,9 +117,9 @@
 .scoreboard-orchestration-scope .scope-label {
   flex: 0 0 auto;
   padding: 1px 6px;
-  border: 1px solid #2e343c;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
-  color: #c9d0d9;
+  color: var(--fg-soft);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
