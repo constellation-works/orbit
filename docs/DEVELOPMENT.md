@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-11-10
+last_validated: 2026-11-14
 ---
 
 # Development Reference
@@ -73,7 +73,16 @@ target/filter listings and native execution evidence validation. Push runs of
 `ci-macos.yml` and `codeql.yml` share one group per branch with cancellation off: one run
 executes and one waits, and a newer push replaces the waiting run. An
 intermediate commit can therefore get no macOS run, while the newest commit
-always does. Scheduled and dispatch runs keep a group per run. Required-check
+always does. A `workflow_dispatch` of `ci-macos.yml` keeps a group per run, so later pushes do not replace it. `codeql.yml` uses one group per ref for push, schedule and dispatch, still with cancellation off. A docs-only push
+whose parent already has a successful completed run of the same workflow skips
+that workflow's heavy jobs: both macOS build jobs, or all three CodeQL analysis
+jobs. The parent's result still covers that unchanged code. A push that changes
+any non-docs path, or a docs-only push whose parent has no such proof, starts
+those jobs.
+`workflow_dispatch` and CodeQL's daily schedule always run every job. A
+docs-only `agent-main` tip therefore has no macOS result from the push; the
+dispatch route under [Getting a completed result for a chosen agent-main SHA](#getting-a-completed-result-for-a-chosen-agent-main-sha)
+is how that SHA gets one. A dispatch run is not docs-scoped. Required-check
 settings are managed separately in the repository's provider rules.
 
 The task and MCP CLI integration binaries use named contract tables, with
@@ -420,11 +429,11 @@ In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-sco
 - **`skip`**: a push whose commit has exactly the tree of the merged PR's head, when that head's latest `Check / Clippy / Test` succeeded in a run that tested every crate. The same bytes already passed the full gate, so nothing reruns. A PR run that tests every crate says so in its `Change scope` job with a `Test selection` notice reading `full`, and the push requires that notice from the same run (check suite) as the passing check. An `affected:` PR run, or a head whose run left no notice, gets a full push run. A merge whose tree differs from what the PR tested also runs in full. With non-strict required checks, most merges differ: the PR was tested against an older base.
 - **`full`**: everything else, including any classification error. The job never fails, and an empty mode admits the full run.
 
-Push runs of `ci.yml` share one group per branch without cancelling the running workflow, as `ci-macos.yml` does: one run executes, one waits, and a newer push replaces the waiting run. The surviving tip runs in full unless its entire tree already passed on the PR head, or its changes from a successfully checked `before` commit qualify for docs mode. Replacing a pending code push therefore cannot let a later Markdown-only delta hide its untested code. Skipped jobs keep their check names and report as skipped, which GitHub's required checks treat as passing. Orbit's landing pays an owed check only with an explicit success, so a skipped owed check keeps it waiting; its absent-context repair recognises this exact scope job when it proves that a missing required check will report after a branch update. The macOS and CodeQL workflows are unaffected. `scripts/test-pr-state-workflows.py` runs the classifier against recorded API answers and checks which jobs each mode admits.
+Push runs of `ci.yml` share one group per branch without cancelling the running workflow, as `ci-macos.yml` does: one run executes, one waits, and a newer push replaces the waiting run. The surviving tip runs in full unless its entire tree already passed on the PR head, or its changes from a successfully checked `before` commit qualify for docs mode. Replacing a pending code push therefore cannot let a later Markdown-only delta hide its untested code. Skipped jobs keep their check names and report as skipped, which GitHub's required checks treat as passing. Orbit's landing pays an owed check only with an explicit success, so a skipped owed check keeps it waiting; its absent-context repair recognises this exact scope job when it proves that a missing required check will report after a branch update. `ci-macos.yml` and `codeql.yml` run the same classifier before their build and analysis jobs. They set `DOCS_BEFORE_CHECKS` (one GitHub check name per line) so a docs-only push is `docs` only when every named check on `BEFORE` is a successful completed GitHub Actions run, and that result overrides `skip`. Unset, as in `ci.yml` and `ci-cache-seed.yml`, the parent check stays `Check / Clippy / Test` and `skip` still wins. macOS names `macOS Clippy (informational)` and `macOS Sandbox`. CodeQL names `Analyze (actions)`, `Analyze (javascript-typescript)` and `Analyze (rust)`. An empty mode, or a missing, failed, cancelled or unfinished parent check, keeps the heavy jobs. `workflow_dispatch` and the CodeQL `schedule` event run those jobs even when the mode is `docs`. `scripts/test-pr-state-workflows.py` runs the classifier against recorded API answers and checks which jobs each mode admits.
 
 #### Getting a completed result for a chosen agent-main SHA
 
-RB-15 deploys only an exact agent-main SHA with a completed successful `CI` result, plus a completed successful `macOS Platform` result for the Mac. On a busy day that SHA may never get one from its push: each workflow keeps one running and one pending push run per branch, so the next merge replaces the pending run and the replaced SHA ends `cancelled` with no jobs started. A `gh run rerun` of the cancelled run re-enters the same push group and can be replaced again the same way. Use a manual dispatch instead. Both workflows accept `workflow_dispatch`, and a dispatch run gets a concurrency group per run (`run-<run_id>`: the existing fall-through in `ci.yml`, the dispatch branch of the group in `ci-macos.yml`) with cancellation off for that event, so later agent-main pushes neither replace nor cancel it. Ordinary push and `pull_request` groups and cancellation are unchanged, no extra macOS push runs are added, and the required PR checks and ruleset are untouched. A dispatch run always takes the `full` change scope, so its result covers every crate.
+RB-15 deploys only an exact agent-main SHA with a completed successful `CI` result, plus a completed successful `macOS Platform` result for the Mac. On a busy day that SHA may never get one from its push: each workflow keeps one running and one pending push run per branch, so the next merge replaces the pending run and the replaced SHA ends `cancelled` with no jobs started. A `gh run rerun` of the cancelled run re-enters the same push group and can be replaced again the same way. Use a manual dispatch instead. Both workflows accept `workflow_dispatch`, and a dispatch run gets a concurrency group per run (`run-<run_id>`: the existing fall-through in `ci.yml`, the dispatch branch of the group in `ci-macos.yml`) with cancellation off for that event, so later agent-main pushes neither replace nor cancel it. Ordinary push and `pull_request` groups and cancellation are unchanged, no extra macOS push runs are added, and the required PR checks and ruleset are untouched. A dispatch run always takes the `full` change scope, so its `ci.yml` result covers every crate. It is not a push, so macOS and CodeQL also run every build and analysis job rather than the docs skip. A docs-only push whose parent already completed both macOS checks starts no macOS build job; this dispatch is how that SHA gets a macOS result.
 
 If the chosen SHA is still the `agent-main` head, dispatch both workflows on that branch and confirm the runs report that SHA before relying on them (a merge landing between choosing and dispatching moves the head):
 

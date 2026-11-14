@@ -14,6 +14,9 @@ on:
 # CodeQL runner jobs per merge. A daily scheduled analysis covers agent-main
 # changes before promotion to main without rate-limit exhaustion. Running
 # analyses are not cancelled in progress so completed results always publish.
+# A docs-only push to main skips the analysis jobs only when BEFORE already has
+# a successful completed Analyze run for actions, javascript-typescript and
+# rust. The daily schedule and workflow_dispatch always run every analysis job.
 concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: false
@@ -24,8 +27,43 @@ permissions:
   actions: read
 
 jobs:
+  # Same classifier as ci.yml. An empty mode fails open, and this job never
+  # fails the workflow, so a classifier error still analyses.
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Classify the change
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          DOCS_BEFORE_CHECKS: |
+            Analyze (actions)
+            Analyze (javascript-typescript)
+            Analyze (rust)
+        run: scripts/ci-change-scope.sh
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.mode != 'docs') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
