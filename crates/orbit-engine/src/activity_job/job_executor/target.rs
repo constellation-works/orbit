@@ -46,18 +46,6 @@ pub(super) fn run_target(
     // A rendered activity `crew` or `crew_config_key` selects an assignment;
     // otherwise dispatch inherits the run's resolved crew.
     let crew_override = crew_overridden_spec(t, ctx, &rendered_input)?;
-    if t.session.is_some() {
-        // [ORB-10801] Cross-iteration sessions were provided only by the
-        // retired HTTP agent loop. `validate_job_retired_sessions` refuses the
-        // asset at load; this is the structural backstop for a job built in
-        // memory, which never passes through the loader.
-        return Err(DispatchError::JobValidation(format!(
-            "step `{}`: `session:` bindings are no longer supported; {}",
-            step.id,
-            orbit_types::workflow::activity_job::RETIRED_BACKEND_MIGRATION
-        )));
-    }
-
     // Swap in the crew-resolved clone when the host has a configuration layer;
     // isolated hosts may retain inline values.
     let dispatched_spec_storage = crew_override

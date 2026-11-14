@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Retired agent backend selection and its migration"
 tags: ["activity-job"]
-last_validated: 2026-11-04
+last_validated: 2026-11-14
 ---
 
 # Spec: Retired Agent Backend Selection
@@ -43,10 +43,10 @@ work without saying so.
 | `ORBIT_BACKEND` | accepted, ignored | refused at config load |
 | `[crews.<name>] backend` | accepted, ignored | refused at config load |
 
-`session:` on a job step has no `cli` equivalent — cross-iteration
-conversation history was an HTTP-loop capability — so **any** `session:`
-binding is refused at job load. Remove the binding and carry the state the loop
-needs through its step inputs instead.
+Cross-iteration session history was an HTTP-loop capability with no `cli`
+equivalent. The job-step `session:` field and its refusal shim were later
+removed; a `session:` key is now an unknown, ignored key, so every iteration
+starts cold.
 
 Every refusal carries the same instruction: remove the setting; agent execution
 runs through the CLI agent path.
@@ -57,11 +57,9 @@ values manually when doctor reports them.
 
 ## Invariants
 
-- `target: activity:<name>` resolution happens before job execution begins, so
-  retired-declaration validation sees concrete specs.
-- A retired declaration is refused at load time, before a run is persisted or a
-  detached worker is started — a run never begins work it cannot finish as
-  written.
+- `target: activity:<name>` resolution happens before job execution begins.
+- Retired backend values are rejected during asset or configuration loading,
+  before a run is persisted or a detached worker is started.
 - `openai_compat` has no CLI runtime and therefore cannot be executed by any
   crew; selecting it fails structurally rather than falling back.
 

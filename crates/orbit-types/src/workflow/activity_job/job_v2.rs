@@ -653,10 +653,6 @@ pub struct TargetStep {
     pub default_input: Option<Value>,
     #[serde(default)]
     pub timeout_seconds: u64,
-    /// Named Session binding. When set and present in the executor's session
-    /// map (loop body only), conversation history persists across iterations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
 }
 
 /// Named target reference — `target: activity:<name>` in YAML. Phase 4
@@ -664,8 +660,8 @@ pub struct TargetStep {
 /// inlining the full spec. The resolver in
 /// `resolve_job_target_refs` looks the name up in the
 /// workspace catalog and rewrites this variant to [`TargetStep`] with the
-/// named `ActivityV2Spec` inlined. All other fields (`default_input`,
-/// `timeout_seconds`, `session`) carry through unchanged.
+/// named `ActivityV2Spec` inlined. The input and timeout fields carry through
+/// unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TargetRef {
     /// Reference string — `activity:<name>` or `script:<name>`.
@@ -676,8 +672,6 @@ pub struct TargetRef {
     pub default_input: Option<Value>,
     #[serde(default)]
     pub timeout_seconds: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
 }
 
 /// Retry modifier (§4.1). Applied per-step wrapper; counts re-runs of the

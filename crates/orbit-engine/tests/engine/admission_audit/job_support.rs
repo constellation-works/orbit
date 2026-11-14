@@ -99,7 +99,6 @@ pub(super) fn deterministic_target(action: &str) -> TargetStep {
         fs_profile: None,
         default_input: None,
         timeout_seconds: 0,
-        session: None,
     }
 }
 

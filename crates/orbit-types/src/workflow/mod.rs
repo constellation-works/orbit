@@ -44,15 +44,14 @@ pub use activity_job::{
     JobTaskDelivery, JobV2, JobV2Step, JobV2StepBody, JoinMode, LoopBlock, OnDenial, ParallelBlock,
     PipelineRef, Provider, ProviderAlias, ProviderDeprecation, ProviderIdentity,
     ProviderParseError, ProviderSource, RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_IDS,
-    RETIRED_PROVIDER_MIGRATION, RetiredAgentBackend, RetiredFeatureError, RetrySpec, SchemaHeader,
-    SteeringGateSpec, TargetRef, TargetStep, ToolAllowlistError, V2_DENIAL_EVENT_TYPES,
-    V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_SCRIPT_EXECUTION, V2_EVENT_TYPE_STEP_DENIED,
-    V2_EVENT_TYPE_TOOL_DENIED, V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS,
-    V2AuditEnvelope, V2AuditEvent, V2AuditEventKind, activity_tool_policy_deprecation,
-    check_retired_backend_value, retired_provider_id, tool_allowed, tools_allowed_by_disallow_list,
+    RETIRED_PROVIDER_MIGRATION, RetiredAgentBackend, RetrySpec, SchemaHeader, SteeringGateSpec,
+    TargetRef, TargetStep, ToolAllowlistError, V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED,
+    V2_EVENT_TYPE_SCRIPT_EXECUTION, V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
+    V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS, V2AuditEnvelope,
+    V2AuditEvent, V2AuditEventKind, activity_tool_policy_deprecation, check_retired_backend_value,
+    retired_provider_id, tool_allowed, tools_allowed_by_disallow_list,
     validate_activity_tool_allowlist, validate_activity_tool_allowlist_against_registered_tools,
-    validate_job_retired_sessions, validate_tool_allowlist,
-    validate_tool_allowlist_against_registered_tools,
+    validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
 };
 pub use auto_task::*;
 pub use child_dispatch::*;

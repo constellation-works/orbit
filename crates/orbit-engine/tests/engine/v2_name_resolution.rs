@@ -14,8 +14,7 @@
 //!      (`agent_assess_diff`, `agent_apply_fixes`, `revert_on_red`) and
 //!      excludes retired `promote_agent_main`.
 //!   B) `resolve_job_target_refs` rewrites `target: activity:<name>` refs
-//!      into inline `TargetStep`s using the catalog, including the `session:`
-//!      binding.
+//!      into inline `TargetStep`s using the catalog.
 //!   C) An unknown activity name is `ResolveError::ActivityNotInCatalog`,
 //!      not a silent no-op.
 //!
@@ -420,7 +419,6 @@ fn validation_target(id: &str, when: Option<&str>) -> JobV2Step {
             fs_profile: None,
             default_input: None,
             timeout_seconds: 0,
-            session: None,
         }),
     )
 }
@@ -531,8 +529,7 @@ fn scenario_b_target_ref_resolves() -> Result<(), Box<dyn std::error::Error>> {
         );
     };
     assert!(matches!(&t.spec, ActivityV2Spec::AgentLoop(_)));
-    assert_eq!(t.session.as_deref(), Some("assessor"));
-    println!("    resolved ref → inline Target carrying its session binding");
+    println!("    resolved ref → inline Target");
     Ok(())
 }
 
@@ -604,7 +601,6 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
                 target: format!("activity:{}", target_name),
                 default_input: None,
                 timeout_seconds: 0,
-                session: Some("assessor".to_string()),
             }),
         }],
     }

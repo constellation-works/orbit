@@ -29,7 +29,6 @@ pub mod audit_envelope;
 pub mod job_v2;
 pub mod provider_sandbox;
 pub mod response_correction;
-pub mod retired;
 pub mod schema_header;
 pub mod script;
 pub mod tool_allowlist;
@@ -201,7 +200,6 @@ pub use response_correction::{
     MUTATING_TOOLS, ResponseCorrectionActivityError, is_response_correction_mutating_tool,
     validate_response_correction_activity,
 };
-pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
 pub use script::{
     SCRIPT_GRANT_DIFF_MAX_BYTES, SCRIPT_GRANT_TASK_TAG, ScriptGrantCapabilities,

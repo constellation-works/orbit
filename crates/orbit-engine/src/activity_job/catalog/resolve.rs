@@ -130,7 +130,6 @@ fn resolve_step(
                     target: String::new(),
                     default_input: None,
                     timeout_seconds: 0,
-                    session: None,
                 }),
             );
             let JobV2StepBody::TargetRef(r) = old else {
@@ -216,6 +215,5 @@ fn resolve_ref(
         fs_profile: activity.fs_profile.clone(),
         default_input: r.default_input,
         timeout_seconds: r.timeout_seconds,
-        session: r.session,
     })
 }

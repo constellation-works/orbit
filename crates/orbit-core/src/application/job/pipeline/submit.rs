@@ -699,8 +699,6 @@ impl OrbitRuntime {
         let asset = load_job_asset(&yaml).map_err(|error| {
             OrbitError::InvalidInput(format!("load {}: {error}", yaml_path.display()))
         })?;
-        validate_job_retired_sessions(&asset.spec, &yaml_path.display().to_string())
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
         Ok((asset.name, asset.spec, yaml))
     }
     /// Submit an automation-admitted run under its idempotency `key`.

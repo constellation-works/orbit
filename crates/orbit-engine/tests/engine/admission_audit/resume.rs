@@ -409,7 +409,6 @@ fn compound_replay_job() -> JobV2 {
             target: "auto-task:hold".to_string(),
             default_input: None,
             timeout_seconds: 0,
-            session: None,
         }),
     };
     let work = JobV2Step {
@@ -682,7 +681,6 @@ fn alias_collision_replay_job() -> JobV2 {
             target: "auto-task:hold".to_string(),
             default_input: None,
             timeout_seconds: 0,
-            session: None,
         }),
     );
     hold.wait_until = Some("board.empty".to_string());

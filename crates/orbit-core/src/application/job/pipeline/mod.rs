@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 
 use orbit_engine::activity_job::load_job_asset;
 use orbit_types::workflow::activity_job::{
-    TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host, validate_job_retired_sessions,
+    TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host,
 };
 use orbit_types::workflow::{JobV2, run_input_declares_review_reconciliation};
 

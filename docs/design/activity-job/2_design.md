@@ -100,7 +100,7 @@ The body is one of:
 - `fan_out` plus matching `fan_in`
 - `loop`
 
-`TargetStep` is the executor-facing form. It inlines an `ActivityV2Spec` plus optional `fsProfile`, `default_input`, `timeout_seconds`, and optional `session`. `TargetRef` is the authoring-facing form. `target: activity:<name>` resolves to a concrete
+`TargetStep` is the executor-facing form. It inlines an `ActivityV2Spec` plus optional `fsProfile`, `default_input`, and `timeout_seconds`. `TargetRef` is the authoring-facing form. `target: activity:<name>` resolves to a concrete
 activity before execution. `target: script:<name>` resolves against the workspace script
 catalog and remains a reference dispatched under an operator grant and the script profile
 ([ORB-19983], [ORB-19985]); see [Script steps](../script-steps/1_scope.md) for the current
@@ -280,9 +280,8 @@ Job runs:
 2. Parse via `load_job_asset(...)`.
 3. Build the activity catalog from seeded/workspace activity directories.
 4. Resolve every `target: activity:<name>` into a concrete `TargetStep` and resolve any job-level or step-level `recovery_activity` into a cached activity spec.
-5. Reject retired declarations: any `session:` binding on a step.
-6. Build audit sinks and run id with `system` as the v2 envelope `agent_identity`.
-7. Execute the normalized `JobV2`.
+5. Build audit sinks and run id with `system` as the v2 envelope `agent_identity`.
+6. Execute the normalized `JobV2`.
 
 Activities execute only through jobs (`orbit job run` and the workflow aliases under `orbit run`); there is no standalone activity runner [T20260426-0047]. `orbit job list` inspects the job catalog.
 
@@ -874,10 +873,11 @@ Orbit dispatches every `agent_loop` through the CLI agent path. The
 `backend` field, and the engine-driven HTTP agent loop were removed in
 [ORB-10801].
 
-Retired declarations are recognized rather than ignored, so nothing is silently
-reinterpreted: `backend: cli` parses and is inert, `backend: http` / `auto` are
-refused, and any `session:` binding is refused because cross-iteration
-conversation history was an HTTP-loop capability with no CLI equivalent.
+Retired backend declarations are recognized rather than ignored, so nothing is
+silently reinterpreted: `backend: cli` parses and is inert, while
+`backend: http` / `auto` are refused. A `session:` key on a job step is unknown
+and ignored; each iteration starts cold because cross-iteration conversation
+history was an HTTP-loop capability with no CLI equivalent.
 `AgentLoopSpec::max_iterations` is likewise inert — it bounded only that loop.
 
 `openai_compat` has no CLI runtime, so selecting it fails structurally rather
@@ -1564,7 +1564,7 @@ count: independent successful pilots finish and apply before the guard makes a
 failed, stale, cancelled, interrupted, or timed-out pilot visible as a failed
 sweep, while a genuinely empty candidate list remains a successful no-op.
 
-Workers use isolated pipeline maps initialized from the parent at dispatch. Named sessions are retired for all job steps, including workers: orbit-core calls `validate_job_retired_sessions` after resolving activity references and before execution (§5). `validate_job` itself does not enforce that retired-session check.
+Workers use isolated pipeline maps initialized from the parent at dispatch.
 
 `validate_job` also rejects a `fan_in` quorum with `n == 0`, naming the owning fan-out step. Positive fan-in quorums are accepted at validation because the item count is rendered at runtime; `max_workers` limits concurrency, not the total number of workers.
 
