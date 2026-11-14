@@ -2,7 +2,7 @@ use orbit_core::application::contracts::PullSettlementOutcome;
 use std::fmt::Write as _;
 
 use clap::Args;
-use orbit_core::application::job::run_error_step;
+use orbit_core::application::job::{AutoDrainSubmissionReceipt, run_error_step};
 use orbit_core::{
     JobRunState, OrbitError, OrbitRuntime, PipelineWaitEntry, PipelineWaitStatus, find_workflow,
 };
@@ -177,22 +177,6 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
     warnings: Vec<String>,
     notes: Vec<String>,
 ) -> CommandOut {
-    workflow_dispatch_payload_with_auto_concurrency(
-        workflow_alias,
-        runs,
-        warnings,
-        notes,
-        Value::Null,
-    )
-}
-
-pub(crate) fn workflow_dispatch_payload_with_auto_concurrency(
-    workflow_alias: &'static str,
-    runs: &[WorkflowDispatchResult],
-    warnings: Vec<String>,
-    notes: Vec<String>,
-    auto_concurrency: Value,
-) -> CommandOut {
     let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
     } else {
@@ -216,14 +200,6 @@ pub(crate) fn workflow_dispatch_payload_with_auto_concurrency(
         lines.extend(notes.iter().map(|note| format!("Note: {note}")));
         doc["note"] = json!(notes.join("\n"));
     }
-    if !auto_concurrency.is_null() {
-        lines.push(format!(
-            "Auto-concurrency: {} ({}).",
-            auto_concurrency["mode"].as_str().unwrap_or("off"),
-            auto_concurrency["source"].as_str().unwrap_or("configured")
-        ));
-        doc["auto_concurrency"] = auto_concurrency;
-    }
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs
         .iter()
@@ -232,6 +208,27 @@ pub(crate) fn workflow_dispatch_payload_with_auto_concurrency(
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())
+}
+
+pub(super) fn auto_drain_submission_payload(receipt: &AutoDrainSubmissionReceipt) -> CommandOut {
+    let doc = receipt.to_json();
+    let mut lines = submitted_workflow_lines(
+        receipt.workflow(),
+        &receipt.job_id,
+        &receipt.run_id,
+        receipt.state,
+    );
+    lines.extend(
+        receipt
+            .warnings()
+            .iter()
+            .map(|warning| format!("Warning: {warning}")),
+    );
+    lines.extend(receipt.notes().iter().map(|note| format!("Note: {note}")));
+    if let Some((mode, source)) = receipt.auto_concurrency_summary() {
+        lines.push(format!("Auto-concurrency: {mode} ({source})."));
+    }
+    Ok(Payload::detail(doc, lines.join("\n")).into())
 }
 
 pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> Value {
@@ -248,21 +245,27 @@ pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> 
     value
 }
 
+fn submitted_workflow_lines(
+    workflow: &str,
+    job_id: &str,
+    run_id: &str,
+    state: &str,
+) -> Vec<String> {
+    vec![
+        format!("Workflow: {workflow}"),
+        format!("Job ID: {job_id}"),
+        format!("Run ID: {run_id}"),
+        format!("State: {state}"),
+        format!("Inspect: orbit run history -j {job_id} | orbit run show {run_id}"),
+    ]
+}
+
 fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Vec<String> {
     if matches!(run.state.as_str(), "submitted" | "queued")
         && run.error_code.is_none()
         && run.error_message.is_none()
     {
-        return vec![
-            format!("Workflow: {}", run.workflow_alias),
-            format!("Job ID: {}", run.job_id),
-            format!("Run ID: {}", run.run_id),
-            format!("State: {}", run.state),
-            format!(
-                "Inspect: orbit run history -j {} | orbit run show {}",
-                run.job_id, run.run_id
-            ),
-        ];
+        return submitted_workflow_lines(run.workflow_alias, &run.job_id, &run.run_id, &run.state);
     }
 
     let error_code = run.error_code.clone().unwrap_or_else(|| "-".to_string());

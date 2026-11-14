@@ -77,6 +77,10 @@ pub(in crate::application) trait JobDrainPort {
         &self,
         task_id: &str,
     ) -> Result<Option<(ClaimedLeafStage, String, String)>, OrbitError>;
+
+    /// Whether pull drain `drain_run_id`'s replica validation or review gates
+    /// differ from the owner's captured at start.
+    fn drain_pull_gate_drift(&self, drain_run_id: &str) -> Result<Option<String>, OrbitError>;
 }
 
 /// Pull settlement job run surfaces carry, implemented by `pull_drain`.

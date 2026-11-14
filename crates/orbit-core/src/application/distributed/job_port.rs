@@ -67,4 +67,8 @@ impl JobDrainPort for OrbitRuntime {
     ) -> Result<Option<(ClaimedLeafStage, String, String)>, OrbitError> {
         self.claimed_leaf_stage_for_task(task_id)
     }
+
+    fn drain_pull_gate_drift(&self, drain_run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.pull_gate_drift(drain_run_id)
+    }
 }
