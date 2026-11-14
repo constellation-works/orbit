@@ -1,7 +1,7 @@
 ---
 title: "Remote Access — Decisions"
 owner: codex
-last_updated: 2026-11-08
+last_updated: 2026-11-14
 last_validated: 2026-10-13
 status: Accepted
 feature: remote-access
@@ -89,6 +89,6 @@ These choices describe the current implementation.
 
 ## Task References
 
-No task IDs are cited in this historical record.
+- [ORB-23047] — recorded that dashboard operator authority comes from the serve session, not the server terminal or `ORBIT_OPERATOR`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

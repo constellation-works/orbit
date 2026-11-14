@@ -1,7 +1,7 @@
 ---
 title: "Bounded application approvals — Design"
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-14
 last_validated: 2026-11-01
 status: Draft
 feature: application-approvals
@@ -144,9 +144,10 @@ pending gateway drafts at their current digest.
 - reach another workspace or host;
 - act after revocation: every admission rereads the record and the witness.
 
-*Bounds:* constrained consents expire within the host's cap,
-`machine.application_consent_max_days` (default 30 days; Daniel: "30 can be default but
-configurable"). Revocation is immediate for the next admission. Every admission is
+*Bounds:* constrained consents expire within 30 days. Daniel set that default on
+host-only `machine.application_consent_max_days` ("30 can be default but
+configurable"); [ORB-22808] fixed the cap at 30 days and ignores the key
+([§4.1](#41-request)). Revocation is immediate for the next admission. Every admission is
 audited with its bound values, so misuse is visible after the fact. A scope may carry an
 optional rate limit (Daniel: "configurable, default off"): none is set unless the
 operator writes one ([§4.2](#42-scope-and-operation)). Both answers are recorded in
@@ -679,5 +680,6 @@ restriction.
 - [ORB-21041] — shipped Orbit slice 4 (audit fields and documentation).
 - [ORB-21042] — shipped Orbit slice 5 (payload-bound auto-task callbacks).
 - [ORB-21043] — compatibility retirement (slice 7).
+- [ORB-22808] — fixed the constrained-consent expiry cap at 30 days and ignores `machine.application_consent_max_days`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
