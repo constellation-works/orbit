@@ -4,6 +4,7 @@
 usage: ci-await-jobs.py --job NAME [--job NAME ...] [--step NAME]
                         [--artifact NAME ...]
                         [--poll-seconds S] [--timeout-seconds S]
+                        [--absent-grace-seconds S]
 
 The Check / Clippy / Test job runs this after its own checks, naming the test
 build and every nextest shard job. The Check job therefore completes only when
@@ -41,10 +42,17 @@ build's archive upload, not for the partition guard after it. A step that
 concludes without success, or a job that completes without success before the
 step succeeded, fails the wait at once.
 
-A named job omitted from a complete listing is absent: the wait fails at once
-and names it (`ci-await: <job> is absent from the run`). Several omitted names
-use `are`. An API error or a partial page is not absence and is retried until
-the timeout.
+GitHub lists a job only once every job in its `needs` has completed, and
+creates it shortly after the last one does. A named job omitted from a complete
+listing therefore stays pending while any other listed job, apart from the
+waiter's own (ORBIT_DEPENDENCY_JOB_NAME), has not completed, and then for
+--absent-grace-seconds (default 120) after the first listing in which every
+other job has completed. A job listed within that time is awaited normally.
+One still omitted after it is absent: the wait fails and names it (`ci-await:
+<job> is absent from the run`). Several omitted names use `are`. Without
+ORBIT_DEPENDENCY_JOB_NAME, a waiter whose own job is listed keeps an omitted
+job pending until the timeout. An API error or a partial page is not absence
+and is retried until the timeout.
 
 --artifact NAME (repeatable) applies only after every named job is done. The
 wait then lists the run's artifacts and returns only once each name is present,
@@ -79,6 +87,11 @@ import time
 
 # Bound on reaping a listing killed at the deadline, added to --timeout-seconds.
 CLEANUP_SECONDS = 5
+
+# How long a named job may stay unlisted once every other listed job has
+# completed. GitHub lists a job only once its `needs` have completed, and
+# creates it shortly after the last one does, not atomically with it.
+ABSENT_GRACE_SECONDS = 120
 
 FIELDS = (".jobs[] | {id, run_id, run_attempt, head_sha, name, status, conclusion, started_at, completed_at, html_url,"
           " steps: [.steps[]? | {name, number, status, conclusion}]}")
@@ -499,6 +512,7 @@ def main():
     parser.add_argument("--artifact", action="append", default=[], dest="artifacts")
     parser.add_argument("--poll-seconds", type=float, default=15)
     parser.add_argument("--timeout-seconds", type=float, default=2400)
+    parser.add_argument("--absent-grace-seconds", type=float, default=ABSENT_GRACE_SECONDS)
     args = parser.parse_args()
     repository = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
@@ -514,8 +528,13 @@ def await_workflow_jobs(args, poller):
     """Keep the whole gate's original success, failure and absolute-deadline rules."""
 
     deadline = time.monotonic() + args.timeout_seconds
+    # The waiter's own job is listed in progress for as long as it waits.
+    own_job = os.environ.get("ORBIT_DEPENDENCY_JOB_NAME")
     reported = set()
     pending = []
+    # When the first listing with a named job missing and every other job
+    # completed was read; reset once another job is listed unfinished.
+    settled_since = None
     while True:
         remaining = deadline - time.monotonic()
         jobs = None
@@ -569,10 +588,23 @@ def await_workflow_jobs(args, poller):
                     print(f"ci-await: {name} succeeded started={started} completed={completed} "
                           f"elapsed_s={elapsed(started, completed)}")
             if absent:
-                listed = ", ".join(absent)
-                verb = "is" if len(absent) == 1 else "are"
-                print(f"ci-await: {listed} {verb} absent from the run", file=sys.stderr)
-                return 1
+                # A job whose `needs` are unfinished is not listed yet. It
+                # stays pending while another job could still be one of its
+                # needs, then for the grace period GitHub takes to create it.
+                unfinished = any(job.get("status") != "completed"
+                                 for listed, job in jobs.items() if listed != own_job)
+                if unfinished:
+                    settled_since = None
+                elif settled_since is None:
+                    settled_since = time.monotonic()
+                if not unfinished and time.monotonic() - settled_since >= args.absent_grace_seconds:
+                    listed = ", ".join(absent)
+                    verb = "is" if len(absent) == 1 else "are"
+                    print(f"ci-await: {listed} {verb} absent from the run", file=sys.stderr)
+                    return 1
+                pending += [f"{name} (not listed)" for name in absent]
+            else:
+                settled_since = None
             if not pending and args.artifacts and time.monotonic() < deadline:
                 remaining = deadline - time.monotonic()
                 available = None

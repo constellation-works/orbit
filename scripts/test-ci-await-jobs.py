@@ -191,9 +191,11 @@ finally:
 ''')
 
     def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None, poll="0.01", virtual=False,
-             artifact_names=()):
+             artifact_names=(), grace=None):
         self.responses[:] = responses
         arguments = [argument for name in jobs for argument in ("--job", name)]
+        if grace is not None:
+            arguments += ["--absent-grace-seconds", grace]
         if step is not None:
             arguments += ["--step", step]
         for name in artifact_names:
@@ -404,14 +406,16 @@ finally:
     def test_an_absent_job_fails_without_waiting_out_the_timeout(self):
         # Run 42670994582 attempt 1 listed no Test build job. The old wait
         # treated that omission as pending and sat out the full timeout.
-        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="30", poll="15",
+        # Every listed job has completed, so the omission fails once the
+        # grace period for creating a dependent job has passed.
+        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="2400", poll="15",
                            virtual=True, artifact_names=["nextest-archive-1"])
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("Test shard 2/2 is absent from the run", result.stderr)
         self.assertNotIn("timed out", result.stderr)
-        self.assertEqual(len(self.requests), 1, self.requests)
+        self.assertEqual(len(self.requests), 9, self.requests)
         self.assertFalse(any("/artifacts" in path for path in self.requests), self.requests)
-        self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 120)
 
         self.requests.clear()
         failed = job("Test build", conclusion="failure", steps=[(UPLOAD, "completed", "failure")])
@@ -421,6 +425,47 @@ finally:
         self.assertIn("concluded failure", result.stderr)
         self.assertFalse(any("/artifacts" in path for path in self.requests), self.requests)
         self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+
+    def test_jobs_created_after_their_need_completes_are_awaited_not_absent(self):
+        # Run 43630477699: the shards `needs:` Test build, so GitHub listed
+        # none of them until the build had completed, and the first test job
+        # started 16 s after it. The wait failed 3 s in, calling them absent.
+        self.env["ORBIT_DEPENDENCY_JOB_NAME"] = "Check / Clippy / Test"
+        check = job("Check / Clippy / Test", "in_progress")
+
+        def created_after_build(never_created):
+            def response(elapsed):
+                if elapsed < 30:
+                    return [check, job("Test build", "in_progress")]
+                # Between the build completing and its dependents appearing,
+                # every job but the waiter's own has completed.
+                if never_created or elapsed < 45:
+                    return [check, job("Test build")]
+                status = "completed" if elapsed >= 60 else "queued"
+                return [check, job("Test build"), job("Test shard 1/2", status),
+                        job("Test shard 2/2", status)]
+            return response
+
+        self.timed_response = created_after_build(never_created=False)
+        result = self.wait(timeout="600", poll="15", virtual=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("all 3 awaited jobs succeeded", result.stdout)
+        self.assertNotIn("absent", result.stderr)
+        # Listings were taken inside the 15 s gap, and the wait went on to
+        # the dependents' completion.
+        times = [float(headers["X-Fixture-Time"]) for headers in self.request_headers]
+        self.assertTrue(any(30 <= at < 45 for at in times), times)
+        self.assertGreaterEqual(float((self.root / "elapsed").read_text()), 60)
+
+        self.requests.clear()
+        self.timed_response = created_after_build(never_created=True)
+        result = self.wait(timeout="600", poll="15", virtual=True, grace="20")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Test shard 1/2, Test shard 2/2 are absent from the run", result.stderr)
+        self.assertNotIn("timed out", result.stderr)
+        # Not before the grace period that began with the build's completion.
+        self.assertGreaterEqual(float((self.root / "elapsed").read_text()), 50)
+        self.assertLess(float((self.root / "elapsed").read_text()), 60)
 
     def test_a_blocked_listing_is_killed_at_the_deadline(self):
         pid_file = self.root / "gh.pid"
