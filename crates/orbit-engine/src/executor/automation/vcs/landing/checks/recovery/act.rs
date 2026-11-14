@@ -348,8 +348,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::Flaky => Ok(CheckRecoveryStep::WaitForBase(evidence(
             "the unchanged-head retry has no authenticated repeated signature; no candidate repair",
         ))),
-        CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
-            "the candidate is handed to one automatic repair",
+        CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Requeue(evidence(
+            "the owner ends the claim and returns the task to the backlog, where its next run repairs this candidate",
         ))),
         CheckFailureClass::Inconclusive => Ok(CheckRecoveryStep::HoldInReview(evidence(
             "its evidence could not be read in full, so nothing is rerun, updated or repaired \
