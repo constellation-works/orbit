@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::application::experiment::readout::stats::Interval;
 
 /// The readout shape's version; bump it on any breaking change.
-pub const EXPERIMENT_READOUT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const EXPERIMENT_READOUT_SCHEMA_VERSION: u32 = 1;
 /// Below this sample-ratio p-value the assignment is suspect.
 pub(super) const SAMPLE_RATIO_ALPHA: f64 = 0.001;
 

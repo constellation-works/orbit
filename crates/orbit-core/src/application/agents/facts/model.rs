@@ -87,7 +87,7 @@ impl Problem {
     }
 
     /// Rework: a repeat run, a `[BLOCKED]` or unmerged PR, or a requeue.
-    pub fn is_rework(self) -> bool {
+    pub(crate) fn is_rework(self) -> bool {
         matches!(
             self,
             Problem::RepeatRun

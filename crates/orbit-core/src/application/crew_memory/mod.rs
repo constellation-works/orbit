@@ -3,7 +3,7 @@
 //!
 //! Slice M1 holds the store, the write rules and the operator surface. Every
 //! writer goes through one write path, which refuses while
-//! `crew_memory.enabled` is false and runs [`validate_memory_write`], the one
+//! `crew_memory.enabled` is false and runs `validate_memory_write`, the one
 //! place the five write rules live. Nothing here delivers memory to a
 //! prompt on its own: slice M2's `memory` experiment overlay renders a space
 //! with [`OrbitRuntime::render_crew_memory_delivery`](crate::OrbitRuntime)
@@ -24,17 +24,15 @@ mod validate;
 
 use serde::{Deserialize, Serialize};
 
-pub use agent::{CREW_MEMORY_MAX_PROPOSALS_PER_RUN, MemoryToolCaller};
-pub use dream::{
-    CREW_MEMORY_DREAM_MIN_SUPPORT, CREW_MEMORY_DREAM_TAG, CREW_MEMORY_EVIDENCE_ARTIFACT,
-    CREW_MEMORY_EVIDENCE_MAX_BYTES, CREW_MEMORY_KEY_REF_SYSTEM,
-};
-pub use key::{GLOBAL_MEMORY_KEY, MemoryKey, memory_key, parse_memory_key};
-pub use validate::{
+pub use agent::MemoryToolCaller;
+pub(crate) use dream::CREW_MEMORY_DREAM_TAG;
+pub(crate) use key::parse_memory_key;
+pub use key::{MemoryKey, memory_key};
+pub(crate) use validate::{
     GLOBAL_MAX_BYTES, GLOBAL_MAX_FILES, MODEL_SPACE_MAX_BYTES, MODEL_SPACE_MAX_FILES,
-    MemoryLintVocabulary, MemoryRule, MemoryWriteContext, MemoryWriteRefusal,
     validate_memory_write,
 };
+pub use validate::{MemoryLintVocabulary, MemoryRule, MemoryWriteContext, MemoryWriteRefusal};
 
 /// One Markdown file of a memory space.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

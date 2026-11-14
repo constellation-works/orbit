@@ -422,7 +422,7 @@ impl OrbitRuntime {
     /// Render every current space as `global.md` and `<model>/<file>.md`
     /// under `dir` (default: the workspace's `.orbit/memory`). Orbit never
     /// reads these files back. An empty space writes nothing.
-    pub fn crew_memory_export(&self, dir: Option<&Path>) -> Result<Value, OrbitError> {
+    pub(crate) fn crew_memory_export(&self, dir: Option<&Path>) -> Result<Value, OrbitError> {
         let dir = dir.map_or_else(|| self.shared_root().join("memory"), Path::to_path_buf);
         let store = self.crew_memory_store()?;
         let rows = store.crew_memory_current(&self.workspace_id()?)?;
@@ -463,7 +463,7 @@ impl OrbitRuntime {
     }
 
     /// Empty a space with a new revision that holds no files.
-    pub fn crew_memory_reset(
+    pub(crate) fn crew_memory_reset(
         &self,
         key: &str,
         reason: Option<String>,
@@ -482,7 +482,7 @@ impl OrbitRuntime {
 
     /// Copy `from`'s current space into `to` as a new revision, keeping the
     /// source revision's evidence.
-    pub fn crew_memory_copy(
+    pub(crate) fn crew_memory_copy(
         &self,
         from: &str,
         to: &str,

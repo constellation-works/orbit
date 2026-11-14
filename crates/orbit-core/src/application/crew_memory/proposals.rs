@@ -103,7 +103,7 @@ impl OrbitRuntime {
     /// Accept an open proposal, appending its note to the current global
     /// text, or replacing the whole global text with the contents of `edit`.
     /// Both forms pass the operator's global write rules before deciding.
-    pub fn crew_memory_proposal_accept(
+    pub(crate) fn crew_memory_proposal_accept(
         &self,
         id: &str,
         edit: Option<&Path>,
@@ -181,7 +181,11 @@ impl OrbitRuntime {
 
     /// Reject an open proposal with a nonempty reason, preserving its text
     /// and evidence and atomically appending the decision's audit event.
-    pub fn crew_memory_proposal_reject(&self, id: &str, reason: &str) -> Result<Value, OrbitError> {
+    pub(crate) fn crew_memory_proposal_reject(
+        &self,
+        id: &str,
+        reason: &str,
+    ) -> Result<Value, OrbitError> {
         self.open_crew_memory_proposals()?
             .into_iter()
             .find(|row| row.id == id)

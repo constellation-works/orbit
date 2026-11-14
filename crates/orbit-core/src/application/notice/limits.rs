@@ -8,55 +8,55 @@ use orbit_types::record::NoticeKind;
 
 /// The former `notice.default_expiry_hours.incident` default, fixed when the key was removed
 /// [ORB-22808].
-pub const DEFAULT_EXPIRY_HOURS_INCIDENT: u32 = 72;
+pub(crate) const DEFAULT_EXPIRY_HOURS_INCIDENT: u32 = 72;
 /// The former `notice.default_expiry_hours.maintenance` default, fixed when the key was removed
 /// [ORB-22808].
-pub const DEFAULT_EXPIRY_HOURS_MAINTENANCE: u32 = 12;
+pub(crate) const DEFAULT_EXPIRY_HOURS_MAINTENANCE: u32 = 12;
 /// The former `notice.default_expiry_hours.info` default, fixed when the key was removed
 /// [ORB-22808].
-pub const DEFAULT_EXPIRY_HOURS_INFO: u32 = 168;
+pub(crate) const DEFAULT_EXPIRY_HOURS_INFO: u32 = 168;
 /// The former `notice.max_expiry_hours.operator` default, fixed when the key was removed
 /// [ORB-22808].
-pub const MAX_EXPIRY_HOURS_OPERATOR: u32 = 720;
+pub(crate) const MAX_EXPIRY_HOURS_OPERATOR: u32 = 720;
 /// The former `notice.max_expiry_hours.orchestrator.incident` default, fixed when the key was
 /// removed [ORB-22808].
-pub const MAX_EXPIRY_HOURS_ORCHESTRATOR_INCIDENT: u32 = 168;
+pub(crate) const MAX_EXPIRY_HOURS_ORCHESTRATOR_INCIDENT: u32 = 168;
 /// The former `notice.max_expiry_hours.orchestrator.maintenance` default, fixed when the key was
 /// removed [ORB-22808].
-pub const MAX_EXPIRY_HOURS_ORCHESTRATOR_MAINTENANCE: u32 = 72;
+pub(crate) const MAX_EXPIRY_HOURS_ORCHESTRATOR_MAINTENANCE: u32 = 72;
 /// The former `notice.max_expiry_hours.orchestrator.info` default, fixed when the key was removed
 /// [ORB-22808].
-pub const MAX_EXPIRY_HOURS_ORCHESTRATOR_INFO: u32 = 168;
+pub(crate) const MAX_EXPIRY_HOURS_ORCHESTRATOR_INFO: u32 = 168;
 /// The former `notice.max_expiry_hours.agent` default, fixed when the key was removed [ORB-22808].
 /// It is also an agent's default expiry.
-pub const MAX_EXPIRY_HOURS_AGENT: u32 = 24;
+pub(crate) const MAX_EXPIRY_HOURS_AGENT: u32 = 24;
 /// The former `notice.max_title_chars` default, fixed when the key was removed [ORB-22808].
-pub const MAX_TITLE_CHARS: u32 = 120;
+pub(crate) const MAX_TITLE_CHARS: u32 = 120;
 /// The former `notice.max_body_bytes` default, fixed when the key was removed [ORB-22808].
-pub const MAX_BODY_BYTES: u32 = 4096;
+pub(crate) const MAX_BODY_BYTES: u32 = 4096;
 /// The former `notice.max_evidence` default, fixed when the key was removed [ORB-22808].
-pub const MAX_EVIDENCE: u32 = 8;
+pub(crate) const MAX_EVIDENCE: u32 = 8;
 /// The former `notice.max_open_per_workspace` default, fixed when the key was removed [ORB-22808].
-pub const MAX_OPEN_PER_WORKSPACE: u32 = 20;
+pub(crate) const MAX_OPEN_PER_WORKSPACE: u32 = 20;
 /// The former `notice.max_open_global_per_owner` default, fixed when the key was removed
 /// [ORB-22808].
-pub const MAX_OPEN_GLOBAL_PER_OWNER: u32 = 10;
+pub(crate) const MAX_OPEN_GLOBAL_PER_OWNER: u32 = 10;
 /// The former `notice.max_open_per_agent_task` default, fixed when the key was removed [ORB-22808].
-pub const MAX_OPEN_PER_AGENT_TASK: u32 = 2;
+pub(crate) const MAX_OPEN_PER_AGENT_TASK: u32 = 2;
 /// The former `notice.agent_posts_per_task_per_day` default, fixed when the key was removed
 /// [ORB-22808].
 pub const AGENT_POSTS_PER_TASK_PER_DAY: u32 = 5;
 /// The former `notice.orchestrator_posts_per_hour` default, fixed when the key was removed
 /// [ORB-22808].
-pub const ORCHESTRATOR_POSTS_PER_HOUR: u32 = 30;
+pub(crate) const ORCHESTRATOR_POSTS_PER_HOUR: u32 = 30;
 /// The former `notice.retention_days` default, fixed when the key was removed [ORB-22808].
-pub const RETENTION_DAYS: u32 = 30;
+pub(crate) const RETENTION_DAYS: u32 = 30;
 /// The former `notice.brief_max_items` default, fixed when the key was removed [ORB-22808].
-pub const BRIEF_MAX_ITEMS: u32 = 5;
+pub(crate) const BRIEF_MAX_ITEMS: u32 = 5;
 /// The former `notice.brief_body_chars` default, fixed when the key was removed [ORB-22808].
-pub const BRIEF_BODY_CHARS: u32 = 600;
+pub(crate) const BRIEF_BODY_CHARS: u32 = 600;
 /// The former `notice.brief_read_timeout_ms` default, fixed when the key was removed [ORB-22808].
-pub const BRIEF_READ_TIMEOUT_MS: u32 = 2000;
+pub(crate) const BRIEF_READ_TIMEOUT_MS: u32 = 2000;
 
 /// The expiry, in hours, an operator or orchestrator post of `kind` gets
 /// when it names none.

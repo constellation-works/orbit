@@ -96,7 +96,7 @@ impl OrbitRuntime {
     }
 
     /// Record one interactive cost using the same validator and ledger as residents.
-    pub fn add_evolution_cost(
+    pub(crate) fn add_evolution_cost(
         &self,
         cost: ResidentCostEvent,
         mandate: Option<String>,
@@ -150,7 +150,7 @@ impl OrbitRuntime {
         Ok(())
     }
     /// Workspace-only reads; friction rows cannot enter this query.
-    pub fn list_evolution_records(
+    pub(crate) fn list_evolution_records(
         &self,
         state: Option<EvolutionState>,
         since: Option<DateTime<Utc>>,
@@ -181,7 +181,7 @@ impl OrbitRuntime {
         });
         Ok(json!({"count": rows.len(), "records": rows}))
     }
-    pub fn show_evolution_record(&self, id: &str) -> Result<Value, OrbitError> {
+    pub(crate) fn show_evolution_record(&self, id: &str) -> Result<Value, OrbitError> {
         let record = self
             .sqlite_store()?
             .evolution_records(&self.workspace_id()?)?
