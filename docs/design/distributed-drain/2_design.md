@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-11-11
+last_updated: 2026-11-14
 last_validated: 2026-11-05
 status: Draft
 feature: distributed-drain
@@ -530,7 +530,10 @@ retired declaration, or a script manifest whose entry does not resolve. The fail
 nothing on the task, so the live-leaf exclusion alone would re-admit it on the next iteration
 indefinitely (one bad manifest produced 88 failed leaves in 21 s). The pass records each held
 task in its deferred list with reason `leaf_load_failed` and returns it in
-`leaf_load_failed_holds`, naming the leaf run and the load error. The hold lifts when the task
+`leaf_load_failed_holds`, naming the leaf run and the load error. Readiness
+reports that same hold (`eligible: false`, reason `leaf_load_failed`, detail
+`leaf <run> failed at job load: <error>`), so a held task is not projected as
+ready and does not take a slot from work the drain will start. The hold lifts when the task
 is updated after the failure. A leaf whose audit shows an activity started — a transient
 failure, a post-step failure, or a worker exit after real work — is not held and keeps ordinary
 re-admission, however long it ran and however its job record looks. A new drain carries no

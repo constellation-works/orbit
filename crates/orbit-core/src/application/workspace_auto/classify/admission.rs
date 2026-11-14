@@ -8,16 +8,13 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::admission::auto_admission::{
-    AdmissionHolders, DeferralReason, select_admissions,
-};
+use crate::application::admission::auto_admission::DeferralReason;
 use crate::application::admission::backlog_exclusion::{allowlist_from_input, backlog_snapshot};
 use crate::application::admission::claim_holders::ClaimHolders;
-use crate::application::admission::cpu_light::{LightBudget, ResourceGate};
+use crate::application::admission::cpu_light::ResourceGate;
 use crate::application::admission::gap_fit::{GapFit, GapFitMode};
 use crate::application::admission::pass_error::PassError;
 use crate::application::admission::stuck_head::report_stuck_head;
-use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
 use crate::application::distributed::OwnerRepairDrain;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
@@ -26,12 +23,13 @@ use super::super::drains::{
     live_worker_limit,
 };
 
+use super::super::wave::{AdmissionWave, AdmissionWaveInput, unreserved_admission_slots};
 use super::forecast::{record_admission_forecast, record_last_pass};
 use super::gap_fit::{
     GAP_FIT_REASON, GapFitPass, gap_fit_selection, release_refused_reservations,
     release_unadmitted_reservations,
 };
-use super::load_failure::leaf_load_failure_holds;
+use super::load_failure::{leaf_load_failure_holds, retain_leaf_load_failure_holds};
 use super::lock_busy::defer_lock_busy_pass;
 use super::pool::{
     DEFAULT_IDLE_SLEEP_SECONDS, DEFAULT_POLL_SLEEP_SECONDS, candidate_pool_limit, templated_u64,
@@ -57,11 +55,12 @@ use super::waiting::{admit_through_section, waiting_excluded, waiting_reason};
 /// coarser refill unit, and a one-task child is crew-homogeneous by
 /// construction.
 ///
-/// [ORB-11973] Which leaves fill those slots is `select_admissions`' answer,
-/// not a prefix of the queue: the wave is pairwise conflict-free, so a cluster
-/// of overlapping candidates costs one slot instead of all of them. Readiness
-/// reads the same snapshot and calls the same routine, which is what keeps the
-/// diagnostic and the drain from disagreeing about who starts.
+/// [ORB-11973] Which leaves fill those slots is the shared admission wave's
+/// answer, not a prefix of the queue: the wave is pairwise conflict-free, so a
+/// cluster of overlapping candidates costs one slot instead of all of them.
+/// Readiness builds that same wave from this snapshot, including a leaf that
+/// failed at job load, which is what keeps the diagnostic and the drain from
+/// disagreeing about who starts.
 ///
 /// A pass that loses only to a busy task-store lock (`lock_busy`) is deferred
 /// rather than failed: see [`super::lock_busy::defer_lock_busy_pass`].
@@ -221,13 +220,11 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // a new drain starts fresh, and a leaf whose audit shows a started step
     // is not held (see `load_failure`).
     let mut leaf_load_holds = leaf_load_failure_holds(runtime, action, drain_run_id(input))?;
-    leaf_load_holds.retain(|task_id, hold| {
-        snapshot.admissible_leaves.contains(task_id)
-            && snapshot
-                .task_lookup
-                .get(task_id)
-                .is_none_or(|task| task.updated_at <= hold.finished_at)
-    });
+    retain_leaf_load_failure_holds(
+        &mut leaf_load_holds,
+        &snapshot.admissible_leaves,
+        &snapshot.task_lookup,
+    );
     let leaf_load_held: BTreeSet<String> = leaf_load_holds.keys().cloned().collect();
     let leaf_load_waiting: Vec<DrainWaitingTask> = leaf_load_holds
         .values()
@@ -235,21 +232,18 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             task_id: hold.task_id.clone(),
             reason: Some("leaf_load_failed".to_string()),
             blocked_by: Vec::new(),
-            detail: Some(format!(
-                "leaf {} failed at job load: {}",
-                hold.leaf_run_id, hold.error
-            )),
+            detail: Some(hold.leaf_load_failure_detail()),
             findings: Vec::new(),
         })
         .collect();
-    // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
-    let light_budget = LightBudget::new(
-        crate::application::admission::cpu_light::CPU_LIGHT_LEAVES,
-        &claimed,
+    // The repair pull is sized from the unreserved slots. Readiness does not
+    // run this fallback; it builds the same wave with `reserved_slots` of 0.
+    let slots = unreserved_admission_slots(
+        claimed.iter(),
         &snapshot.task_lookup,
+        resource.throttle.as_ref(),
+        unthrottled_slots,
     );
-    let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
-    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
     // [ORB-17303] A stopped landing's repair is offered to its original
     // executor first. Once the fallback window has passed, this owner pulls
     // it into one of these slots; until then the pass names who it waits on.
@@ -265,75 +259,28 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
                 None
             },
             max_active_leaf_runs,
-            free_slots,
+            free_slots: slots.free_slots,
         })
         .map_err(|error| PassError::store(action, "read pending landing repairs", error))?;
-    let free_slots = free_slots.saturating_sub(repairs.reserved_slots);
-    // Priority/age order is the snapshot's, and everything below preserves it:
-    // the slots are scarce, so they go to the front of the queue rather than to
-    // whichever tasks happen to sort last.
-    let pending: Vec<String> = snapshot
-        .admissible_leaves
-        .iter()
-        .filter(|task_id| !claimed.contains(*task_id) && !leaf_load_held.contains(*task_id))
-        .cloned()
-        .collect();
-    // Under a CPU-only throttle the wave is chosen from CPU-light leaves
-    // alone, in the same order, so heavier work ahead of them in the queue
-    // does not hide them from the candidate pool.
-    let gated: Vec<String>;
-    let candidates: &[String] = if gate == ResourceGate::Open {
-        &pending
-    } else {
-        gated = pending
-            .iter()
-            .filter(|task_id| {
-                snapshot
-                    .task_lookup
-                    .get(*task_id)
-                    .is_some_and(|task| gate.admits(task))
-            })
-            .cloned()
-            .collect();
-        &gated
-    };
-
-    // [ORB-11973] The wave used to be `pending[..free_slots]`, which could hand
-    // every slot to one cluster of overlapping tasks and leave independent work
-    // queued behind a contention it created itself. Select a mutually
-    // compatible set instead, walking past a blocked candidate to the next
-    // compatible one rather than stopping at it.
-    let max_tasks = candidate_pool_limit(action, input)?;
-    let examined = &candidates[..candidates.len().min(max_tasks)];
-    let holders = AdmissionHolders::new(
-        &snapshot.lock_holders,
-        &claimed,
-        &snapshot.task_lookup,
-        runtime.paths().repo_root.as_path(),
-        runtime.unlocked_context_paths(),
-        runtime.footprint_lock_modes(),
-    );
-    // [ORB-15191] Work with no footprint waits for its pilot or goes alone,
-    // unless this drain runs one leaf at a time.
-    let whole_tree = whole_tree_holder(&claimed, &snapshot.task_lookup);
-    let select = |gap_fit: Option<&mut GapFit<'_>>| {
-        select_admissions(
-            examined,
-            &snapshot.task_lookup,
-            runtime.paths().repo_root.as_path(),
-            runtime.unlocked_context_paths(),
-            &holders,
-            &snapshot.published_resumes,
-            free_slots,
-            FootprintGuard {
-                enabled: max_active_leaf_runs > 1,
-                leaves_in_flight: occupancy.occupied > 0,
-                whole_tree_holder: whole_tree.clone(),
-                waits: &snapshot.footprint_waits,
-            },
-            gap_fit,
-        )
-    };
+    let wave = AdmissionWave::build(AdmissionWaveInput {
+        snapshot: &snapshot,
+        claimed: &claimed,
+        held: &leaf_load_held,
+        slots,
+        reserved_slots: repairs.reserved_slots,
+        candidate_pool_limit: candidate_pool_limit(action, input)?,
+        max_active_leaf_runs,
+        occupied: occupancy.occupied,
+        workspace_root: runtime.paths().repo_root.as_path(),
+        unlocked: runtime.unlocked_context_paths(),
+        lock_modes: runtime.footprint_lock_modes(),
+    });
+    let pending = &wave.pending;
+    let examined = &wave.examined;
+    let free_slots = wave.free_slots;
+    let light_budget = &wave.light_budget;
+    let gate = wave.gate;
+    let select = |gap_fit: Option<&mut GapFit<'_>>| wave.select(gap_fit);
     // Gap fit (the effective per-drain mode) judges the wave against the
     // host load forecast after every check above, so it only removes
     // candidates; the ceiling and the throttle have already set
@@ -353,7 +300,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         },
         Some(mode) => {
             let can_admit = free_slots > 0 && !examined.is_empty();
-            gap_fit_selection(runtime, action, input, mode, &pending, can_admit, &select)?
+            gap_fit_selection(runtime, action, input, mode, pending, can_admit, &select)?
         }
     };
     // [ORB-16376] `enforce` has already committed this wave's reservations.
@@ -398,12 +345,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         .unwrap_or_default();
     // [ORB-15514] A lock wait whose blocker a follower's claim holds says so.
     let claim_holders = ClaimHolders::read(runtime);
-    // `max_tasks` bounds how much of the backlog one iteration expands lock
-    // footprints for. It only hides work when the wave ran out of *examined*
-    // candidates rather than out of slots, so report exactly that case instead
-    // of leaving a short wave looking like an empty backlog.
-    let candidate_pool_truncated =
-        candidates.len() > examined.len() && selection.selected.len() < free_slots;
+    let candidate_pool_truncated = wave.candidate_pool_truncated(selection.selected.len());
     let admitted = &selection.selected;
     let loose_task_dispatches: Vec<Value> = admitted
         .iter()

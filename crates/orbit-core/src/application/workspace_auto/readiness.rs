@@ -8,23 +8,26 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::admission::auto_admission::{AdmissionHolders, select_admissions};
 use crate::application::admission::backlog_exclusion::{
     BacklogSnapshot, backlog_snapshot_observed, sort_tasks_for_automatic_dispatch,
 };
 use crate::application::admission::claim_holders::ClaimHolders;
-use crate::application::admission::cpu_light::{LightBudget, ResourceGate};
+use crate::application::admission::cpu_light::ResourceGate;
 use crate::application::admission::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
-use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
+use crate::application::admission::pass_error::PassError;
 use crate::application::job::drain_deadline;
 use crate::runtime::engine::crew::CrewAllowlist;
 
 use super::approvals::readiness_approvals;
-use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
+use super::classify::{
+    DEFAULT_CANDIDATE_POOL, candidate_pool_limit, leaf_load_failure_holds,
+    retain_leaf_load_failure_holds,
+};
 use super::drains::{
     ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain,
     read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
 };
+use super::wave::{AdmissionWave, AdmissionWaveInput, unreserved_admission_slots};
 
 const MAX_READINESS_LIMIT: usize = 500;
 
@@ -293,66 +296,63 @@ fn readiness_snapshot_with_detail(
             .unwrap_or(usize::MAX)
             .saturating_sub(shared_occupancy.occupied)
     };
-    // [ORB-14624] The classifier's own gate: under a CPU-only throttle,
-    // CPU-light leaves fill the reserved light slots and nothing else starts.
-    let light_budget = LightBudget::new(
-        crate::application::admission::cpu_light::CPU_LIGHT_LEAVES,
-        claimed_by_task.keys(),
+    // The same wave the pass builds. Holds are this active drain's load
+    // failures; with no live drain there is nothing to hold, and a read
+    // never reserves repair slots or starts a pull.
+    let claimed = claimed_by_task.keys().cloned().collect::<BTreeSet<_>>();
+    let mut leaf_load_holds = match active_drain.as_ref() {
+        Some(drain) => leaf_load_failure_holds(
+            runtime,
+            "explain_workspace_auto_readiness",
+            Some(drain.run_id.as_str()),
+        )
+        .map_err(|error: PassError| {
+            OrbitError::Execution(format!("read readiness leaf-load holds: {error}"))
+        })?,
+        None => BTreeMap::new(),
+    };
+    retain_leaf_load_failure_holds(
+        &mut leaf_load_holds,
+        &snapshot.admissible_leaves,
         &snapshot.task_lookup,
     );
-    let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
-    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
-    let pending = snapshot
-        .admissible_leaves
+    let held: BTreeSet<String> = leaf_load_holds.keys().cloned().collect();
+    let leaf_load_failed: BTreeMap<String, String> = leaf_load_holds
         .iter()
-        .filter(|task_id| !claimed_by_task.contains_key(*task_id))
-        .filter(|task_id| {
-            gate == ResourceGate::Open
-                || snapshot
-                    .task_lookup
-                    .get(*task_id)
-                    .is_some_and(|task| gate.admits(task))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    // [ORB-11973] Use the classifier's identical ordered prefix and admission
-    // routine, so readiness explains the wave the drain would actually admit
-    // rather than a second guess at it.
-    let candidate_pool_size = match active_drain.as_ref() {
+        .map(|(task_id, hold)| (task_id.clone(), hold.leaf_load_failure_detail()))
+        .collect();
+    let slots = unreserved_admission_slots(
+        claimed.iter(),
+        &snapshot.task_lookup,
+        resource.throttle.as_ref(),
+        unthrottled_slots,
+    );
+    let pool_limit = match active_drain.as_ref() {
         Some(drain) => candidate_pool_limit("explain_workspace_auto_readiness", &drain.input)
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?,
         None => usize::try_from(DEFAULT_CANDIDATE_POOL).unwrap_or(usize::MAX),
     };
-    let examined = &pending[..pending.len().min(candidate_pool_size)];
     let workspace_root = runtime.paths().repo_root.as_path();
-    let claimed = claimed_by_task.keys().cloned().collect::<BTreeSet<_>>();
-    let holders = AdmissionHolders::new(
-        &snapshot.lock_holders,
-        &claimed,
-        &snapshot.task_lookup,
+    let wave = AdmissionWave::build(AdmissionWaveInput {
+        snapshot: &snapshot,
+        claimed: &claimed,
+        held: &held,
+        slots,
+        reserved_slots: 0,
+        candidate_pool_limit: pool_limit,
+        max_active_leaf_runs,
+        occupied: shared_occupancy.occupied,
         workspace_root,
-        runtime.unlocked_context_paths(),
-        runtime.footprint_lock_modes(),
-    );
-    let footprint = FootprintGuard {
-        enabled: max_active_leaf_runs > 1,
-        leaves_in_flight: shared_occupancy.occupied > 0,
-        whole_tree_holder: whole_tree_holder(&claimed, &snapshot.task_lookup),
-        waits: &snapshot.footprint_waits,
-    };
-    let selection = select_admissions(
-        examined,
-        &snapshot.task_lookup,
-        workspace_root,
-        runtime.unlocked_context_paths(),
-        &holders,
-        &snapshot.published_resumes,
-        free_slots,
-        footprint,
-        None,
-    );
-    let candidate_pool_truncated =
-        pending.len() > examined.len() && selection.selected.len() < free_slots;
+        unlocked: runtime.unlocked_context_paths(),
+        lock_modes: runtime.footprint_lock_modes(),
+    });
+    let selection = wave.select(None);
+    let candidate_pool_truncated = wave.candidate_pool_truncated(selection.selected.len());
+    let examined = &wave.examined;
+    let free_slots = wave.free_slots;
+    let gate = wave.gate;
+    let light_budget = &wave.light_budget;
+    let holders = &wave.holders;
     let admitted = selection.selected.iter().cloned().collect::<BTreeSet<_>>();
     // [ORB-15514] A held footprint a follower's claim holds names that claim.
     // Claims only annotate a wait with its holder; they never change its reason.
@@ -388,7 +388,7 @@ fn readiness_snapshot_with_detail(
                 selected_ids: &selected_ids,
                 pools: &pools,
                 allowlist: &allowlist,
-                holders: &holders,
+                holders,
                 claim_holders: &claim_holders,
                 claimed_by_task: &claimed_by_task,
                 host_shutdown_holding: &host_shutdown_holding,
@@ -397,8 +397,9 @@ fn readiness_snapshot_with_detail(
                 admissions_stopped,
                 admitted: &admitted,
                 selection: &selection,
-                light_budget: &light_budget,
+                light_budget,
                 examined,
+                leaf_load_failed: &leaf_load_failed,
                 live_leaves: &live_leaves,
                 host_os_limits: &host_os_limits,
                 follower_evidence: &follower_evidence,
