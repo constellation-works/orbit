@@ -825,12 +825,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_task_coordination_claim_indexes,
     },
+    // ORB-24423: per-task agent scorecard facts kept between scans. A new
+    // derived-cache table only, which an older binary never reads or writes.
+    Migration {
+        version: 91,
+        name: "agent_task_facts",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_agent_task_facts,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 90;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 91;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

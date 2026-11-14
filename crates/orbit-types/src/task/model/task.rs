@@ -212,9 +212,14 @@ impl Task {
         }
     }
 
+    /// The task's current pull request: the LAST recorded `github-pr` ref.
+    /// Storage appends (`push_external_ref_if_missing`), and a task requeued
+    /// with a discarded candidate keeps its closed earlier PR ref ahead of the
+    /// fresh one, so the newest recorded PR is the current delivery.
     pub fn github_pr_number(&self) -> Option<&str> {
         self.external_refs
             .iter()
+            .rev()
             .find(|external_ref| external_ref.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
             .map(|external_ref| external_ref.id.as_str())
     }

@@ -120,6 +120,20 @@ impl Fixture {
         shelf: Shelf,
         end: LeafEnd,
     ) -> Leaf {
+        self.delivered_leaf_after(None, number, completion, shelf, end)
+    }
+
+    /// As [`Self::delivered_leaf`], for a task that already records the
+    /// closed pull request `earlier` from a discarded candidate, so `number`
+    /// is its second recorded `github-pr`.
+    fn delivered_leaf_after(
+        &self,
+        earlier: Option<u64>,
+        number: u64,
+        completion: &str,
+        shelf: Shelf,
+        end: LeafEnd,
+    ) -> Leaf {
         let task = self
             .runtime
             .add_task(TaskAddParams {
@@ -128,6 +142,10 @@ impl Fixture {
                 acceptance_criteria: vec!["Its PR lands.".into()],
                 plan: "Deliver it.".into(),
                 status: Some(TaskStatus::Backlog),
+                external_refs: earlier
+                    .map(|number| ExternalRef::github_pr(number.to_string()).unwrap())
+                    .into_iter()
+                    .collect(),
                 tags: matches!(shelf, Shelf::OptedOut)
                     .then(|| "no-auto-approve".to_string())
                     .into_iter()
@@ -494,6 +512,26 @@ fn a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fi
     let again = fx.pass(&drain, "review", true);
     assert_eq!(again["auto_fix"]["started"], json!([]), "{again}");
     assert_eq!(fx.retries(&leaf.run).len(), 1);
+}
+
+/// A requeued task keeps its closed earlier pull request and appends the
+/// fresh one: the repair pass observes and hands back the latest recorded
+/// pull request, not the closed first one.
+fn a_requeued_tasks_repair_observes_its_latest_recorded_pull_request() {
+    let fx = fixture();
+    let leaf = fx.delivered_leaf_after(Some(79), 82, "review", Shelf::Escalated, LeafEnd::Failed);
+    // Only the fresh pull request is open and conflicting.
+    fx.blocked(&leaf, "bbb2", "orbit-bot", true, &[]);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    let entry = started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(entry["pr_number"], "82", "{pass}");
+    assert_eq!(
+        fx.retries(&leaf.run).len(),
+        1,
+        "the stopped leaf is resumed"
+    );
 }
 
 fn skipped_repairs_are_checkpointed_and_visible_in_readiness() {
@@ -1277,6 +1315,7 @@ crate::scenario_table!(
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
     fix_pr_hands_back_a_red_pull_request_a_review_delivery_left,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
+    a_requeued_tasks_repair_observes_its_latest_recorded_pull_request,
     a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,
     a_repair_reruns_the_second_round_when_it_is_the_one_that_failed,
     a_repair_does_not_count_a_skipped_republication_as_published,
