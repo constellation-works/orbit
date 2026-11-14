@@ -281,7 +281,9 @@ fn cold_selection(root: &Path, filter: &TaskListFilter) -> (usize, usize, Durati
 /// envelope stamps without parsing.
 #[test]
 fn open_task_selection_reads_only_open_envelopes() {
-    const CLOSED: usize = 2000;
+    // OPEN + CLOSED must stay above the 256-row floor of the concurrent stamp
+    // scan and CLOSED well above the 100-read bound.
+    const CLOSED: usize = 400;
     const OPEN: usize = 20;
     const CHILDREN: usize = 5;
     if !allocation_admission_isolated("task_index::open_task_selection_reads_only_open_envelopes") {
