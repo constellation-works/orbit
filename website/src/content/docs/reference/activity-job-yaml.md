@@ -448,8 +448,10 @@ The template namespaces are:
 | `{{ steps.<id>.state.<path> }}` | A completed step's recorded state, when the step recorded any. |
 | `{{ item }}` / `{{ item.<path> }}` | The current fan-out or loop item. Only available inside a fan-out worker or a loop body. |
 | `{{ iteration }}` | The current 0-based fan-out worker or loop iteration index. |
-| `{{ env.<NAME> }}` | One variable from the run's environment. A missing variable fails the step. |
-| `{{ workspace_path }}` | The run's workspace path, when the run has one. |
+
+The template context does not include a workspace path automatically. For
+example, a caller can pass `{"workspace_path":"/work/example"}` in the run
+input and a step can reference it as `{{ input.workspace_path }}`.
 
 A whole-string `{{ steps.<id>.output... }}` reference forwards the value
 with its JSON type intact, so a string output such as `"618"` stays a
