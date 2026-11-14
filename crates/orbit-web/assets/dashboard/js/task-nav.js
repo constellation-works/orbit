@@ -5,6 +5,7 @@ import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue,
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
+import { recordRoutedHref } from './router.js';
 
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
 // the hash no longer names is dropped.
@@ -668,17 +669,36 @@ export function syncTaskControls(context) {
   refreshChips(context);
 }
 
+// The current entry is a Tasks entry (the list or a full page), not another
+// destination that a search debounce outlived.
+function onTasksEntry() {
+  return /^#tasks([/?]|$)/.test(window.location.hash || "");
+}
+
+// A filter change rewrites the current Tasks entry rather than pushing one, so
+// only a destination adds a Back step (`history.length` is unchanged). Without
+// a hashchange, the state the router would derive from the new address is
+// applied here, and the router's last-routed address moves with it so a later
+// navigation to that address is not skipped (ORB-19783).
 function navigateTasksHash(context) {
   if (context && typeof context.resetTaskPagination === "function") {
     context.resetTaskPagination();
   }
   const hash = buildTasksHash(context);
-  if (window.location.hash !== hash) {
-    window.location.hash = hash;
-  } else {
+  if (window.location.hash === hash) {
     refreshChips(context);
     refreshTasks(context).catch((error) => console.error("Failed to reset task pages", error));
+    return;
   }
+  if (!onTasksEntry()) {
+    window.location.hash = hash;
+    return;
+  }
+  window.history.replaceState(null, "", hash);
+  recordRoutedHref();
+  applyTasksHashQuery(new URLSearchParams(hash.split("?")[1] || ""), context, taskState.taskPageId);
+  refreshChips(context);
+  refreshTasks(context).catch((error) => console.error("Failed to reset task pages", error));
 }
 
 export function renderTaskPagination(context) {
