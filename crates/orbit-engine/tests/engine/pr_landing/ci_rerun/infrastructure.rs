@@ -317,7 +317,7 @@ fn claimed_landing_retries_transient_failures_then_lands() {
                     "handoff_land",
                     &json!({}),
                     &json!({"handoff_id":"handoff-retry","task_id":TASK_ID,"run_id":RUN_ID,
-                    "max_wait_seconds":600,"poll_interval_seconds":5}),
+                    "max_wait_seconds":600,"poll_interval_seconds":60}),
                     false,
                     &HashMap::new(),
                     None,

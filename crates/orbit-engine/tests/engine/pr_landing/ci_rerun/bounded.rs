@@ -107,6 +107,27 @@ fn bounded_dependency_failure_authenticates_and_reruns_once() {
     );
 }
 
+/// Prepared unchanged-workflow fixture, built once per child. Rows only read
+/// `ci.rerun_plan`, so each one copies this seed and then applies its own
+/// log or provider-metadata edit.
+fn prepared_workflow_fixture(row: &Path) -> (Fixture, DeliveryHost, Value) {
+    thread_local! {
+        static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+    }
+    TEMPLATE.with(|slot| {
+        let mut template = slot.borrow_mut();
+        let seed = template.get_or_insert_with(|| fixture_with_source(row, WORKFLOW).0);
+        let fx = seed.copy_to(row);
+        let path = fx.forge.join("retry-config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config["workspace"] = json!(fx.repo);
+        fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+        let request = json!({"workspace_path":fx.repo,"pr":"42","head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"accepted_base":fx.base_sha,"run_id":700,"roots":[CiRerunRoot {job_id:1000,check:"CI / test".into(),classification:"flaky".into(),signature:"error: source failure at src/stable:<n>:<n>".into()}],"deadline_ms":9_999_999_999_999_u64});
+        (fx, host, request)
+    })
+}
+
 #[test]
 fn bounded_retry_keeps_refusal_boundaries() {
     isolated(
@@ -147,13 +168,23 @@ fn bounded_retry_keeps_refusal_boundaries() {
                     {
                         continue;
                     }
+                    // These rows change provider job metadata, not the log, so the
+                    // column-display pass repeats the raw pass.
+                    if !raw && matches!(case, "multiple_steps" | "unknown_step" | "unknown_outcome")
+                    {
+                        continue;
+                    }
                     in_fresh_row(sandbox, |row| {
                         let source = match case {
                         "ambiguous_source" => WORKFLOW.replace("  independent:\n    name: independent", "  independent:\n    name: test"),
                         "duplicate_script" => WORKFLOW.replace("        run: echo tests", "        run: echo tests\n      - name: Other tests\n        run: echo tests"),
                         _ => WORKFLOW.to_string(),
                     };
-                        let (fx, host, request) = fixture_with_source(row, &source);
+                        let (fx, host, request) = if source == WORKFLOW {
+                            prepared_workflow_fixture(row)
+                        } else {
+                            fixture_with_source(row, &source)
+                        };
                         bounded_logs(&fx, raw);
                         let root = fx.forge.join("retry-log-1000");
                         let waiter = fx.forge.join("retry-log-1001");
