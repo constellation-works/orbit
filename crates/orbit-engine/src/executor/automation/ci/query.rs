@@ -19,7 +19,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
-use super::super::github_host::{auth_status, run_gh};
+use super::super::github_host::{auth_status, clear_gh_environment, run_gh};
 
 /// Which slice of a run's log to read, and the read itself, are owned by
 /// `orbit_tools::github_cli` so the stages and the `github.*` tools cannot
@@ -353,10 +353,11 @@ impl CiQueries for HostCiQueries {
             &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
-        let read = github_cli::read_run_log(
+        let read = github_cli::read_run_log_guarded(
             &requests,
             github_cli::LogReadBounds::new(max_bytes),
             cached_view,
+            &|request| Ok(clear_gh_environment(request)),
         )?;
 
         Ok(RunLog {

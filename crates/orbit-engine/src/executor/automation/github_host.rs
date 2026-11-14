@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::{redact_all, redact_all_error};
-use orbit_exec::{NoSandbox, run_process};
+use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, run_process};
 use orbit_tools::github_cli;
 use serde_json::Value;
 
@@ -16,6 +16,7 @@ use crate::context::RuntimeHost;
 
 use super::ci::AuthStatus;
 use super::input::{canonicalize_existing_dir, input_string_field};
+use super::vcs::git::gh_environment;
 
 /// A GitHub client was absent or unauthenticated on this host, so no
 /// evidence was gathered. Never a clean bill of health.
@@ -33,13 +34,31 @@ pub(super) fn query_root<H: RuntimeHost + ?Sized>(
     }
 }
 
+/// Run `gh` from `repo_root` under the cleared VCS environment, so it never
+/// inherits the drain's provider credentials or ORBIT_* envelope.
+pub(super) fn run_gh_process(
+    repo_root: &Path,
+    mut request: ExecRequest,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    request.current_dir = Some(repo_root.to_string_lossy().into_owned());
+    request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
+    run_process(&request, &NoSandbox)
+}
+
+/// Guard for `orbit_tools::github_cli::read_run_log_guarded`: put one `gh`
+/// subprocess request under the cleared VCS environment.
+pub(super) fn clear_gh_environment(request: &ExecRequest) -> ExecRequest {
+    let mut request = request.clone();
+    request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
+    request
+}
+
 pub(super) fn run_gh(
     repo_root: &Path,
-    mut request: orbit_exec::ExecRequest,
+    request: ExecRequest,
     label: &str,
 ) -> Result<String, OrbitError> {
-    request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = run_process(&request, &NoSandbox).map_err(redact_all_error)?;
+    let result = run_gh_process(repo_root, request).map_err(redact_all_error)?;
     // A rate limit stays typed, so the sweep can wait for its reset.
     github_cli::check_gh_read_result(&result, label).map_err(redact_all_error)?;
     Ok(result.stdout)
@@ -47,7 +66,7 @@ pub(super) fn run_gh(
 
 /// Probe host authentication, preserving each sweep's unavailable-detail prefix.
 pub(super) fn auth_status(repo_root: &Path, unavailable_prefix: &str) -> AuthStatus {
-    let mut request = match github_cli::auth_status_request(&Value::Null) {
+    let request = match github_cli::auth_status_request(&Value::Null) {
         Ok(request) => request,
         Err(error) => {
             return AuthStatus {
@@ -57,10 +76,9 @@ pub(super) fn auth_status(repo_root: &Path, unavailable_prefix: &str) -> AuthSta
             };
         }
     };
-    request.current_dir = Some(repo_root.to_string_lossy().into_owned());
     // A missing `gh`, or a host that refuses to execute it, surfaces as a
     // spawn error. That is a capability answer, not a fault.
-    match run_process(&request, &NoSandbox) {
+    match run_gh_process(repo_root, request) {
         Ok(result) if result.success => AuthStatus {
             available: true,
             authenticated: true,
