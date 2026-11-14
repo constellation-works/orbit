@@ -47,7 +47,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Scheduled execution | [Automation](references/automation.md) |
 | Configure task-pilot eligibility or freshness, inspect readiness, or request a later assessment | [Automation — Tuning task-pilot](references/automation.md#tuning-which-tasks-task-pilot-prepares); [Orchestration — task-pilot](../orbit-orchestrate/references/orchestration.md) |
 | Workspace scripts (`target: script:<name>` job steps): what a script is, granting or revoking one, grant staleness, network and root grants, or verifying a grant | [Automation — Workspace scripts](references/automation.md#workspace-scripts) |
-| Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
+| Recurring QA and other task templates, including tool grants and the upgrade rule before setting one | [Auto-tasks — Granting tools to every minted task](references/auto-tasks.md#granting-tools-to-every-minted-task) |
 | Prompt-size cost estimates, token usage and unknown cost | [Operational logs — Prompt-size cost accounting](references/operational-logs.md#prompt-size-cost-accounting) |
 | Choose which shipped routines and auto-tasks an existing workspace carries, reconcile a policy change, or diagnose excluded defaults | [Configuration — Seeding policy](references/configuration.md#seeding-policy) |
 | MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
