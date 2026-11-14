@@ -6,7 +6,7 @@
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain, Locks held or Log view.
+// and `setDockMode` for the router to select the Drain, Fleet or Log view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
@@ -51,7 +51,7 @@ let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "fleet", "locks", "log"];
+const DOCK_MODES = ["drain", "fleet", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -142,7 +142,7 @@ function applyDockMode() {
     tab.dataset.mode = "fleet";
     tab.tabIndex = -1;
     tab.addEventListener("click", () => chooseDockMode("fleet"));
-    $("dock-tab-locks").before(tab);
+    $("dock-tab-drain").after(tab);
     const pane = el("div", { class: "dock-pane", id: "dock-pane-fleet", role: "tabpanel", "aria-labelledby": "dock-tab-fleet" }, [
       el("section", { class: "panel drain-card" }, [el("header", {}, [el("h2", { class: "drain-title", text: "Fleet drains" })]), el("div", { class: "body", id: "fleet-drains-body" })]),
     ]);
@@ -154,9 +154,7 @@ function applyDockMode() {
   }
   const modes = dockModes();
   const mode = shownDockMode();
-  const card = mode === "locks" ? mode : null;
-  dock.dataset.mode = card ? "drain" : mode;
-  dock.dataset.card = card || "drain";
+  dock.dataset.mode = mode;
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
     btn.hidden = !modes.includes(btn.dataset.mode);

@@ -305,6 +305,8 @@
         "application/job/tests/delivery_attention.rs::healthy_and_ineligible_tasks_have_no_attention",
         "application/job/tests/delivery_attention.rs::timeout_and_interrupted_runs_and_conflict_are_flagged",
         "application/job/tests/exec.rs::a_claimed_leaf_provider_limit_holds_and_records_a_deferral",
+        "application/job/tests/exec.rs::code_only_hold_is_audited_held_and_finalizes_held",
+        "application/job/tests/exec.rs::detached_worker_persists_unrecognized_audit_step_outcomes_as_failed",
         "application/job/tests/exec.rs::held_and_unsuccessful_runs_finalize_despite_summary_store_faults",
         "application/job/tests/pipeline/admission.rs::a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew",
         "application/job/tests/pipeline/admission.rs::audit_failure_preserves_admitted_runs_and_submission_errors",

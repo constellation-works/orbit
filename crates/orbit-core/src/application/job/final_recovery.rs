@@ -144,15 +144,9 @@ fn apply(
             ))
         })?;
     let decision = &application.decision;
-    if matches!(decision, FinalRecoveryDecision::Resume { .. }) {
-        record_decision(
-            runtime,
-            run_id,
-            application,
-            Some(&FinalRecoveryApplied::Resume),
-        )?;
-        return Ok(FinalRecoveryApplied::Resume);
-    }
+    // A replay must not replace a different decision already recorded,
+    // including a resume over a settlement that may already have touched
+    // the task. The same decision, resume included, may be recorded again.
     if let Some(recorded) = checkpoint
         .decision
         .as_ref()
@@ -163,6 +157,15 @@ fn apply(
             recorded.kind(),
             decision.kind()
         )));
+    }
+    if matches!(decision, FinalRecoveryDecision::Resume { .. }) {
+        record_decision(
+            runtime,
+            run_id,
+            application,
+            Some(&FinalRecoveryApplied::Resume),
+        )?;
+        return Ok(FinalRecoveryApplied::Resume);
     }
     // The intent is durable before the task is touched. If recording it
     // fails, the task stays as the failure left it.

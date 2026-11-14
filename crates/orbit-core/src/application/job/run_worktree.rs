@@ -42,6 +42,15 @@ impl RecordedRunWorktree {
     }
 }
 
+/// How a local run's recorded worktree was read.
+enum WorktreeRead {
+    Recorded(RecordedRunWorktree),
+    /// The run has no persisted state on this machine.
+    Absent,
+    /// The state row exists but could not be read.
+    Unreadable,
+}
+
 /// The run's branch and path from the claim bound to it: what its follower
 /// reported at settlement, else the branch of the candidate the claim kept
 /// from that same run.
@@ -63,14 +72,25 @@ fn claimed_run_worktree(claim: &ClaimInspection, run_id: &str) -> RecordedRunWor
 }
 
 impl OrbitRuntime {
+    fn read_recorded_run_worktree(&self, run_id: &str) -> WorktreeRead {
+        match self.read_run_state(run_id) {
+            Ok(Some(state)) => WorktreeRead::Recorded(RecordedRunWorktree::of_state(&state)),
+            Ok(None) => WorktreeRead::Absent,
+            Err(error) => {
+                tracing::warn!(run_id, %error, "run state unreadable for run worktree");
+                WorktreeRead::Unreadable
+            }
+        }
+    }
+
     /// The branch and worktree path `run_id`'s `worktree` step recorded in
-    /// this machine's job store; empty when the run or the step is absent.
+    /// this machine's job store. Empty when the run or the step is absent,
+    /// and when the state cannot be read (that failure is logged).
     pub(crate) fn recorded_run_worktree(&self, run_id: &str) -> RecordedRunWorktree {
-        self.read_run_state(run_id)
-            .ok()
-            .flatten()
-            .map(|state| RecordedRunWorktree::of_state(&state))
-            .unwrap_or_default()
+        match self.read_recorded_run_worktree(run_id) {
+            WorktreeRead::Recorded(recorded) => recorded,
+            WorktreeRead::Absent | WorktreeRead::Unreadable => RecordedRunWorktree::default(),
+        }
     }
 
     /// `job_run_worktree` for one task row: `branch` and `worktree_path` of
@@ -90,10 +110,14 @@ impl OrbitRuntime {
         };
         let (recorded, missing) =
             if job_run_is_locally_navigable(self.automation_machine_identity(), task) {
-                (
-                    self.recorded_run_worktree(run_id),
-                    "The run did not record its worktree on this machine.",
-                )
+                const UNRECORDED: &str = "The run did not record its worktree on this machine.";
+                const UNREADABLE: &str =
+                    "The run's recorded worktree could not be read on this machine.";
+                match self.read_recorded_run_worktree(run_id) {
+                    WorktreeRead::Recorded(recorded) => (recorded, UNRECORDED),
+                    WorktreeRead::Absent => (RecordedRunWorktree::default(), UNRECORDED),
+                    WorktreeRead::Unreadable => (RecordedRunWorktree::default(), UNREADABLE),
+                }
             } else {
                 self.foreign_run_worktree(&task.id, run_id, task.job_run_machine.as_ref())
             };

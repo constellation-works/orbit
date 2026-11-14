@@ -246,6 +246,70 @@ projections_test!(
         check_eq!(written["active_triage"] => Value::Null; "write response: {written}");
     }
 );
+projections_test!(
+    unreadable_run_worktree_is_distinct_from_an_unrecorded_one,
+    fixture,
+    Fixture::new(),
+    {
+        let unread = add_titled_task(&fixture, "Unreadable worktree", "Name the read failure");
+        let missing = add_titled_task(&fixture, "Unrecorded worktree", "Name the absence");
+        let unread_run = "jrun-worktree-unreadable";
+        let missing_run = "jrun-worktree-missing";
+        for (task, run_id) in [(&unread, unread_run), (&missing, missing_run)] {
+            fixture
+                .runtime
+                .apply_task_automation_update(
+                    task,
+                    TaskAutomationUpdate {
+                        job_run_id: Some(run_id.into()),
+                        ..TaskAutomationUpdate::default()
+                    },
+                )
+                .unwrap();
+        }
+        let job = "task_pr_pipeline";
+        let mut run = fixture.seed_run(unread_run, job, JobRunState::Success);
+        run.input = Some(json!({}));
+        fixture.save_run(&run);
+        let state = PipelineState::new(unread_run.into(), job.into(), json!({}));
+        fixture.runtime.write_run_state(unread_run, &state).unwrap();
+        let workspace = fixture.runtime.workspace_id().unwrap();
+        fixture
+            .runtime
+            .sqlite_store()
+            .unwrap()
+            .with_transaction(|tx| {
+                let changed = tx
+                    .connection()
+                    .execute(
+                        "UPDATE job_run_states SET pipeline_state_json = '{' \
+                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        [workspace.as_str(), unread_run],
+                    )
+                    .unwrap();
+                assert_eq!(changed, 1);
+                Ok(())
+            })
+            .unwrap();
+
+        let server = fixture.server(true);
+        let unread_detail = task_detail(&server, &unread);
+        let missing_detail = task_detail(&server, &missing);
+        check_eq!(
+            unread_detail["job_run_worktree"]["unrecorded"] =>
+            json!("The run's recorded worktree could not be read on this machine.");
+            "unreadable state: {unread_detail}"
+        );
+        check_eq!(
+            missing_detail["job_run_worktree"]["unrecorded"] =>
+            json!("The run did not record its worktree on this machine.");
+            "absent state: {missing_detail}"
+        );
+        check!(unread_detail["job_run_worktree"]["branch"].is_null(); "unreadable branch");
+        check!(missing_detail["job_run_worktree"]["branch"].is_null(); "absent branch");
+    }
+);
+
 fn rows_of(page: &Value) -> &Vec<Value> {
     page["items"]
         .as_array()

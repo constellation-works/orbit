@@ -1282,6 +1282,55 @@ fn unproven_ownership_and_moved_pins_retain_every_pin() {
     assert_eq!(workspace.object(&moved_pin), elsewhere);
 }
 
+fn a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot() {
+    use orbit_core::application::job::{TaskPilotRefusal, TaskPilotSubmitError};
+    use orbit_types::workflow::JobRunTrigger;
+
+    let workspace = Workspace::new();
+    let task = workspace.task("already piloting");
+    let run = workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "task_ids": [task.id] })),
+            None,
+        )
+        .unwrap();
+    let changed = workspace
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET state = 'retrying' WHERE run_id = ?1",
+            [&run.run_id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let error = workspace
+        .runtime
+        .submit_explicit_task_pilot(&task.id, Some("operator"), JobRunTrigger::cli())
+        .expect_err("a retrying pilot holds the task");
+    match error {
+        TaskPilotSubmitError::Refused(TaskPilotRefusal::PilotRunning { run_id, task_id }) => {
+            assert_eq!(run_id, run.run_id);
+            assert_eq!(task_id, task.id);
+        }
+        other => panic!("expected the live pilot refusal, got {other}"),
+    }
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot_scenarios,
+    a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot,
+);
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     all_held_pilot_run_succeeds_and_retains_every_holder_skip_scenarios,
