@@ -512,7 +512,7 @@ const SHOW: TaskOperation = TaskOperation {
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
-            "Show a task by ID. Runs on reports OS tags intersected with the stored crew executor host_os, naming the source or an unresolved/conflicting constraint. This readout is derived and never stored. An unset crew leaves automatic routing undecided.",
+            "Show a task by ID. The `Runs on` readout summarizes the task's effective OS requirement by intersecting its OS tags with the stored crew executor's `host_os`. It identifies the source of the requirement or any unresolved or conflicting constraint. This readout is derived and never stored. Without a crew, automatic routing remains undecided.",
         ),
         ..CliHelp::NONE
     },
