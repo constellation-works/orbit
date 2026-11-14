@@ -1,6 +1,6 @@
 use crate::contracts::TaskRow;
 use crate::contracts::params::*;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_types::task::{
     ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry, TaskStatus,
 };
@@ -20,100 +20,56 @@ pub trait TaskDocumentStoreBackend: Send + Sync {
 pub trait TaskHistoryStoreBackend: Send + Sync {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError>;
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError>;
-    /// Evidence that a task's history and comments are unchanged, taken
-    /// without reading them: equal stamps mean both reads would return what
-    /// they returned when the earlier stamp was taken, or something newer
-    /// that a later stamp catches. `None` when this backend cannot vouch for
-    /// them, so the caller reads instead of reusing anything derived.
-    fn task_history_stamp(&self, _id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-    /// [`Self::task_history_stamp`] for each listed task, in one pass. A
-    /// task is absent when this backend cannot vouch for its logs.
+    /// Evidence that a task's history and comments are unchanged.
+    fn task_history_stamp(&self, _id: &str) -> Result<Option<String>, OrbitError>;
+    /// History stamps for each listed task, in one pass.
     fn task_history_stamps(
         &self,
         _ids: &[String],
-    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError> {
-        Ok(Default::default())
-    }
-    /// Evidence that each listed task's whole bundle is unchanged, taken
-    /// without reading it: equal stamps mean a whole-bundle read would
-    /// return, or fail, as it did when the earlier stamp was taken, with the
-    /// limits of [`Self::task_history_stamp`]. A task is absent when this
-    /// backend cannot vouch for its bundle.
+    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError>;
+    /// Whole-bundle unchanged evidence for each listed task.
     fn task_bundle_stamps(
         &self,
         _ids: &[String],
-    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError> {
-        Ok(Default::default())
-    }
+    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError>;
     fn update_task_history(
         &self,
         id: &str,
         params: TaskHistoryUpdateParams,
     ) -> Result<TaskRow, OrbitError>;
-    /// Refuse a work-starting history write whose effective footprint
-    /// overlaps a protecting execution claim, before a coordinated caller
-    /// persists any companion document or artifact edits. The guard inside
-    /// `update_task_history` remains authoritative; this pre-flight only
-    /// keeps a deterministic refusal from leaving companion writes behind.
-    /// `context_files` is the replacement footprint when the same update
-    /// changes it, otherwise the stored footprint applies.
+    /// Refuse a work-starting history write overlapping a protecting claim.
     fn check_ordinary_work_start_footprint(
         &self,
         _id: &str,
         _status: Option<TaskStatus>,
         _status_event: Option<&str>,
         _context_files: Option<&[String]>,
-    ) -> Result<(), OrbitError> {
-        Ok(())
-    }
+    ) -> Result<(), OrbitError>;
 }
 
 pub trait TaskArtifactStoreBackend: Send + Sync {
-    /// Read one immutable payload named by a manifest the caller already
-    /// loaded from this task. Verify its bytes without reopening the bundle.
-    /// Backends without a snapshot reader retain their ordinary artifact read.
+    /// Read one immutable payload named by an already-loaded manifest.
     fn task_artifact_from_manifest(
         &self,
         id: &str,
         file: &ArtifactManifestFileV2,
-    ) -> Result<Option<TaskArtifact>, OrbitError> {
-        self.get_task_artifact(id, &file.path)
-    }
+    ) -> Result<Option<TaskArtifact>, OrbitError>;
 
+    /// Artifact manifest for a task, if any.
     fn get_task_artifact_manifest(
         &self,
         _id: &str,
-    ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
-        Err(OrbitError::Store(
-            "task artifact manifest read is not supported by this backend".to_string(),
-        ))
-    }
+    ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError>;
     fn get_task_artifacts(&self, id: &str) -> Result<Option<Vec<TaskArtifact>>, OrbitError>;
-    fn get_task_artifact(
-        &self,
-        _id: &str,
-        _path: &str,
-    ) -> Result<Option<TaskArtifact>, OrbitError> {
-        Err(OrbitError::Store(
-            "task artifact read is not supported by this backend".to_string(),
-        ))
-    }
+    /// One artifact payload by path, if present.
+    fn get_task_artifact(&self, _id: &str, _path: &str)
+    -> Result<Option<TaskArtifact>, OrbitError>;
     /// Read one artifact from a manifest entry the caller already holds.
-    ///
-    /// The file store reads that blob under the bundle lock and checks its
-    /// size and sha256, without hashing the rest of the bundle. Backends
-    /// without that path fall back to [`Self::get_task_artifact`].
     fn read_manifest_artifact(
         &self,
         id: &str,
         file: &ArtifactManifestFileV2,
-    ) -> Result<TaskArtifact, OrbitError> {
-        self.get_task_artifact(id, &file.path)?.ok_or_else(|| {
-            OrbitError::not_found(NotFoundKind::Artifact, format!("{id}/{}", file.path))
-        })
-    }
+    ) -> Result<TaskArtifact, OrbitError>;
     fn upsert_task_artifacts(
         &self,
         id: &str,
