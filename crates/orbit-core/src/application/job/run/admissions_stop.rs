@@ -16,9 +16,10 @@
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunStateUpdate};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
+use super::state_write::terminal_run_error;
 use crate::OrbitRuntime;
 use crate::application::job::{JobDrainPort, JobPullSettlementPort};
 
@@ -289,19 +290,13 @@ impl OrbitRuntime {
             });
         }
         if run.state.is_terminal() {
-            return Err(OrbitError::JobValidation(format!(
-                "job run '{}' is {}; a terminal run admits no further work",
-                run.run_id, run.state
-            )));
+            return Err(terminal_run_error(&run.run_id, run.state));
         }
 
         let mut unchanged = false;
         let mut update = |run_state: JobRunState, state: &mut PipelineState| {
             if run_state.is_terminal() {
-                return Err(OrbitError::JobValidation(format!(
-                    "job run '{}' is {run_state}; a terminal run admits no further work",
-                    run.run_id
-                )));
+                return Err(terminal_run_error(&run.run_id, run_state));
             }
             if state.admissions_stopped() {
                 unchanged = true;
@@ -314,36 +309,13 @@ impl OrbitRuntime {
             Ok(())
         };
 
-        loop {
-            match self
-                .stores()
-                .jobs()
-                .update_run_state(&run.run_id, &mut update)?
-            {
-                RunStateUpdate::Updated => break,
-                RunStateUpdate::NotFound => {
-                    return Err(orbit_common::OrbitError::not_found(
-                        orbit_common::NotFoundKind::JobRun,
-                        run.run_id.clone(),
-                    ));
-                }
-                RunStateUpdate::NoState => {
-                    #[cfg(test)]
-                    run_admissions_stop_state_init_hook();
-                    let state = PipelineState::new(
-                        run.run_id.clone(),
-                        run.job_id.clone(),
-                        run.input.clone().unwrap_or_else(|| json!({})),
-                    );
-                    // Preserve a worker's first checkpoint, then apply the control
-                    // with the current run status in the next transaction. Even
-                    // when we initialize first, the run may have terminalized.
-                    self.stores()
-                        .jobs()
-                        .initialize_run_state(&run.run_id, &state)?;
-                }
-            }
-        }
+        self.update_or_create_run_state(
+            &run.run_id,
+            &run.job_id,
+            run.input.as_ref(),
+            true,
+            &mut update,
+        )?;
 
         let mut change = DrainAdmissionsStopChange {
             run_id: run.run_id.clone(),
@@ -439,26 +411,5 @@ impl OrbitRuntime {
             }),
             None,
         )
-    }
-}
-
-// A one-shot seam after NoState, outside the store transaction, so tests can
-// force the first checkpoint or terminal transition before initialization.
-#[cfg(test)]
-thread_local! {
-    static ADMISSIONS_STOP_STATE_INIT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        std::cell::RefCell::new(None);
-}
-
-#[cfg(test)]
-pub(super) fn set_admissions_stop_state_init_hook(hook: impl FnOnce() + 'static) {
-    ADMISSIONS_STOP_STATE_INIT_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-}
-
-#[cfg(test)]
-fn run_admissions_stop_state_init_hook() {
-    let hook = ADMISSIONS_STOP_STATE_INIT_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
     }
 }

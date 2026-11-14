@@ -37,8 +37,8 @@ use orbit_store::contracts::{
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, RunCancellationProvenance, RunStateUpdate,
-    TaskCancellationPolicy, WORKSPACE_AUTO_PIPELINE_JOB,
+    JobRun, JobRunState, PipelineState, RunCancellationProvenance, TaskCancellationPolicy,
+    WORKSPACE_AUTO_PIPELINE_JOB,
 };
 use serde_json::json;
 
@@ -186,36 +186,13 @@ impl OrbitRuntime {
             });
             Ok(())
         };
-        loop {
-            match self
-                .stores()
-                .jobs()
-                .update_run_state(&run.run_id, &mut update)?
-            {
-                RunStateUpdate::Updated => break,
-                RunStateUpdate::NotFound => {
-                    return Err(OrbitError::not_found(
-                        NotFoundKind::JobRun,
-                        run.run_id.clone(),
-                    ));
-                }
-                RunStateUpdate::NoState => {
-                    #[cfg(test)]
-                    run_drain_cancel_state_init_hook();
-                    let state = PipelineState::new(
-                        run.run_id.clone(),
-                        run.job_id.clone(),
-                        run.input.clone().unwrap_or_else(|| json!({})),
-                    );
-                    // Initialize without controls or replacing worker progress.
-                    // Retrying checks the fresh lifecycle state transactionally,
-                    // whether we or a concurrent worker supplied the state.
-                    self.stores()
-                        .jobs()
-                        .initialize_run_state(&run.run_id, &state)?;
-                }
-            }
-        }
+        self.update_or_create_run_state(
+            &run.run_id,
+            &run.job_id,
+            run.input.as_ref(),
+            true,
+            &mut update,
+        )?;
         if terminal {
             // The drain finished while this request was on its way.
             return self.cancel_job_run_with_reason_and_policy(
@@ -524,26 +501,5 @@ impl OrbitRuntime {
             }
         }
         Ok(result)
-    }
-}
-
-// Force a worker checkpoint or terminal transition between the NoState result
-// and insert-if-absent initialization without relying on scheduler timing.
-#[cfg(test)]
-thread_local! {
-    static DRAIN_CANCEL_STATE_INIT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        std::cell::RefCell::new(None);
-}
-
-#[cfg(test)]
-pub(super) fn set_drain_cancel_state_init_hook(hook: impl FnOnce() + 'static) {
-    DRAIN_CANCEL_STATE_INIT_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-}
-
-#[cfg(test)]
-fn run_drain_cancel_state_init_hook() {
-    let hook = DRAIN_CANCEL_STATE_INIT_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
     }
 }

@@ -31,6 +31,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+use super::state_write::terminal_run_error;
 use super::worker_limit::{
     DrainWorkerLimitChange, DrainWorkerLimitOutcome, validate_drain_worker_ceiling,
 };
@@ -484,10 +485,4 @@ fn submitted_window_seconds(input: &Value) -> Option<f64> {
 
 fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn terminal_run_error(run_id: &str, state: JobRunState) -> OrbitError {
-    OrbitError::JobValidation(format!(
-        "job run '{run_id}' is {state}; a terminal run admits no further work"
-    ))
 }
