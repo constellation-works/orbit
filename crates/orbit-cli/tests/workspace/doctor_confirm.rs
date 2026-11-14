@@ -185,17 +185,13 @@ fn doctor_reports_and_clears_zombie_holder_through_confirmed_repair() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // The old probe still sees the zombie as alive: signal 0 is delivered.
-    // A doctor built on it would report no stale locks and clear nothing,
-    // so this assertion is what the pre-fix implementation fails.
+    // Signal 0 still sees the unreaped child. Do not assert the shared
+    // liveness helper's answer here: the pre-fix implementation must reach
+    // the doctor command below and fail on its stale-lock report.
     let raw_probe = unsafe { libc::kill(pid as libc::pid_t, 0) };
     assert!(
         raw_probe == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM),
         "zombie holder must still accept signal 0 (pid {pid})"
-    );
-    assert!(
-        !orbit_common::process::identity::process_is_alive(pid),
-        "zombie holder pid {pid} must not count as live"
     );
 
     let fixture = Fixture::new();
