@@ -4,7 +4,9 @@
 //! it can mechanically and otherwise opens one decision request on the task
 //! (see `final_recovery`). The retired blocked-task triage left
 //! [`BLOCKED_TASK_TRIAGED_EVENT`] markers and `block_triage` requests
-//! whose options live in a proposal comment; readers keep parsing both.
+//! whose options live in a proposal comment. [`LegacyBlockedTriageRecord`] is
+//! the only reader of a marker's outcome, disposition, actor and run; the
+//! proposal's replacement text stays with the decision channel.
 //! [`triage_candidacy`] stays as the one rule the auto-task
 //! `skip_unless_blocked_candidates` precondition reads: a block episode
 //! qualifies while final recovery's escalation, or the backstop's silence,
@@ -12,7 +14,9 @@
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{ArtifactManifestFileV2, Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    ArtifactManifestFileV2, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+};
 use serde::Serialize;
 
 use super::super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
@@ -314,4 +318,160 @@ impl TriageTarget {
             .into_iter()
             .find(|target| target.as_str() == value)
     }
+}
+
+/// Lead of the comment the retired triage wrote beside its marker.
+const TRIAGE_COMMENT_LEAD: &str = "blocked_task_triage ";
+/// Decision kind on the typed final-recovery event a triage requeue recorded.
+/// That typed decision, not the marker note, names the run.
+const TRIAGE_REQUEUE_DECISION: &str = "blocked_task_triage_requeue";
+
+/// What a retired blocked-task triage marker recorded as its outcome.
+///
+/// `Requeued` is the only outcome handled-by treats as a recovery. Any other
+/// spelled value is `Other`; a marker that names no outcome is `Missing`.
+/// A missing outcome does not discard a decision disposition on the same marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LegacyBlockedTriageOutcome {
+    /// The marker's note contains the token `outcome=requeued`.
+    Requeued,
+    /// The marker spells an outcome this reader does not classify.
+    Other(String),
+    /// The marker names no outcome.
+    Missing,
+}
+
+/// What a retired blocked-task triage marker recorded as its disposition.
+///
+/// `Decision` is the only disposition pilot-warning settlement treats as a
+/// missed scope block. Any other spelled value is `Other`; a marker that
+/// names no disposition is `Missing`. A missing actor does not discard a
+/// requeue outcome on the same marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LegacyBlockedTriageDisposition {
+    /// The marker's note contains the token `disposition=decision`.
+    Decision,
+    /// The marker spells a disposition this reader does not classify.
+    Other(String),
+    /// The marker names no disposition.
+    Missing,
+}
+
+/// One retired `blocked_task_triaged` marker and the `blocked_task_triage`
+/// comment written at the same instant, decoded. Not a stored payload:
+/// history notes and comments stay as they were written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LegacyBlockedTriageRecord {
+    /// When the marker was written.
+    pub(crate) at: DateTime<Utc>,
+    /// The marker note's outcome.
+    pub(crate) outcome: LegacyBlockedTriageOutcome,
+    /// The marker note's disposition.
+    pub(crate) disposition: LegacyBlockedTriageDisposition,
+    /// Who triaged, from the same-time comment's `by=`. Absent when that
+    /// comment or field is missing.
+    pub(crate) actor: Option<String>,
+    /// The run the same-time typed final-recovery decision binds. Absent when
+    /// that decision was not recorded.
+    pub(crate) run_id: Option<String>,
+}
+
+/// Decode `entry` when it is a retired `blocked_task_triaged` marker.
+///
+/// Outcome and disposition come only from the marker note. The actor comes
+/// only from the `blocked_task_triage` comment written at the same instant.
+/// The run comes only from a same-time typed final-recovery decision of the
+/// retired triage-requeue kind. Returns none for every other event.
+pub(crate) fn decode_blocked_task_triaged(
+    entry: &TaskHistoryEntry,
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+) -> Option<LegacyBlockedTriageRecord> {
+    if entry.event != BLOCKED_TASK_TRIAGED_EVENT {
+        return None;
+    }
+    let note = entry.note.as_deref().unwrap_or("");
+    Some(LegacyBlockedTriageRecord {
+        at: entry.at,
+        outcome: note_outcome(note),
+        disposition: note_disposition(note),
+        actor: triage_comment_actor(comments, entry.at),
+        run_id: bound_run_id(history, entry.at),
+    })
+}
+
+/// Whether `entry` is the typed final-recovery decision a triage requeue
+/// recorded. Handled-by skips it so the marker, not this binding, is the hand.
+pub(crate) fn is_legacy_triage_requeue_binding(entry: &TaskHistoryEntry) -> bool {
+    triage_requeue_run_id(entry).is_some()
+}
+
+fn note_outcome(note: &str) -> LegacyBlockedTriageOutcome {
+    let mut outcome = LegacyBlockedTriageOutcome::Missing;
+    for field in note.split_whitespace() {
+        let Some(value) = field.strip_prefix("outcome=") else {
+            continue;
+        };
+        if value == "requeued" {
+            // Any exact requeue token counts, as the retired reader did.
+            outcome = LegacyBlockedTriageOutcome::Requeued;
+        } else if !value.is_empty() && matches!(outcome, LegacyBlockedTriageOutcome::Missing) {
+            outcome = LegacyBlockedTriageOutcome::Other(value.to_string());
+        }
+    }
+    outcome
+}
+
+fn note_disposition(note: &str) -> LegacyBlockedTriageDisposition {
+    let mut disposition = LegacyBlockedTriageDisposition::Missing;
+    for field in note.split_whitespace() {
+        let Some(value) = field.strip_prefix("disposition=") else {
+            continue;
+        };
+        if value == "decision" {
+            disposition = LegacyBlockedTriageDisposition::Decision;
+        } else if !value.is_empty()
+            && matches!(disposition, LegacyBlockedTriageDisposition::Missing)
+        {
+            disposition = LegacyBlockedTriageDisposition::Other(value.to_string());
+        }
+    }
+    disposition
+}
+
+fn triage_comment_actor(comments: &[TaskComment], at: DateTime<Utc>) -> Option<String> {
+    comments
+        .iter()
+        .filter(|comment| comment.at == at)
+        .find_map(|comment| {
+            let header = comment
+                .message
+                .strip_prefix(TRIAGE_COMMENT_LEAD)?
+                .lines()
+                .next()?;
+            header
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix("by="))
+                .filter(|actor| !actor.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn triage_requeue_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
+    match &entry.decision {
+        Some(TaskDecision::FinalRecovery {
+            run_id, decision, ..
+        }) if decision == TRIAGE_REQUEUE_DECISION => Some(run_id.as_str()),
+        _ => None,
+    }
+}
+
+fn bound_run_id(history: &[TaskHistoryEntry], at: DateTime<Utc>) -> Option<String> {
+    history.iter().find_map(|other| {
+        if other.at == at {
+            triage_requeue_run_id(other).map(str::to_string)
+        } else {
+            None
+        }
+    })
 }

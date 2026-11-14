@@ -45,15 +45,13 @@ use crate::application::agents::records::spec_documents;
 use crate::application::agents::score::{self, Denominator, Occurrence, Stat, Tally, number};
 use crate::application::agents::{AgentFacts, WindowBounds};
 use crate::application::codebase::PilotRun;
+use crate::application::task::blocked_recovery::{self, LegacyBlockedTriageDisposition};
 use crate::application::task::{BLOCKED_TASK_TRIAGED_EVENT, warning_hold_findings};
 
 /// The actor that writes task-pilot receipts.
 const PILOT_ACTOR: &str = "task-pilot";
 /// Orbit's own writes, which never settle a warning.
 const SYSTEM_ACTOR: &str = "system";
-/// The block-triage marker field of a decision proposal: the block needs the
-/// operator to decide what the task asks.
-const DECISION_DISPOSITION: &str = "disposition=decision";
 /// Settled assessments a row needs before its warning terms count.
 pub(super) const MIN_SETTLED: usize = 10;
 /// The warning terms, each rated per 100 settled assessments.
@@ -171,7 +169,7 @@ pub(in crate::application::agents) fn settle(
         .map(|(index, (at, operation_id, body))| {
             let held = warning_hold_findings(&body["assessment"], &dependencies, &|_| false);
             let next = receipts.get(index + 1).map(|(at, _, _)| *at);
-            let (outcome, settled) = outcome(history, *at, next, !held.is_empty());
+            let (outcome, settled) = outcome(history, comments, *at, next, !held.is_empty());
             Assessment {
                 at: *at,
                 operation_id: (*operation_id).to_string(),
@@ -289,12 +287,14 @@ fn by_writer(entry: &TaskHistoryEntry) -> bool {
 }
 
 /// A block-triage marker recording a decision proposal.
-fn decision_triage(entry: &TaskHistoryEntry) -> bool {
+fn decision_triage(
+    entry: &TaskHistoryEntry,
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+) -> bool {
     entry.event == BLOCKED_TASK_TRIAGED_EVENT
-        && entry.note.as_deref().is_some_and(|note| {
-            note.split_whitespace()
-                .any(|field| field == DECISION_DISPOSITION)
-        })
+        && blocked_recovery::decode_blocked_task_triaged(entry, history, comments)
+            .is_some_and(|record| record.disposition == LegacyBlockedTriageDisposition::Decision)
 }
 
 type Settled = (Outcome, Option<(DateTime<Utc>, String)>);
@@ -302,6 +302,7 @@ type Settled = (Outcome, Option<(DateTime<Utc>, String)>);
 /// How the assessment written at `at` settled, given the next one at `next`.
 fn outcome(
     history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
     at: DateTime<Utc>,
     next: Option<DateTime<Utc>>,
     held: bool,
@@ -398,7 +399,7 @@ fn outcome(
                 }
                 _ => {}
             }
-        } else if decision_triage(entry) {
+        } else if decision_triage(entry, history, comments) {
             return settled(
                 Outcome::Missed,
                 entry,
