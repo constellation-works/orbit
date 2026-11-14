@@ -254,10 +254,9 @@ impl TaskCommitBoundary {
     }
 
     pub fn landing_attempt(&self, handoff_id: &str) -> Result<Option<LandingAttempt>, OrbitError> {
-        Ok(self
-            .landing_attempts()?
-            .into_iter()
-            .find(|attempt| attempt.handoff_id == handoff_id))
+        self.attempt_row(handoff_id)?
+            .map(|r| decode(&r.payload_json))
+            .transpose()
     }
 
     fn attempt_row(&self, handoff_id: &str) -> Result<Option<TaskCoordinationRow>, OrbitError> {
@@ -568,8 +567,8 @@ impl TaskCommitBoundary {
     /// both attempts' human reasons. The raw stop string, including an
     /// `owner_landing_refusal` diagnostic, stays on the landing attempt.
     ///
-    /// A `requeue` stop — the candidate fails its own required check once
-    /// that one repair is spent [ORB-16890] — revokes the handoff's
+    /// A `requeue` stop — the candidate fails its own required check
+    /// [ORB-16890] — revokes the handoff's
     /// authority too, and the claim ends: the task returns to the backlog
     /// with the accepted candidate and the stop's human reason kept for its
     /// next run, owner or follower, which repairs that candidate. Past
@@ -653,10 +652,10 @@ impl TaskCommitBoundary {
         }
     }
 
-    /// [ORB-16890] End a claim whose candidate fails its own required check
-    /// once its automatic repair is spent: keep the accepted candidate with
-    /// the stop's human reason for the task's next run and return the task
-    /// to the backlog, or block it once the landing repair budget is spent.
+    /// [ORB-16890] End a claim whose candidate fails its own required check:
+    /// keep the accepted candidate with the stop's human reason for the
+    /// task's next run and return the task to the backlog, or block it once
+    /// the landing repair budget is spent.
     fn requeue_landing_repair(
         &self,
         auth: &ClaimInvocation,

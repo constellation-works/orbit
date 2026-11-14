@@ -914,7 +914,7 @@
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe write identity; selects guarded update (as do expected_revision, verdict, complete), which accepts only its mode's fields: 'verdict', 'complete'; 'comment'; or 'status' and the add fields."
+          "description": "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update."
         },
         "expected_revision": {
           "type": "string",

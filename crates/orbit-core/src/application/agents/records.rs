@@ -12,6 +12,7 @@ use orbit_types::task::{
     task_fields_updated_documents,
 };
 use orbit_types::workflow::{RecoveryFault, TASK_BLOCKED_BY_AGENT_EVENT};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::application::codebase::{BlockCause, SettledFailure, actor_kind, classify_block};
@@ -47,7 +48,7 @@ const SPEC_BLOCKER_WORDS: &[&str] = &[
 const DETAIL_CHARS: usize = 200;
 
 /// What a rework occurrence is attributed to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(in crate::application) enum Cause {
     /// The task's own specification: an edit to what it asks, a criteria
     /// blocker or escalation.

@@ -276,7 +276,7 @@ pub struct ReadoutMetric {
     /// `lower` or `higher` is better.
     pub better: &'static str,
     pub unit: &'static str,
-    /// `false` while the metric's source series does not exist.
+    /// Always `true`; kept so the dashboard's readout contract holds.
     pub measured: bool,
     pub arms: Vec<ArmEstimate>,
     pub differences: Vec<Difference>,
@@ -398,7 +398,7 @@ pub struct Verdict {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
-    /// `sample_ratio`, `drift`, `undelivered`, `lagging`, `primary_unmeasured`,
+    /// `sample_ratio`, `drift`, `undelivered`, `lagging`,
     /// `primary_all_unmeasured`, `first_edit_incomplete`,
     /// `tool_trace_incomplete`, `explorer_trace_incomplete`, `crew_mismatch` or
     /// `crew_mismatch_unavailable`.
@@ -407,134 +407,6 @@ pub struct ReadoutWarning {
 }
 
 use orbit_types::workflow::TagInstructionRole;
-
-/// Whether an arm does better with a lower or a higher value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Better {
-    Lower,
-    Higher,
-}
-
-/// How a metric is summarised: a mean of per-task values, a rate of
-/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
-    Mean,
-    Rate,
-    /// Arm total numerator divided by arm total reviewable lines.
-    Ratio,
-}
-
-pub(super) struct MetricSpec {
-    pub(super) name: &'static str,
-    pub(super) kind: Kind,
-    pub(super) better: Better,
-    pub(super) unit: &'static str,
-    /// `false` for a metric whose source series does not exist yet.
-    pub(super) measured: bool,
-}
-
-const fn spec(
-    name: &'static str,
-    kind: Kind,
-    better: Better,
-    unit: &'static str,
-    measured: bool,
-) -> MetricSpec {
-    MetricSpec {
-        name,
-        kind,
-        better,
-        unit,
-        measured,
-    }
-}
-
-/// Every metric an experiment may name, in the definition's order.
-pub(super) const METRIC_SPECS: &[MetricSpec] = &[
-    spec(
-        "implement_tokens",
-        Kind::Mean,
-        Better::Lower,
-        "normalized_tokens",
-        true,
-    ),
-    spec(
-        "total_tokens",
-        Kind::Mean,
-        Better::Lower,
-        "normalized_tokens",
-        true,
-    ),
-    spec("cost_usd", Kind::Mean, Better::Lower, "usd", true),
-    spec("lead_time", Kind::Mean, Better::Lower, "hours", true),
-    spec(
-        "implement_duration",
-        Kind::Mean,
-        Better::Lower,
-        "minutes",
-        true,
-    ),
-    spec(
-        "turns_before_first_edit",
-        Kind::Mean,
-        Better::Lower,
-        "turns",
-        true,
-    ),
-    spec(
-        "result_bytes_before_first_edit",
-        Kind::Mean,
-        Better::Lower,
-        "bytes",
-        true,
-    ),
-    spec(
-        "first_pass_acceptance",
-        Kind::Rate,
-        Better::Higher,
-        "rate",
-        true,
-    ),
-    spec("review_repairs", Kind::Mean, Better::Lower, "count", true),
-    spec("step_recoveries", Kind::Mean, Better::Lower, "count", true),
-    spec("final_recoveries", Kind::Mean, Better::Lower, "count", true),
-    spec("failed_checks", Kind::Mean, Better::Lower, "count", true),
-    spec("merge_conflicts", Kind::Mean, Better::Lower, "count", true),
-    spec(
-        "delivery_done_rate",
-        Kind::Rate,
-        Better::Higher,
-        "rate",
-        true,
-    ),
-    spec(
-        "escaped_regressions",
-        Kind::Mean,
-        Better::Lower,
-        "count",
-        true,
-    ),
-    spec("lines_changed", Kind::Mean, Better::Lower, "lines", true),
-    spec(
-        "cost_per_line",
-        Kind::Ratio,
-        Better::Lower,
-        "usd_per_line",
-        true,
-    ),
-    spec(
-        "lead_time_per_line",
-        Kind::Ratio,
-        Better::Lower,
-        "hours_per_line",
-        true,
-    ),
-];
-
-pub(super) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
-    METRIC_SPECS.iter().find(|spec| spec.name == name)
-}
 
 /// One task's value for one metric.
 #[derive(Debug, Clone, Copy, PartialEq)]

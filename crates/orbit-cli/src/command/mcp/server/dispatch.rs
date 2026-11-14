@@ -39,7 +39,7 @@ impl McpHost for ServerMcpHost {
         // shipped defaults here and fails closed at call time, so tools/list
         // stays available for globally resolved tools such as task.show.
         let Ok((runtime, _selected)) =
-            self.resolve_workspace_runtime("orbit.friction.add", &input, context)
+            self.resolve_workspace_runtime("orbit.friction.add", &input, context, None)
         else {
             return Ok(None);
         };
@@ -52,33 +52,7 @@ impl McpHost for ServerMcpHost {
     /// tools follow the host state alone and are never hidden here. Any read
     /// that fails hides nothing — `tools/call` refuses on its own.
     fn hidden_tool_names(&self, context: &ToolSessionContext) -> BTreeSet<String> {
-        let owners = match self.plugin_surface.resolve(&self.global_root) {
-            Ok(surface) if !surface.workspace_tool_owners.is_empty() => {
-                surface.workspace_tool_owners.clone()
-            }
-            _ => return BTreeSet::new(),
-        };
-        let switched_off: BTreeSet<String> = if context.workspace.is_some() {
-            let Some(probe) = owners.keys().next() else {
-                return BTreeSet::new();
-            };
-            let input = Value::Object(Default::default());
-            let Ok((runtime, _)) = self.resolve_workspace_runtime(probe, &input, context) else {
-                return BTreeSet::new();
-            };
-            owners
-                .values()
-                .filter(|plugin| runtime.ensure_plugin_enabled_in_workspace(plugin).is_err())
-                .cloned()
-                .collect()
-        } else {
-            self.plugins_off_in_every_workspace(owners.values())
-        };
-        owners
-            .into_iter()
-            .filter(|(_, plugin)| switched_off.contains(plugin))
-            .map(|(tool, _)| tool)
-            .collect()
+        self.hidden_tool_names_from_surface(context, None, None)
     }
 
     fn refuse_internal_drain(
@@ -106,7 +80,7 @@ impl McpHost for ServerMcpHost {
         let Some(canonical) = orbit_mcp::internal_drain_name(name) else {
             return self.refuse_internal_drain(name, input, context);
         };
-        self.call_workspace_tool(canonical, input, context)
+        self.call_workspace_tool(canonical, input, context, None)
     }
 
     fn call_tool(
@@ -142,17 +116,29 @@ impl ServerMcpHost {
         if name == orbit_mcp::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL {
             return self.call_global_tool(name, input, context);
         }
-        let definition = match self.definition(name, &context) {
+        // One advertised resolution for this call: the definition, plugin
+        // membership and the workspace-optional check all read this snapshot.
+        let surface = match self.advertised_surface() {
+            Ok(surface) => surface,
+            Err(error) => return self.audit_global_failure(name, input, context, error),
+        };
+        let definition = match self.definition_from_advertised(&surface, name, &context) {
             Ok(definition) => definition,
             Err(error) => return self.audit_global_failure(name, input, context, error),
         };
         if definition.scope == McpToolScope::Global {
-            if self.is_plugin_tool(name) {
+            let is_plugin = surface.plugins.as_ref().is_some_and(|plugins| {
+                plugins
+                    .definitions
+                    .iter()
+                    .any(|plugin| plugin.schema.name == name)
+            });
+            if is_plugin {
                 return self.call_global_plugin_tool(name, input, context);
             }
             return self.call_global_tool(name, input, context);
         }
-        self.call_workspace_tool(name, input, context)
+        self.call_workspace_tool(name, input, context, Some(&definition))
     }
 }
 

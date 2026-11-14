@@ -53,10 +53,9 @@ pub enum DeliveryRefusal {
     /// pushed, and the one re-trigger completion requested for that head
     /// produced none either. The task stays in review; no repair is spent.
     CheckRunsAbsent,
-    /// A required check failed because of the candidate after its one
-    /// automatic repair was spent. The claim ends and the task returns to
-    /// the backlog with the candidate kept, or blocks once the landing
-    /// repair budget is spent. The held run is not resumed.
+    /// A required check failed because of the candidate. The claim ends and
+    /// the task returns to the backlog with the candidate kept, or blocks
+    /// once the landing repair budget is spent. The held run is not resumed.
     LandingRepairRequeue,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
@@ -176,7 +175,7 @@ impl DeliveryRefusal {
                 "An auto-fix pass hands this task back to completion once the head reports a required check run. If none appear, confirm the forge runs workflows for this repository, then start the required checks on that head by hand or push a new head.".into()
             }
             Self::LandingRepairRequeue => {
-                "The automatic repair is spent, the claim ended, and the task returned to the backlog with this candidate kept (or it is blocked once the landing repair budget is spent). The next run repairs that candidate. Do not resume this held run.".into()
+                "The claim ended and the task returned to the backlog with this candidate kept (or it is blocked once the landing repair budget is spent). The next run repairs that candidate. Do not resume this held run.".into()
             }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()

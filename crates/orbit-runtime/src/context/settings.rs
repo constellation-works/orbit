@@ -109,6 +109,9 @@ pub struct OrbitRuntimeSettings {
     /// `workflow.task_types`: the ordered task types type pools route by
     /// and the implementer scorecard's by-type lens.
     task_types: Vec<orbit_config::TaskTypeDefinition>,
+    /// `workflow.regression_layers`: the ordered path layers codebase
+    /// regression analytics classify a fix by.
+    regression_layers: Vec<orbit_config::RegressionLayerDefinition>,
     /// `[decision_channel] enabled`: raise decision requests for held work.
     decision_channel_enabled: bool,
     /// The fixed lease policy (path leases disabled) [ORB-22808]: whether
@@ -166,6 +169,7 @@ impl OrbitRuntimeSettings {
             orbit_common::fs::path_filter::PathFilter,
         ),
         task_types: Vec<orbit_config::TaskTypeDefinition>,
+        regression_layers: Vec<orbit_config::RegressionLayerDefinition>,
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
         experiments: orbit_config::ExperimentSettings,
@@ -218,6 +222,7 @@ impl OrbitRuntimeSettings {
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
             task_types,
+            regression_layers,
             decision_channel_enabled,
             lease_policy,
             experiments,
@@ -247,6 +252,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn task_types(&self) -> &[orbit_config::TaskTypeDefinition] {
         &self.task_types
+    }
+
+    pub(crate) fn regression_layers(&self) -> &[orbit_config::RegressionLayerDefinition] {
+        &self.regression_layers
     }
 
     pub(crate) fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
