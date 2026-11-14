@@ -262,7 +262,10 @@ instead. The built-in fulfilment runs only `scripts/codeql-rust-local.sh`
 with optional `--ram <mib>` and `--toolchain <version>` and exactly one query
 selector. Download the script from
 <https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
-and save it at `scripts/codeql-rust-local.sh` in the workspace. A custom
+and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it
+executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755):
+the fulfilment executes that path directly, so a copy saved without the
+executable bit cannot run. A custom
 command is not fulfilled by the built-in path: the run attaches its log with
 that refusal and the hold stays. For each such task the sweep dispatches one
 `review_evidence_fulfilment_pipeline` run, one at a time. The run executes an
