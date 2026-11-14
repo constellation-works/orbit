@@ -206,8 +206,27 @@ impl OrbitRuntime {
             }
             // Outside the window and upgrade interruptions are not this
             // pass's to consider at all.
+            // Orphan timing may now be the detection-time upper bound. Keep
+            // adoption's activity window independent of when a reader happened
+            // to discover a dead worker, and never extend an older terminal row.
+            let activity_at = if run.state == JobRunState::Interrupted {
+                match self.latest_run_audit_timestamp(&run.run_id) {
+                    Ok(activity) => activity,
+                    Err(error) => {
+                        tracing::warn!(
+                            run_id = %run.run_id,
+                            %error,
+                            "orphan adoption deferred: recent activity unreadable",
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
             if run
                 .finished_at
+                .map(|finished| activity_at.map_or(finished, |activity| finished.min(activity)))
                 .is_none_or(|at| now.signed_duration_since(at) > ADOPTION_WINDOW)
                 || super::upgrade_resume::upgrade_interrupted(&run)
             {

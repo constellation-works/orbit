@@ -24,6 +24,7 @@ mod task_params_test_support;
 orbit_common::isolate_test_process!();
 
 mod scenarios;
+mod store_gc;
 
 /// Keep related permutations in one table with isolated fixture state.
 macro_rules! scenario_table {

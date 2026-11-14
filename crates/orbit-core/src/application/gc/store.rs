@@ -7,7 +7,8 @@
 //! Each plans by default and deletes only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
 //! pause between them so other writers are not starved while a long history
-//! is pruned. Neither runs `VACUUM`: freed pages stay on the freelist, which
+//! is pruned. Busy batches retry for up to a minute, releasing the connection
+//! between attempts. Neither runs `VACUUM`: freed pages stay on the freelist, which
 //! each report shows.
 
 use std::collections::{HashMap, HashSet};
@@ -30,6 +31,8 @@ use crate::{OrbitError, OrbitRuntime};
 const RETENTION_BATCH_ROWS: usize = 1_000;
 /// Pause between batches, so a queued writer gets the lock.
 const BATCH_PAUSE: Duration = Duration::from_millis(20);
+/// Contention window for one batch, including SQLite's own busy waits.
+const BATCH_BUSY_WINDOW: Duration = Duration::from_secs(60);
 /// Per-minute run and host resource history, and the admission forecasts
 /// checked against it, are kept at least this long. Older rows stay while
 /// they belong to the newest deliveries of their profile key or the newest
@@ -670,16 +673,32 @@ fn run_batches(
     }
 }
 
-/// Run one write transaction, recording its duration.
+/// Retry only lock contention, with no transaction or writer mutex held during
+/// the pause. A failed store batch rolls back before returning, so retrying it
+/// cannot double-count committed rows. Report the successful attempt's elapsed
+/// time separately from retry backoff.
 fn timed_batch(
     writes: &mut BatchReport,
-    batch: impl FnOnce() -> Result<usize, OrbitError>,
+    mut batch: impl FnMut() -> Result<usize, OrbitError>,
 ) -> Result<usize, OrbitError> {
-    let started = Instant::now();
-    let removed = batch()?;
-    writes.batches += 1;
-    writes.max_batch_ms = writes.max_batch_ms.max(elapsed_ms(started));
-    Ok(removed)
+    let deadline = Instant::now() + BATCH_BUSY_WINDOW;
+    loop {
+        let started = Instant::now();
+        match batch() {
+            Ok(removed) => {
+                writes.batches += 1;
+                writes.max_batch_ms = writes.max_batch_ms.max(elapsed_ms(started));
+                return Ok(removed);
+            }
+            Err(error) if error.is_lock_busy() && Instant::now() < deadline => {
+                tracing::debug!(%error, "store retention batch busy; retrying");
+                std::thread::sleep(
+                    BATCH_PAUSE.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn elapsed_ms(started: Instant) -> u64 {

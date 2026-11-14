@@ -2825,9 +2825,13 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 Store retention selects resource-history candidates once on a read connection,
 including the deliveries kept for each profile key and crew model. It deletes
 those candidates by key in batches of at most 1,000 rows, yielding 20 ms between
-batches; history ranking holds no writer lock. The blob-reference scan stops
-at each table's initial maximum rowid, while pending markers and the 24-hour
-blob grace protect concurrent publications. Freed database pages remain
+batches; history ranking holds no writer lock. Audit, run-state, resource-history
+and journal write batches retry SQLite busy/locked failures within a one-minute
+contention window per batch, releasing their transaction and connection lock
+before each 20 ms retry pause. An in-flight SQLite busy wait can finish after
+that window; other errors and contention that outlasts it still fail the pass.
+The blob-reference scan stops at each table's initial maximum rowid, while
+pending markers and the 24-hour blob grace protect concurrent publications. Freed database pages remain
 available for reuse; retention does not run `VACUUM`.
 
 Several housekeeping bounds are fixed [ORB-22808]; their former keys are [deprecated](#validation-and-errors):
