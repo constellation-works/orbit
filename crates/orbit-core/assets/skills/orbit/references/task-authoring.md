@@ -132,6 +132,40 @@ orbit tool run orbit.task.add --input '{
 }'
 ```
 
+### Bound the footprint and evidence before filing
+
+File only work the pilot can assess. Before creating the task, establish both
+halves of its input:
+
+- **Bounded selectors.** Every `context_files` entry is a verified creation,
+  modification or deletion target at the scoped revision: an existing file,
+  directory or symbol confirmed by inspection, or a known new target filed
+  with `allow_missing_context` and a stated creation intent. See Modification
+  footprint below for granularity, companions and wiring. Never file a sweep
+  of a directory or crate, read-only background, tests or fixtures only
+  consulted, or a shared reference doc as the footprint; background belongs
+  in the description. A task whose batch cannot be reconciled from readable
+  sources — an oldest-first selection with uncovered history, an unreadable
+  predecessor ledger, an unresolvable release reference — has no verified
+  footprint yet. File the smallest bounded investigation that establishes it
+  instead of the full repair, or leave the repair unfiled until the sources
+  are readable.
+- **Readable evidence references.** Every run, log, commit, ledger, tag or
+  predecessor artifact the description or criteria names must be readable
+  through the task record or the lane's granted tools. Quote the failing
+  command and its tested commit rather than a truncated excerpt: a truncated
+  log with no commit identifies no repair. Record each ledger's dates and
+  sources rather than citing it alone: an unreconciled ledger verifies no
+  batch. Resolve release tags and predecessor artifacts before filing. An
+  unreadable reference is a filing block. Make it readable or re-scope the
+  task. Never file the repair expecting the pilot to resolve it.
+- **Check the pilot's answer.** After filing, read the task's readiness and
+  the pilot assessment. A `selectors`, `verified_no_diff` or
+  `host_operational` disposition with its lock footprint is the filing proof.
+  An `unassessed` recommendation, or a holding unestablished-footprint
+  finding, means the filing failed this section. Attach the missing
+  selectors or evidence and request a new pilot assessment.
+
 Write the title as a concrete outcome that fits the commit subject. The pipeline
 writes the title as `<type>: <title>` and cuts that part at 72 characters with
 an ellipsis, so a longer title ends mid-word in the history. Keep titles to at
