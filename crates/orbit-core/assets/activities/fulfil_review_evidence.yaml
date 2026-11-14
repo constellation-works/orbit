@@ -13,7 +13,9 @@ spec:
     --test <target> [<filter>]` (a single `--` may precede the one filter)
     or exactly one of the owner's required
     validation commands, with no shell metacharacter. Any other command
-    refuses the whole hold before anything runs. The Linux owner must have
+    refuses the whole hold before anything runs. A refused `codeql` command's
+    `detail` states the admitted command and the published script to install;
+    a custom command is not fulfilled. The Linux owner must have
     working Bubblewrap namespaces, and the scratch filesystem must have
     `min_free_mib` free (default 30 GiB). Each command runs without a shell at
     the held commit: CodeQL in a standalone shallow checkout confined by

@@ -2588,7 +2588,7 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
 - A `host_sandbox_test` rule is owed on a host of `os`, which runs it outside the agent sandbox at settlement, so its command must be one settlement admits. A held `linux` rule the leaf could not run is fulfilled by a Linux owner whose host can create namespaces.
 - The owner captures the rules on each claim. The reviewer records an owed check `not_run` and never attempts it, and a verdict whose only gaps are owed checks holds for them instead of blocking.
 
-Example: the [CodeQL runbook](runbooks/codeql-local.md#non-linux-hosts) rule (`kind = "codeql"`, `paths = ["**/*.rs"]`, `os = "linux"`, `command = "scripts/codeql-rust-local.sh …"`, `artifact = "evidence/codeql-rust-linux.json"`, and `hosted_check` only where a hosted job runs that command). Design: [owed evidence](design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545).
+Example: the [CodeQL runbook](runbooks/codeql-local.md#non-linux-hosts) rule (`kind = "codeql"`, `paths = ["**/*.rs"]`, `os = "linux"`, `command = "scripts/codeql-rust-local.sh …"`, `artifact = "evidence/codeql-rust-linux.json"`, and `hosted_check` only where a hosted job runs that command). The built-in fulfilment runs only that script, with optional `--ram` and `--toolchain` and one query selector. Obtain it from <https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh> and save it at `scripts/codeql-rust-local.sh` in the workspace. A custom `codeql` command still loads, and that fulfilment does not run it. Design: [owed evidence](design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545).
 
 #### Distributed PR delivery
 

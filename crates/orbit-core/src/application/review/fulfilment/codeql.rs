@@ -27,6 +27,9 @@ use crate::application::task::recovery_checkout_path;
 
 /// The only `codeql` command a fulfilment runs, relative to the held checkout.
 const CODEQL_SCRIPT: &str = "scripts/codeql-rust-local.sh";
+/// Published copy of [`CODEQL_SCRIPT`], pinned to release `v0.49.0`.
+/// That URL returned the script in this checkout (HTTP 200, no fragment).
+const CODEQL_SCRIPT_SOURCE: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh";
 /// Ceiling for one CodeQL run: toolchain preparation, extraction, analysis.
 const CODEQL_TIMEOUT_MS: u64 = 3 * 60 * 60 * 1000;
 /// Captured output kept per stream in the log artifact.
@@ -378,11 +381,7 @@ impl OrbitRuntime {
 /// its own options and one query selector. Every word is restricted to
 /// characters with no shell meaning, so no hold can name another program.
 pub(super) fn admitted_codeql_args(command: &str) -> Result<Vec<String>, String> {
-    let refuse = |why: &str| {
-        Err(format!(
-            "`{command}` is not an admitted CodeQL command: {why}"
-        ))
-    };
+    let refuse = |why: &str| Err(codeql_command_refusal(command, why));
     let plain = |word: &str| {
         !word.is_empty()
             && word.chars().all(|c| {
@@ -429,6 +428,19 @@ pub(super) fn admitted_codeql_args(command: &str) -> Result<Vec<String>, String>
         return refuse("it names no query selector");
     }
     Ok(args)
+}
+
+/// Why `command` is not run, including the admitted shape and where a
+/// consumer obtains [`CODEQL_SCRIPT`]. The workspace-relative program is the
+/// command contract; the URL is the copy to install there.
+fn codeql_command_refusal(command: &str, why: &str) -> String {
+    format!(
+        "`{command}` is not an admitted CodeQL command: {why}. \
+         The built-in fulfilment admits only `{CODEQL_SCRIPT}` with optional \
+         `--ram <mib>` and `--toolchain <version>` and exactly one query selector. \
+         Obtain the script from {CODEQL_SCRIPT_SOURCE} and place it at `{CODEQL_SCRIPT}` \
+         in the workspace. A custom command is not fulfilled"
+    )
 }
 
 /// What a complete run's SARIF reported.
