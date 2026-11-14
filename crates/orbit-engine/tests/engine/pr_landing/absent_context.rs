@@ -1066,6 +1066,40 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                     "update\nmerge\n"
                 );
             });
+            // A job behind the full scope gate may also need sibling jobs
+            // that are behind that same gate and need nothing else. `peers`
+            // adds five such jobs; `need` appends to a job's `needs`.
+            let peers = |source: &mut Value| {
+                for id in ["peer-1", "peer-2", "peer-3", "peer-4", "peer-5"] {
+                    source["jobs"][id] = json!({
+                        "needs": source["jobs"]["ci"]["needs"],
+                        "if": source["jobs"]["ci"]["if"],
+                        "runs-on": "ubuntu-latest",
+                        "steps": [{"run": "true"}],
+                    });
+                }
+            };
+            let need = |source: &mut Value, job: &str, siblings: &[&str]| {
+                source["jobs"][job]["needs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend(siblings.iter().map(|sibling| json!(sibling)));
+            };
+            // One job needs a single sibling and `ci` needs four: both report
+            // under their own names whatever the siblings do, so the missing
+            // check is still proven and repaired by one update.
+            in_fresh_row(sandbox, |row| {
+                let mut source = ci();
+                peers(&mut source);
+                need(&mut source, "peer-5", &["peer-1"]);
+                need(&mut source, "ci", &["peer-1", "peer-2", "peer-3", "peer-4"]);
+                let (fx, result) = full(row, &source);
+                result.unwrap_or_else(|error| panic!("sibling needs: {error}"));
+                assert_eq!(
+                    fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                    "update\nmerge\n"
+                );
+            });
             for case in [
                 "scope_script",
                 "scope_output",
@@ -1074,6 +1108,14 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                 "scope_step",
                 "always",
                 "needs",
+                "sibling_unknown",
+                "sibling_self",
+                "sibling_repeated",
+                "sibling_other_shape",
+                "sibling_chained",
+                "sibling_excess",
+                "sibling_docs_dependent",
+                "sibling_dependent_condition",
                 "stale_open_fallback",
                 "stale_closed_fallback",
                 "stale_event_fallback",
@@ -1126,6 +1168,48 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                                 .as_array_mut()
                                 .unwrap()
                                 .push(json!("docs"));
+                        }
+                        "sibling_unknown" => need(&mut source, "ci", &["absent"]),
+                        "sibling_self" => need(&mut source, "ci", &["ci"]),
+                        "sibling_repeated" => {
+                            peers(&mut source);
+                            need(&mut source, "ci", &["peer-1", "peer-1"]);
+                        }
+                        // An unconditional job is admitted by itself, but it is
+                        // not behind the dependent's gate.
+                        "sibling_other_shape" => {
+                            peers(&mut source);
+                            let peer = source["jobs"]["peer-1"].as_object_mut().unwrap();
+                            peer.remove("needs");
+                            peer.remove("if");
+                            need(&mut source, "ci", &["peer-1"]);
+                        }
+                        "sibling_chained" => {
+                            peers(&mut source);
+                            need(&mut source, "peer-1", &["peer-2"]);
+                            need(&mut source, "ci", &["peer-1"]);
+                        }
+                        "sibling_excess" => {
+                            peers(&mut source);
+                            need(
+                                &mut source,
+                                "ci",
+                                &["peer-1", "peer-2", "peer-3", "peer-4", "peer-5"],
+                            );
+                        }
+                        "sibling_docs_dependent" => {
+                            peers(&mut source);
+                            need(&mut source, "docs", &["peer-1"]);
+                        }
+                        "sibling_dependent_condition" => {
+                            peers(&mut source);
+                            need(&mut source, "ci", &["peer-1"]);
+                            source["jobs"]["ci"]["if"] = json!(
+                                source["jobs"]["ci"]["if"]
+                                    .as_str()
+                                    .unwrap()
+                                    .replace(" }}", " && github.actor == 'owner' }}")
+                            );
                         }
                         "unknown_condition" | "scope_unknown_condition" => {
                             let job = if case == "unknown_condition" {

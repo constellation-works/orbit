@@ -434,7 +434,13 @@ state read (including the fixed fail-soft form whose `unknown` output admits
 the job, without an event-state fallback), or one also narrowed by the exact
 `Change scope` job of `ci.yml`
 (`scripts/ci-change-scope.sh`, `continue-on-error`): every mode it can output
-either runs such a job or reports it skipped under its name. A skipped check
+either runs such a job or reports it skipped under its name. A job narrowed by
+the full (non-docs) form of that gate may also need one to four distinct
+sibling jobs, each in that same form with only the live-state and `Change
+scope` needs: its `!cancelled()` condition runs it under its name when a
+sibling fails, and the shared condition skips both together. A sibling of any
+other shape, a repeated or self reference, a fifth sibling and a sibling that
+itself needs siblings refuse. A skipped check
 run on the old head that no policy requires does not stop the path. The
 workflow scan authenticates path-filtered (`paths` or `paths-ignore`) PR
 workflows but derives no guaranteed contexts from them; they cannot justify

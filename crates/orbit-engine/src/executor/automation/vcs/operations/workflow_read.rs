@@ -235,6 +235,16 @@ fn legacy_api_read(command: &str, workflow: &Value, job: &str, step: &Value) -> 
 
 /// Finite PR-emission condition forms, sharing the existing source-bound REST
 /// projection verifier. This recognizes no general expression or shell syntax.
+///
+/// Admitted forms, by `needs` and `if`:
+/// - neither, or no `needs` and the literal PR-event condition;
+/// - `needs: <root>` with the exact live-open condition of that root's read;
+/// - `needs: [<root>, <scope>]` with the exact full or docs condition over the
+///   change-scope mode;
+/// - `needs: [<root>, <scope>, <sibling>...]` with the exact full condition,
+///   under the rule on `scope_gated_siblings`.
+///
+/// Every other shape refuses.
 pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitError> {
     let job = &workflow["jobs"][id];
     if job.get("uses").is_some() {
@@ -256,9 +266,13 @@ pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitErr
         // the scope job never fails and every mode it can output either runs
         // the job or skips it under its unchanged name.
         (Some(Value::Array(needs)), Some(condition)) => {
-            let [Value::String(root), Value::String(scope)] = needs.as_slice() else {
+            let [Value::String(root), Value::String(scope), siblings @ ..] = needs.as_slice()
+            else {
                 return Err(unreadable("unsupported emission dependencies"));
             };
+            if siblings.len() > MAX_SIBLING_NEEDS {
+                return Err(unreadable("unsupported emission dependencies"));
+            }
             let open = live_open(root, live_state(workflow, root)?);
             let mode = format!("needs.{scope}.outputs.mode");
             let full = format!("${{{{ {open} && {mode} != 'docs' && {mode} != 'skip' }}}}");
@@ -266,10 +280,55 @@ pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitErr
             if !matches!(condition.as_str(), Some(c) if c == full || c == docs) {
                 return Err(unreadable("unsupported emission condition"));
             }
+            if !siblings.is_empty()
+                && !(condition == full.as_str()
+                    && scope_gated_siblings(workflow, id, root, scope, siblings, &full))
+            {
+                return Err(unreadable("unsupported emission dependencies"));
+            }
             change_scope(workflow, root, scope, &open)
         }
         _ => Err(unreadable("conditional emission is unsupported")),
     }
+}
+
+/// Most sibling jobs one scope-gated job may wait for besides its root and
+/// scope. The form is finite: a longer list refuses.
+const MAX_SIBLING_NEEDS: usize = 4;
+
+/// Whether every extra `needs` entry of scope-gated job `id` is a distinct
+/// other job of this workflow in the plain two-need full form: not reusable,
+/// `needs` exactly `[root, scope]` and `if` exactly `full`, the dependent's own
+/// condition. An unknown job, the job itself, a repeated entry, the docs-form
+/// job, a job of any other admitted shape and a job that itself waits for
+/// siblings all fail, so the form never chains.
+///
+/// Why waiting for such a sibling keeps the dependent reporting on every open
+/// PR: its condition carries `!cancelled()`, so the provider evaluates it even
+/// when a sibling failed, and the job then runs and reports under its
+/// unchanged name. When the scope mode skips the sibling, the identical
+/// condition skips the dependent under its unchanged name. Either way the
+/// outcome is the one the two-need form already guarantees.
+fn scope_gated_siblings(
+    workflow: &Value,
+    id: &str,
+    root: &str,
+    scope: &str,
+    siblings: &[Value],
+    full: &str,
+) -> bool {
+    let plain = serde_json::json!([root, scope]);
+    siblings.iter().enumerate().all(|(index, sibling)| {
+        let Some(sibling_id) = sibling.as_str() else {
+            return false;
+        };
+        let job = &workflow["jobs"][sibling_id];
+        sibling_id != id
+            && !siblings[..index].contains(sibling)
+            && job.get("uses").is_none()
+            && job.get("needs") == Some(&plain)
+            && job.get("if").and_then(Value::as_str) == Some(full)
+    })
 }
 
 enum LiveStateRead {
