@@ -45,6 +45,9 @@ mod observe;
 mod published;
 mod validation;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) use artifacts::import_implementation_evidence;
 pub(in crate::executor::automation) use carry::claim_candidate_carry;
 pub(super) use carry::{carry_to_durable_ref, push_candidate_ref};
