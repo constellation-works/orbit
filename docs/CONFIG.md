@@ -3057,7 +3057,7 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | Deprecated | Translation |
 |---|---|
 | `workflow.system_crew` | Ignored: system work draws from `workflow.<tier>_complexity_crews` ([system work](#system-work-draws-from-the-complexity-pools)). Delete the key and set those pools. |
-| `operation.review_policy` | `before-pr` sets `review.timing = "before_pr"`. `after-landing` enables the `delivery-code-review` auto-task while no operator has configured it; once its `enabled` flag is set by `orbit auto-task toggle` or any other edit, that flag decides. `none` turns neither on. A `[review]` table in the same file wins. |
+| `operation.review_policy` | `before-pr` sets `review.timing = "before_pr"`. `after-landing` and `none` turn neither on: after-landing review is the `delivery-code-review` auto-task's own `enabled` flag (`orbit auto-task toggle delivery-code-review on|off`). A `[review]` table in the same file wins. |
 | `operation.review_minutes` | Becomes `review.minutes`, now one candidate's review limit rather than a lineage total. |
 | `operation.review_crew` | Becomes `workflow.purpose_crews.review`, the same crew or pool. |
 | `workflow.final_recovery_crews` | Becomes `workflow.purpose_crews.final_recovery`, the same pool. |

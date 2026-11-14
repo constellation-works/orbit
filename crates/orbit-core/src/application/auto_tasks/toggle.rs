@@ -26,9 +26,7 @@ pub enum AutoTaskToggleProfile {
     },
     /// The dashboard toggle: compare the observed raw flag before writing,
     /// answer a request the effective switch already satisfies without
-    /// writing, then write as [`Self::Checked`]. Disable on a legacy-enabled
-    /// after-landing consumer (raw flag still false) is not a no-op: it writes
-    /// and the operator stamp clears the legacy enablement.
+    /// writing, then write as [`Self::Checked`].
     Observed {
         /// The raw `enabled` flag the caller observed.
         expected_enabled: bool,
@@ -112,9 +110,6 @@ impl OrbitRuntime {
                         actual_enabled: current.enabled,
                     });
                 }
-                // A legacy after-landing consumer is on while its raw flag is
-                // still false. Comparing the request to that raw flag would
-                // report Disable as a no-op and leave the consumer running.
                 if self.auto_task_enabled(&current) == enabled {
                     return Ok(AutoTaskToggleOutcome::AlreadySet(current));
                 }

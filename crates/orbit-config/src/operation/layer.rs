@@ -10,7 +10,6 @@ use super::keys::{
     PRE_LANDING_REVIEW_CREW_KEY, REVIEW_BEFORE_LANDING_HOSTS_KEY, REVIEW_CREW_KEY,
     REVIEW_HOST_EVIDENCE_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
 };
-use super::legacy::LegacyReviewPolicy;
 use super::minutes::review_minutes;
 use super::timing::ReviewTimingSetting;
 use crate::config_document;
@@ -86,10 +85,6 @@ pub struct OperationLayer {
     /// Explicit `[[review.host_evidence]]` rules; an empty list clears the
     /// rules an earlier layer stated.
     pub review_host_evidence: Option<Vec<HostEvidenceRule>>,
-    /// What a legacy `operation.review_policy` says about after-landing
-    /// review: `Some(true)` for `after-landing`, `Some(false)` for any other
-    /// value, `None` when the layer does not state the legacy key.
-    pub legacy_after_landing: Option<bool>,
 }
 
 impl OperationLayer {
@@ -150,8 +145,6 @@ impl OperationLayer {
                 )?
                 .map(host_evidence_rules)
                 .transpose()?,
-            legacy_after_landing: LegacyReviewPolicy::read(document, config_path)?
-                .map(|policy| policy == LegacyReviewPolicy::AfterLanding),
         })
     }
 

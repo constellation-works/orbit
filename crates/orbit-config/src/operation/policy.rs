@@ -68,12 +68,6 @@ pub struct OperationPolicy {
     /// Checks a claimed leaf's host owes for the paths it changed.
     #[serde(default = "no_host_evidence")]
     pub review_host_evidence: OperationField<Vec<HostEvidenceRule>>,
-    /// The layer whose legacy `operation.review_policy = after-landing`
-    /// still enables the `delivery-code-review` auto-task while that
-    /// definition's own flag was never set explicitly. `None` when no
-    /// legacy statement asks for it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_after_landing: Option<OperationLayerSource>,
 }
 
 impl Default for OperationPolicy {
@@ -94,7 +88,6 @@ impl OperationPolicy {
             review_crew: OperationField::built_in(Vec::new()),
             pre_landing_review_crew: no_pre_landing_review_crew(),
             review_host_evidence: no_host_evidence(),
-            legacy_after_landing: None,
         }
     }
 
@@ -186,9 +179,6 @@ impl OperationPolicy {
             .set(layer.pre_landing_review_crew.as_ref(), source);
         self.review_host_evidence
             .set(layer.review_host_evidence.as_ref(), source);
-        if let Some(after_landing) = layer.legacy_after_landing {
-            self.legacy_after_landing = after_landing.then_some(source);
-        }
     }
 
     /// The pool before-PR and before-landing review draw from:
