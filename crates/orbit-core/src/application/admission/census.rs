@@ -68,6 +68,7 @@ impl OrbitRuntime {
             None if pressure => Some(ExecutorCensus::new(requester, capability, Vec::new())),
             None => None,
         }
+        .map(|census| census.with_tag_label_requirements(self.tag_label_requirements().clone()))
     }
 
     /// The owner-local dispatch order: the owner is the requester, declared
@@ -84,7 +85,10 @@ impl OrbitRuntime {
                 .find(|entry| entry.machine_id == owner)?
                 .capability
                 .clone();
-            Some(ExecutorCensus::new(owner, own, live))
+            Some(
+                ExecutorCensus::new(owner, own, live)
+                    .with_tag_label_requirements(self.tag_label_requirements().clone()),
+            )
         });
         DispatchOrder {
             census,

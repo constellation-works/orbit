@@ -80,6 +80,8 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.review_skip_tags]`: mapped tags whose candidates may
     /// skip agent review under their own paths and guard.
     review_skip_tags: orbit_config::ReviewSkipSettings,
+    /// Additional host labels required by the workspace's task tags.
+    tag_label_requirements: orbit_types::task::TagLabelRequirements,
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
     unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
@@ -156,6 +158,7 @@ impl OrbitRuntimeSettings {
         mid_run_steering: orbit_config::MidRunSteeringSettings,
         tag_instructions: orbit_config::TagInstructionSettings,
         review_skip_tags: orbit_config::ReviewSkipSettings,
+        tag_label_requirements: orbit_types::task::TagLabelRequirements,
         unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
         footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
         unlocked_path_validation_commands: Vec<String>,
@@ -211,6 +214,7 @@ impl OrbitRuntimeSettings {
             mid_run_steering,
             tag_instructions,
             review_skip_tags,
+            tag_label_requirements,
             unlocked_context_paths,
             footprint_lock_modes,
             unlocked_path_validation_commands,
@@ -228,6 +232,10 @@ impl OrbitRuntimeSettings {
             experiments,
             machine_labels,
         }
+    }
+
+    pub(crate) fn tag_label_requirements(&self) -> &orbit_types::task::TagLabelRequirements {
+        &self.tag_label_requirements
     }
 
     pub(crate) fn machine_labels(&self) -> &[String] {

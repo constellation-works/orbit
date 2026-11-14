@@ -74,6 +74,7 @@ impl TaskCommitBoundary {
             tasks,
             receipt,
             screen.executor_host_os,
+            screen.tag_label_requirements,
         )?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
@@ -122,6 +123,7 @@ impl TaskCommitBoundary {
         tasks: &'a [Task],
         receipt: &mut AdmissionReceipt,
         executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+        tag_label_requirements: &orbit_types::task::TagLabelRequirements,
     ) -> Result<Vec<RepairCandidate<'a>>, OrbitError> {
         let mut candidates = Vec::new();
         for state in self.live_claim_states_locked()? {
@@ -163,7 +165,12 @@ impl TaskCommitBoundary {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+            if let Some(reason) = labels_unavailable_with_tag_requirements(
+                request.os,
+                &request.labels,
+                task,
+                tag_label_requirements,
+            ) {
                 receipt.labels_unavailable.push(diagnose(reason));
                 continue;
             }

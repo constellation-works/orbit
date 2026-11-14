@@ -3,6 +3,14 @@ macro_rules! with_workflow_keys {
     ([$($head:tt)*] $($tail:tt)*) => {
         define_config_settings! {
             $($head)*
+    workflow_tag_requires_labels: orbit_types::task::TagLabelRequirements => BTreeMap<String, Vec<String>> {
+        key: "workflow.tag_requires_labels", value_type: "table<string,array<string>>",
+        description: "Additional host capability labels required by each task tag.",
+        section: ConfigSection::Delivery, order: 117,
+        tier: ConfigKeyTier::Advanced,
+        detail: "All matching tags add labels to the task's requires_labels. Tags match case-insensitively; the owner applies its policy to pull admission.",
+        resolve: resolve::resolve_tag_requires_labels,
+    },
     workflow_activity_timeouts: BTreeMap<String, u64> => BTreeMap<String, u64> {
         key: "workflow.activity_timeouts", value_type: "table<string,integer>",
         description: "Wall-clock timeout in seconds for each named CLI agent activity.",

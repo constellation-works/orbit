@@ -326,6 +326,13 @@ pagination for a projection.
   (`host_labels_missing`), and while no live host carries them task show/list
   and `orbit run readiness` name the wait in `placement_wait`. Use it for a
   real capability (a GPU, a signed toolchain), not to pin a hostname.
+  `workflow.tag_requires_labels` adds configured labels for every matching
+  task tag (trimmed, case-insensitive). Admission uses their union with this
+  field, including for existing tasks; the owner applies its map on pulls.
+  Derived labels are not persisted here, and clearing this field cannot remove
+  a tag requirement. A workspace can map `ui = ["visual-fixture"]` and declare
+  that label only on hosts whose managed worker can run its fixture backend;
+  the built-in browser-kit check still applies.
 - `not_before: "<RFC 3339 instant>"` — the earliest time a dispatcher may
   start the task, stored in UTC and shown only when set. Give an instant with
   an offset (`2026-11-06T09:00:00Z`); the CLI's `--not-before` also takes a

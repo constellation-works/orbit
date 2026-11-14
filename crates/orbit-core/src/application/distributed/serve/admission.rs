@@ -258,6 +258,7 @@ impl OrbitRuntime {
                 gates: Some(self.owner_validation_gates()),
                 tag_instructions: Some(self.captured_tag_instructions(&request.ship)),
                 executor_host_os: self.executor_host_os_limits()?,
+                tag_label_requirements: self.tag_label_requirements().clone(),
                 repairs_only,
                 crew_pools: self.dispatch_crew_pools(),
             },

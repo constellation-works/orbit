@@ -379,3 +379,104 @@ crate::scenario_table!(
     grants_and_labels_require_the_owner_to_carry_every_label,
     a_grant_added_during_admission_is_rechecked_before_claim
 );
+
+/// A verified browser alone does not make a worker able to run a workspace's
+/// fixture backend. The owner's mapping also governs existing tasks without
+/// persisting derived labels on those tasks.
+fn configured_fixture_labels_gate_ui_claims_and_local_admission() {
+    let mut pair = Pair::with_owner_host(
+        "[workflow.tag_requires_labels]\n\" UI \" = [\" FIXTURE-BACKEND \", \"fixture-backend\"]\n",
+        "",
+        &[None],
+        |owner| owner.with_machine_labels(vec!["fixture-backend".into(), "image-export".into()]),
+    );
+    let ui = pair.tasks[0].clone();
+    pair.wire.owner.run_tool(
+        "orbit.task.update",
+        json!({"id": ui, "tags": ["UI"], "requires_labels": ["image-export"], "model": "codex"}),
+    ).unwrap();
+    let kit_home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    super::super::host_ui_routing::write_kit(kit_home.path(), true);
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(HostOs::Macos))
+        .with_browser_kit_home(kit_home.path())
+        .with_machine_labels(vec!["image-export".into()]);
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert_eq!(
+        idle["admitted"], 0,
+        "a browser cannot run the fixture: {idle}"
+    );
+    assert!(!pair.owner_has_claim_for_task(&ui));
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .unwrap();
+    let wait = recorded
+        .excluded
+        .iter()
+        .find(|row| row.task_id == ui)
+        .unwrap();
+    assert_eq!(wait.reason.as_deref(), Some("host_labels_missing"));
+    assert!(wait.detail.as_deref().unwrap().contains("fixture-backend"));
+
+    let plain_owner = pair
+        .wire
+        .owner
+        .clone()
+        .with_browser_kit_home(kit_home.path())
+        .with_machine_labels(vec!["image-export".into()]);
+    let discovered = plain_owner
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert!(
+        discovered["task_ids"].as_array().unwrap().is_empty(),
+        "{discovered}"
+    );
+    assert_eq!(discovered["excluded"][0]["reason"], "host_labels_missing");
+    let shown = plain_owner
+        .run_tool("orbit.task.show", json!({"id": ui}))
+        .unwrap();
+    assert!(
+        shown["placement_wait"]
+            .as_str()
+            .unwrap()
+            .contains("fixture-backend")
+    );
+    assert_eq!(shown["requires_labels"], json!(["image-export"]));
+
+    // The tag rule adds requirements; it cannot erase the task's own label.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["fixture-backend".into()]);
+    let still_waiting = pair.pass(&drain);
+    assert_eq!(still_waiting["admitted"], 0, "{still_waiting}");
+    assert!(!pair.owner_has_claim_for_task(&ui));
+
+    // Capability, not OS, decides: the same Mac worker may claim it after
+    // the operator verifies its fixture runtime and declares the label.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["fixture-backend".into(), "image-export".into()]);
+    let ready_drain = pair.start_drain();
+    let leaf = pair.running_leaf(&ready_drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), ui);
+}
+
+crate::scenario_table!(
+    configured_fixture_labels_gate_ui_scenarios,
+    configured_fixture_labels_gate_ui_claims_and_local_admission
+);

@@ -673,6 +673,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.tag_requires_labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.task_pilot_freshness.material_fields": {
       "scope": "built-in",
       "state": "default",

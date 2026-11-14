@@ -6,7 +6,9 @@
 //! Topical tags such as `dashboard` or `ux` route nothing. Local admission and
 //! pull admission both read [`requires_browser_kit`], so a drain, ship
 //! discovery, `orbit run ship` and an owner handing out claims cannot disagree
-//! about which tasks wait for the kit.
+//! about which tasks wait for the kit. Workspace `workflow.tag_requires_labels`
+//! may require additional worker capabilities; a verified browser kit alone
+//! does not establish that a workspace's fixture backend can run.
 
 /// The tag of a task whose change a user sees.
 pub const UI_TAG: &str = "ui";

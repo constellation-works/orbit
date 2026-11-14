@@ -254,6 +254,7 @@ impl TaskCommitBoundary {
             owner_wave: &owner_wave,
             lock_modes: self.store.footprint_lock_modes(),
             executor_host_os,
+            tag_label_requirements: &ordering.tag_label_requirements,
             census,
         };
         let mut receipt = AdmissionReceipt {

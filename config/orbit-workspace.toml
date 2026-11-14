@@ -19,6 +19,12 @@ handoff_steps = [
   "Await the test build and nextest shards",
 ]
 
+# UI QA must run the disposable dashboard fixture inside the managed worker.
+# Declare visual-fixture in machine.labels only after verifying that runtime;
+# the browser kit alone does not establish fixture-backend capability.
+[workflow.tag_requires_labels]
+ui = ["visual-fixture"]
+
 [workflow.generated_paths]
 "docs/INDEX.md" = "make docs-index"
 

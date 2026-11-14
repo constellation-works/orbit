@@ -233,6 +233,11 @@ impl RuntimeKernel {
         self.context.settings().tag_instructions()
     }
 
+    /// Additional host capability requirements keyed by normalized task tag.
+    pub fn tag_label_requirements(&self) -> &orbit_types::task::TagLabelRequirements {
+        self.context.settings().tag_label_requirements()
+    }
+
     /// `[workflow.review_skip_tags]` as admitted.
     pub fn review_skip_settings(&self) -> &orbit_config::ReviewSkipSettings {
         self.context.settings().review_skip_tags()
