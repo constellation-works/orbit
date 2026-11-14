@@ -5,7 +5,7 @@ use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskHistoryEntry, TaskRelationType,
     TaskStatus, tags_at,
 };
-use orbit_types::workflow::ReviewVerdict;
+use orbit_types::workflow::{self, ReviewVerdict};
 
 use super::super::records::{
     Cause, blocked_pr, bounded, cites_criteria, is_operator_requeue, landed, landing_pr,
@@ -183,22 +183,19 @@ pub(in crate::application::agents) fn task_facts(
         });
     }
 
-    // Settlements come from typed history with a legacy-comment fallback.
-    // Failed-fix escalation prose is a separate boundary.
+    // Decode settlements and fix-validation failures once at the facts boundary.
     let mut reviews = review::review_settlement_facts(history, comments);
-    for comment in comments {
-        if review::failed_fix(comment) {
-            if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= comment.at) {
-                review.fix_failed = true;
-            }
-            records.push(Record {
-                problem: Problem::FailedFix,
-                at: comment.at,
-                detail: "reviewer fixes failed owner revalidation".to_string(),
-                cause: None,
-                ended: None,
-            });
+    for at in workflow::review_fix_validation_failure_times(history, comments) {
+        if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= at) {
+            review.fix_failed = true;
         }
+        records.push(Record {
+            problem: Problem::FailedFix,
+            at,
+            detail: "reviewer fixes failed owner revalidation".to_string(),
+            cause: None,
+            ended: None,
+        });
     }
     // An incomplete review is infrastructure's when the block that followed
     // its settlement is.
