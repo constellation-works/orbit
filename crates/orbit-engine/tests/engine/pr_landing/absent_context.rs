@@ -1043,6 +1043,20 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                 "scope_step",
                 "always",
                 "needs",
+                "stale_open_fallback",
+                "stale_closed_fallback",
+                "stale_event_fallback",
+                "unknown_condition",
+                "scope_unknown_condition",
+                "count_output",
+                "scope_count",
+                "live_endpoint",
+                "live_output",
+                "live_shell",
+                "live_environment",
+                "conditional_live_step",
+                "extra_live_step",
+                "count_injection",
             ] {
                 in_fresh_row(sandbox, |row| {
                     let mut source = ci();
@@ -1076,18 +1090,82 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                                     .replace(" }}", " && always() }}")
                             )
                         }
-                        _ => {
+                        "needs" => {
                             source["jobs"]["ci"]["needs"]
                                 .as_array_mut()
                                 .unwrap()
                                 .push(json!("docs"));
+                        }
+                        "unknown_condition" | "scope_unknown_condition" => {
+                            let job = if case == "unknown_condition" {
+                                "ci"
+                            } else {
+                                "scope"
+                            };
+                            source["jobs"][job]["if"] = json!(
+                                source["jobs"][job]["if"]
+                                    .as_str()
+                                    .unwrap()
+                                    .replace(" || needs.pr-state.outputs.state == 'unknown'", "")
+                            );
+                        }
+                        "count_output" => {
+                            source["jobs"]["pr-state"]["outputs"]["changed_files"] =
+                                json!("${{ steps.foreign.outputs.changed_files }}");
+                        }
+                        "scope_count" => {
+                            scope["steps"][1]["env"]["PR_CHANGED_FILES"] =
+                                json!("${{ github.event.pull_request.changed_files }}");
+                        }
+                        "live_output" => {
+                            source["jobs"]["pr-state"]["outputs"]["state"] =
+                                json!("${{ steps.foreign.outputs.state }}");
+                        }
+                        "extra_live_step" => {
+                            source["jobs"]["pr-state"]["steps"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(json!({"run": "echo state=closed >> \"$GITHUB_OUTPUT\""}));
+                        }
+                        _ => {
+                            let step = &mut source["jobs"]["pr-state"]["steps"][0];
+                            match case {
+                                "live_shell" => step["shell"] = json!("python"),
+                                "live_environment" => {
+                                    step["env"]["GH_REPO"] = json!("foreign/repository")
+                                }
+                                "conditional_live_step" => step["if"] = json!(false),
+                                _ => {
+                                    let (from, to) = match case {
+                                        "stale_open_fallback" => {
+                                            ("'state=unknown'", "'state=open'")
+                                        }
+                                        "stale_closed_fallback" => {
+                                            ("'state=unknown'", "'state=closed'")
+                                        }
+                                        "stale_event_fallback" => (
+                                            "'state=unknown'",
+                                            "'state=${{ github.event.pull_request.state }}'",
+                                        ),
+                                        "live_endpoint" => ("/pulls/", "/issues/"),
+                                        "count_injection" => ("== \"number\"", "== \"string\""),
+                                        _ => panic!("unknown case: {case}"),
+                                    };
+                                    let command = step["run"].as_str().unwrap();
+                                    assert!(
+                                        command.contains(from),
+                                        "counterfactual must change the workflow: {case}"
+                                    );
+                                    step["run"] = json!(command.replace(from, to));
+                                }
+                            }
                         }
                     }
                     let (fx, result) = full(row, &source);
                     assert!(result.is_err(), "{case}");
                     assert!(
                         !fx.forge.join("mutations").exists(),
-                        "unknown change-scope semantics cannot update: {case}"
+                        "unknown live-state or change-scope semantics cannot update: {case}"
                     );
                 });
             }

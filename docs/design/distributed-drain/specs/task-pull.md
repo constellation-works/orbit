@@ -430,7 +430,9 @@ with absent required contexts has one bounded base-refresh path. Adapter-owned
 PR-event/integration evidence and complete old/base workflow blobs must prove
 non-emission and exact supported emission on the fresh descendant base.
 Supported emission is an unconditional job, a job behind the adapter's live-PR
-state read, or one also narrowed by the exact `Change scope` job of `ci.yml`
+state read (including the fixed fail-soft form whose `unknown` output admits
+the job, without an event-state fallback), or one also narrowed by the exact
+`Change scope` job of `ci.yml`
 (`scripts/ci-change-scope.sh`, `continue-on-error`): every mode it can output
 either runs such a job or reports it skipped under its name. A skipped check
 run on the old head that no policy requires does not stop the path. The
