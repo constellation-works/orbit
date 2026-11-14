@@ -485,6 +485,7 @@ task_types = []
 | `workflow.test_paths` | `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]` | **Advanced.** Path globs whose changed lines count as tests in landed-delivery diff stats. See [landed diff classification](#landed-diff-classification). |
 | `workflow.non_code_paths` | `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]` | **Advanced.** Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats; everything else is code. See [landed diff classification](#landed-diff-classification). |
 | `workflow.non_reviewable_paths` | `[]` | **Advanced.** Path globs left out of the reviewable-lines denominator. Docs and config stay reviewable; list lockfiles, goldens, snapshots and generated files here. Empty counts every line that is not a pure rename. Distinct from `workflow.non_code_paths`. See [landed diff classification](#landed-diff-classification). |
+| `workflow.regression_layers` | `ci_tests`, `docs_skills` rows | **Advanced.** Ordered `[[workflow.regression_layers]]` tables, each a `name` and `prefixes`, `dirs` and `suffixes` path rules, that give a regression fix its layer in codebase regression analytics. See [regression layers](#regression-layers). |
 | `workflow.review_skip_tags.<tag>.paths` | unset | Path globs (same syntax as `workflow.light_delivery_paths`; `["**"]` allowed) a candidate carrying `<tag>` must change only within to skip agent review. See [review-skip tags](#review-skip-tags-workflowreview_skip_tags). |
 | `workflow.review_skip_tags.<tag>.guard` | unset | Optional repository-relative executable, read from the delivery's base revision, that must exit 0 (with the base and head as its first two arguments) for `<tag>` to skip agent review. |
 
@@ -590,6 +591,30 @@ A rename counts its changed lines only, and a binary file counts as a changed fi
 [workflow]
 non_reviewable_paths = ["**/*.golden", "**/*.lock", "**/generated/**"]
 ```
+
+### Regression layers
+
+`orbit codebase analytics` and `show` (and the dashboard's Codebase view) give each `regression_from` link a layer: where the regression task's fix sits. Its landed paths, else its declared footprint, map through `workflow.regression_layers`, an ordered list of `[[workflow.regression_layers]]` tables. A path is in the first row with a matching rule: it starts with one of the row's `prefixes`, one of its directory components equals one of its `dirs`, or it ends with one of its `suffixes`. A path no row matches is `other`, and a fix with no path is `unknown`. The fix takes the layer most of its paths map to, ties going to the earlier row; `ci_tests` and `docs_skills` count only when the fix touched nothing else. Breakdowns list the layers in row order, then `other` and `unknown`, and `--layer` (the tool's `layer`) accepts exactly those names.
+
+Unset, the list holds two repository-neutral rows. Setting it replaces them, so repeat them if you want them:
+
+```toml
+[[workflow.regression_layers]]
+name = "ci_tests"
+prefixes = [".github/"]
+dirs = ["tests", "testdata", "fixtures"]
+
+[[workflow.regression_layers]]
+name = "docs_skills"
+prefixes = ["docs/"]
+suffixes = [".md"]
+
+[[workflow.regression_layers]]
+name = "web"
+prefixes = ["web/", "packages/ui/"]
+```
+
+Each row needs a unique `name` other than `other` and `unknown` and at least one rule, and each `dirs` entry is a single path component. A refused list is a load error naming the key. `[]` puts every path in `other`. Layers are computed when the analytics scan runs, so a changed list applies to the next scan.
 
 ### Review-skip tags: `workflow.review_skip_tags`
 

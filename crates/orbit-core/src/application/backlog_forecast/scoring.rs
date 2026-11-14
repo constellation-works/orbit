@@ -60,6 +60,8 @@ use orbit_types::task::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::application::statistics;
+
 use super::ForecastRun;
 use super::outcomes::{self, EpisodeOutcome, TaskEpisodes};
 
@@ -158,19 +160,9 @@ fn log_residual(actual: f64, quantiles: &Value) -> Option<f64> {
     (actual > 0.0 && p50 > 0.0).then(|| (actual / p50).ln())
 }
 
-/// The median of `values`, rounded; `None` when empty.
+/// The median of `values`, rounded to three places; `None` when empty.
 fn median_residual(values: &mut [f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f64::total_cmp);
-    let mid = values.len() / 2;
-    let median = if values.len().is_multiple_of(2) {
-        (values[mid - 1] + values[mid]) / 2.0
-    } else {
-        values[mid]
-    };
-    Some((median * 1000.0).round() / 1000.0)
+    statistics::median(values).map(|median| (median * 1000.0).round() / 1000.0)
 }
 
 /// How many actuals fell at or under p50 and p90.

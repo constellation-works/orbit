@@ -10,10 +10,11 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 
+use crate::application::statistics::SplitMix64;
 use crate::application::task::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 
 use super::correction::{self, Correction};
-use super::model::{self, Delivery, Draw, Item, Rng, Script};
+use super::model::{self, Delivery, Draw, Item, Script};
 use super::outcomes::{AwayWait, Episode};
 use super::schedule::HORIZON_HOURS;
 
@@ -411,7 +412,7 @@ pub(super) fn draw_regression_bundles(
     items: &[Item],
     included: &[bool],
     episodes: &[Episode],
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
     correction: &Correction,
 ) -> (Vec<ForecastGeneratedNode>, bool) {
     let mut nodes = Vec::new();
@@ -475,7 +476,7 @@ fn generated_node(
     origin: Option<usize>,
     lag: f64,
     episodes: &[Episode],
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
     correction: &Correction,
 ) -> ForecastGeneratedNode {
     let mut script = Script::default();
@@ -587,7 +588,7 @@ impl<'a> ForecastArrivalStream<'a> {
         items: usize,
         rates: &'a BTreeMap<&'static str, f64>,
         pools: &'a ArrivalPools,
-        rng: &mut Rng,
+        rng: &mut SplitMix64,
     ) -> Option<Self> {
         let total: f64 = rates.values().sum();
         if total <= 0.0 || rework.donors.is_empty() {
@@ -618,7 +619,7 @@ impl<'a> ForecastArrivalStream<'a> {
         &mut self,
         limit: usize,
         episodes: &[Episode],
-        rng: &mut Rng,
+        rng: &mut SplitMix64,
         correction: &Correction,
         nodes: &mut Vec<ForecastGeneratedNode>,
     ) {

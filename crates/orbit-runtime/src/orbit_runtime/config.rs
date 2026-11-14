@@ -252,6 +252,12 @@ impl RuntimeKernel {
         self.context.settings().task_types()
     }
 
+    /// `workflow.regression_layers` as admitted: the ordered path layers
+    /// codebase regression analytics classify a fix by.
+    pub fn regression_layers(&self) -> &[orbit_config::RegressionLayerDefinition] {
+        self.context.settings().regression_layers()
+    }
+
     /// The resolved `[operation]` review preferences (layered over the
     /// built-in no-review defaults) with per-field provenance [ORB-11333].
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {

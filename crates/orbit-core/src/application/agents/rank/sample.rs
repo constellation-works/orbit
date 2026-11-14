@@ -1,10 +1,12 @@
-//! Resampling: the seeded generator, within-tier draws, and the noise
+//! Resampling: within-tier draws, and the noise
 //! scale calibration (§4.2). Seeds are fixed so the same facts always give
 //! the same scales, intervals and bands.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+
+use crate::application::statistics::{SplitMix64, percentile};
 
 use super::measures::{MEASURE_COUNT, MEASURES, Observations, totals};
 
@@ -14,28 +16,6 @@ pub(super) const DRAWS: usize = 1000;
 const FLOOR_PERCENTILE: f64 = 10.0;
 const CALIBRATION_SEED: u64 = 0x6f72_6269_745f_7261;
 pub(super) const BOOTSTRAP_SEED: u64 = 0x6e6b_5f62_6f6f_7473;
-
-/// SplitMix64: small, seedable and good enough for resampling indices.
-pub(in crate::application::agents) struct Rng(u64);
-
-impl Rng {
-    pub(in crate::application::agents) fn seeded(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// A uniform index below `n`, which must be positive.
-    pub(in crate::application::agents) fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
-    }
-}
 
 /// One implemented task as the ranking resamples it.
 pub(super) struct Record {
@@ -79,7 +59,7 @@ fn allocate(n: usize, counts: &BTreeMap<&'static str, Vec<&Record>>) -> Vec<(&'s
 
 /// Resample `per_tier` records from each tier with replacement.
 pub(super) fn draw<'a>(
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
     strata: &BTreeMap<&'static str, Vec<&'a Record>>,
     per_tier: &[(&'static str, usize)],
 ) -> Vec<&'a Observations> {
@@ -89,7 +69,7 @@ pub(super) fn draw<'a>(
             continue;
         };
         for _ in 0..n {
-            sample.push(&records[rng.below(records.len())].observed);
+            sample.push(&records[rng.index(records.len())].observed);
         }
     }
     sample
@@ -101,7 +81,7 @@ pub(super) fn draw<'a>(
 fn reference_deviation(
     pool: &BTreeMap<&'static str, Vec<&Record>>,
     n_ref: usize,
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
 ) -> [Option<f64>; MEASURE_COUNT] {
     let per_tier = allocate(n_ref, pool);
     let mut residuals: [Vec<f64>; MEASURE_COUNT] = Default::default();
@@ -129,20 +109,6 @@ fn deviation(values: &[f64]) -> Option<f64> {
     Some(variance.sqrt())
 }
 
-/// The `percentile` (0–100) of `values` by linear interpolation.
-pub(in crate::application::agents) fn percentile(
-    values: &mut [f64],
-    percentile: f64,
-) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f64::total_cmp);
-    let rank = percentile / 100.0 * (values.len() - 1) as f64;
-    let (low, high) = (rank.floor() as usize, rank.ceil() as usize);
-    Some(values[low] + (values[high] - values[low]) * (rank - low as f64))
-}
-
 /// One measure's calibrated scale and how it was reached.
 #[derive(Clone, Default)]
 pub(super) struct Calibrated {
@@ -163,7 +129,7 @@ pub(super) fn calibrate(
     since: DateTime<Utc>,
     n_ref: usize,
 ) -> [Calibrated; MEASURE_COUNT] {
-    let mut rng = Rng::seeded(CALIBRATION_SEED);
+    let mut rng = SplitMix64::seeded(CALIBRATION_SEED);
     let whole = reference_deviation(&by_tier(records.iter().copied()), n_ref, &mut rng);
     let mut weeks: BTreeMap<i64, Vec<&Record>> = BTreeMap::new();
     for &record in records {
