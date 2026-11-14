@@ -621,6 +621,13 @@ impl ServerMcpHost {
                 || operation.starts_with("orbit.notice."))
         {
             if operation == "orbit.task.artifact.put" {
+                // The put's spec refuses unknown fields, and a family call's
+                // `action` names the operation rather than being one of them.
+                if tool_family(name).is_some()
+                    && let Some(fields) = input.as_object_mut()
+                {
+                    fields.remove("action");
+                }
                 let cwd = std::env::current_dir()?;
                 input = orbit_cmd::prepare_remote_task_artifact_put(
                     input,
