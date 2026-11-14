@@ -14,7 +14,9 @@
 //!   interruption by the upgrade that just settled never is;
 //! - it is a claimed execution, which only the owner's claim recovery may
 //!   re-admit (a claim that cannot be read is not a decision: the run is left
-//!   for a later tick, as a live worker is);
+//!   for a later tick, as a live worker is). The same deferral covers one
+//!   run whose retries, earlier decision, or skip check cannot be read: that
+//!   run is left, no decision is recorded, and the rest of the page continues;
 //! - it is a drain whose admissions were stopped or whose window has
 //!   elapsed — a resumed drain's first pass
 //!   admits before it re-reads the window;
@@ -99,15 +101,38 @@ impl OrbitRuntime {
             if resumed.len() >= UPGRADE_RESUME_TICK_LIMIT {
                 break;
             }
-            if !upgrade_interrupted(&run)
-                || !self
-                    .stores()
-                    .jobs()
-                    .job_run_retries(&run.run_id, 1)?
-                    .is_empty()
-                || self.upgrade_resume_decided(&run.run_id)?
-            {
+            if !upgrade_interrupted(&run) {
                 continue;
+            }
+            // A store error on one run is not a decision and must not drop
+            // the runs still waiting later in this recency page.
+            let retries = match self.stores().jobs().job_run_retries(&run.run_id, 1) {
+                Ok(retries) => retries,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.sweep",
+                        source_run_id = %run.run_id,
+                        error = %error,
+                        "could not read an upgrade-interrupted run's retries; deferred to the next tick",
+                    );
+                    continue;
+                }
+            };
+            if !retries.is_empty() {
+                continue;
+            }
+            match self.upgrade_resume_decided(&run.run_id) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.sweep",
+                        source_run_id = %run.run_id,
+                        error = %error,
+                        "could not read an upgrade-interrupted run's resume decision; deferred to the next tick",
+                    );
+                    continue;
+                }
             }
             // A live worker is a passing condition, not a decision; checked first
             // because generic resume refuses it, which would read as a skip.
@@ -132,7 +157,19 @@ impl OrbitRuntime {
                     continue;
                 }
             };
-            if let Some(skip) = self.upgrade_resume_skip(&run, now, claimed)? {
+            let skip = match self.upgrade_resume_skip(&run, now, claimed) {
+                Ok(skip) => skip,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.sweep",
+                        source_run_id = %run.run_id,
+                        error = %error,
+                        "could not read an upgrade-interrupted run's skip check; deferred to the next tick",
+                    );
+                    continue;
+                }
+            };
+            if let Some(skip) = skip {
                 tracing::info!(
                     target: "orbit.core.sweep",
                     run_id = %run.run_id,

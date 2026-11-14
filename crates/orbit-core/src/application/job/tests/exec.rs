@@ -315,3 +315,195 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
         }
     }
 }
+
+#[test]
+fn code_only_hold_is_audited_held_and_finalizes_held() {
+    use orbit_common::RemoteToolCode;
+    use orbit_engine::JobOutcome;
+    use orbit_types::workflow::StepFailureCode;
+
+    use super::super::exec::audit_terminal_outcome;
+
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &code_only_hold_is_audited_held_and_finalizes_held,
+    )) {
+        return;
+    }
+    let message = "the operator has not recorded approval";
+    let outcome = JobOutcome {
+        success: false,
+        evidence_hold: None,
+        forge_hold: None,
+        child_cancelled: false,
+        pipeline: json!({}),
+        message: Some(message.into()),
+        failure_code: Some(StepFailureCode::OwnerSignoffRequired),
+        audit_failures: 0,
+        degraded_audit: false,
+        telemetry_failures: 0,
+        degraded_telemetry: false,
+        parked: None,
+    };
+    let (label, _) = audit_terminal_outcome("task_pr_pipeline", &Ok(outcome));
+    assert_eq!(label, "held", "a typed hold code is audited held");
+
+    let error = crate::OrbitError::RemoteTool {
+        code: RemoteToolCode::Other("baseline_red".into()),
+        message: "required validation failed on this candidate".into(),
+        payload: json!({}),
+    };
+    let (label, _) = audit_terminal_outcome("task_pr_pipeline", &Err(error));
+    assert_eq!(label, "held", "a typed error code is audited held");
+
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let started = Utc::now();
+    let input = json!({});
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_pr_pipeline", 1, started, Some(input.clone()), None)
+        .unwrap();
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, started, std::process::id())
+        .unwrap();
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
+        )
+        .unwrap();
+    let result = V2JobRunResult {
+        run_id: run.run_id.clone(),
+        job_name: run.job_id.clone(),
+        success: false,
+        pipeline: json!({}),
+        evidence_hold: None,
+        forge_hold: None,
+        child_cancelled: false,
+        message: Some(message.into()),
+        failure_code: Some(StepFailureCode::OwnerSignoffRequired),
+        parked: None,
+        events_emitted: 0,
+    };
+    runtime
+        .finalize_v2_pipeline_run(
+            &run,
+            &input,
+            started,
+            Utc::now(),
+            Ok(&result),
+            V2RunFinalizationOptions::DETACHED_WORKER,
+        )
+        .unwrap();
+    let stored = runtime.get_job_run_backend(&run.run_id).unwrap().unwrap();
+    assert_eq!(stored.state, JobRunState::Held);
+}
+
+#[test]
+fn detached_worker_persists_unrecognized_audit_step_outcomes_as_failed() {
+    use orbit_engine::V2AuditWriter;
+    use orbit_types::workflow::activity_job::V2AuditEventKind;
+
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &detached_worker_persists_unrecognized_audit_step_outcomes_as_failed,
+    )) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let started = Utc::now();
+    let input = json!({});
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_pr_pipeline", 1, started, Some(input.clone()), None)
+        .unwrap();
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, started, std::process::id())
+        .unwrap();
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
+        )
+        .unwrap();
+    let writer = V2AuditWriter::with_disk_sinks(
+        &runtime.paths().audit_dir,
+        runtime.v2_audit_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        &run.run_id,
+        "fixture",
+        Some(runtime.paths().repo_root.as_path()),
+    )
+    .unwrap();
+    let emit = |kind| writer.emit(kind).unwrap();
+    emit(V2AuditEventKind::StepStarted {
+        step_id: "implement".into(),
+    });
+    emit(V2AuditEventKind::StepFinished {
+        step_id: "implement".into(),
+        lock_wait_ms: None,
+        outcome: "not-a-state".into(),
+        error_message: None,
+    });
+    emit(V2AuditEventKind::StepStarted {
+        step_id: "check".into(),
+    });
+    emit(V2AuditEventKind::StepFinished {
+        step_id: "check".into(),
+        lock_wait_ms: None,
+        outcome: "finished".into(),
+        error_message: None,
+    });
+    emit(V2AuditEventKind::StepStarted {
+        step_id: "hanging".into(),
+    });
+    let result = V2JobRunResult {
+        run_id: run.run_id.clone(),
+        job_name: run.job_id.clone(),
+        success: true,
+        pipeline: json!({}),
+        evidence_hold: None,
+        forge_hold: None,
+        child_cancelled: false,
+        message: None,
+        failure_code: None,
+        parked: None,
+        events_emitted: 0,
+    };
+    runtime
+        .finalize_v2_pipeline_run(
+            &run,
+            &input,
+            started,
+            Utc::now(),
+            Ok(&result),
+            V2RunFinalizationOptions::DETACHED_WORKER,
+        )
+        .unwrap();
+    let stored = runtime.get_job_run_backend(&run.run_id).unwrap().unwrap();
+    let state_of = |id: &str| {
+        stored
+            .steps
+            .iter()
+            .find(|step| step.target_id == id)
+            .unwrap_or_else(|| panic!("missing step {id}: {:?}", stored.steps))
+            .state
+    };
+    assert_eq!(state_of("implement"), JobRunState::Failed);
+    assert_eq!(state_of("check"), JobRunState::Success);
+    assert_eq!(state_of("hanging"), JobRunState::Failed);
+}

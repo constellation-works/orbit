@@ -320,7 +320,11 @@ impl OrbitRuntime {
         let named = self.list_job_runs(JobRunListParams {
             job_id: Some(TASK_PILOT_PIPELINE_JOB.to_string()),
             task_id: Some(task_id.to_string()),
-            states: vec![JobRunState::Pending, JobRunState::Running],
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
             limit: Some(PILOT_SCAN_LIMIT),
             ..Default::default()
         })?;
