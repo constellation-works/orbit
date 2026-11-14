@@ -2587,7 +2587,7 @@
       },
       {
         "name": "request_id",
-        "description": "Retry-safe creation identity.",
+        "description": "Retry-safe creation identity. Presence selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew' (plus 'workspace', 'request_id', 'model'); omit it for an ordinary create.",
         "param_type": "string",
         "required": false
       }
@@ -3389,7 +3389,7 @@
       },
       {
         "name": "request_id",
-        "description": "Retry-safe write identity.",
+        "description": "Retry-safe write identity. Presence selects guarded update (also selected by 'expected_revision', 'verdict' or 'complete'), which accepts only its mode's fields — review: 'verdict', 'complete'; comment: 'comment'; edit: 'status', 'title', 'description', 'acceptance_criteria', 'priority', 'crew' (plus 'workspace', 'request_id', 'id', 'expected_revision', 'model'); omit guarded keys for an ordinary update.",
         "param_type": "string",
         "required": false
       },
