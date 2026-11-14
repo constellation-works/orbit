@@ -9,8 +9,9 @@ last_validated: 2026-11-14
 Orbit is a Rust workspace of layered crates. **Lower layers never depend on higher ones.** [`scripts/check-dependency-direction.sh`](scripts/check-dependency-direction.sh) enforces every crate edge, so a new edge means updating that script and the table below in the same PR.
 
 ```text
-Surfaces      orbit-cli · orbit-web · orbit-mcp
+Surfaces      orbit-cli (command/mcp) · orbit-web
 Composition   orbit-cmd
+Transport     orbit-mcp
 Application   orbit-core
 Runtime       orbit-runtime
 Domain        orbit-engine · orbit-automation · orbit-agent · orbit-tools · orbit-store
