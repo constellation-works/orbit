@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::providers::common::render_prompt_with_embedded_envelope;
 use crate::types::response_envelope_json_schema_arg;
 use orbit_types::identity::ReasoningEffort;
+use orbit_types::workflow::activity_job::Provider;
 
 /// Leave this much of the remaining Orbit spawn deadline for outer process
 /// supervision after `agy --print-timeout` fires, so a terminal `result` can
@@ -125,11 +126,11 @@ pub(crate) fn format_antigravity_print_timeout(duration: Duration) -> String {
 /// never duplicated. Returns the value now in argv so the runner can tell a
 /// run that ended at that budget from one that exited early. [ORB-14683]
 pub fn apply_antigravity_print_timeout(
-    provider: &str,
+    provider: Provider,
     args: &mut Vec<String>,
     remaining_deadline: Duration,
 ) -> Option<Duration> {
-    if provider != "antigravity" && provider != "agy" {
+    if provider != Provider::Antigravity {
         return None;
     }
     let derived = derived_antigravity_print_timeout(remaining_deadline);

@@ -11,6 +11,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::TokenUsage;
+use orbit_types::workflow::activity_job::Provider;
 
 use super::claude::claude_long_prompt_requests;
 use super::codex::codex_long_prompt_requests;
@@ -28,7 +29,7 @@ use super::codex::codex_long_prompt_requests;
 /// means it is known and no request reached the floor.
 #[must_use]
 pub fn provider_long_prompt_requests(
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     stdout_complete: bool,
     codex_home: Option<&Path>,
@@ -36,8 +37,18 @@ pub fn provider_long_prompt_requests(
     now: DateTime<Utc>,
 ) -> Option<Vec<TokenUsage>> {
     match provider {
-        "claude" if stdout_complete => claude_long_prompt_requests(stdout, model),
-        "codex" => codex_long_prompt_requests(stdout, codex_home?, now),
-        _ => None,
+        Provider::Claude if stdout_complete => claude_long_prompt_requests(stdout, model),
+        Provider::Codex => codex_long_prompt_requests(stdout, codex_home?, now),
+        Provider::Claude
+        | Provider::Gemini
+        | Provider::Grok
+        | Provider::Copilot
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Antigravity
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode
+        | Provider::Muse => None,
     }
 }

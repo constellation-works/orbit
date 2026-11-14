@@ -3,6 +3,7 @@
 use orbit_agent::latest_assistant_message;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+use orbit_types::workflow::activity_job::Provider;
 
 pub(super) const STDOUT_TEXT_PREVIEW_LIMIT_BYTES: usize = 64 * 1024;
 pub(super) struct StdoutTextPreview {
@@ -86,7 +87,7 @@ pub(super) struct BoundedMessage {
 /// The newest assistant message in `stdout`, redacted and cut to `limit`
 /// bytes from its start.
 pub(super) fn bounded_assistant_message(
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     redactor: &PatternRedactor,
     limit: usize,

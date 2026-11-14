@@ -19,7 +19,7 @@ use orbit_agent::{
     provider_invocation_diagnostic, provider_usage_limit,
 };
 use orbit_common::security::redaction::PatternRedactor;
-use orbit_types::workflow::activity_job::AgentLoopSpec;
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use orbit_types::workflow::{
     CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
     TRANSIENT_FAILURE_MARKER, provider_failure_text, with_failed_account,
@@ -28,7 +28,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 pub(super) struct CompletionFailureInput<'a> {
-    pub(super) provider: &'a str,
+    pub(super) provider: Provider,
     pub(super) spec: &'a AgentLoopSpec,
     pub(super) input: &'a Value,
     pub(super) stdout: &'a CapturedOutput,
@@ -102,9 +102,14 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;
     let mut limit_failure = |text: &str, prefix: &str| {
         let reported = bounded_diagnostic(text, redaction);
-        let limit = reported_limit(provider, text, stdout.protocol_bytes(), chrono::Utc::now());
+        let limit = reported_limit(
+            provider.as_str(),
+            text,
+            stdout.protocol_bytes(),
+            chrono::Utc::now(),
+        );
         let message = limit.text(
-            provider,
+            provider.as_str(),
             &format!("{prefix}{provider} provider reported a usage limit: {reported}"),
         );
         observed_limit = Some((limit, reported));
@@ -141,14 +146,14 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         failure_class = Some(ProviderFailureClass::Unavailable);
         Some(provider_failure_text(
             ProviderFailureClass::Unavailable,
-            provider,
+            provider.as_str(),
             &bounded_diagnostic(&diagnostic, redaction),
         ))
     } else if let Some(refusal) = provider_refusal {
         failure_class = Some(ProviderFailureClass::Refusal);
         Some(provider_failure_text(
             ProviderFailureClass::Refusal,
-            provider,
+            provider.as_str(),
             &format!(
                 "{provider} provider refused the request: {}",
                 bounded_diagnostic(&refusal, redaction)
@@ -173,7 +178,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // genuine. [DANI-10509]
             .or_else(|| {
                 macos_sandbox_apply_failure_diagnostic(
-                    provider,
+                    provider.as_str(),
                     sandbox,
                     exit_code,
                     stderr_text.as_ref(),
@@ -188,7 +193,11 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     .get("crew")
                     .and_then(Value::as_str)
                     .and_then(|crew| {
-                        copilot_model_unavailable_diagnostic(provider, crew, stderr_text.as_ref())
+                        copilot_model_unavailable_diagnostic(
+                            provider.as_str(),
+                            crew,
+                            stderr_text.as_ref(),
+                        )
                     })
                     .map(|diagnostic| {
                         format!(
@@ -205,7 +214,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // [ORB-10929]
             .or_else(|| {
                 macos_keychain_auth_diagnostic(
-                    provider,
+                    provider.as_str(),
                     sandbox,
                     &format!("{trace_stdout_text}\n{stderr_text}"),
                 )
@@ -269,11 +278,11 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             failure_class = Some(ProviderFailureClass::Unavailable);
             Some(provider_failure_text(
                 ProviderFailureClass::Unavailable,
-                provider,
+                provider.as_str(),
                 &diagnostic,
             ))
         } else if let Some(limit) = provider_reported(
-            provider,
+            provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
             terminal_error.as_deref(),
@@ -283,7 +292,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // the limit holds until the reset the provider reported.
             Some(limit_failure(&limit, &format!("{diagnostic}: ")))
         } else if let Some(capacity) = provider_reported(
-            provider,
+            provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
             terminal_error.as_deref(),
@@ -296,14 +305,14 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // finishes is not unavailable.
             Some(provider_failure_text(
                 ProviderFailureClass::Capacity,
-                provider,
+                provider.as_str(),
                 &format!(
                     "{diagnostic}: {provider} provider reported the selected model at capacity: {}",
                     bounded_diagnostic(&capacity, redaction)
                 ),
             ))
         } else if let Some(refusal) = provider_reported(
-            provider,
+            provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
             terminal_error.as_deref(),
@@ -315,7 +324,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // `error` and `turn.failed` frames and a failed exit.
             Some(provider_failure_text(
                 ProviderFailureClass::Refusal,
-                provider,
+                provider.as_str(),
                 &format!(
                     "{diagnostic}: {provider} provider refused the request: {}",
                     bounded_diagnostic(&refusal, redaction)

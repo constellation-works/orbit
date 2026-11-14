@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::PatternRedactor;
-use orbit_types::workflow::activity_job::AgentLoopSpec;
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use serde_json::Value;
 
 use super::super::supervisor::CapturedOutput;
@@ -34,6 +34,7 @@ pub(super) struct ProviderExit<'a> {
     pub(super) input: &'a Value,
     pub(super) run_id: &'a str,
     pub(super) provider: String,
+    pub(super) provider_enum: Provider,
     pub(super) model: Option<String>,
     pub(super) agent_execution_id: Option<i64>,
     pub(super) task_ids: &'a [String],

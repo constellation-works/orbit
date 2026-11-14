@@ -28,6 +28,7 @@ use orbit_agent::{
     provider_usage_limit,
 };
 use orbit_common::security::redaction::redact_all_json;
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -45,7 +46,7 @@ pub(in super::super) fn print_budget_exhausted(
 /// failure frame carries [ORB-22427]? A corrected reply cannot change any of
 /// these, so they keep their own failure.
 fn provider_reported_ending(
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     stderr: &str,
     duration: Duration,
@@ -61,7 +62,9 @@ fn provider_reported_ending(
             provider_content_refusal,
         ]
         .into_iter()
-        .any(|matches| provider_reported(provider, stdout, stderr, None, matches).is_some())
+        .any(|matches| {
+            provider_reported(provider.as_str(), stdout, stderr, None, matches).is_some()
+        })
 }
 
 /// Is `message` a provider's own frame rather than anything the agent wrote?
@@ -88,7 +91,7 @@ fn is_provider_frame(message: &str) -> bool {
 /// replace the retained terminal with that earlier text. Error, refusal, and
 /// timeout endings stay on the projection the caller already reads.
 fn truncated_terminal_envelope_message(
-    provider: &str,
+    provider: Provider,
     protocol_bytes: &[u8],
     answer_text: &str,
 ) -> Option<String> {
@@ -111,8 +114,8 @@ fn truncated_terminal_envelope_message(
 /// Claude's answer projection is the last `result` line when the retained
 /// stream has one, and empty when it does not. A parsed `result` object is a
 /// terminal the turn already ended on.
-fn retained_claude_terminal_result(provider: &str, answer_text: &str) -> bool {
-    if provider != "claude" {
+fn retained_claude_terminal_result(provider: Provider, answer_text: &str) -> bool {
+    if provider != Provider::Claude {
         return false;
     }
     let text = answer_text.trim();
@@ -198,6 +201,7 @@ pub(in super::super) fn project_completion(
         input,
         run_id,
         provider,
+        provider_enum,
         model,
         agent_execution_id,
         task_ids,
@@ -256,8 +260,8 @@ pub(in super::super) fn project_completion(
     // output; those frames belong in the trace and diagnostics, but only
     // provider-attributed assistant answer content may supply Orbit response
     // fields or completion status. [ORB-10946] [ORB-11348]
-    let trace_stdout = normalize_cli_stdout(&provider, stdout.protocol_bytes());
-    let answer_stdout = project_cli_response(&provider, stdout.protocol_bytes());
+    let trace_stdout = normalize_cli_stdout(provider_enum, stdout.protocol_bytes());
+    let answer_stdout = project_cli_response(provider_enum, stdout.protocol_bytes());
     let answer_text = String::from_utf8_lossy(answer_stdout.as_ref());
     let trace_stdout_text = String::from_utf8_lossy(trace_stdout.as_ref());
     let answer_parsed = ParsedStdout::parse(answer_text.as_ref());
@@ -268,7 +272,7 @@ pub(in super::super) fn project_completion(
         .truncated()
         .then(|| {
             truncated_terminal_envelope_message(
-                &provider,
+                provider_enum,
                 stdout.protocol_bytes(),
                 answer_text.as_ref(),
             )
@@ -342,7 +346,7 @@ pub(in super::super) fn project_completion(
     // the exit code, so it fails the invocation like an authentication error.
     let provider_refusal = structured_provider_refusal(&provider, stdout.protocol_bytes());
     // [ORB-14695] So does Claude's terminal error result for a usage limit.
-    let provider_limit = structured_provider_limit(&provider, stdout.protocol_bytes());
+    let provider_limit = structured_provider_limit(provider_enum, stdout.protocol_bytes());
     let structured_output_exhaustion = (!stdout.truncated())
         .then(|| frames::claude_structured_output_exhaustion(&provider, stdout.protocol_bytes()))
         .flatten()
@@ -351,7 +355,7 @@ pub(in super::super) fn project_completion(
     // the operator diagnostic on either exit path. Classification of that
     // reason stays with the shared readers above and below.
     let muse_terminal_failure =
-        muse_terminal_failure_diagnostic(&provider, stdout.protocol_bytes());
+        muse_terminal_failure_diagnostic(provider_enum, stdout.protocol_bytes());
     // Two orthogonal contracts. `require_completion_envelope` gates step
     // completion and its status outcome (above); `require_response_envelope` additionally gates the
     // envelope's *content* for activities whose downstream templates consume it
@@ -430,7 +434,7 @@ pub(in super::super) fn project_completion(
                 && !stdout.truncated()
                 && sandbox_write_diagnostic.is_none()
                 && !provider_reported_ending(
-                    &provider,
+                    provider_enum,
                     stdout.protocol_bytes(),
                     &stderr_text,
                     duration,
@@ -439,7 +443,7 @@ pub(in super::super) fn project_completion(
                 return None;
             }
             let reply = bounded_assistant_message(
-                &provider,
+                provider_enum,
                 stdout.protocol_bytes(),
                 redaction,
                 FINAL_MESSAGE_LIMIT_BYTES,
@@ -476,7 +480,12 @@ pub(in super::super) fn project_completion(
         && provider_limit.is_none()
         && !completion_status_failure
         && let Some(diagnostic) = structured_output_exhaustion.as_ref()
-        && !provider_reported_ending(&provider, stdout.protocol_bytes(), &stderr_text, duration)
+        && !provider_reported_ending(
+            provider_enum,
+            stdout.protocol_bytes(),
+            &stderr_text,
+            duration,
+        )
         && provider_invocation_diagnostic(&trace_stdout_text, &stderr_text).is_none()
     {
         response_correction_request = Some(serde_json::json!({
@@ -540,13 +549,13 @@ pub(in super::super) fn project_completion(
     // drop the tool frames, and Grok's streaming-json reduction keeps only
     // the end event, so the calls are read from the raw capture.
     let trace = trace.map(|mut trace| {
-        assign_recorded_tool_calls(&provider, stdout.protocol_bytes(), &mut trace);
+        assign_recorded_tool_calls(provider_enum, stdout.protocol_bytes(), &mut trace);
         // [ORB-20572] Every reading above is of the retained suffix, whose
         // calls are numbered from its first complete line. A capture that
         // dropped its middle must not pass that suffix off as the whole trace.
         trace.tool_calls_incomplete = stdout.truncated();
         trace.long_prompt_requests = provider_long_prompt_requests(
-            &provider,
+            provider_enum,
             stdout.bytes(),
             !stdout.truncated(),
             usage_context.codex_home.as_deref(),
@@ -561,7 +570,7 @@ pub(in super::super) fn project_completion(
         failure_code,
         observed_limit,
     } = failure::completion_failure(failure::CompletionFailureInput {
-        provider: &provider,
+        provider: provider_enum,
         spec,
         input,
         stdout: &stdout,
@@ -607,7 +616,7 @@ pub(in super::super) fn project_completion(
     let crew = input.get("crew").and_then(Value::as_str);
     record_usage_windows(
         host,
-        &provider,
+        provider_enum,
         stdout.bytes(),
         &usage_context,
         run_id,
@@ -626,7 +635,7 @@ pub(in super::super) fn project_completion(
     // [ORB-13899] What the agent last said, for an operator reading the run.
     // Taken from the answer projection, so it never quotes tool traffic.
     let final_message = bounded_assistant_message(
-        &provider,
+        provider_enum,
         stdout.protocol_bytes(),
         redaction,
         FINAL_MESSAGE_LIMIT_BYTES,

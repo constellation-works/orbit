@@ -40,6 +40,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, ToolCallTrace};
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 use super::super::usage_window::top_level_frames;
@@ -236,8 +237,8 @@ pub(crate) fn project_muse_response(stdout: &[u8]) -> Vec<u8> {
 /// child-task records never count as failure evidence. Completed terminals
 /// and malformed streams yield `None`. Unbounded in the prose it selects;
 /// the caller bounds and redacts it, and this helper bounds it again.
-pub fn muse_terminal_failure_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
-    if provider != "muse" {
+pub fn muse_terminal_failure_diagnostic(provider: Provider, stdout: &[u8]) -> Option<String> {
+    if provider != Provider::Muse {
         return None;
     }
     let info = last_terminal(stdout)?;

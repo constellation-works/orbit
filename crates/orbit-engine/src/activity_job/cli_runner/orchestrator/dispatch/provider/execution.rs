@@ -57,6 +57,7 @@ pub(in super::super) fn dispatch_prepared_provider(
     } = preparation::prepare_provider_envelope(context, &prepared)?;
     let dispatch_preparation::PreparedCliDispatch {
         provider,
+        provider_enum,
         mut cli_executor,
         inspection_tools,
         image_input: _,
@@ -247,7 +248,7 @@ pub(in super::super) fn dispatch_prepared_provider(
     // the runtime alone: the provider stops itself before Orbit's wall clock
     // kills it. [ORB-11337] [ORB-15206]
     let mut print_timeout =
-        apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+        apply_provider_runtime_arg_fixups(provider_enum, &mut subprocess_args, wall_clock_timeout);
     if let Some(budget) = print_timeout {
         tracing::info!(
             provider = %provider,
@@ -440,6 +441,7 @@ pub(in super::super) fn dispatch_prepared_provider(
     let mut process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
         context,
         provider: &provider,
+        provider_enum,
         resolved_program: &resolved_program,
         subprocess_args: &subprocess_args,
         child_env: &child_env,
@@ -509,8 +511,11 @@ pub(in super::super) fn dispatch_prepared_provider(
         if let Some(mcp_args) = &codex_mcp_args {
             subprocess_args.extend(mcp_args.iter().cloned());
         }
-        print_timeout =
-            apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+        print_timeout = apply_provider_runtime_arg_fixups(
+            provider_enum,
+            &mut subprocess_args,
+            wall_clock_timeout,
+        );
         if let Some(tools) = &inspection_tools {
             subprocess_args.extend(tools.args.iter().cloned());
         }
@@ -542,6 +547,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
             context,
             provider: &provider,
+            provider_enum,
             resolved_program: &resolved_program,
             subprocess_args: &subprocess_args,
             child_env: &child_env,
@@ -564,6 +570,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         context,
         started_at,
         provider,
+        provider_enum,
         model,
         agent_execution_id,
         task_ids: &task_ids,

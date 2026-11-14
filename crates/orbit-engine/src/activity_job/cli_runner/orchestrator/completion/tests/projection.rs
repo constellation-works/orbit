@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::PatternRedactor;
-use orbit_types::workflow::activity_job::AgentLoopSpec;
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use serde_json::json;
 
 use super::super::super::super::supervisor::CapturedOutput;
@@ -43,6 +43,7 @@ pub(super) fn project_stdout(
         input: &input,
         run_id: "run",
         provider: provider.to_string(),
+        provider_enum: Provider::parse(provider).unwrap_or(Provider::Ollama),
         model: None,
         task_ids: &[],
         worktree_boundary: None,
@@ -74,7 +75,7 @@ pub(super) fn project_stdout(
 fn only_a_clean_exit_without_an_envelope_at_the_injected_budget_is_a_timeout() {
     let mut argv = Vec::new();
     let budget = orbit_agent::apply_antigravity_print_timeout(
-        "antigravity",
+        Provider::Antigravity,
         &mut argv,
         Duration::from_secs(3600),
     );

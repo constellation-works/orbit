@@ -11,6 +11,7 @@ use orbit_agent::{
 };
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderLimitFailure;
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -31,21 +32,30 @@ pub(super) struct UsageWindowContext {
 /// Claude's error `result` frame and Antigravity's `event=result` frame with
 /// `status: ERROR` can both be written with exit 0, so they fail the turn
 /// whatever the exit code, like an authentication error. [ORB-15102]
-pub(super) fn structured_provider_limit(provider: &str, stdout: &[u8]) -> Option<String> {
+pub(super) fn structured_provider_limit(provider: Provider, stdout: &[u8]) -> Option<String> {
     match provider {
-        "claude" => stdout_frames(stdout)
+        Provider::Claude => stdout_frames(stdout)
             .filter(|frame| frame.get("type").and_then(Value::as_str) == Some("result"))
             .filter_map(|frame| {
-                provider_failure(provider, &frame)?
+                provider_failure(provider.as_str(), &frame)?
                     .get("result")
                     .and_then(Value::as_str)
                     .filter(|text| provider_usage_limit(text))
                     .map(str::to_string)
             })
             .last(),
-        "antigravity" | "agy" => antigravity_terminal_error_diagnostic(provider, stdout)
+        Provider::Antigravity => antigravity_terminal_error_diagnostic(provider, stdout)
             .filter(|text| provider_usage_limit(text)),
-        _ => None,
+        Provider::Codex
+        | Provider::Gemini
+        | Provider::Grok
+        | Provider::Copilot
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode
+        | Provider::Muse => None,
     }
 }
 
@@ -153,7 +163,7 @@ pub(super) fn record_limit(
 /// the provider's default login when that is `None`.
 pub(super) fn record_usage_windows(
     host: &dyn RuntimeHost,
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     context: &UsageWindowContext,
     run_id: &str,
@@ -161,14 +171,23 @@ pub(super) fn record_usage_windows(
     account: Option<&str>,
 ) {
     let usage = match provider {
-        "grok" => context.grok.as_ref().and_then(GrokUsageRequest::read),
-        "antigravity" => context
+        Provider::Grok => context.grok.as_ref().and_then(GrokUsageRequest::read),
+        Provider::Antigravity => context
             .antigravity
             .as_ref()
             .and_then(AntigravityUsageRequest::read),
-        _ => None,
+        Provider::Claude
+        | Provider::Codex
+        | Provider::Gemini
+        | Provider::Copilot
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode
+        | Provider::Muse => None,
     };
-    let source = if matches!(provider, "grok" | "antigravity") {
+    let source = if matches!(provider, Provider::Grok | Provider::Antigravity) {
         usage.as_deref().unwrap_or_default()
     } else {
         stdout

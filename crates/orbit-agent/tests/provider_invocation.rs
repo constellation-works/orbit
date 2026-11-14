@@ -422,7 +422,7 @@ fn continuity_resume_is_emitted_only_by_supporting_provider_adapters() {
         ("copilot", "copilot", None),
     ] {
         assert_eq!(
-            orbit_agent::provider_supports_continuity(provider),
+            orbit_agent::provider_supports_continuity(Provider::parse(provider).unwrap()),
             expected_pair.is_some(),
             "unexpected continuity support for {provider}"
         );
