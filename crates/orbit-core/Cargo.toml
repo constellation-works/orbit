@@ -19,6 +19,7 @@ clap = ["orbit-types/clap"]
 # Test-only hooks for downstream crates' tests (`orbit_core::test_support`).
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
 test-support = [
+  "orbit-common/test-support",
   "orbit-engine/test-support",
   "orbit-runtime/test-support",
   "orbit-store/test-support",

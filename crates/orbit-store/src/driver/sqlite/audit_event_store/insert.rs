@@ -35,7 +35,7 @@ impl Store {
         )
         .map_err(sqlite_store_error)?;
         conn.busy_timeout(Duration::from_millis(u64::from(
-            orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+            orbit_common::storage::sqlite::sqlite_busy_timeout_ms(),
         )))
         .map_err(sqlite_store_error)?;
         // Hold the writer lock across the schema check and insert so another
@@ -87,7 +87,7 @@ impl Store {
 /// instead of failing the moment it is attempted.
 fn arm_audit_busy_timeout(conn: &Connection) -> Result<(), OrbitError> {
     conn.busy_timeout(Duration::from_millis(u64::from(
-        orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+        orbit_common::storage::sqlite::sqlite_busy_timeout_ms(),
     )))
     .map_err(sqlite_store_error)
 }

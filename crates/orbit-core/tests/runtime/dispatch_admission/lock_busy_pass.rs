@@ -45,7 +45,7 @@ const HOLD_CEILING: Duration = Duration::from_secs(300);
 
 /// The task-commit lock deadline of the held-out passes, instead of the
 /// production 30 s. Each pass waits it out on the lock its holder keeps.
-const LOCK_DEADLINE: Duration = Duration::from_secs(2);
+const LOCK_DEADLINE: Duration = Duration::from_millis(500);
 
 /// One admission pass of `drain`, with `enforce` gap fit.
 fn classify(runtime: &OrbitRuntime, drain: &str, extra: Value) -> Result<Value, String> {
