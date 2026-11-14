@@ -195,14 +195,17 @@ Each Tasks row can show a task riskiness percentage: an estimate of whether a
 task of that size, once done, will later be named by a regression. The estimate
 uses task size alone, fitted on done tasks from the trailing 30 days. Before a
 diff exists, size is the declared path count; once a review candidate or landed
-diff resolves, size is the lines changed. The 30-day window and the minimum of
-five done tasks are fixed. A `~` before the percentage means some selectors
+diff resolves, size is the lines changed if a lines-based fit is available;
+otherwise the estimate falls back to the declared path count. The 30-day window
+and the minimum of five done tasks are fixed. A `~` before the percentage means some selectors
 name no path. If no estimate is available, the row has no risk part. Task detail
 shows the estimate's basis and size, plus how many recent done tasks of that
 size or larger regressed. When there is no estimate, detail gives one of four
 reasons: **no files**, **no paths**, **thin history**, or **unavailable**.
-`@auto` effort and analytics read the same score. To verify the display, open
-one task with an estimate and one without; check each Tasks row and task detail
+Analytics uses this score. `@auto` effort instead uses configured bands based
+on complexity and declared files (or review diff lines), with the crew's
+configured effort as a fallback; it does not read the riskiness score. To verify
+the display, open one task with an estimate and one without; check each Tasks row and task detail
 for the percentage or the matching no-estimate state and reason. There is
 nothing to configure.
 
