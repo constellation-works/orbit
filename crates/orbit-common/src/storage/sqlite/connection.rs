@@ -8,7 +8,6 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::{OrbitError, StorageLayer};
 
-use super::DEFAULT_BUSY_TIMEOUT_MS;
 use super::errors::{
     is_readonly_or_access_sqlite_error, sqlite_error_detail, sqlite_operation_error,
     sqlite_path_error,
@@ -19,6 +18,7 @@ use super::hardening::{
 };
 use super::header::database_uses_wal;
 use super::pragma;
+use super::sqlite_busy_timeout_ms;
 
 /// Bytes in a WAL file header. A `-wal` of at most this size carries no
 /// frames, so the main database file already holds every committed page.
@@ -133,7 +133,7 @@ pub struct PragmaOutcome {
 ///   or the filesystem refuses WAL sidecar writes, we warn and keep the
 ///   active journal mode so reads still succeed (in-memory databases keep
 ///   their `memory` mode silently — WAL does not apply to them);
-/// - `busy_timeout` = [`DEFAULT_BUSY_TIMEOUT_MS`];
+/// - `busy_timeout` = [`super::DEFAULT_BUSY_TIMEOUT_MS`];
 /// - `foreign_keys=ON`;
 /// - `synchronous=NORMAL` — the recommended WAL durability level. Stores
 ///   that need commit-durable acks (e.g. the task registry) override to
@@ -156,7 +156,7 @@ fn apply_default_pragmas_inner(
     path: Option<&Path>,
 ) -> Result<PragmaOutcome, OrbitError> {
     let (journal_mode, mut write_denied) = request_wal_journal_mode(conn, path);
-    pragma::set(conn, "busy_timeout", &DEFAULT_BUSY_TIMEOUT_MS)
+    pragma::set(conn, "busy_timeout", &sqlite_busy_timeout_ms())
         .map_err(|error| sqlite_operation_error(path, "set busy_timeout", &error))?;
     pragma::set(conn, "foreign_keys", &"ON")
         .map_err(|error| sqlite_operation_error(path, "enable foreign keys", &error))?;
@@ -353,7 +353,7 @@ fn open_read_only_connection(
 fn configure_observational_connection(conn: &Connection, path: &Path) -> Result<(), OrbitError> {
     pragma::set(conn, "query_only", &"ON")
         .map_err(|error| sqlite_operation_error(Some(path), "set query_only", &error))?;
-    pragma::set(conn, "busy_timeout", &DEFAULT_BUSY_TIMEOUT_MS)
+    pragma::set(conn, "busy_timeout", &sqlite_busy_timeout_ms())
         .map_err(|error| sqlite_operation_error(Some(path), "set busy_timeout", &error))?;
     pragma::set(conn, "foreign_keys", &"ON")
         .map_err(|error| sqlite_operation_error(Some(path), "enable foreign keys", &error))?;
