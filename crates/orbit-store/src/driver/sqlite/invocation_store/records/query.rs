@@ -195,7 +195,10 @@ impl Store {
     }
 }
 
-fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn ToSql>>) {
+// Visibility widened to pub(super) for sibling unit tests (records/tests/query.rs).
+pub(super) fn build_invocation_list_query(
+    filter: &InvocationQuery,
+) -> (String, Vec<Box<dyn ToSql>>) {
     let mut query = InvocationListQuery::default();
 
     if filter.succeeded_candidate_only {
@@ -315,7 +318,3 @@ impl InvocationListQuery {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/query.rs"]
-mod tests;

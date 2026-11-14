@@ -1,7 +1,10 @@
 // Admitted unit test: SQL generation through SQLite's planner. Uses the same
 // builder as the store's list method; no copied query oracle.
-use super::*;
-use rusqlite::types::Value;
+use rusqlite::types::{ToSql, Value};
+
+use super::super::query::build_invocation_list_query;
+use crate::Store;
+use crate::contracts::InvocationQuery;
 
 /// Succeeded-candidate selection behind the implement_one durations trend.
 /// Without planner statistics, which the store never collects, SQLite probed
