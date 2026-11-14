@@ -154,7 +154,8 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
         legacy = ROOT / "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml"
         self.workflows["legacy-codeql"] = yaml.safe_load(legacy.read_text())
 
-    def run_gate(self, gate, response, *, api_failure=False):
+    def run_gate(self, gate, response, *, api_failure=False, event_state="open",
+                 event_merged="false", expected_requests=1):
         self.output.write_text("")
         self.response = response
         self.api_failure = api_failure
@@ -163,12 +164,16 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
         step = gate["steps"][0]
         bindings = {"${{ github.token }}": "offline-token",
                     "${{ github.event.pull_request.number }}": "42",
+                    "${{ github.event.pull_request.state }}": event_state,
+                    "${{ github.event.pull_request.merged }}": event_merged,
                     "${{ github.repository }}": "fixture/repository"}
         env = dict(PATH=f"{self.root}:{os.environ['PATH']}", LANG="C",
                    HOME=str(self.root), GH_CONFIG_DIR=str(self.root / "gh-config"),
                    GITHUB_REPOSITORY="fixture/repository", GITHUB_OUTPUT=str(self.output),
                    **self.fixture_env)
         env.update({key: bindings.get(value, value) for key, value in step["env"].items()})
+        if "RETRY_DELAY_SECONDS" in step.get("env", {}):
+            env["RETRY_DELAY_SECONDS"] = "0"
         script = step["run"]
         for expression, value in bindings.items():
             script = script.replace(expression, value)
@@ -176,8 +181,9 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
             [step["shell"], "-e", "-o", "pipefail", "-c", script],
             step=str(step.get("id") or "pr-state"),
             cwd=self.root, env=env, text=True, capture_output=True)
-        self.assertEqual(self.requests, [{"method": "GET", "path": "/repos/fixture/repository/pulls/42"}],
-                         "each gate must make exactly one read of the bound pull request")
+        self.assertEqual(self.requests,
+                         [{"method": "GET", "path": "/repos/fixture/repository/pulls/42"}] * expected_requests,
+                         "each gate attempt must read only the bound pull request")
         self.assertEqual(json.loads(self.credentials.read_text()), {"token": "offline-token"})
         outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
         # Follow the actual step-to-job output binding consumed by needs.
@@ -230,15 +236,82 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
                     print(f"{name}: {event} -> gate skipped, build jobs admitted")
 
     def test_api_errors_fail_gate_without_admitting_unknown_state(self):
+        # The frozen historical gate keeps its fail-closed behavior; it is
+        # executed here only as an old-head fixture, not as a live workflow.
+        document = self.workflows["legacy-codeql"]
+        for response, api_failure in ((RESPONSES["open"], True), ({}, False),
+                                      ({"state": "unexpected", "merged": False}, False)):
+            with self.subTest(workflow="legacy-codeql", response=response, api_failure=api_failure):
+                result, output = self.run_gate(document["jobs"]["pr-state"], response,
+                                               api_failure=api_failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(output, "")
+                self.assert_admission(document, "pull_request", output, False)
+
+    def test_api_errors_fall_back_to_event_payload_without_failing_gate(self):
+        # [ORB-24444] A rate-limited or malformed live read must not turn a
+        # PR red: the step retries a bounded number of times, then publishes
+        # the pull_request event payload's state as its only output.
+        cases = (
+            # (response, api_failure, event_state, event_merged, expected)
+            (RESPONSES["open"], True, "open", "false", "open"),
+            ({}, False, "open", "false", "open"),
+            ({"state": "unexpected", "merged": False}, False, "closed", "false", "closed"),
+            (RESPONSES["open"], True, "closed", "true", "merged"),
+            (RESPONSES["open"], True, "unexpected", "false", "unknown"),
+        )
         for name, document in self.workflows.items():
-            for response, api_failure in ((RESPONSES["open"], True), ({}, False),
-                                          ({"state": "unexpected", "merged": False}, False)):
-                with self.subTest(workflow=name, response=response, api_failure=api_failure):
-                    result, output = self.run_gate(document["jobs"]["pr-state"], response,
-                                                   api_failure=api_failure)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertEqual(output, "")
-                    self.assert_admission(document, "pull_request", output, False)
+            if name == "legacy-codeql":
+                continue
+            for response, api_failure, event_state, event_merged, expected in cases:
+                with self.subTest(workflow=name, api_failure=api_failure,
+                                  event_state=event_state, event_merged=event_merged):
+                    result, output = self.run_gate(
+                        document["jobs"]["pr-state"], response, api_failure=api_failure,
+                        event_state=event_state, event_merged=event_merged, expected_requests=3)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(output, expected)
+                    for line in self.output.read_text().splitlines():
+                        self.assertRegex(line, r"^[A-Za-z_][A-Za-z0-9_]*=[^=\n]*$",
+                                         "GITHUB_OUTPUT must hold only key=value lines")
+                    self.assert_admission(document, "pull_request", output, expected == "open")
+
+    def test_rate_limited_gh_stub_writes_only_valid_output(self):
+        # Dry run with a failing gh stub whose stderr/stdout carry the
+        # rate-limit body that used to be appended to $GITHUB_OUTPUT.
+        for name, document in self.workflows.items():
+            if name == "legacy-codeql":
+                continue
+            with self.subTest(workflow=name):
+                gate = document["jobs"]["pr-state"]
+                step = gate["steps"][0]
+                stub_dir = self.root / f"stub-{name}"
+                stub_dir.mkdir(exist_ok=True)
+                attempts = stub_dir / "attempts"
+                attempts.write_text("")
+                gh = stub_dir / "gh"
+                gh.write_text(
+                    "#!/bin/sh\n"
+                    f"echo attempt >> {attempts}\n"
+                    "echo '{\"message\":\"API rate limit exceeded for installation\"}'\n"
+                    "echo 'API rate limit exceeded for installation' >&2\n"
+                    "exit 1\n")
+                gh.chmod(0o755)
+                output = stub_dir / "output"
+                output.write_text("")
+                env = dict(PATH=f"{stub_dir}:{os.environ['PATH']}", LANG="C", HOME=str(self.root),
+                           GH_TOKEN="offline-token", GH_REPO="fixture/repository",
+                           PR_NUMBER="42", EVENT_STATE="open", EVENT_MERGED="false",
+                           RETRY_DELAY_SECONDS="0", GITHUB_OUTPUT=str(output),
+                           GITHUB_REPOSITORY="fixture/repository")
+                result = self_test_hang.run(
+                    [step.get("shell", "bash"), "-e", "-o", "pipefail", "-c", step["run"]],
+                    step="pr-state-rate-limited", cwd=self.root, env=env,
+                    text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(attempts.read_text().splitlines()), 3,
+                                 "a rate-limited call must be retried a bounded number of times")
+                self.assertEqual(output.read_text(), "state=open\n")
 
 
 @unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
@@ -1055,6 +1128,20 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 }],
             }
         return self.classify("push", routes, SHA=self.SHA, BEFORE=self.BEFORE)
+
+    def test_pull_request_scope_reuses_pr_state_changed_files(self):
+        # No pulls/<n> route is registered: a docs result proves the count
+        # came from PR_CHANGED_FILES and the pulls/<n> call was saved.
+        files = [{"filename": "README.md"}, {"filename": "docs/guide.md"}]
+        mode = self.classify("pull_request",
+                             {"repos/o/r/pulls/7/files?per_page=100": files},
+                             PR="7", PR_CHANGED_FILES="2")
+        self.assertEqual(mode, "docs")
+        # A supplied count that disagrees with the listing is not trusted.
+        mode = self.classify("pull_request",
+                             {"repos/o/r/pulls/7/files?per_page=100": files},
+                             PR="7", PR_CHANGED_FILES="3")
+        self.assertEqual(mode, "full")
 
     def test_pull_request_scope(self):
         self.assertEqual(self.pull_request("README.md", "docs/guide.md"), "docs")
