@@ -170,10 +170,6 @@
              list and the dock, and wraps only when the chips exceed it. -->
         <div class="controls">
           <div id="task-filter" role="group" aria-label="Filter tasks"></div>
-          <nav class="task-pagination" aria-label="Task pages" hidden>
-            <button id="tasks-previous" type="button" disabled>Previous</button>
-            <button id="tasks-next" type="button" disabled>Next</button>
-          </nav>
         </div>
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
@@ -195,13 +191,12 @@
                block, with the tabs above it (log-tail.js sets
                --tasks-dock-lead). The room above the dock is a fixed message area for
                the list's passing notices, newest first, so they never move the
-               list or the dock: lookup progress and failures, page failures, action
+               list or the dock: lookup progress and failures, action
                and folded status notices (tasks.js) and the list's failure notes
                (common.js). Loading text is never written here. -->
           <div class="tasks-messages" id="tasks-messages">
             <div id="tasks-notices"></div>
             <span id="task-lookup-status" class="task-lookup-status" role="status"></span>
-            <span id="tasks-page-status" role="status" aria-live="polite"></span>
           </div>
           <div class="col-log" id="side-dock" data-home="tasks" data-mode="drain" data-card="drain">
             <div class="dock-head">

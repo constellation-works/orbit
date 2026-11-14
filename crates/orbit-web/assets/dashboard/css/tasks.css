@@ -84,10 +84,9 @@
 /* The full page has no list for the task to be outside of. Its crew lives
    in the shared detail lever row, so the entire dock-only note can go. */
 main.tasks-layout.task-page-mode .pinned-external { display: none; }
-/* The filter bar (status pills, then the pager at their right once the list
-   has pages — on its own line when the pills fill theirs) spans the full
-   width of the Tasks view, above the list and the dock, and wraps only when
-   the chips exceed that width. The list and the dock start 12px below it. */
+/* The filter bar (status pills) spans the full width of the Tasks view,
+   above the list and the dock, and wraps only when the chips exceed that
+   width. The list and the dock start 12px below it. */
 /* --tasks-list-lead (log-tail.js) lowers the list when the dock's tab bar is
    taller than the bar's own room, so the first card and the first task block
    start level. */
@@ -199,7 +198,8 @@ main.tasks-layout > .controls {
 #tasks-body > .group-header,
 #tasks-body > .group-readiness,
 #tasks-body > .row,
-#tasks-body > .group-empty {
+#tasks-body > .group-empty,
+#tasks-body > .group-more {
   background: var(--bg-elev);
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
@@ -244,6 +244,33 @@ main.tasks-layout > .controls {
   flex: 0 0 auto;
   background: var(--dot, var(--fg-dim));
 }
+/* The head's name and count fold the section; the chevron points down while
+   it is open. */
+.group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  margin: -4px -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.group-toggle:hover { background: var(--accent-wash); }
+.group-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.group-chevron {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--fg-mute);
+  transition: transform 120ms ease;
+}
+.group-header.collapsed .group-chevron { transform: rotate(-90deg); }
 .group-header .group-count {
   color: var(--fg-mute);
   font-size: 12.5px;
@@ -259,6 +286,32 @@ main.tasks-layout > .controls {
 }
 .groups-empty-note { margin: 0 0 10px; font-size: 12.5px; color: var(--fg-mute); }
 .group-empty { padding: 12px 18px; border-top: 1px solid var(--hair); font-size: 12.5px; color: var(--fg-mute); }
+/* The end of a partly loaded section: the next step, "Show all" and a
+   failed read's error, under the rows. */
+.group-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--hair);
+  font-size: 12.5px;
+}
+.group-more-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.group-more-button:hover:not([aria-disabled="true"]) { border-color: var(--accent); }
+.group-more-button[aria-disabled="true"] { color: var(--fg-dim); opacity: 0.55; cursor: default; }
+.group-more-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.group-more-error { flex-basis: 100%; color: var(--state-failed); overflow-wrap: anywhere; }
 
 /* The Backlog card's readiness, on one line: a slim bar split by pool, a
    compact legend whose entries narrow the card to a pool, and the link to
@@ -772,28 +825,6 @@ main.tasks-layout > .controls {
   outline-offset: 2px;
 }
 
-.task-pagination[hidden] { display: none; }
-.task-pagination {
-  display: flex;
-  flex: none;
-  margin-left: auto;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-.task-pagination button {
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: 12.5px;
-}
-.task-pagination button:disabled { color: var(--fg-dim); opacity: 0.55; }
-.task-pagination button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 /* The two-line row needs about 620px beside its crew and action. The panel's
    own width decides, not the window's: beside the dock or the detail pane on
    a laptop the panel is often narrower than that while the window is wide. */
@@ -938,9 +969,8 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 }
 .tasks-messages > :empty { display: none; }
 #tasks-notices { display: flex; flex-direction: column; gap: 6px; }
-/* Lookup and page feedback share the notices' left-rule look. */
-.tasks-messages > .task-lookup-status,
-.tasks-messages > #tasks-page-status {
+/* Lookup feedback shares the notices' left-rule look. */
+.tasks-messages > .task-lookup-status {
   flex: none;
   padding: 6px 12px;
   border-left: 3px solid var(--border-strong);
@@ -950,8 +980,7 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.tasks-messages > .task-lookup-status[data-kind="error"],
-.tasks-messages > #tasks-page-status.error { border-left-color: var(--state-failed); color: var(--state-failed); }
+.tasks-messages > .task-lookup-status[data-kind="error"] { border-left-color: var(--state-failed); color: var(--state-failed); }
 .tasks-messages > .panel-placeholder:not(.quiet) { flex: none; position: static; padding: 6px 12px; border-left: 3px solid var(--border-strong); border-radius: 4px; background: var(--bg-elev); }
 .tasks-messages > .panel-placeholder.action-error { border-left-color: var(--state-failed); }
 .tasks-messages .task-action-notice { background: color-mix(in srgb, var(--state-success) 10%, var(--bg-elev)); }

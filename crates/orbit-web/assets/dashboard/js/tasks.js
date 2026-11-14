@@ -5,7 +5,7 @@ import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUno
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
-import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
+import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask, TASK_SECTION_STEP } from './task-shared.js';
 import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
 import { recoveryRefusals } from './task-agent-actions.js';
@@ -15,8 +15,8 @@ import * as taskComments from './task-comments.js';
 export { buildArtifacts } from './task-evidence.js';
 export { scrollToComment } from './task-comments.js';
 import { clearTaskDataCaches } from './task-data.js';
-import { closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, renderTaskPagination, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction } from './task-nav.js';
-export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, refreshPinnedTask, setPinnedExternalTask, clearPinnedExternalTask, cancelTaskSearchDebounce, clearTaskSearch, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, syncTaskControls, renderTaskPagination, refreshChips, buildChips, wireSearch } from './task-nav.js';
+import { browserTaskFilterActive, closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction } from './task-nav.js';
+export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, refreshPinnedTask, setPinnedExternalTask, clearPinnedExternalTask, cancelTaskSearchDebounce, clearTaskSearch, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, syncTaskControls, refreshChips, buildChips, wireSearch } from './task-nav.js';
 import { buildQuickAction, buildQuickActionError, hasQuickAction, pruneQuickActionErrors, quickActionSignature, quickActionState } from './task-quick-actions.js';
 import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-controls.js';
 import { followRovingSelection, renderTaskPane } from './task-pane.js';
@@ -88,14 +88,12 @@ const EMPTY_GROUP_PHRASES = {
   backlog: "in the backlog",
 };
 
-// Explicit page range and matching total instead of the ambiguous `N/50`
-// shorthand, which could mean either a total or an unreachable hard cap.
+// The rows loaded against the matching total, so a list whose sections are
+// partly loaded never reads as complete.
 export function formatTaskCount(filteredCount, fetchedCount, meta) {
   if (meta && Number.isFinite(meta.total)) {
-    const offset = Number.isFinite(meta.offset) ? meta.offset : 0;
-    if (fetchedCount === 0) return `0 of ${meta.total}`;
-    const range = `${offset + 1}–${offset + fetchedCount} of ${meta.total}`;
-    return filteredCount === fetchedCount ? range : `${filteredCount} shown · page ${range}`;
+    const loaded = fetchedCount === meta.total ? plural(meta.total, "task") : `${fetchedCount} of ${meta.total} loaded`;
+    return filteredCount === fetchedCount ? loaded : `${filteredCount} shown · ${loaded}`;
   }
   return filteredCount === fetchedCount
     ? `${fetchedCount} shown`
@@ -378,20 +376,91 @@ function runningHint(group) {
   return parts.length > 0 ? parts.join(" · ") : GROUP_HINTS["in-progress"];
 }
 
-function buildGroupHeader(status, group) {
+// Sections the operator folded, kept across refreshes for the page session.
+const collapsedSections = new Set();
+
+// A section's head: its name, its count and the hint, as one button that
+// folds the section. The count is the status total under the server-side
+// filter; while a browser-side filter narrows the rows, the total is not
+// known for it, so the head counts the rows shown instead.
+function buildGroupHeader(status, group, count, context) {
   const hint = status === "in-progress" ? runningHint(group) : GROUP_HINTS[status];
-  const header = el("div", { class: "group-header" }, [
-    el("h3", { class: "group-title" }, [
-      el("span", { class: "group-dot", "aria-hidden": "true" }),
-      el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
-      el("span", { class: "group-count", text: `${group.length}` }),
-    ]),
-    hint ? el("span", { class: "group-hint", text: hint }) : null,
+  const collapsed = collapsedSections.has(status);
+  const label = GROUP_LABELS[status] || status;
+  const countTitle = count.total ? `${count.value} ${label.toLowerCase()} tasks` : `${count.value} shown under the current filter`;
+  const toggle = el("button", {
+    class: "group-toggle",
+    type: "button",
+    "aria-expanded": collapsed ? "false" : "true",
+    title: collapsed ? `Expand ${label}` : `Collapse ${label}`,
+  }, [
+    el("span", { class: "group-chevron", "aria-hidden": "true" }),
+    el("span", { class: "group-dot", "aria-hidden": "true" }),
+    el("span", { class: "group-label", text: label }),
+    el("span", { class: "group-count", text: `${count.value}`, title: countTitle }),
+  ]);
+  toggle.addEventListener("click", () => {
+    if (collapsedSections.has(status)) collapsedSections.delete(status);
+    else collapsedSections.add(status);
+    taskState.sectionToggleFocus = status;
+    rerender(context);
+  });
+  const header = el("div", { class: `group-header${collapsed ? " collapsed" : ""}` }, [
+    el("h3", { class: "group-title" }, [toggle]),
+    hint && !collapsed ? el("span", { class: "group-hint", text: hint }) : null,
   ]);
   header.dataset.status = status;
   header.dataset.key = `header-${status}`;
-  header.dataset.hash = `${status}-${group.length}-${hint || ""}`;
+  header.dataset.hash = `${status}-${count.value}-${count.total}-${collapsed}-${hint || ""}`;
   return header;
+}
+
+// The end of a partly loaded section: the next step and what is left, "Show
+// all" once fewer than 100 remain, and a failed read's error, which the same
+// buttons retry. Rows load below the ones shown.
+function buildSectionMore(status, section, context) {
+  if (!section || !section.next_cursor) return null;
+  const remaining = Math.max(0, section.total - section.items.length);
+  if (remaining === 0) return null;
+  const load = typeof context?.getTaskSectionLoad === "function" ? context.getTaskSectionLoad(status) : null;
+  const loading = Boolean(load && load.loading);
+  const error = load && !loading ? load.error : null;
+  const step = Math.min(TASK_SECTION_STEP, remaining);
+  const label = (GROUP_LABELS[status] || status).toLowerCase();
+  const more = el("button", {
+    class: "group-more-button",
+    type: "button",
+    text: `Show ${step} more · ${remaining} remaining`,
+    title: `Load the next ${step} ${label} tasks below these`,
+  });
+  more.dataset.more = "step";
+  more.addEventListener("click", () => context.loadMoreTaskSection(status));
+  const all = remaining < 100 ? el("button", {
+    class: "group-more-button",
+    type: "button",
+    text: "Show all",
+    title: `Load the remaining ${remaining} ${label} tasks`,
+  }) : null;
+  if (all) {
+    all.dataset.more = "all";
+    all.addEventListener("click", () => context.loadMoreTaskSection(status, { all: true }));
+  }
+  // Marked unavailable rather than disabled while the read is out, so the
+  // button keeps focus through the repaints; a click then does nothing.
+  for (const button of [more, all]) {
+    if (!button || !loading) continue;
+    button.setAttribute("aria-disabled", "true");
+    button.setAttribute("aria-busy", "true");
+  }
+  const node = el("div", { class: "group-more" }, [
+    more,
+    all,
+    error ? el("span", { class: "group-more-error", role: "alert", text: `Could not load more: ${error}` }) : null,
+  ]);
+  stopRowInteraction(node);
+  node.dataset.key = `more-${status}`;
+  node.dataset.hash = `more-${status}-${remaining}-${loading}-${error || ""}`;
+  return node;
 }
 // The legend's short word for each readiness pool; its title says it in full.
 const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capacity", other: "other" };
@@ -464,8 +533,8 @@ function buildWorkspaceBadge(task) {
   return badge;
 }
 
-function buildFilteredEmpty(status) {
-  const note = el("div", { class: "group-empty", text: `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
+function buildFilteredEmpty(status, text = null) {
+  const note = el("div", { class: "group-empty", text: text || `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
   note.dataset.key = `empty-${status}`;
   note.dataset.hash = `empty-${status}`;
   return note;
@@ -527,10 +596,9 @@ export function renderTasks(tasks, context) {
   const quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   if (body.dataset.quickActions !== quickActions) body.dataset.quickActions = quickActions;
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
-  renderTaskPagination(context);
   // ORB-10972: the rail shows the matching total the panel header reports, so
-  // the Tasks entry reads correctly from any other tab. The rows on this page
-  // are not that total once the list is paginated (ORB-14701).
+  // the Tasks entry reads correctly from any other tab. The rows loaded are
+  // not that total while a section holds more (ORB-14701).
   const railCount = document.getElementById("rail-count-tasks");
   if (railCount) {
     const meta = tasksMeta(context);
@@ -540,7 +608,14 @@ export function renderTasks(tasks, context) {
   }
   renderFilterSummary(context);
   refreshChips(context);
-  if (filtered.length === 0) {
+  const sections = tasksMeta(context)?.sections || new Map();
+  const narrowed = browserTaskFilterActive();
+  const activeStatuses = context && typeof context.getActiveStatuses === "function" ? context.getActiveStatuses() : null;
+  // A section with rows still to load keeps its control even when a
+  // browser-side filter hides every loaded row, so more can be read.
+  const pending = [...sections.values()].filter((section) => section.next_cursor
+    && section.total > section.items.length && (!activeStatuses || activeStatuses.has(section.status)));
+  if (filtered.length === 0 && pending.length === 0) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const replicaText = !replica
@@ -574,16 +649,34 @@ export function renderTasks(tasks, context) {
       group.sort((a, b) => workspacePickerIndex(a.workspace_id) - workspacePickerIndex(b.workspace_id));
     }
   }
+  for (const section of pending) {
+    if (!groups.has(section.status)) groups.set(section.status, []);
+  }
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
   );
+  // A "Show more" button that had focus is rebuilt when its section changes;
+  // focus returns to the same button of the same section.
+  const focusedMore = document.activeElement?.closest?.(".group-more");
+  const moreFocus = focusedMore && body.contains(focusedMore)
+    ? { group: focusedMore.dataset.group, kind: document.activeElement.dataset.more || "step" } : null;
   for (const status of ordered) {
     const group = groups.get(status);
-    // Each status is one card: its head, the backlog's readiness strip, then
-    // the rows. The nodes stay siblings in the list so row reuse and keyboard
-    // roving work across groups; CSS draws the card from the first node of
-    // each run to the one marked `group-end`.
-    const groupNodes = [buildGroupHeader(status, group)];
+    const section = sections.get(status);
+    const count = !narrowed && section ? { value: section.total, total: true } : { value: group.length, total: false };
+    // Each status is one card: its head, the backlog's readiness strip, the
+    // rows, then the control that loads more. The nodes stay siblings in the
+    // list so row reuse and keyboard roving work across groups; CSS draws the
+    // card from the first node of each run to the one marked `group-end`.
+    const groupNodes = [buildGroupHeader(status, group, count, context)];
+    if (collapsedSections.has(status)) {
+      groupNodes.forEach((node) => {
+        if (node.dataset.group !== status) node.dataset.group = status;
+        node.classList.add("group-end");
+      });
+      nodes.push(...groupNodes);
+      continue;
+    }
     let rows = group;
     if (status === "backlog") {
       const strip = buildBacklogReadiness(group, context);
@@ -660,7 +753,13 @@ export function renderTasks(tasks, context) {
       groupNodes.push(row);
       rowIds.add(taskDispatchIdentity(t));
     }
-    if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
+    if (rows.length === 0) {
+      groupNodes.push(group.length === 0
+        ? buildFilteredEmpty(status, `No loaded ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this filter.`)
+        : buildFilteredEmpty(status));
+    }
+    const more = buildSectionMore(status, section, context);
+    if (more) groupNodes.push(more);
     // A card whose rows carry no action (Blocked) gives the action column
     // back, so its crew sits at the card's right edge.
     const noQuick = !group.some(hasQuickAction);
@@ -676,6 +775,7 @@ export function renderTasks(tasks, context) {
   syncTaskNotices([notice, ...buildFoldedStatusNotices(rowIds, context)].filter(Boolean));
   syncNodes(body, nodes);
   syncRowSelection(body);
+  restoreSectionFocus(body, moreFocus);
   renderTaskPane(filtered, context);
   finishTaskRender(body);
   const commentHash = taskComments.getCommentHash();
@@ -689,6 +789,23 @@ export function renderTasks(tasks, context) {
     taskState.restoredCommentHash = null;
   }
 }
+// Focus a rebuilt section control: the "Show more" button the operator used,
+// or the head they folded or opened.
+function restoreSectionFocus(body, moreFocus) {
+  const toggled = taskState.sectionToggleFocus;
+  taskState.sectionToggleFocus = null;
+  if (toggled) {
+    const header = [...body.children].find((node) => node.dataset.key === `header-${toggled}`);
+    const toggle = header?.querySelector(".group-toggle");
+    if (toggle && document.activeElement !== toggle) toggle.focus({ preventScroll: true });
+    return;
+  }
+  if (!moreFocus || body.contains(document.activeElement)) return;
+  const node = [...body.children].find((child) => child.dataset.key === `more-${moreFocus.group}`);
+  const button = node?.querySelector(`[data-more="${moreFocus.kind}"]`) || node?.querySelector(".group-more-button");
+  if (button) button.focus({ preventScroll: true });
+}
+
 // The selected row reads as selected without being rebuilt: its class and
 // its disclosure state are set on the node the list already holds.
 function syncRowSelection(body) {
