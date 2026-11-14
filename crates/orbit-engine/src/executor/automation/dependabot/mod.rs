@@ -1,8 +1,9 @@
 //! Host-owned Dependabot alert discovery.
 //!
-//! All `gh` processes run here with `NoSandbox` on the engine-private
-//! deterministic boundary. Only the bounded, redacted snapshot leaves this
-//! module; no credential or follow-up query capability enters an agent lane.
+//! All `gh` processes run here with `NoSandbox` and the cleared GitHub
+//! allowlist, on the engine-private deterministic boundary. Only the
+//! bounded, redacted snapshot leaves this module; no credential or
+//! follow-up query capability enters an agent lane.
 
 mod collect;
 mod query;

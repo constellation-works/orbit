@@ -1,11 +1,12 @@
 //! The GitHub/git reads the CI stages make, behind one seam.
 //!
-//! Every call here runs on the host, unsandboxed, with whatever credentials
-//! the host already has — the same boundary as `automation::vcs::operations`,
-//! and for the same reason: these labels are engine-private, are never
-//! advertised to agents, and do not pass through tool authorization or an
-//! activity allowlist. Nothing in this module is reachable from an activity's
-//! tool surface, and nothing it returns carries a credential outward.
+//! Every call here runs on the host, unsandboxed. `gh` children get the
+//! cleared GitHub allowlist and Git children get the secured Git environment,
+//! the same boundary as `automation::vcs::operations`. These labels are
+//! engine-private, are never advertised to agents, and do not pass through
+//! tool authorization or an activity allowlist. Nothing in this module is
+//! reachable from an activity's tool surface, and nothing it returns carries
+//! a credential outward.
 //!
 //! The argv, the JSON projections, and the log bounding all come from
 //! `orbit_tools::github_cli`, so the shape of a `gh` call has exactly one
@@ -16,10 +17,12 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_exec::EnvironmentMode;
 use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
 use super::super::github_host::{auth_status, run_gh};
+use super::super::vcs::git::gh_environment;
 
 /// Which slice of a run's log to read, and the read itself, are owned by
 /// `orbit_tools::github_cli` so the stages and the `github.*` tools cannot
@@ -353,10 +356,15 @@ impl CiQueries for HostCiQueries {
             &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
-        let read = github_cli::read_run_log(
+        let read = github_cli::read_run_log_guarded(
             &requests,
             github_cli::LogReadBounds::new(max_bytes),
             cached_view,
+            &|request| {
+                let mut request = request.clone();
+                request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
+                Ok(request)
+            },
         )?;
 
         Ok(RunLog {
