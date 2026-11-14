@@ -422,7 +422,7 @@ resource throttle's memory percentage both measure non-reclaimable memory.
 - `orbit config set` refuses `machine.id` and `machine.task_prefix`: changing either would orphan or renumber records minted under it.
 - `orbit init` refuses to create an identity once the task store has minted ids under another prefix (tasks created before `orbit init` use the historical `ORB`). It fails before writing anything; run `orbit init` before creating tasks.
 - Hand edits fail closed: a `[machine]` table missing an identity key, a `task_prefix` that contradicts the local task allocator, or an `id` that contradicts a workspace record naming this machine as owner is refused. Nothing falls back to the hostname.
-- A legacy `~/.orbit/host.toml` is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths; delete the stale one.
+- A legacy `~/.orbit/host.toml` left as the only identity source is refused by name: copy `machine_id` as `[machine] id`, `host_id` as `machine.name` and `task_prefix` as `machine.task_prefix` into `~/.orbit/config.toml` by hand, then delete `host.toml`. When `[machine]` already exists, a leftover `host.toml` is ignored.
 - `orbit init --force` deletes the global root, machine identity and executor sandbox settings included, before seeding defaults, so it creates a new machine ID and prompts for name and prefix. Non-interactively, pass both `--machine-name` and `--task-prefix`; missing or invalid flags are rejected before anything is deleted. Plain `orbit init` keeps an existing identity.
 
 ### Worker containment

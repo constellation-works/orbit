@@ -313,8 +313,9 @@ alone or beside `hosts.toml`, fails every host-registry load with
 The JSON keys `legacy` on rows and lists remain constant `false`, and mutation
 results retain `migrated: []`; no mutation reports action `migrated`.
 
-The legacy `~/.orbit/host.toml`, singular and folded into `[machine]` by [ORB-12725], is
-unrelated to this file.
+The legacy `~/.orbit/host.toml`, singular, is unrelated to this file. It is
+refused with the manual repair when it is the only identity source, and ignored
+when `[machine]` already exists in `~/.orbit/config.toml`.
 
 ## Failure summary
 

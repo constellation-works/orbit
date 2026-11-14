@@ -13,7 +13,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::WorkspaceRegistryMachineContext;
-use super::legacy::migrate_legacy_registry;
 
 /// Validates local checkout paths, marking their logical workspace invalid
 /// when the local repository root no longer exists. Checkoutless logical
@@ -47,14 +46,13 @@ pub fn validate_workspaces(registry: &mut WorkspaceRegistry) -> bool {
     changed
 }
 
-/// Parse, migrate, and validate one workspace registry JSON document.
+/// Parse and validate one workspace registry JSON document.
 ///
 /// The happy path is one typed deserialize straight from the text: the
 /// document is not materialised as a [`Value`] first, so every `orbit`
 /// invocation parses `workspaces.json` once [DANI-10371]. Only a document the
 /// typed pass rejects is re-read through `RegistryProbe`, which keeps the
-/// registry-worded diagnostics for versions and role tokens and the legacy
-/// migration branch.
+/// registry-worded diagnostics for versions and role tokens.
 pub fn parse_workspace_registry(
     content: &str,
     context: &WorkspaceRegistryMachineContext,
@@ -69,9 +67,9 @@ pub fn parse_workspace_registry(
 }
 
 /// The fields checked before a typed deserialize is trusted to explain a
-/// failure: a missing `schema_version` selects legacy migration, and a version
-/// or role-token problem is reported in registry terms rather than as a serde
-/// variant error.
+/// failure: a missing `schema_version` selects the pre-path-free refusal, and a
+/// version or role-token problem is reported in registry terms rather than as
+/// a serde variant error.
 #[derive(Debug, Deserialize)]
 struct RegistryProbe {
     schema_version: Option<Value>,
@@ -85,12 +83,11 @@ struct CheckoutRoleProbe {
     role: Option<Value>,
 }
 
-/// Explain why the typed deserialize of `content` failed, or migrate it when
-/// it is a legacy document. `typed_error` is the answer when the probe finds
-/// nothing more specific to say.
+/// Explain why the typed deserialize of `content` failed. `typed_error` is
+/// the answer when the probe finds nothing more specific to say.
 fn diagnose_registry_document(
     content: &str,
-    context: &WorkspaceRegistryMachineContext,
+    _context: &WorkspaceRegistryMachineContext,
     typed_error: serde_json::Error,
 ) -> Result<(WorkspaceRegistry, bool), OrbitError> {
     if !typed_error.is_data() {
@@ -104,9 +101,11 @@ fn diagnose_registry_document(
         }
     })?;
     let Some(version_value) = probe.schema_version else {
-        let mut migrated = migrate_legacy_registry(content, context)?;
-        validate_workspace_registry(&mut migrated, context)?;
-        return Ok((migrated, true));
+        return Err(invalid_registry(
+            "this is a pre-path-free registry (no schema_version); the file is left unchanged. \
+             Rebuild it by re-running `orbit workspace init` in each checkout"
+                .to_string(),
+        ));
     };
     let version = version_value.as_u64().ok_or_else(|| {
         invalid_registry("schema_version must be a non-negative integer".to_string())

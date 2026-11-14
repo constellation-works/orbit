@@ -339,8 +339,7 @@ fn minted_prefix_conflict(
 
 /// Create this machine's identity in the global `config.toml`. Machine name
 /// and task prefix are only consulted when the identity is absent (a fresh
-/// create); a present identity is preserved unchanged and a pre-ORB-12725
-/// `host.toml` is folded in without prompting.
+/// create); a present identity is preserved unchanged.
 fn ensure_machine_identity_for_init(
     root_override: Option<&Path>,
     non_interactive: bool,
@@ -396,7 +395,6 @@ fn ensure_machine_identity_for_init(
     Ok(IdentityReport {
         outcome: match outcome {
             MachineIdentityOutcome::Created(_) => "created",
-            MachineIdentityOutcome::Migrated(_) => "migrated",
             MachineIdentityOutcome::Unchanged(_) => "unchanged",
         },
         name: identity.name.clone(),
