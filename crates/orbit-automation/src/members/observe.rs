@@ -13,7 +13,6 @@ pub(super) struct Absorbed {
 }
 
 type AcceptedKey = (String, String, Vec<String>);
-type CarriesKey = (String, String, Vec<String>, String, String, String, bool);
 
 /// Per-evaluation memo of host answers shared by the trial fold (which only
 /// reads `deferred`) and the real fold in `evaluate`. Both folds walk the
@@ -23,7 +22,6 @@ type CarriesKey = (String, String, Vec<String>, String, String, String, bool);
 #[derive(Debug, Default)]
 pub(super) struct HostMemo {
     accepted: HashMap<AcceptedKey, Option<bool>>,
-    carries: HashMap<CarriesKey, bool>,
 }
 
 fn accepted_key(member: &StateMember) -> AcceptedKey {
@@ -32,33 +30,6 @@ fn accepted_key(member: &StateMember) -> AcceptedKey {
         member.fingerprint.clone(),
         member.task_ids.clone(),
     )
-}
-
-fn carries_key(member: &StateMember, assessed: &MemberAssessment) -> CarriesKey {
-    (
-        member.key.clone(),
-        member.fingerprint.clone(),
-        member.task_ids.clone(),
-        assessed.input_fingerprint.clone(),
-        assessed.resulting_fingerprint.clone(),
-        assessed.receipt_id.clone(),
-        assessed.ready,
-    )
-}
-
-fn memoized_carries_forward(
-    host: &dyn MemberHost,
-    member: &StateMember,
-    assessed: &MemberAssessment,
-    memo: &mut HostMemo,
-) -> bool {
-    let key = carries_key(member, assessed);
-    if let Some(&cached) = memo.carries.get(&key) {
-        return cached;
-    }
-    let verdict = host.carries_forward(member, assessed);
-    memo.carries.insert(key, verdict);
-    verdict
 }
 
 /// Fold one page into the working set without exceeding [`CAPACITY`], and
@@ -129,12 +100,12 @@ pub(super) fn absorb(
             continue;
         }
 
-        // Already assessed at exactly this fingerprint, or under an earlier
-        // contract whose assessment still holds: nothing left to apply.
-        if members.assessed.get(&member.key).is_some_and(|assessed| {
-            assessed.resulting_fingerprint == member.fingerprint
-                || memoized_carries_forward(host, &member, assessed, memo)
-        }) {
+        // Already assessed at exactly this fingerprint: nothing left to apply.
+        if members
+            .assessed
+            .get(&member.key)
+            .is_some_and(|assessed| assessed.resulting_fingerprint == member.fingerprint)
+        {
             members.pending.remove(&member.key);
             continue;
         }

@@ -751,12 +751,11 @@ fn automation_pin_cleanup_message(
         ),
         None => format!(
             "Reclaimed {} unreferenced automation attempt pin(s) under {}; kept {} in flight, \
-             {} live-run, {} assessed.",
+             {} live-run.",
             cleanup.released.len(),
             cleanup.namespace,
             cleanup.retained_active,
             cleanup.retained_live_run,
-            cleanup.retained_assessed,
         ),
     };
     message.push_str(&format!(

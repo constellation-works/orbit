@@ -123,7 +123,7 @@ Do not run a repair merely to collect health evidence.
 | `remove-graph` | `ok`, number of retired graph locations removed |
 | `fix-stale-artifacts` | `ok`, number of deprecated Orbit-written artifacts retired |
 | `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
-| `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, assessed, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
+| `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
 | `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed, their translated values written under the replacement keys in the same layer, and the original backup written beside each edited `config.toml`. Explicit modern values win. A run that finds none writes nothing; any legacy after-landing policy refuses before either config is changed or backed up |
 
 For an after-landing refusal, choose the intended consumer state with
@@ -362,8 +362,7 @@ Genuinely absent catalog directories remain optional and do not produce findings
 Admitting a state-routine attempt (the task-pilot routine) pins the commit it froze in a
 namespace owned by this Orbit root and workspace, `refs/orbit/pins/v1/<owner digest>/<attempt id>`,
 whose owner record is `refs/orbit/pin-owners/v1/<owner digest>`. Settlement, terminal failure
-or retirement releases the pin unless an accepted pre-upgrade `material_v1` assessment still
-needs that revision for its compatibility check. A crash between the checkpoint and the
+or retirement releases the pin. A crash between the checkpoint and the
 release, or a release refused for want of ownership proof, can leave an owned pin behind.
 
 Earlier releases pinned every attempt in one shared namespace,
@@ -387,9 +386,8 @@ rerun it after the sweep finishes. It first requires this namespace's owner reco
 this root, workspace, machine and Git directory; a missing or conflicting record refuses and
 retains every owned pin. It lists the owned pins, then inventories this owner's consumers and
 this workspace's pending or running task-pilot runs. A pin is kept when an attempt is still in
-flight or retrying, a live run carries it, or an accepted assessment names it (an assessment
-certified before the material fingerprint became configurable is carried forward through that
-pin). Every other owned pin is deleted only while it still names the commit it was listed
+flight or retrying, or a live run carries it. A pin that only an accepted assessment names is
+reclaimed. Every other owned pin is deleted only while it still names the commit it was listed
 with, so a ref repointed meanwhile survives and is reported. Any inventory failure deletes
 nothing, and the repair is idempotent.
 

@@ -32,7 +32,7 @@ use std::ops::ControlFlow;
 use std::path::Path;
 
 /// The shared namespace releases before owner scoping pinned attempts in.
-/// Read as a bounded exact fallback; never written or deleted here.
+/// Counted and retained by cleanup; never written or deleted here.
 const LEGACY_NAMESPACE: &str = "refs/orbit/automation/";
 const OWNED_NAMESPACE: &str = "refs/orbit/pins/v1/";
 const OWNER_RECORDS: &str = "refs/orbit/pin-owners/v1/";
@@ -259,23 +259,6 @@ pub(super) fn pin(
     }
 }
 
-/// The commit `attempt_id` pinned: its owned pin, else the legacy shared
-/// pin an attempt admitted before owner scoping took. Two exact reads,
-/// whatever either namespace holds.
-pub(super) fn pinned(
-    source: &Source,
-    owner: &Owner,
-    attempt_id: &str,
-) -> Result<Option<String>, AutomationError> {
-    if !is_attempt_id(attempt_id) {
-        return Ok(None);
-    }
-    if let Some(pinned) = exact(source, &owner.pin(attempt_id)?)? {
-        return Ok(Some(pinned));
-    }
-    exact(source, &format!("{LEGACY_NAMESPACE}{attempt_id}"))
-}
-
 /// Release `attempt`'s owned pin once the owner record proves the namespace
 /// is this owner's. Git deletes it only while it still names the commit the
 /// attempt froze. A legacy shared pin is never deleted. Returns whether a pin
@@ -325,9 +308,6 @@ pub struct AttemptPinCleanup {
     pub released: Vec<String>,
     /// Owned pins of attempts a consumer still has in flight or will retry.
     pub retained_active: usize,
-    /// Owned pins an accepted assessment names, which an assessment certified
-    /// under the `material_v1` contract needs to be carried forward.
-    pub retained_assessed: usize,
     /// Owned pins of attempts a pending or running pipeline run still carries.
     pub retained_live_run: usize,
     /// Owned pins kept because ownership was refused.
@@ -346,14 +326,15 @@ pub struct AttemptPinCleanup {
     pub unrecognized: Vec<String>,
 }
 
-/// Reclaim every owned attempt pin that no persisted consumer state and no
-/// live run of this owner still names, and report what every other pin
-/// namespace holds without touching it.
+/// Reclaim every owned attempt pin that no in-flight attempt and no live run
+/// of this owner still names, and report what every other pin namespace holds
+/// without touching it. A pin that only an accepted assessment names is
+/// reclaimed with the rest.
 ///
 /// Only this owner's consumers and runs can name a pin in its namespace, and
 /// all of them live in this runtime's stores. Pins are listed before the
 /// inventory is read, and admission commits an attempt before pinning it, so
-/// a listed pin whose attempt is still needed is always in the inventory.
+/// a listed pin whose attempt is still in flight is always in the inventory.
 /// Deletion is compare-and-delete at the listed commit, and the routine sweep
 /// lock keeps this root's own evaluations out meanwhile. Any inventory
 /// failure deletes nothing.
@@ -413,8 +394,6 @@ pub fn release_unreferenced_attempt_pins(
             cleanup.retained_active += 1;
         } else if inventory.live_runs.contains(&id) {
             cleanup.retained_live_run += 1;
-        } else if inventory.assessed.contains(&id) {
-            cleanup.retained_assessed += 1;
         } else {
             unreferenced.push((refname, object));
         }
@@ -484,7 +463,6 @@ fn top_level_refs(root: &Path, namespace: &str) -> Result<Vec<(String, String)>,
 #[derive(Default)]
 struct Inventory {
     active: BTreeSet<String>,
-    assessed: BTreeSet<String>,
     live_runs: BTreeSet<String>,
 }
 
@@ -538,11 +516,5 @@ impl Inventory {
         if let Some(active) = &members.active {
             self.active.insert(active.id.clone());
         }
-        self.assessed.extend(
-            members
-                .assessed
-                .values()
-                .map(|assessment| assessment.receipt_id.clone()),
-        );
     }
 }

@@ -354,27 +354,6 @@ fn read_evidence(
     )
 }
 
-/// The `material_v1` fingerprint of `task` as an assessment pinned at
-/// `revision` would have certified it, for carrying such an assessment
-/// forward across the contract change [ORB-13638].
-pub(crate) fn legacy_fingerprint(
-    runtime: &OrbitRuntime,
-    task: &Task,
-    revision: &str,
-    instructions: &InstructionSnapshot,
-    eligibility: &PreparationEligibility,
-) -> Result<String, AutomationError> {
-    let mut dependencies = dependency_evidence(runtime, task)?;
-    dependencies.push(assignment_evidence(runtime, task)?);
-    preparation::legacy_fingerprint(
-        task,
-        revision,
-        &Value::Array(dependencies),
-        &instructions.0,
-        eligibility,
-    )
-}
-
 /// Read only the evidence `policy` makes material: an unread input can
 /// neither invalidate an assessment nor cost a git or registry lookup.
 fn evidence(

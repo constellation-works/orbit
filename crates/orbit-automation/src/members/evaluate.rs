@@ -152,8 +152,8 @@ pub fn evaluate(
     let batch_size = trigger.effective_batch_size();
     // The trial fold exists only to read `deferred`; the real fold then
     // applies the same page. Both folds share one per-evaluation host memo
-    // so each candidate's `accepted_assessment`/`carries_forward` verdicts
-    // are computed once and seen identically by both folds. The
+    // so each candidate's `accepted_assessment` verdict
+    // is computed once and seen identically by both folds. The
     // retire-then-absorb order stays: the real fold still runs after the
     // retire below.
     let mut memo = HostMemo::default();

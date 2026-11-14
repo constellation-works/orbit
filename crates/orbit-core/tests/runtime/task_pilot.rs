@@ -864,143 +864,6 @@ fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
     assert!(workspace.pins().is_empty(), "terminal failure released it");
 }
 
-/// Record a `material_v1` assessment of `task` at `attempt`'s source: no task
-/// dependencies, the resolved crew assignment, and an empty instruction list.
-/// That list matches a pinned tree with no `AGENTS.md` or `CLAUDE.md`. A tree
-/// that has them no longer matches, so the assessment is piloted again.
-fn applied_legacy(workspace: &Workspace, task: &Task, attempt: &MemberAttempt) -> String {
-    let assignment = workspace
-        .runtime
-        .lookup_crew_for_task(None, task.crew.as_deref())
-        .unwrap();
-    let legacy_dependencies = json!([{
-        "effective_assignment": {
-            "crew": assignment.name,
-            "model": assignment.assignment.model,
-            "provider": assignment.assignment.provider,
-        }
-    }]);
-    let legacy_fingerprint = orbit_automation::members::preparation::legacy_fingerprint(
-        task,
-        &attempt.member.source.commit,
-        &legacy_dependencies,
-        "[]",
-        &Default::default(),
-    )
-    .unwrap();
-    workspace.applied_with_fingerprint(attempt, Some(&legacy_fingerprint));
-    legacy_fingerprint
-}
-
-/// A pre-upgrade accepted assessment still needs its pinned source to be
-/// compared under material_v1; current material_v2 assessments release at
-/// settlement as covered above.
-fn routine_attempt_pin_stays_for_a_legacy_assessment() {
-    let workspace = Workspace::new();
-    workspace.install_pilot_job();
-    let task = workspace.task("legacy assessment");
-    let routine = pilot_routine();
-    let now = Utc::now();
-    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
-    let attempt = workspace.admitted(&task, 1);
-    let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
-    let legacy_fingerprint = applied_legacy(&workspace, &task, &attempt);
-
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(4),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert_eq!(
-        members.assessed[&task.id].resulting_fingerprint,
-        legacy_fingerprint
-    );
-    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
-    assert!(members.active.is_none());
-    assert_eq!(
-        workspace.pins(),
-        [pin],
-        "the legacy assessment still needs its pinned revision"
-    );
-    let run_id = attempt.action_id.as_deref().unwrap();
-    workspace
-        .jobs
-        .mark_job_run_running(run_id, Utc::now(), std::process::id())
-        .unwrap();
-    workspace
-        .jobs
-        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
-        .unwrap();
-
-    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
-    assert_eq!(cleanup.retained_assessed, 1);
-    assert!(cleanup.released.is_empty());
-}
-
-/// An attempt an earlier client admitted pinned only the legacy shared ref.
-/// The current client still reads it by its exact name to carry the
-/// assessment forward, and never deletes it: no owner is recorded for it.
-fn legacy_shared_pins_are_read_as_a_fallback_and_never_released() {
-    let workspace = Workspace::new();
-    workspace.install_pilot_job();
-    let task = workspace.task("pinned by an earlier client");
-    let routine = pilot_routine();
-    let now = Utc::now();
-    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
-    let attempt = workspace.admitted(&task, 1);
-    let owned = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
-    workspace.git(&["update-ref", "-d", &owned]);
-    let legacy = format!("refs/orbit/automation/{}", attempt.id);
-    workspace.pin(&legacy);
-
-    applied_legacy(&workspace, &task, &attempt);
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(4),
-    )
-    .unwrap();
-    assert_eq!(
-        workspace.pins(),
-        std::slice::from_ref(&legacy),
-        "settlement kept it"
-    );
-
-    // The next pass recomputes the legacy digest at the legacy pin, so the
-    // unchanged task keeps its assessment instead of joining a re-pilot.
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(5),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
-    assert!(
-        !members.pending.contains_key(&task.id),
-        "the legacy fallback carried the assessment forward"
-    );
-
-    let run_id = attempt.action_id.as_deref().unwrap();
-    workspace
-        .jobs
-        .mark_job_run_running(run_id, Utc::now(), std::process::id())
-        .unwrap();
-    workspace
-        .jobs
-        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
-        .unwrap();
-    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
-    assert_eq!(cleanup.retained_legacy, 1);
-    assert!(cleanup.released.is_empty());
-    assert_eq!(workspace.pins(), [legacy]);
-}
-
 /// Tracked root and nested `AGENTS.md` and `CLAUDE.md` bytes are part of the
 /// preparation fingerprint when `instructions` is material. A near-name, an
 /// ordinary file, and an untracked instruction file are not.
@@ -1153,57 +1016,6 @@ fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
     );
 }
 
-/// A `material_v1` assessment stored against an empty instruction snapshot
-/// does not carry forward once the pinned revision's tracked instruction
-/// files are part of that hash. The member is piloted again once.
-fn legacy_assessment_repilots_when_pinned_instructions_were_omitted() {
-    let workspace = Workspace::new();
-    workspace.install_pilot_job();
-    workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
-    workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
-    workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
-    let task = workspace.task("legacy empty snapshot");
-    let routine = pilot_routine();
-    let now = Utc::now();
-    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
-    let attempt = workspace.admitted(&task, 1);
-    let stale = applied_legacy(&workspace, &task, &attempt);
-
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(4),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert_eq!(
-        members.assessed[&task.id].resulting_fingerprint, stale,
-        "settlement records the empty-snapshot assessment"
-    );
-    assert!(
-        workspace.pins().is_empty(),
-        "that hash does not match the pinned instructions, so the pin is not kept"
-    );
-
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(5),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert!(
-        members.pending.contains_key(&task.id),
-        "the member is piloted again once"
-    );
-    assert_ne!(
-        members.pending[&task.id].fingerprint, stale,
-        "the new fingerprint is not the empty-snapshot legacy hash"
-    );
-}
-
 /// `orbit doctor --fix-automation-pins` reclaims leaked owned pins past the
 /// size one namespace listing could read, and keeps every pin a consumer or
 /// live run names, every legacy and delivery batch pin, and every ref it
@@ -1216,7 +1028,8 @@ fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
     let now = Utc::now();
     evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
 
-    // A pin from before settlement released them, backing an assessment.
+    // A pin left behind after settlement. Only the accepted assessment names
+    // it, so the repair reclaims it.
     let settled = workspace.admitted(&assessed, 1);
     workspace.settle(&settled, now + Duration::minutes(3));
     let assessed_pin = pin_attempt_source(&workspace.runtime, &settled).unwrap();
@@ -1292,23 +1105,23 @@ fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
     let mut released = cleanup.released.clone();
     released.sort();
     let mut expected = leaked.clone();
+    expected.push(assessed_pin.clone());
     expected.sort();
     assert_eq!(released, expected);
     assert_eq!(
         (
             cleanup.retained_active,
-            cleanup.retained_assessed,
             cleanup.retained_live_run,
             cleanup.retained_legacy,
             cleanup.foreign_owners,
         ),
-        (1, 1, 1, 1, 0)
+        (1, 1, 1, 0)
     );
     let mut reported = cleanup.unrecognized.clone();
     reported.sort();
     assert_eq!(reported, unrecognized);
     assert!(cleanup.kept.is_empty());
-    let mut remaining = vec![assessed_pin, active_pin, live_pin, batch_pin, legacy_pin];
+    let mut remaining = vec![active_pin, live_pin, batch_pin, legacy_pin];
     remaining.extend(unrecognized);
     remaining.sort();
     assert_eq!(workspace.pins(), remaining);
@@ -1432,13 +1245,13 @@ fn unproven_ownership_and_moved_pins_retain_every_pin() {
     assert!(cleanup.refused.is_some(), "a missing record proves nothing");
     assert_eq!(workspace.pins(), std::slice::from_ref(&pin));
 
-    // Restored, the record proves the namespace again; the settled
-    // attempt's assessment still names the pin.
+    // Restored, the record proves the namespace again. The settled attempt
+    // is done, so the pin its assessment alone named is reclaimed.
     workspace.git(&["update-ref", &record, &bound]);
     let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
     assert_eq!(cleanup.refused, None);
-    assert_eq!(cleanup.retained_assessed, 1);
-    assert_eq!(workspace.pins(), std::slice::from_ref(&pin));
+    assert_eq!(cleanup.released, std::slice::from_ref(&pin));
+    assert!(workspace.pins().is_empty());
 
     // A pin repointed after admission is neither rebound nor released.
     let moved_task = workspace.task("moved pin");
@@ -1457,9 +1270,7 @@ fn unproven_ownership_and_moved_pins_retain_every_pin() {
     workspace.git(&["update-ref", &moved_pin, &elsewhere]);
     assert!(pin_attempt_source(&workspace.runtime, &moved).is_err());
     workspace.settle(&moved, now + Duration::minutes(5));
-    let mut expected = vec![pin, moved_pin.clone()];
-    expected.sort();
-    assert_eq!(workspace.pins(), expected);
+    assert_eq!(workspace.pins(), vec![moved_pin.clone()]);
     assert_eq!(workspace.object(&moved_pin), elsewhere);
 }
 
@@ -1472,15 +1283,12 @@ crate::scenario_table!(
     no_pilot_excludes_automatic_preparation_and_explains_the_tag,
     preparation_routine_admission_withholds_a_held_member_off_the_scan_page,
     routine_attempt_pins_are_released_once_the_attempt_settles_or_fails,
-    routine_attempt_pin_stays_for_a_legacy_assessment,
-    legacy_shared_pins_are_read_as_a_fallback_and_never_released,
     instruction_edits_change_the_preparation_fingerprint
 );
 
 crate::scenario_table!(
     instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap_scenarios,
     instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap,
-    legacy_assessment_repilots_when_pinned_instructions_were_omitted,
     fix_automation_pins_releases_only_owned_attempt_pins_nothing_names
 );
 

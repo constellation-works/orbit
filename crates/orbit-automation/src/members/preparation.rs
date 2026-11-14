@@ -11,11 +11,6 @@ use serde_json::{Value, json};
 
 pub const CONTRACT: &str = "material_v2";
 
-/// The contract accepted assessments were certified under before the material
-/// set became configurable [ORB-13638]. Kept only so such an assessment can be
-/// carried forward instead of re-piloting every assessed task on upgrade.
-const LEGACY_CONTRACT: &str = "material_v1";
-
 /// Only unstarted work carries material worth fingerprinting, and an explicit
 /// no-diff tag opts a task out entirely — by default. The consumer's resolved
 /// `eligibility` block narrows or widens that rule [ORB-12745]; every caller
@@ -162,36 +157,6 @@ fn without_dependency_status(mut value: Value) -> Value {
         }
     }
     value
-}
-
-/// The exact `material_v1` hash: every task field, the eligibility verdict,
-/// dependency evidence with the crew assignment appended, instructions and
-/// the source revision. Only an accepted pre-upgrade assessment is checked
-/// against it, at the revision that assessment pinned.
-pub fn legacy_fingerprint(
-    task: &Task,
-    source_revision: &str,
-    dependencies: &Value,
-    instructions: &str,
-    eligibility: &PreparationEligibility,
-) -> Result<String, AutomationError> {
-    let mut material = json!({
-        "contract": LEGACY_CONTRACT, "id": task.id, "title": task.title.trim(),
-        "description": task.description.trim(), "criteria": task.acceptance_criteria,
-        "plan": task.plan.trim(), "selectors": sorted(&task.context_files),
-        "tags": sorted(&task.tags), "tools": sorted(&task.required_tools),
-        "type": task.task_type, "complexity": task.complexity,
-        "crew": task.crew, "eligible": eligible(task, eligibility), "relations": task.relations,
-        "dependencies": dependencies, "instructions": instructions,
-        "source_revision": source_revision,
-    });
-    let eligibility = eligibility.normalized();
-    if !eligibility.is_default() {
-        material["eligibility"] = serde_json::to_value(eligibility)
-            .map_err(|error| AutomationError::Evidence(error.to_string()))?;
-    }
-
-    json_definition_epoch(material)
 }
 
 /// Order-insensitive collections are normalized so an equivalent task
