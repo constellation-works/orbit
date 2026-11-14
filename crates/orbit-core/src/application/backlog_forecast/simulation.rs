@@ -5,7 +5,7 @@ use super::dependencies::DependencyPlan;
 use super::model::Delivery;
 use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Script};
 use super::outcomes::{Episode, MAX_ATTEMPTS};
-use super::rework::{self, ForecastArrivalStream, MAX_GENERATED, RegressionRework};
+use super::rework::{self, ForecastArrivalStream, RegressionRework};
 use super::schedule::{self, DrainStop, HORIZON_HOURS, Scenario, ScheduleState};
 use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 use crate::application::statistics::SplitMix64;
@@ -442,7 +442,7 @@ impl Outcome {
                 "reason": cut.key(),
                 "iterations": ITERATIONS,
                 "iterations_completed": completed,
-                "generated_limit": rework::MAX_GENERATED,
+                "generated_limit": rework::max_generated(),
                 "compute_budget_seconds": arrivals_compute_budget().as_secs(),
             });
         }
@@ -530,6 +530,7 @@ pub(super) fn simulate_backlog_forecast(
     let arrivals_active = arrivals
         .is_some_and(|rates| rates.values().sum::<f64>() > 0.0 && !rework.donors.is_empty());
     let deadline = arrivals_active.then_some(deadline);
+    let max_generated = rework::max_generated();
     let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     for _ in 0..ITERATIONS {
         if expired() {
@@ -597,7 +598,7 @@ pub(super) fn simulate_backlog_forecast(
                 }
                 if let Some(stream) = &mut stream {
                     stream.extend_forecast_arrivals(
-                        (generated.len() + batch).min(MAX_GENERATED),
+                        (generated.len() + batch).min(max_generated),
                         episodes,
                         &mut rng,
                         correction,
@@ -653,7 +654,7 @@ pub(super) fn simulate_backlog_forecast(
                     &mut totals,
                     attempt_state,
                 );
-                if run.stop == Some(DrainStop::ArrivalsOutrun) && generated.len() < MAX_GENERATED {
+                if run.stop == Some(DrainStop::ArrivalsOutrun) && generated.len() < max_generated {
                     batch *= ARRIVAL_BATCH_GROWTH;
                     continue;
                 }

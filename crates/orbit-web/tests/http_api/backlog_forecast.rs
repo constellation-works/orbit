@@ -931,31 +931,56 @@ fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
         "backlog_forecast::arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals",
         || {
             let fixture = Fixture::new();
-            busy_arrivals_fixture(&fixture, 2_150);
-            // Over 300 one-hour filings a day keep some task running at every
-            // moment, so no run drains before the stream's limit. Which bound
-            // ends the run must not depend on host speed: the production budget
-            // starts before history loads, so a loaded host can spend it first and
-            // report compute_budget. This read uses a budget no host reaches, as
-            // the drain test below does; the production budget is read afterwards.
+            busy_arrivals_fixture(&fixture, 200);
+            // A starting backlog keeps the single slot busy until arrivals
+            // accumulate; with one queued task the queue can empty before
+            // the bound on a lucky early gap between filings.
+            for _ in 0..32 {
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: "Initial work".into(),
+                        complexity: TaskComplexity::Medium,
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            // Over 28 one-hour filings a day at concurrency 1 arrive faster
+            // than the single slot drains them, so no run drains before the
+            // stream's limit. Which bound ends the run must not depend on
+            // host speed: the production budget starts before history loads,
+            // so a loaded host can spend it first and report compute_budget.
+            // This read uses a budget no host reaches and a test generation
+            // bound of 256, as the drain test below does; a short budget is
+            // read afterwards.
             let server = fixture.server_with_envs(
                 false,
-                &[(
-                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
-                    "3600000".as_ref(),
-                )],
+                &[
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                        "3600000".as_ref(),
+                    ),
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_MAX_GENERATED_ENV,
+                        "256".as_ref(),
+                    ),
+                ],
             );
-            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
             drop(server);
-            assert!(cut["arrivals"]["per_day"]["total"].as_f64().unwrap() >= 300.0);
+            assert!(cut["arrivals"]["per_day"]["total"].as_f64().unwrap() >= 28.0);
             assert_eq!(cut["inputs"]["iterations"], 1000);
             let forecast = &cut["forecast"];
             assert_eq!(
                 forecast["simulation_cut"]["reason"], "generated_limit",
                 "{forecast}"
             );
-            assert_eq!(forecast["simulation_cut"]["generated_limit"], 10_000);
-            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["simulation_cut"]["generated_limit"], 256);
+            assert_eq!(
+                forecast["simulation_cut"]["iterations_completed"], 0,
+                "{forecast}"
+            );
             assert_eq!(forecast["unavailable"]["simulation_cut"], true);
             assert_eq!(forecast["simulation_truncated"], 1);
             assert!(
@@ -977,26 +1002,32 @@ fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
             }
             assert!(forecast["drain_probability"].is_null(), "{forecast}");
 
-            // The dashboard's read keeps its time limit under the production
-            // budget. Whichever bound this host reaches first, the run is cut
+            // A short substituted budget cuts this read deterministically:
+            // with the production generation bound the stream cannot reach
+            // its limit before the deadline, so the run is cut by the budget
             // and its totals are withheld.
-            let server = fixture.server(false);
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "2000".as_ref(),
+                )],
+            );
             let started = std::time::Instant::now();
-            let read = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let read = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
             let elapsed = started.elapsed();
             assert!(
-                elapsed < std::time::Duration::from_secs(30),
-                "the dashboard abandons this read at 30 seconds: {elapsed:?}"
+                elapsed < std::time::Duration::from_secs(12),
+                "a 2s budget plus the 10s margin must bound this read: {elapsed:?}"
             );
             let forecast = &read["forecast"];
-            assert!(
-                matches!(
-                    forecast["simulation_cut"]["reason"].as_str(),
-                    Some("generated_limit" | "compute_budget")
-                ),
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "compute_budget",
                 "{forecast}"
             );
-            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["simulation_cut"]["compute_budget_seconds"], 2);
+            // Iterations completed before the deadline vary with host
+            // speed; the cut and withheld totals are the guarantee here.
             assert_eq!(forecast["unavailable"]["simulation_cut"], true);
             assert!(
                 forecast.get("pre_regression_baseline").is_none(),
@@ -1057,22 +1088,28 @@ fn arrivals_draining_before_the_generation_bound_stay_complete() {
         "backlog_forecast::arrivals_draining_before_the_generation_bound_stay_complete",
         || {
             let fixture = Fixture::new();
-            busy_arrivals_fixture(&fixture, 850);
+            busy_arrivals_fixture(&fixture, 60);
             // The simulation costs well over the production wall-time budget
             // on a host slowed by instrumentation, so this checks completion
-            // under a budget no host reaches; the budget's own cut is checked
-            // by the test above.
+            // under a budget no host reaches and a test generation bound of
+            // 256; the budget's own cut is checked by the test above.
             let server = fixture.server_with_envs(
                 false,
-                &[(
-                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
-                    "3600000".as_ref(),
-                )],
+                &[
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                        "3600000".as_ref(),
+                    ),
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_MAX_GENERATED_ENV,
+                        "256".as_ref(),
+                    ),
+                ],
             );
             // Over 90 days this rate files past the limit, yet every run
             // drains long before using that many filings.
             let complete = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
-            assert!(complete["arrivals"]["per_day"]["total"].as_f64().unwrap() > 111.2);
+            assert!(complete["arrivals"]["per_day"]["total"].as_f64().unwrap() > 8.5);
             let forecast = &complete["forecast"];
             assert!(forecast.get("simulation_cut").is_none(), "{forecast}");
             assert!(forecast["unavailable"].get("simulation_cut").is_none());

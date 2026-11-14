@@ -21,6 +21,26 @@ use super::schedule::HORIZON_HOURS;
 /// Bound generated nodes independently of the event bound.
 pub(super) const MAX_GENERATED: usize = 10_000;
 
+/// Count an isolated test fixture's server substitutes for
+/// [`MAX_GENERATED`]. Only dev-dependency builds with `test-support`
+/// recognize this variable.
+#[cfg(feature = "test-support")]
+pub const MAX_GENERATED_ENV: &str = "ORBIT_TEST_FORECAST_MAX_GENERATED";
+
+/// The generation bound: [`MAX_GENERATED`] unless a test fixture
+/// substituted another through [`MAX_GENERATED_ENV`].
+pub(super) fn max_generated() -> usize {
+    #[cfg(feature = "test-support")]
+    if let Some(count) = std::env::var(MAX_GENERATED_ENV)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|count: &usize| *count > 0)
+    {
+        return count;
+    }
+    MAX_GENERATED
+}
+
 /// Each arrival source class's donor indexes.
 pub(super) type ArrivalPools = BTreeMap<&'static str, Vec<usize>>;
 
@@ -453,7 +473,7 @@ pub(super) fn draw_regression_bundles(
                 known -= 1;
                 continue;
             }
-            if nodes.len() == MAX_GENERATED {
+            if nodes.len() == max_generated() {
                 return (nodes, true);
             }
             nodes.push(generated_node(

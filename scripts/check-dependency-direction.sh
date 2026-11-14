@@ -99,7 +99,8 @@ allowed_internal_deps() {
       ;;
     orbit-web)
       # Lease token scopes and startup machine settings are host-local inputs.
-      echo "orbit-auth orbit-common orbit-cmd orbit-config orbit-core orbit-registry orbit-types orbit-engine orbit-store"
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-auth orbit-common orbit-cmd orbit-config orbit-core orbit-registry orbit-types orbit-engine orbit-store orbit-web"
       ;;
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
@@ -119,7 +120,8 @@ allowed_dev_only_deps() {
       echo "orbit-mcp"
       ;;
     orbit-web)
-      echo "orbit-engine orbit-store"
+      # Only integration tests enable its test-support fixture hooks.
+      echo "orbit-engine orbit-store orbit-web"
       ;;
     orbit-cli)
       echo "orbit-engine orbit-exec orbit-tools"

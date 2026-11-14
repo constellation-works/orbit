@@ -63,6 +63,53 @@ const HOST_RESOURCES_INTERVAL: StdDuration = StdDuration::from_secs(5);
 /// The drain phase is read after any run changes, and at least this often for
 /// a window deadline that passes with no run changing.
 const DRAIN_RECHECK_INTERVAL: StdDuration = StdDuration::from_secs(15);
+/// Interval, in milliseconds, an isolated test fixture's server substitutes
+/// for [`SCAN_INTERVAL`]. Only builds with `test-support` recognize it.
+#[cfg(feature = "test-support")]
+const SCAN_INTERVAL_ENV: &str = "ORBIT_TEST_EVENTS_SCAN_INTERVAL_MS";
+/// Interval, in milliseconds, an isolated test fixture's server substitutes
+/// for [`HOST_RESOURCES_INTERVAL`]. Only builds with `test-support`
+/// recognize it.
+#[cfg(feature = "test-support")]
+const HOST_RESOURCES_INTERVAL_ENV: &str = "ORBIT_TEST_EVENTS_HOST_RESOURCES_INTERVAL_MS";
+/// Interval, in milliseconds, an isolated test fixture's server substitutes
+/// for [`DRAIN_RECHECK_INTERVAL`]. Only builds with `test-support`
+/// recognize it.
+#[cfg(feature = "test-support")]
+const DRAIN_RECHECK_INTERVAL_ENV: &str = "ORBIT_TEST_EVENTS_DRAIN_RECHECK_INTERVAL_MS";
+
+#[cfg(feature = "test-support")]
+fn test_interval(env: &str) -> Option<StdDuration> {
+    std::env::var(env)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|millis: &u64| *millis > 0)
+        .map(StdDuration::from_millis)
+}
+
+fn scan_interval() -> StdDuration {
+    #[cfg(feature = "test-support")]
+    if let Some(interval) = test_interval(SCAN_INTERVAL_ENV) {
+        return interval;
+    }
+    SCAN_INTERVAL
+}
+
+fn host_resources_interval() -> StdDuration {
+    #[cfg(feature = "test-support")]
+    if let Some(interval) = test_interval(HOST_RESOURCES_INTERVAL_ENV) {
+        return interval;
+    }
+    HOST_RESOURCES_INTERVAL
+}
+
+fn drain_recheck_interval() -> StdDuration {
+    #[cfg(feature = "test-support")]
+    if let Some(interval) = test_interval(DRAIN_RECHECK_INTERVAL_ENV) {
+        return interval;
+    }
+    DRAIN_RECHECK_INTERVAL
+}
 /// Longest wait between disconnect and shutdown checks.
 const SLEEP_SLICE: StdDuration = StdDuration::from_millis(250);
 /// The browser's reconnect delay after a dropped stream.
@@ -180,7 +227,7 @@ fn stream_workspace_changes(
         return;
     }
     let mut next_host = Instant::now();
-    let mut next_scan = Instant::now() + SCAN_INTERVAL;
+    let mut next_scan = Instant::now() + scan_interval();
     loop {
         if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
             return;
@@ -197,16 +244,16 @@ fn stream_workspace_changes(
             if tx.blocking_send(frame).is_err() {
                 return;
             }
-            next_host = Instant::now() + HOST_RESOURCES_INTERVAL;
+            next_host = Instant::now() + host_resources_interval();
         }
         if Instant::now() >= next_scan {
             let notices = watch.scan(runtime);
             if !send_notices(tx, watch.scanned_at, notices) {
                 return;
             }
-            next_scan = Instant::now() + SCAN_INTERVAL;
+            next_scan = Instant::now() + scan_interval();
         }
-        thread::sleep(SLEEP_SLICE);
+        thread::sleep(SLEEP_SLICE.min(scan_interval()));
     }
 }
 
@@ -423,7 +470,7 @@ impl WorkspaceWatch {
         let drain_due = runs_changed
             || self
                 .drain_read_at
-                .is_none_or(|at| at.elapsed() >= DRAIN_RECHECK_INTERVAL);
+                .is_none_or(|at| at.elapsed() >= drain_recheck_interval());
         if drain_due {
             let executor_change = match runtime.executor_readiness_change_keys() {
                 Ok(keys) => {
