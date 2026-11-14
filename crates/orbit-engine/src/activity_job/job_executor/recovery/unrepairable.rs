@@ -1,8 +1,11 @@
 //! The one table of step failures no repair agent can repair.
 //!
-//! Step recovery, final recovery and the retry wrapper all stop on these
-//! classes; they used to keep separate copies of the list. Add a new
-//! "do not spend a repair agent on this" class here only.
+//! Step recovery and final recovery stop on these classes; they used to keep
+//! separate copies of the list. Add a new "do not spend a repair agent on
+//! this" class here only. The retry wrapper stops only on the agent's own
+//! declarations (blocker, upgrade refusal) and tests those two predicates
+//! directly: the table returns the first matching class, and a blocker's
+//! free-text evidence may quote another class's marker.
 
 use orbit_types::workflow::StepFailureCode;
 
