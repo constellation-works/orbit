@@ -157,8 +157,7 @@ impl OrbitRuntime {
             Some(rescue) => rescue.landing_note(landing),
             None => landing_note(landing),
         };
-        let mut written = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        let task = self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             if task.status != observed.status {
                 return Err(refusal::refused(
@@ -218,13 +217,7 @@ impl OrbitRuntime {
                     ..TaskRecordUpdateParams::default()
                 },
             )?;
-            written = Some(updated);
-            Ok(())
-        })?;
-        let task = written.ok_or_else(|| {
-            OrbitError::Execution(
-                "external merge settlement did not run under the task lock".to_string(),
-            )
+            Ok(updated)
         })?;
         tracing::info!(
             target: "orbit.core.external_merge",

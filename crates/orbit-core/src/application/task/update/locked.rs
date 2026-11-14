@@ -60,9 +60,6 @@ impl OrbitRuntime {
         params: TaskUpdateParams,
         context: TaskUpdateContext,
     ) -> Result<(Task, Option<TaskRow>), OrbitError> {
-        // The lock hook takes `FnMut` because it is a trait object, but the
-        // body must run exactly once and consumes its inputs; `take()` makes
-        // both facts explicit rather than forcing the params to be cloneable.
         // An operator's or agent's own move back to backlog or someday may
         // also close the task's undelivered PRs; Orbit's own holds and
         // requeues keep them for the run that continues the candidate.
@@ -79,29 +76,19 @@ impl OrbitRuntime {
             && context.agent.is_none()
             && context.model.is_none()
             && params.is_comment_only();
-        let mut inputs = Some((params, context));
-        let mut updated: Option<LockedTaskUpdate> = None;
-        let mut body = || {
-            let (params, context) = inputs.take().ok_or_else(|| {
-                OrbitError::Execution("task update body was invoked more than once".to_string())
-            })?;
-            updated = Some(self.update_task_locked(id, params, context)?);
-            Ok(())
-        };
-        let tasks = self.stores().tasks();
-        if operator_comment {
-            tasks.with_task_comment_write_lock(id, &mut body)?;
+        let locked = if operator_comment {
+            self.with_task_comment_write_locked(id, || {
+                self.update_task_locked(id, params, context)
+            })?
         } else {
-            tasks.with_task_write_lock(id, &mut body)?;
-        }
+            self.with_task_write_locked(id, || self.update_task_locked(id, params, context))?
+        };
         let LockedTaskUpdate {
             task: updated,
             row,
             previous_status,
             status_note,
-        } = updated.ok_or_else(|| {
-            OrbitError::Execution("task update body did not run under the task lock".to_string())
-        })?;
+        } = locked;
 
         // Cascading friction/task resolution touches *other* records, so it
         // stays outside this task's lock.

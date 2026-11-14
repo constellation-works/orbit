@@ -31,20 +31,11 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
-        let mut result = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             if task.status == TaskStatus::Proposed {
                 ensure_status_change_not_run_owned(self, id)?;
-            }
-            result = Some(if task.status == TaskStatus::Proposed {
-                self.approve_task_with_identity(
-                    id,
-                    note.clone(),
-                    comment.clone(),
-                    agent.clone(),
-                    model.clone(),
-                )?
+                self.approve_task_with_identity(id, note, comment, agent, model)
             } else {
                 if note.is_some() {
                     return Err(OrbitError::InvalidInput(
@@ -55,20 +46,14 @@ impl OrbitRuntime {
                 self.update_task_with_identity(
                     id,
                     TaskUpdateParams {
-                        comment: comment.clone(),
+                        comment,
                         status: Some(TaskStatus::Backlog),
                         ..Default::default()
                     },
-                    agent.clone(),
-                    model.clone(),
-                )?
-            });
-            Ok(())
-        })?;
-        result.ok_or_else(|| {
-            OrbitError::Execution(
-                "task backlog transition body did not run under the task lock".to_string(),
-            )
+                    agent,
+                    model,
+                )
+            }
         })
     }
 
@@ -226,8 +211,7 @@ impl OrbitRuntime {
             canonical_model.as_deref(),
         )?;
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
-        let mut result = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        let result = self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
@@ -243,7 +227,7 @@ impl OrbitRuntime {
                 super::super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
             }
 
-            result = Some(match task.status {
+            match task.status {
                 TaskStatus::Proposed => self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
@@ -277,11 +261,7 @@ impl OrbitRuntime {
                 other => Err(OrbitError::InvalidInput(format!(
                     "task '{id}' is in status '{other}'; approve requires 'proposed' or 'review'"
                 ))),
-            }?);
-            Ok(())
-        })?;
-        let result = result.ok_or_else(|| {
-            OrbitError::Execution("task approve body did not run under the task lock".to_string())
+            }
         })?;
         let effects = DeferredApprovalEffects {
             task: result.clone(),
