@@ -15,14 +15,13 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::TaskAutomationUpdate;
-use orbit_store::AuditEventInsertParams;
-use orbit_store::contracts::{ClaimInspection, TaskCandidates, TaskListFilter};
+use orbit_store::contracts::{TaskCandidates, TaskListFilter};
 use orbit_types::task::{
     CrewSource, ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority,
     TaskStatus,
 };
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::Value;
 
 use crate::RuntimeKernel;
@@ -77,31 +76,12 @@ pub trait ApplicationPort: Send + Sync {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError>;
-    fn inspect_execution_claims(
-        &self,
-        kernel: &RuntimeKernel,
-    ) -> Result<Vec<ClaimInspection>, OrbitError>;
     fn apply_task_automation_update(
         &self,
         kernel: &RuntimeKernel,
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError>;
-    fn record_audit_event(
-        &self,
-        kernel: &RuntimeKernel,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError>;
-    fn get_job_run_backend(
-        &self,
-        kernel: &RuntimeKernel,
-        run_id: &str,
-    ) -> Result<Option<JobRun>, OrbitError>;
-    fn read_run_state(
-        &self,
-        kernel: &RuntimeKernel,
-        run_id: &str,
-    ) -> Result<Option<PipelineState>, OrbitError>;
     fn list_orphaned_running_job_runs(
         &self,
         kernel: &RuntimeKernel,
@@ -230,10 +210,6 @@ impl RuntimeKernel {
         self.application.task_candidates(self, filter, limit)
     }
 
-    pub(crate) fn inspect_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
-        self.application.inspect_execution_claims(self)
-    }
-
     pub(crate) fn apply_task_automation_update(
         &self,
         task_id: &str,
@@ -241,21 +217,6 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         self.application
             .apply_task_automation_update(self, task_id, update)
-    }
-
-    pub(crate) fn record_audit_event(
-        &self,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError> {
-        self.application.record_audit_event(self, params)
-    }
-
-    pub(crate) fn get_job_run_backend(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        self.application.get_job_run_backend(self, run_id)
-    }
-
-    pub(crate) fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
-        self.application.read_run_state(self, run_id)
     }
 
     pub(crate) fn list_orphaned_running_job_runs(&self) -> Result<Vec<JobRun>, OrbitError> {

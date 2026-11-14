@@ -188,7 +188,7 @@ impl RuntimeKernel {
     ) -> Result<Option<ResolvedCrewProjection>, OrbitError> {
         if self.task_run_is_local(task)
             && let Some(run_id) = task.job_run_id.as_deref()
-            && let Some(run) = self.get_job_run_backend(run_id)?
+            && let Some(run) = self.stores().jobs().get_job_run(run_id)?
             && let (Some(resolved_crew), Some(model)) = (run.resolved_crew, run.crew_model)
         {
             return Ok(Some(ResolvedCrewProjection {

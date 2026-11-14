@@ -295,7 +295,7 @@ impl RuntimeKernel {
             );
             return Ok(());
         }
-        let Some(run) = self.get_job_run_backend(run_id)? else {
+        let Some(run) = self.stores().jobs().get_job_run(run_id)? else {
             return Ok(());
         };
         let (error_code, error_message) = match diagnostic {
@@ -362,7 +362,9 @@ impl RuntimeKernel {
         let upgrade_pending = state == JobRunState::Failed
             && is_upgrade_pending(error_code.as_deref(), error_message.as_deref());
         let task_cancellation_policy = if state == JobRunState::Cancelled {
-            self.read_run_state(run_id)?
+            self.stores()
+                .jobs()
+                .read_run_state(run_id)?
                 .and_then(|state| state.task_cancellation_policy)
         } else {
             None

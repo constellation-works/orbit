@@ -165,7 +165,7 @@ impl RuntimeKernel {
         &self,
     ) -> Result<std::collections::BTreeMap<String, Option<String>>, OrbitError> {
         let cutoff = Utc::now() - Duration::days(SERVING_CLAIM_EVIDENCE_DAYS);
-        let claims = self.inspect_execution_claims()?;
+        let claims = self.stores().tasks().inspect_execution_claims()?;
         let mut recent = std::collections::BTreeMap::new();
         for claim in claims.iter().filter(|claim| {
             [&claim.updated_at, &claim.created_at]

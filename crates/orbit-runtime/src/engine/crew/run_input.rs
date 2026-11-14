@@ -166,7 +166,7 @@ impl RuntimeKernel {
         let Some(run_id) = input_run_id.or(task_run_id) else {
             return Ok((None, None));
         };
-        let Some(run) = self.get_job_run_backend(run_id)? else {
+        let Some(run) = self.stores().jobs().get_job_run(run_id)? else {
             return Ok((None, None));
         };
 

@@ -169,7 +169,7 @@ impl RuntimeKernel {
         if let Some(cached) = context.run_cache.borrow().get(run_id) {
             return Ok(cached.clone());
         }
-        let run = self.get_job_run_backend(run_id)?;
+        let run = self.stores().jobs().get_job_run(run_id)?;
         context
             .run_cache
             .borrow_mut()
@@ -250,33 +250,6 @@ impl RuntimeKernel {
         release_reason: TaskReservationReleaseReason,
         diagnostic: Option<(&str, &str)>,
     ) -> Result<bool, OrbitError> {
-        self.finalize_job_run_with_cleanup_after_prior_read(
-            run_id,
-            state,
-            finished_at,
-            duration_ms,
-            release_reason,
-            (diagnostic, || {}),
-        )
-    }
-
-    // The callback lets a synchronized test put a competing finalization
-    // between this caller's old snapshot and the atomic store decision.
-    fn finalize_job_run_with_cleanup_after_prior_read(
-        &self,
-        run_id: &str,
-        state: JobRunState,
-        finished_at: DateTime<Utc>,
-        duration_ms: Option<u64>,
-        release_reason: TaskReservationReleaseReason,
-        diagnostic_and_after_read: (Option<(&str, &str)>, impl FnOnce()),
-    ) -> Result<bool, OrbitError> {
-        let (diagnostic, after_prior_read) = diagnostic_and_after_read;
-        // This snapshot is observational only. A competing caller can write a
-        // terminal state before our own write, so it grants no side-effect
-        // authority. The store returns that decision from its transaction.
-        let _prior_state = self.get_job_run_backend(run_id)?.map(|run| run.state);
-        after_prior_read();
         let outcome = self.stores().jobs().finalize_job_run_with_outcome(
             run_id,
             state,
@@ -439,7 +412,7 @@ impl RuntimeKernel {
                 continue;
             }
 
-            match self.get_job_run_backend(owner_run_id)? {
+            match self.stores().jobs().get_job_run(owner_run_id)? {
                 Some(run) if run.state.is_terminal() => {
                     released.extend(self.release_task_reservations_for_owner_run_id(
                         owner_run_id,

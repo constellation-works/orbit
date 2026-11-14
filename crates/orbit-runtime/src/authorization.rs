@@ -141,7 +141,7 @@ impl RuntimeKernel {
     /// lookup is not one.
     pub fn is_resident_cycle_run(&self, run_id: &str) -> bool {
         matches!(
-            self.get_job_run_backend(run_id),
+            self.stores().jobs().get_job_run(run_id),
             Ok(Some(run)) if run.job_id == RESIDENT_CYCLE_JOB
         )
     }
