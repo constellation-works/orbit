@@ -1556,6 +1556,32 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_property_tightened_to_false_decides_minor(self):
+        # Witness: {"value": "previously valid"} is accepted before and
+        # rejected after the property schema becomes `false`.
+        before = {"type": "object", "required": ["value"],
+                  "properties": {"value": {"type": "string"}}}
+        after = {"type": "object", "required": ["value"],
+                 "properties": {"value": False}}
+        witness = {"value": "previously valid"}
+        self.assertTrue(schema_accepts_instance(before, witness))
+        self.assertFalse(schema_accepts_instance(after, witness))
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = before
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare string property fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"] = after
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Forbid value property [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema.value` schema tightened to false"),
+        })
+
     def test_false_additional_properties_gaining_required_child_decides_patch(self):
         # As above: no request with extra properties was valid under
         # `false`, so requiring a child of the relaxed object is additive.

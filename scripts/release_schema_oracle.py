@@ -2,13 +2,13 @@
 
 This is deliberately not a general JSON Schema validator. The grammar is:
   value := {} | {type: T} | {enum: E} | {const: V} | {required: [K]}
-  atom := value | {properties: {a: P}} | {additionalProperties: false}
+  atom := true | false | value | {properties: {a: P}} | {additionalProperties: false}
         | {type: object, properties: {a: {}}, additionalProperties: false}
   choice := {anyOf|oneOf: [atom, atom]}
   nested := {anyOf|oneOf: [choice, atom]}
 The finite terminals below bound T, E, V and K; P is {}, type: string or
-enum: ["a"]. Pairs also wrap atoms in a property schema, and choices may
-have a sibling applicator. Pairs
+enum: ["a"]. Pairs also wrap atoms (including true/false) in a property
+schema, and choices may have a sibling applicator. Pairs
 exhaust atom substitutions, substitutions in a branch/property, branch
 insertion/deletion/reordering, and keyword deletion under one outer choice.
 This is a finite soundness check, not a proof over arbitrary JSON Schema.
@@ -88,7 +88,7 @@ def schema_accepts_instance(schema, instance):
 
 def bounded_schema_pairs():
     """Generate deterministic pairs, with no detector-specific expectations."""
-    atoms = [{}] + [{"type": name} for name in
+    atoms = [True, False, {}] + [{"type": name} for name in
                     ("null", "boolean", "integer", "number", "string", "array", "object")]
     atoms += [{"type": ["string", "null"]}]
     atoms += [{"enum": values} for values in (["a"], ["b"], ["a", "b"], [0, False])]

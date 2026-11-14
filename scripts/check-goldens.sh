@@ -74,6 +74,10 @@ run_golden_test() {
   # a filter matching nothing reports a summary with 0 passed. No summary
   # means no harness evidence to judge.
   count="$(printf '%s\n' "$output" | awk '/test result:/ { for (i=1; i<=NF; i++) if ($i == "passed;" && i>1) total += $(i-1); summaries++ } END { print (summaries ? total+0 : -1) }')"
+  if [[ "$count" -eq -1 ]]; then
+    echo "check-goldens: cargo test produced no test-result summary (no harness execution evidence): $*" >&2
+    return 1
+  fi
   if [[ "$count" -eq 0 ]]; then
     echo "check-goldens: cargo test matched zero tests: $*" >&2
     return 1
