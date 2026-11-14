@@ -74,8 +74,8 @@ Other crates are named explicitly.
    (`crates/orbit-store/src/driver/sqlite/audit_event_store/insert.rs:274`).
 
 Admission runs before the capability chokepoint in `authorize_registered_tool`
-(`crates/orbit-runtime/src/tool_exec.rs:175`), in `run_tool_with_context_and_role_and_capability`
-(`crates/orbit-core/src/adapter/tool_execution.rs:133-142`) and on every plugin callback
+(`crates/orbit-runtime/src/tool_exec.rs:175`), in `run_tool_with_context_and_capability`
+(`crates/orbit-core/src/adapter/tool_execution.rs:122-135`) and on every plugin callback
 (`crates/orbit-core/src/adapter/command/dispatch/execute/runtime.rs:513-520`).
 App-bound completion callbacks are sent to the host, because the witness is hidden from
 plugin sandboxes. `routes_on_host` in
