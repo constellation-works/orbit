@@ -5,9 +5,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCensusEntry, browser_kit_unavailable,
-    labels_unavailable, os_unavailable,
+    labels_unavailable_with_tag_requirements, os_unavailable,
 };
-use orbit_types::task::{ExecutorOsLimit, Task};
+use orbit_types::task::{ExecutorOsLimit, TagLabelRequirements, Task};
 use serde::Serialize;
 use serde_json::json;
 
@@ -18,6 +18,9 @@ use crate::OrbitRuntime;
 pub(super) struct FollowerEvidence {
     rows: Result<Vec<(ExecutorCensusEntry, FollowerReportState)>, OrbitError>,
     limits: Result<BTreeMap<String, ExecutorOsLimit>, OrbitError>,
+    /// The owner's tag policy, so a follower's labels are judged as pull
+    /// admission judges them.
+    tag_label_requirements: TagLabelRequirements,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -85,6 +88,7 @@ impl FollowerEvidence {
                         .collect()
                 }),
             limits: runtime.executor_host_os_limits(),
+            tag_label_requirements: runtime.tag_label_requirements().clone(),
         }
     }
 
@@ -102,7 +106,7 @@ impl FollowerEvidence {
         let executors = rows
             .iter()
             .map(|(row, state)| {
-                let refusal = capability_refusal(row, task, limits);
+                let refusal = capability_refusal(row, task, limits, &self.tag_label_requirements);
                 FollowerExecutorObservation {
                     machine_id: row.machine_id.clone(),
                     run_id: row.run_id.clone(),
@@ -199,11 +203,19 @@ fn capability_refusal(
     row: &ExecutorCensusEntry,
     task: &Task,
     limits: &BTreeMap<String, ExecutorOsLimit>,
+    tag_label_requirements: &TagLabelRequirements,
 ) -> Option<String> {
     let capability = &row.capability;
     os_unavailable(capability.os, task, limits)
         .or_else(|| browser_kit_unavailable(capability.browser_kit, task))
-        .or_else(|| labels_unavailable(capability.os, &capability.labels, task))
+        .or_else(|| {
+            labels_unavailable_with_tag_requirements(
+                capability.os,
+                &capability.labels,
+                task,
+                tag_label_requirements,
+            )
+        })
         .or_else(|| {
             capability
                 .crews
