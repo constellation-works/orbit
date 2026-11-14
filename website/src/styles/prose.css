@@ -262,7 +262,7 @@ starlight-toc h2 {
 }
 
 .sl-markdown-content table {
-  font-size: 0.92rem;
+  font-size: var(--orbit-text-ui);
   background-color: var(--sl-color-bg-inline-code);
   border-collapse: separate;
   border-spacing: 0;
@@ -291,8 +291,8 @@ starlight-toc h2 {
 
 .sl-markdown-content table.orbit-config-keys code:not(pre code) {
   overflow-x: visible;
-  /* DESIGN.md §3.2: code is 14px. 0.72em of the 0.92rem table size was 10.6px. */
-  font-size: 0.875rem;
+  /* DESIGN.md §3.2: code is 14px (--orbit-text-ui). */
+  font-size: var(--orbit-text-ui);
   white-space: normal;
 }
 
@@ -434,7 +434,7 @@ starlight-toc h2 {
 }
 
 .sl-markdown-content table.orbit-config-paths code:not(pre code) {
-  font-size: 0.875rem;
+  font-size: var(--orbit-text-ui);
   max-width: 100%;
   overflow-x: visible;
   vertical-align: top;
