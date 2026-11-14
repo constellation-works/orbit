@@ -43,7 +43,7 @@ jobs:
   coverage:
     name: Coverage (informational)
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # Observed ~15 minutes; allows cold instrumented builds.
+    timeout-minutes: 75 # Measured 2026-11: collect ~25-33 min, each report pass ~5-7 min.
     steps:
       # [ORB-10126] Reclaim ~25-30 GB of preinstalled runner bloat before the
       # instrumented build. No maintained free-disk action is pinned in this
