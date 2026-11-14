@@ -22,12 +22,12 @@ use chrono::{DateTime, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{DrainWorkerLimit, JobRun, JobRunState, PipelineState, RunStateUpdate};
+use orbit_types::workflow::{
+    DRAIN_JOBS, DrainWorkerLimit, JobRun, JobRunState, PipelineState, RunStateUpdate, is_drain_job,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::contracts::PULL_DRAIN_JOB;
-use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 const WORKER_LIMIT_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";
 const WORKER_LIMIT_COMPLETION_AUDIT: &str = "pipeline.run.workers.completed";
@@ -232,11 +232,10 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-        let drain_jobs = drain_job_ids()?;
-        if !drain_jobs.contains(&run.job_id.as_str()) {
+        if !is_drain_job(&run.job_id) {
             return Err(OrbitError::InvalidInput(format!(
                 "job run '{run_id}' is a `{}` run; the worker ceiling is a `{}` or `{}` control",
-                run.job_id, drain_jobs[0], drain_jobs[1]
+                run.job_id, DRAIN_JOBS[0], DRAIN_JOBS[1]
             )));
         }
         validate_drain_worker_ceiling(requested)?;
@@ -328,7 +327,7 @@ impl OrbitRuntime {
     /// than one, is refused rather than guessed, so the caller names the run.
     pub fn active_drain_run_id(&self) -> Result<String, OrbitError> {
         let mut active = Vec::new();
-        for job_id in drain_job_ids()? {
+        for job_id in DRAIN_JOBS.iter().copied() {
             active.extend(
                 self.stores()
                     .jobs()
@@ -392,17 +391,6 @@ impl OrbitRuntime {
             None,
         )
     }
-}
-
-/// The drain jobs that carry a worker ceiling: the owner's auto drain and a
-/// replica's pull drain.
-fn drain_job_ids() -> Result<[&'static str; 2], OrbitError> {
-    let auto = find_workflow(AUTO_WORKFLOW_ALIAS)
-        .map(|workflow| workflow.job_id)
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!("unknown workflow '{AUTO_WORKFLOW_ALIAS}'"))
-        })?;
-    Ok([auto, PULL_DRAIN_JOB])
 }
 
 /// A run input value that went through the template engine may arrive as a

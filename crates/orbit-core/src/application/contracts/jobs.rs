@@ -2,7 +2,7 @@
 //! persist these strings, so their values never change.
 
 /// The job a follower drain runs.
-pub const PULL_DRAIN_JOB: &str = "workspace_pull_pipeline";
+pub const PULL_DRAIN_JOB: &str = orbit_types::workflow::WORKSPACE_PULL_PIPELINE_JOB;
 
 /// The job the `pilot_warnings_held` trigger submits.
 pub const ESCALATION_TRIAGE_JOB: &str = "escalation_triage_pipeline";

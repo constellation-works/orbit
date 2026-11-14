@@ -38,7 +38,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     JobRun, JobRunState, PipelineState, RunCancellationProvenance, RunStateUpdate,
-    TaskCancellationPolicy,
+    TaskCancellationPolicy, WORKSPACE_AUTO_PIPELINE_JOB,
 };
 use serde_json::json;
 
@@ -51,8 +51,6 @@ use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::job::{JobDrainPort, JobPullSettlementPort};
 
-/// The local auto drain, whose leaves its cancel detaches.
-const LOCAL_DRAIN_JOB: &str = "workspace_auto_pipeline";
 const GRACEFUL_CANCEL_AUDIT: &str = "pipeline.run.cancel.graceful_requested";
 
 impl OrbitRuntime {
@@ -148,7 +146,7 @@ impl OrbitRuntime {
                 return self.request_graceful_drain_cancel(&run, request);
             }
         }
-        if force && run.job_id == LOCAL_DRAIN_JOB {
+        if force && run.job_id == WORKSPACE_AUTO_PIPELINE_JOB {
             return self.force_cancel_local_drain(&run, request, signal);
         }
         self.cancel_job_run_with_reason_and_policy_and_signal(

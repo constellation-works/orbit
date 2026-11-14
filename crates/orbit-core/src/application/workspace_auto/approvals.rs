@@ -69,7 +69,6 @@ use crate::application::task::pilot::{
 const MAX_CANDIDATES_PER_PASS: usize = 10;
 /// Bounded lists on the durable report; totals sit beside them.
 pub(super) const REPORTED_TASKS: usize = 20;
-pub(super) const PILOT_JOB: &str = "task_pilot_pipeline";
 /// How often a wait re-reads whether the drain's pilot is still live.
 pub(super) const PILOT_WAIT_POLL: Duration = Duration::from_secs(1);
 /// Longest a single wait may block, matching the `sleep` activity's bound.

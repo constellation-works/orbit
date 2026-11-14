@@ -296,10 +296,7 @@ impl OrbitRuntime {
             crate::application::contracts::DrainEntryPoint::ExplicitShip,
             task_ids,
         )?;
-        let workflow = crate::application::workflow::find_workflow(
-            crate::application::workflow::SHIP_WORKFLOW_ALIAS,
-        )
-        .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'ship'".to_string()))?;
+        let workflow_job_id = orbit_types::workflow::TASK_AUTO_PIPELINE_JOB;
         let base = base_branch.unwrap_or_else(|| self.workspace_base_branch());
         let allowed_crews = self.canonical_allowed_crews(allowed_crews)?;
         let allowlist = self.crew_allowlist(&allowed_crews)?;
@@ -402,7 +399,7 @@ impl OrbitRuntime {
         for (task_id, not_before) in &overridden {
             self.record_schedule_override(task_id, *not_before, &overrider)?;
         }
-        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
+        self.submit_pipeline_run_with_trigger(workflow_job_id, input, None, actor, trigger)
     }
     /// Submit a local drain with a run-scoped forecast mode. Omission captures
     /// the host setting; explicit modes never edit configuration. All surfaces
@@ -472,10 +469,7 @@ impl OrbitRuntime {
         )?;
         self.drain_git_protection_preflight()?;
         let crews = self.drain_crews_runnable_here(self.canonical_allowed_crews(allowed_crews)?)?;
-        let workflow = crate::application::workflow::find_workflow(
-            crate::application::workflow::AUTO_WORKFLOW_ALIAS,
-        )
-        .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'auto'".to_string()))?;
+        let workflow_job_id = orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB;
         let mut input = workspace_auto_run_input(
             for_seconds,
             max_active_leaf_runs,
@@ -496,7 +490,7 @@ impl OrbitRuntime {
             review,
             self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
         )?;
-        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
+        self.submit_pipeline_run_with_trigger(workflow_job_id, input, None, actor, trigger)
     }
 
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {

@@ -16,13 +16,14 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow};
 use serde::{Deserialize, Serialize};
 
+use orbit_types::workflow::TASK_PILOT_PIPELINE_JOB;
+
 use crate::OrbitRuntime;
 use crate::application::contracts::PilotTaskReservation;
 use crate::application::job::JobDrainPort;
 
 use super::preparation::active_task_pilot_preparations;
 
-const PILOT_JOB: &str = "task_pilot_pipeline";
 const RESERVATIONS_FILE: &str = "task-pilot-reservations.json";
 const SCHEMA_VERSION: u32 = 1;
 
@@ -113,7 +114,7 @@ pub(super) fn reserve(
 
 fn run_is_live(runtime: &OrbitRuntime, run_id: &str) -> Result<bool, OrbitError> {
     match runtime.show_job_run(run_id) {
-        Ok(run) => Ok(run.job_id == PILOT_JOB && !run.state.is_terminal()),
+        Ok(run) => Ok(run.job_id == TASK_PILOT_PIPELINE_JOB && !run.state.is_terminal()),
         Err(OrbitError::NotFound { .. }) => Ok(false),
         Err(error) => Err(error),
     }

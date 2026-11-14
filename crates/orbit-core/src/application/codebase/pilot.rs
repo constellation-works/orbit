@@ -21,7 +21,9 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunQuery};
-use orbit_types::workflow::{JobRun, JobV2Step, JobV2StepBody, PipelineState};
+use orbit_types::workflow::{
+    JobRun, JobV2Step, JobV2StepBody, PipelineState, TASK_PILOT_PIPELINE_JOB,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -33,8 +35,6 @@ use crate::OrbitRuntime;
 
 /// The actor that writes task-pilot receipts.
 const PILOT_ACTOR: &str = "task-pilot";
-/// The job every task-pilot run (scheduled, drain or CI sweep) belongs to.
-const PILOT_JOB: &str = "task_pilot_pipeline";
 /// The pilot run behind an assessment: its id, the crew and model its
 /// activity recorded (either `None` when it recorded none) and how long it ran.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -184,7 +184,7 @@ impl PilotRuns {
             .stores()
             .jobs()
             .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(PILOT_JOB.to_string()),
+                job_id: Some(TASK_PILOT_PIPELINE_JOB.to_string()),
                 include_steps: false,
                 ..Default::default()
             })
@@ -207,7 +207,7 @@ impl PilotRuns {
         let runs = ids
             .into_iter()
             .filter_map(|id| match runtime.get_job_run_backend(id) {
-                Ok(Some(run)) if run.job_id == PILOT_JOB => Some(run),
+                Ok(Some(run)) if run.job_id == TASK_PILOT_PIPELINE_JOB => Some(run),
                 Ok(_) => None,
                 Err(error) => {
                     tracing::warn!(run_id = id, %error, "pilot identity: run unreadable");
@@ -328,7 +328,7 @@ impl PilotRuns {
 /// Apply step ids paired with their pilot worker ids, in pipeline order.
 /// Read the job definition so renaming a worker or apply step preserves attribution.
 fn pilot_steps(runtime: &OrbitRuntime) -> Vec<(String, String)> {
-    let job = match runtime.resolved_job_spec(PILOT_JOB) {
+    let job = match runtime.resolved_job_spec(TASK_PILOT_PIPELINE_JOB) {
         Ok(job) => job,
         Err(error) => {
             tracing::warn!(%error, "pilot scorecard: task-pilot definition unreadable");

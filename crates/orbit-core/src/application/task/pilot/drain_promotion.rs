@@ -26,8 +26,8 @@ use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskDecision,
     TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
-use orbit_types::workflow::JobRunTriggerKind;
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use orbit_types::workflow::{JobRunTriggerKind, TASK_PILOT_PIPELINE_JOB};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -46,7 +46,6 @@ use super::promotion::{
 };
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
-const PILOT_JOB: &str = "task_pilot_pipeline";
 
 /// Why a `proposed` task does not qualify for drain approval, before any
 /// pilot runs: a `no-auto-approve` tag excludes it outright; otherwise its
@@ -178,10 +177,9 @@ impl DrainAuthority {
             .read_run_state(run_id)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
             .is_some_and(|state| {
-                state
-                    .child_dispatches
-                    .iter()
-                    .any(|child| child.child_run_id == pilot_run_id && child.job_name == PILOT_JOB)
+                state.child_dispatches.iter().any(|child| {
+                    child.child_run_id == pilot_run_id && child.job_name == TASK_PILOT_PIPELINE_JOB
+                })
             });
         if !dispatched {
             return Err(refused("the drain did not dispatch this pilot run"));

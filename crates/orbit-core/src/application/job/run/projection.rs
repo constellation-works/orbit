@@ -198,7 +198,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "steps": run.steps.iter().map(|step| RunDisplayStep::from_job_step(step).to_json()).collect::<Vec<_>>(),
         "created_at": run.created_at.to_rfc3339(),
     });
-    if run.job_id == "workspace_auto_pipeline"
+    if run.job_id == orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB
         && let Some(input) = run.input.as_ref()
         && let Some(mode) = input.get("auto_concurrency").and_then(Value::as_str)
     {

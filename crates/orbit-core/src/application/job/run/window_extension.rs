@@ -25,7 +25,10 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, PullWindowClose, RunStateUpdate};
+use orbit_types::workflow::{
+    JobRun, JobRunState, PipelineState, PullWindowClose, RunStateUpdate,
+    WORKSPACE_AUTO_PIPELINE_JOB,
+};
 use serde_json::{Value, json};
 
 use super::worker_limit::{
@@ -33,9 +36,7 @@ use super::worker_limit::{
 };
 use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
-use crate::application::workflow::{
-    AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow, validate_drain_window,
-};
+use crate::application::workflow::{MAX_DRAIN_WINDOW_SECONDS, validate_drain_window};
 
 const EXTEND_REQUEST_AUDIT: &str = "pipeline.run.window_extend.requested";
 const EXTEND_COMPLETION_AUDIT: &str = "pipeline.run.window_extend.completed";
@@ -171,14 +172,9 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-        let auto_job = find_workflow(AUTO_WORKFLOW_ALIAS)
-            .map(|workflow| workflow.job_id)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!("unknown workflow '{AUTO_WORKFLOW_ALIAS}'"))
-            })?;
-        if run.job_id != auto_job && run.job_id != PULL_DRAIN_JOB {
+        if run.job_id != WORKSPACE_AUTO_PIPELINE_JOB && run.job_id != PULL_DRAIN_JOB {
             return Err(OrbitError::InvalidInput(format!(
-                "job run '{run_id}' is a `{}` run; only a `{auto_job}` or `{PULL_DRAIN_JOB}` drain has a window to extend",
+                "job run '{run_id}' is a `{}` run; only a `{WORKSPACE_AUTO_PIPELINE_JOB}` or `{PULL_DRAIN_JOB}` drain has a window to extend",
                 run.job_id
             )));
         }

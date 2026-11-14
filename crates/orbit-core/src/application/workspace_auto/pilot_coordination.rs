@@ -10,6 +10,7 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     ChildDispatchPhase, DrainApprovalReport, JobRunState, PipelineState, ProviderFailureClass,
+    TASK_PILOT_PIPELINE_JOB,
 };
 use serde_json::{Value, json};
 
@@ -28,8 +29,8 @@ use crate::application::task::pilot::{
 };
 
 use super::approvals::{
-    ApprovalSnapshot, MAX_PILOT_WAIT_SECONDS, PILOT_JOB, PILOT_WAIT_POLL, REPORTED_TASKS,
-    approval_snapshot, held_json, proposed_tasks,
+    ApprovalSnapshot, MAX_PILOT_WAIT_SECONDS, PILOT_WAIT_POLL, REPORTED_TASKS, approval_snapshot,
+    held_json, proposed_tasks,
 };
 
 /// A live task-pilot run that names `task_id` in its input, or whose
@@ -46,7 +47,7 @@ pub(super) fn live_pilot_run(
         .stores()
         .jobs()
         .list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(PILOT_JOB.to_string()),
+            job_id: Some(TASK_PILOT_PIPELINE_JOB.to_string()),
             task_id: Some(task_id.to_string()),
             states: vec![
                 JobRunState::Pending,
@@ -110,7 +111,7 @@ pub(super) fn pilot_children(
     for child in state
         .child_dispatches
         .iter()
-        .filter(|child| child.job_name == PILOT_JOB)
+        .filter(|child| child.job_name == TASK_PILOT_PIPELINE_JOB)
     {
         if liveness_only && !child.phase.is_open() {
             let finished = child

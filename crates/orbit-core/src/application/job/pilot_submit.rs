@@ -12,7 +12,7 @@ use std::fmt;
 
 use orbit_common::{OrbitError, TaskPilotRefusalCode};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{JobRunState, JobRunTrigger};
+use orbit_types::workflow::{JobRunState, JobRunTrigger, TASK_PILOT_PIPELINE_JOB};
 use serde::Serialize;
 use serde_json::json;
 
@@ -21,7 +21,6 @@ use super::{JobRunListParams, PipelineInvokeResult};
 use crate::OrbitRuntime;
 use crate::application::task::pilot_assessable_status;
 
-const PILOT_JOB: &str = "task_pilot_pipeline";
 /// Bound on the live pilot runs scanned for one task; non-terminal runs are
 /// always among the newest rows.
 const PILOT_SCAN_LIMIT: usize = 50;
@@ -226,7 +225,7 @@ impl OrbitRuntime {
             .with_task_write_lock(task_id, &mut || {
                 submitted = Some(self.check_explicit_task_pilot(task_id).and_then(|()| {
                     self.submit_catalog_job_run(
-                        PILOT_JOB,
+                        TASK_PILOT_PIPELINE_JOB,
                         if full {
                             json!({"task_ids": [task_id], "full_pilot": true})
                         } else {
@@ -307,7 +306,7 @@ impl OrbitRuntime {
                 TaskPilotRefusal::DeliveryRunning { task_id, run_id },
             ));
         }
-        self.show_job_catalog_entry(PILOT_JOB)?;
+        self.show_job_catalog_entry(TASK_PILOT_PIPELINE_JOB)?;
         Ok(())
     }
 
@@ -319,7 +318,7 @@ impl OrbitRuntime {
 
     fn live_pilot_run_for_task(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
         let named = self.list_job_runs(JobRunListParams {
-            job_id: Some(PILOT_JOB.to_string()),
+            job_id: Some(TASK_PILOT_PIPELINE_JOB.to_string()),
             task_id: Some(task_id.to_string()),
             states: vec![JobRunState::Pending, JobRunState::Running],
             limit: Some(PILOT_SCAN_LIMIT),

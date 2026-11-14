@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2, JobV2Step, JobV2StepBody};
+use orbit_types::workflow::{
+    JobKind, JobRun, JobScheduleState, JobV2, JobV2Step, JobV2StepBody, TASK_PILOT_PIPELINE_JOB,
+};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +29,7 @@ impl JobCatalogEntry {
             && !self.spec.holds_task_delivery()
             && !(name.starts_with("workspace_")
                 || name.starts_with("epic_")
-                || (name.starts_with("task_") && name != "task_pilot_pipeline"))
+                || (name.starts_with("task_") && name != TASK_PILOT_PIPELINE_JOB))
     }
 
     pub fn kind(&self) -> JobKind {
