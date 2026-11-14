@@ -6,7 +6,9 @@ use orbit_common::security::{
 };
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::TaskArtifactUpdateParams;
-use orbit_types::task::{ArtifactWriter, CommentReceipt, TaskArtifact, TaskComment};
+use orbit_types::task::{
+    ArtifactManifestFileV2, ArtifactWriter, CommentReceipt, TaskArtifact, TaskComment,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -56,6 +58,47 @@ impl OrbitRuntime {
             ));
         }
         decode(&artifact.content)
+    }
+
+    /// [`Self::task_pilot_audit`] using `manifest` for the receipt blob.
+    ///
+    /// `None` reads the artifact through the canonical bundle. A manifest the
+    /// caller already holds reads that one blob and checks its size and
+    /// sha256, then the receipt's `assessment_sha256`, without hashing the
+    /// rest of the bundle.
+    pub(crate) fn task_pilot_audit_with(
+        &self,
+        task_id: &str,
+        receipt: CommentReceipt<'_>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+    ) -> Result<Value, OrbitError> {
+        self.task_pilot_audit_with_reader(task_id, receipt, &|path| {
+            Ok(Some(self.receipt_artifact(task_id, path, manifest)?))
+        })
+    }
+
+    fn receipt_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+    ) -> Result<TaskArtifact, OrbitError> {
+        let Some(files) = manifest else {
+            return self.get_task_artifact(task_id, path)?.ok_or_else(|| {
+                OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
+            });
+        };
+        let canonical = orbit_types::task::canonical_artifact_path(path)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let file = files
+            .iter()
+            .find(|file| file.path == canonical)
+            .ok_or_else(|| {
+                OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
+            })?;
+        self.stores()
+            .task_artifacts()
+            .read_manifest_artifact(task_id, file)
     }
 
     /// Resolve pilot audits for readers that also consume ordinary comments.

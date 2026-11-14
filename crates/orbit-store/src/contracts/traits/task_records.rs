@@ -1,5 +1,5 @@
 use crate::contracts::params::*;
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry, TaskStatus,
 };
@@ -98,6 +98,20 @@ pub trait TaskArtifactStoreBackend: Send + Sync {
         Err(OrbitError::Store(
             "task artifact read is not supported by this backend".to_string(),
         ))
+    }
+    /// Read one artifact from a manifest entry the caller already holds.
+    ///
+    /// The file store reads that blob under the bundle lock and checks its
+    /// size and sha256, without hashing the rest of the bundle. Backends
+    /// without that path fall back to [`Self::get_task_artifact`].
+    fn read_manifest_artifact(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<TaskArtifact, OrbitError> {
+        self.get_task_artifact(id, &file.path)?.ok_or_else(|| {
+            OrbitError::not_found(NotFoundKind::Artifact, format!("{id}/{}", file.path))
+        })
     }
     fn upsert_task_artifacts(
         &self,
