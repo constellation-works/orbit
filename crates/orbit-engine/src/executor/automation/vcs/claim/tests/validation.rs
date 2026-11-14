@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::claimed_base_ref;
+use super::super::validation::claimed_base_ref_for_tests;
 use crate::context::ClaimExecutionContext;
 
 // Admission: combinatorial pure ref-selection logic. The public claim action
@@ -35,7 +35,7 @@ fn claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes() {
                 },
             ),
         ] {
-            let result = claimed_base_ref(&context, &input);
+            let result = claimed_base_ref_for_tests(&context, &input);
             match expected {
                 Some(expected) => assert_eq!(result.unwrap(), expected),
                 None => assert!(
