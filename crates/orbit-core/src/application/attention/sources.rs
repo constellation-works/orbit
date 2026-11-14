@@ -75,32 +75,53 @@ impl Subject<'_> {
             fingerprint: String::new(),
         }
     }
+    /// A next action naming a standalone tool (not a family operation).
+    /// `tool` must be a callable tool name; family operations go through
+    /// [`Self::family_tool_next`] so the stored `tool` is the family a
+    /// caller invokes.
     pub(super) fn tool_next(&self, tool: &str, summary: &str) -> AttentionNext {
-        let mut input = json!({"id": self.task.id, "workspace": self.workspace.id});
-        let mut needs = Vec::new();
-        let extra = if tool == "orbit.task.requeue" {
-            needs.push("reason".to_string());
-            " --reason '<reason>'"
-        } else {
-            ""
-        };
-        // Repair actions accept id; no fabricated audit arguments are supplied.
-        if let Some(object) = input.as_object_mut() {
-            object.remove("reason");
-        }
+        let input = json!({"id": self.task.id, "workspace": self.workspace.id});
         AttentionNext {
             summary: summary.into(),
             tool: Some(tool.into()),
             input: Some(input),
             command: format!(
-                "orbit --workspace '{}' {} {}{extra}",
+                "orbit --workspace '{}' {} {}",
                 self.workspace.id,
                 tool.strip_prefix("orbit.")
                     .unwrap_or(tool)
                     .replace('.', " "),
                 self.task.id
             ),
-            needs,
+            needs: Vec::new(),
+            also: Vec::new(),
+        }
+    }
+    /// A next action naming one action of a tool family: `tool` is the
+    /// callable family, `input` carries its `action`, and `command` keeps
+    /// the CLI verb form (`cli_verb`, such as `task requeue`). Arguments
+    /// needing operator judgment stay out of `input`, are named in
+    /// `needs`, and appear in `command` through `extra`.
+    pub(super) fn family_tool_next(
+        &self,
+        family: &str,
+        action: &str,
+        cli_verb: &str,
+        summary: &str,
+        needs: &[&str],
+        extra: &str,
+    ) -> AttentionNext {
+        AttentionNext {
+            summary: summary.into(),
+            tool: Some(family.into()),
+            input: Some(
+                json!({"action": action, "id": self.task.id, "workspace": self.workspace.id}),
+            ),
+            command: format!(
+                "orbit --workspace '{}' {} {}{extra}",
+                self.workspace.id, cli_verb, self.task.id
+            ),
+            needs: needs.iter().map(|need| (*need).to_string()).collect(),
             also: Vec::new(),
         }
     }
@@ -190,8 +211,10 @@ pub(super) fn finalize_attention_item(
         if item.kind == AttentionKind::DecisionOpen {
             let mut next = subject.show_next();
             next.summary = "Read the decision options".into();
-            next.tool = Some("orbit.decision.show".into());
-            next.input = Some(json!({"id": request.id, "workspace": subject.workspace.id}));
+            next.tool = Some("orbit.decision".into());
+            next.input = Some(
+                json!({"action": "show", "id": request.id, "workspace": subject.workspace.id}),
+            );
             next.command = format!(
                 "orbit --workspace '{}' decision show {}",
                 subject.workspace.id, request.id
@@ -223,6 +246,18 @@ fn review_hold_attention_item(
     kind: AttentionKind,
     hold: &crate::application::job::ReviewHold,
 ) -> AttentionItem {
+    // `next_tool` names the serving operation; store its family call.
+    let mut hold_next = AttentionNext {
+        summary: hold.next_summary.clone(),
+        tool: hold.next_tool().map(str::to_owned),
+        input: hold
+            .next_tool()
+            .map(|_| json!({"id": hold.run_id, "workspace": subject.workspace.id})),
+        command: hold.next_command(&subject.workspace.id, &subject.task.id),
+        needs: vec![],
+        also: vec![subject.show_next()],
+    };
+    hold_next.name_tool_family();
     let mut item = subject.item(
         kind,
         hold.since,
@@ -237,16 +272,7 @@ fn review_hold_attention_item(
             "pr_number": hold.pr_number,
             "run_id": hold.run_id,
         }),
-        AttentionNext {
-            summary: hold.next_summary.clone(),
-            tool: hold.next_tool().map(str::to_owned),
-            input: hold
-                .next_tool()
-                .map(|_| json!({"id": hold.run_id, "workspace": subject.workspace.id})),
-            command: hold.next_command(&subject.workspace.id, &subject.task.id),
-            needs: vec![],
-            also: vec![subject.show_next()],
-        },
+        hold_next,
     );
     item.refs["run_id"] = json!(hold.run_id);
     if let Some(number) = &hold.pr_number {
@@ -284,9 +310,13 @@ fn derive_subject_kind(
                         .is_some_and(|receipt| receipt.operation_id == held.operation_id)
                 })
                 .map_or(task.updated_at, |comment| comment.at);
-            let mut next = subject.tool_next(
-                "orbit.task.repilot",
+            let mut next = subject.family_tool_next(
+                "orbit.task.recover",
+                "repilot",
+                "task repilot",
                 "Re-pilot after fixing the cited warning",
+                &[],
+                "",
             );
             next.also.push(subject.show_next());
             // Keep the display bounded without truncating fingerprint material.
@@ -353,7 +383,14 @@ fn derive_subject_kind(
                 .or_else(|| receipt.map(|comment| comment.message.clone()))
                 .unwrap_or_else(|| task.title.clone());
             let next = if matches!(hold, PilotAdmissionHold::StaleAssessment(_)) {
-                subject.tool_next("orbit.task.repilot", "Re-pilot the changed requirements")
+                subject.family_tool_next(
+                    "orbit.task.recover",
+                    "repilot",
+                    "task repilot",
+                    "Re-pilot the changed requirements",
+                    &[],
+                    "",
+                )
             } else {
                 subject.show_next()
             };
@@ -380,8 +417,14 @@ fn derive_subject_kind(
             ) else {
                 return Ok(None);
             };
-            let mut next =
-                subject.tool_next("orbit.task.requeue", "Requeue after resolving the block");
+            let mut next = subject.family_tool_next(
+                "orbit.task.recover",
+                "requeue",
+                "task requeue",
+                "Requeue after resolving the block",
+                &["reason"],
+                " --reason '<reason>'",
+            );
             next.also.push(subject.show_next());
             // Put the leaf error before run metadata so the bounded reason
             // shows what the operator needs to resolve.
@@ -493,8 +536,10 @@ fn derive_subject_kind(
                 } else {
                     AttentionNext {
                         summary: "Reset the exhausted review budget".into(),
-                        tool: Some("orbit.task.review_reset".into()),
-                        input: Some(json!({"id": task.id, "workspace": subject.workspace.id})),
+                        tool: Some("orbit.task.recover".into()),
+                        input: Some(
+                            json!({"action": "review_reset", "id": task.id, "workspace": subject.workspace.id}),
+                        ),
                         command: format!(
                             "orbit --workspace '{}' task review-reset {} --lineage '<lineage>' --reason '<reason>'",
                             subject.workspace.id, task.id

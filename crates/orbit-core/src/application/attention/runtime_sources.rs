@@ -105,15 +105,10 @@ impl RuntimeAttention<'_> {
                 "Inspect the run"
             }
             .into(),
-            tool: Some(
-                if resume {
-                    "orbit.workflow.run.resume"
-                } else {
-                    "orbit.workflow.run.show"
-                }
-                .into(),
+            tool: Some("orbit.run".into()),
+            input: Some(
+                json!({"action": if resume { "resume" } else { "show" }, "id": run.run_id, "workspace": self.workspace.id}),
             ),
-            input: Some(json!({"id": run.run_id, "workspace": self.workspace.id})),
             command: format!(
                 "orbit --workspace '{}' {} {}",
                 self.workspace.id,
@@ -379,8 +374,10 @@ impl RuntimeAttention<'_> {
             }
             let next = AttentionNext {
                 summary: "Recover the possibly stale claim after inspection".into(),
-                tool: Some("orbit.task.recover_claim".into()),
-                input: Some(json!({"claim_id": claim.claim_id, "workspace": self.workspace.id})),
+                tool: Some("orbit.task.recover".into()),
+                input: Some(
+                    json!({"action": "recover_claim", "claim_id": claim.claim_id, "workspace": self.workspace.id}),
+                ),
                 command: format!(
                     "orbit --workspace '{}' task recover-claim {} --reason '<reason>' --request '<request_key>' --phase '<expected_phase>' --status '<status>'",
                     self.workspace.id, claim.claim_id
