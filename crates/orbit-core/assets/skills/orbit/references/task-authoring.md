@@ -144,21 +144,32 @@ halves of its input:
   footprint below for granularity, companions and wiring. Never file a sweep
   of a directory or crate, read-only background, tests or fixtures only
   consulted, or a shared reference doc as the footprint; background belongs
-  in the description. A task whose batch cannot be reconciled from readable
+  in the description. A task whose preparation must select the exact batch
+  paths cannot be filed until that batch is reconciled from readable
   sources — an oldest-first selection with uncovered history, an unreadable
   predecessor ledger, an unresolvable release reference — has no verified
   footprint yet. File the smallest bounded investigation that establishes it
   instead of the full repair, or leave the repair unfiled until the sources
-  are readable.
+  are readable. This does not apply to a worker-selected batch inside an
+  already declared bounded footprint: when the brief assigns batch selection
+  to the executing worker and the task already carries the bounded template
+  footprint that brief names as the lock, that declared bound is the verified
+  footprint, and an unread predecessor ledger alone is neither an
+  unestablished footprint nor a reason to file an investigation instead; the
+  worker reconciles inside the kept bound at run time.
 - **Readable evidence references.** Every run, log, commit, ledger, tag or
   predecessor artifact the description or criteria names must be readable
   through the task record or the lane's granted tools. Quote the failing
   command and its tested commit rather than a truncated excerpt: a truncated
   log with no commit identifies no repair. Record each ledger's dates and
   sources rather than citing it alone: an unreconciled ledger verifies no
-  batch. Resolve release tags and predecessor artifacts before filing. An
-  unreadable reference is a filing block. Make it readable or re-scope the
-  task. Never file the repair expecting the pilot to resolve it.
+  preparation-selected batch. Resolve release tags and predecessor artifacts
+  before filing. An unreadable footprint-defining reference is a filing
+  block. Make it readable or re-scope the task. Never file the repair
+  expecting the pilot to resolve it. Exception: for a worker-selected batch
+  inside an already declared bounded footprint, an unread predecessor ledger
+  alone does not block filing; disclose the gap and the brief's documented
+  fallbacks in the description instead.
 - **Check the pilot's answer.** After filing, read the task's readiness and
   the pilot assessment. A `selectors`, `verified_no_diff` or
   `host_operational` disposition with its lock footprint is the filing proof.
