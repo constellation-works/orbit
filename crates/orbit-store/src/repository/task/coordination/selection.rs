@@ -435,12 +435,11 @@ impl TaskCommitBoundary {
         } else {
             self.bundle_store.list_bundles()?
         };
-        let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
         let tasks = bundles
             .into_iter()
             .filter(|bundle| is_in_flight(bundle.envelope.status))
-            .map(|bundle| translator.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(crate::repository::task::v2::task_from_bundle)
+            .collect::<Vec<_>>();
         let footprints = tasks
             .iter()
             .map(|task| {

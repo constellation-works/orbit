@@ -15,7 +15,9 @@ use super::{
     StoredReceipt, ValidationHold, admission_refusal, decode, digest, encode, receipt_key, row,
 };
 use crate::contracts::*;
-use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_history_from_events};
+use crate::repository::task::v2::{
+    task_comment_from_row, task_from_bundle, task_history_from_events,
+};
 
 impl TaskCommitBoundary {
     /// One internal owner admission. Identity and resolved ship authority are
@@ -292,7 +294,6 @@ impl TaskCommitBoundary {
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);
         }
-        let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
         for selected in &snapshot.backlog {
             // A task the selection already rules out is reported from it; a
             // stale reason only defers the task to the next request.
@@ -316,7 +317,7 @@ impl TaskCommitBoundary {
                 .map(task_comment_from_row)
                 .collect::<Vec<_>>();
             let history = task_history_from_events(bundle.events.clone());
-            let task = effective_task(&translator.task_from_bundle(bundle)?)?;
+            let task = effective_task(&task_from_bundle(bundle))?;
             // A dependency another partition holds is out of a
             // partition-scoped section's reach. Nothing has been written yet,
             // so the caller takes this decision again host-wide.

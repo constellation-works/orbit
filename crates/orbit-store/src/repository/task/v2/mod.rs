@@ -71,6 +71,22 @@ use row_cache::RowCache;
 use sequencing::{next_event_id, next_sequence};
 pub(crate) use sidecars::{task_comment_from_row, task_history_from_events};
 
+pub(crate) fn task_from_bundle(bundle: TaskBundleV2) -> Task {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query",
+        "task_bundle_materialization",
+        task_id = %bundle.envelope.id,
+    )
+    .entered();
+    Task::from_envelope_parts(
+        bundle.envelope,
+        bundle.description,
+        parse_acceptance(&bundle.acceptance),
+        bundle.plan,
+        bundle.execution_summary,
+    )
+}
+
 pub(crate) struct TaskV2Store {
     registry: TaskRegistryStore,
     bundle_store: TaskBundleStoreV2,
