@@ -256,6 +256,7 @@
         "application/job/pipeline/worker/tests/scope.rs::script_scope_launcher_scopes_when_the_launch_env_reaches_the_bus",
         "application/job/pipeline/worker/tests/scope.rs::script_scope_probe_reports_a_missing_bus_in_the_launch_env",
         "application/job/pipeline/worker/tests/supervisor.rs::a_closed_observer_channel_stops_and_reaps_the_spawned_child",
+        "application/job/pipeline/worker/tests/supervisor.rs::a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing",
         "application/job/pipeline/worker/tests/supervisor.rs::a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing",
         "application/job/pipeline/worker/tests/supervisor.rs::store_read_faults_retain_supervision_and_reap_in_a_live_parent",
         "application/job/pipeline/worker/tests/usage/sampler.rs::concurrent_workers_store_one_host_row_per_minute",

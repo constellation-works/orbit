@@ -543,7 +543,18 @@ impl PipelineWorkerSupervisor {
                             (code, message)
                         }
                     };
-                while !self.finalize_exit_failure(&run, error_code, &message, actor)? {
+                // Rescue eligibility is the signal itself, not the
+                // failure/hold classification in `error_code`: an
+                // unknown-sender SIGKILL classifies as an unclassified
+                // failure below, but its candidate still needs keeping.
+                let externally_signalled = worker_exit.signal.is_some();
+                while !self.finalize_exit_failure(
+                    &run,
+                    error_code,
+                    &message,
+                    externally_signalled,
+                    actor,
+                )? {
                     // Reaping the leader does not prove its independently
                     // grouped providers stopped. Keep the original diagnostic
                     // while waiting; never kill additional processes here.
@@ -652,14 +663,19 @@ impl PipelineWorkerSupervisor {
     /// called. Pending exits are interrupted startup. A running worker the
     /// host manager stopped is held. A running worker with a SIGTERM exit from
     /// any other sender is interrupted like a dead owner found by
-    /// reconciliation. Returns false while provider evidence remains open, so
-    /// the observer can retry with the original diagnostic. A terminal or
+    /// reconciliation. `externally_signalled` — the worker died from a
+    /// terminating signal, whatever sender was captured — separately makes
+    /// its candidate eligible for rescue preservation before terminalizing;
+    /// it does not change that classification. Returns false while provider
+    /// evidence remains open, so the observer can retry with the original
+    /// diagnostic. A terminal or
     /// replaced owner ends observation without changing its outcome.
     fn finalize_exit_failure(
         &self,
         run: &JobRun,
         error_code: Option<&str>,
         message: &str,
+        externally_signalled: bool,
         actor: Option<&str>,
     ) -> Result<bool, OrbitError> {
         let current = self
@@ -681,11 +697,18 @@ impl PipelineWorkerSupervisor {
         }
         // A worker stopped externally leaves its candidate only in its
         // worktree; keep it under its rescue ref before terminalizing,
-        // while that worktree still exists.
-        let message = if matches!(
-            error_code,
-            Some(OPERATOR_STOPPED_ERROR_CODE) | Some(WORKER_TERMINATED_ERROR_CODE)
-        ) {
+        // while that worktree still exists. Eligibility is the terminating
+        // signal itself, kept separate from the `error_code` classification
+        // above: an unknown-sender SIGKILL is neither `operator_stopped`
+        // nor `worker_terminated`, and must not be relabelled as either to
+        // earn preservation. The cancellation and provider-liveness checks
+        // above still gate this: a cancelling caller owns the outcome, and
+        // preservation waits until providers are conclusively stopped.
+        let message = if externally_signalled
+            || matches!(
+                error_code,
+                Some(OPERATOR_STOPPED_ERROR_CODE) | Some(WORKER_TERMINATED_ERROR_CODE)
+            ) {
             match self.host.preserve_rescue_candidate(&current.run_id) {
                 Some(clause) => format!("{message}; {clause}"),
                 None => message.to_string(),
