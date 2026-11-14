@@ -2073,8 +2073,10 @@ fn auto_fix_watches_required_running_beside_optional_failure() {
                 [
                     ("PR status".into(), 15_000),
                     ("PR required checks".into(), 15_000),
+                    // [ORB-24403] The second BLOCKED poll still shows the
+                    // cached required check pending, so it reads no
+                    // required checks; the success poll reads fresh.
                     ("PR status".into(), 10_000),
-                    ("PR required checks".into(), 10_000),
                     ("PR status".into(), 5_000),
                     ("PR required checks".into(), 5_000)
                 ],
