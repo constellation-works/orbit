@@ -1,6 +1,6 @@
 // Orbit dashboard task relation rows: external refs, the regression head and the delivery card's relation rows.
 
-import { el, isHttpUrl } from './common.js';
+import { el, isHttpUrl, pinnedInfoHint } from './common.js';
 import { drainReadinessView } from './drain-waits.js';
 import { GITHUB_PR_REF_SYSTEM } from './task-shared.js';
 import { openVisibleTask } from './task-nav.js';
@@ -103,57 +103,96 @@ function regressionSitesOf(entry) {
   return sites.filter((site) => typeof site === "string" && site !== "");
 }
 
-function buildRegressionHead(entry, context) {
+function buildRegressionEntry(entry, context) {
   const target = regressionTargetId(entry);
-  const head = el("span", { class: "regression-head" });
+  const item = el("span", { class: "regression-entry" });
   const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
-  open.addEventListener("click", (e) => {
-    e.stopPropagation();
+  open.addEventListener("click", (event) => {
+    event.stopPropagation();
     openVisibleTask(target, context);
   });
-  head.appendChild(open);
+  item.appendChild(open);
   const regression = entry && typeof entry === "object" ? entry.regression : null;
-  if (regression) {
-    const nature = regression.nature == null ? "" : String(regression.nature);
-    const escape = regression.escape == null ? "" : String(regression.escape);
-    if (nature) {
-      head.append(document.createTextNode(" · "));
-      const natureLabel = el("span", {
-        class: nature === "unclassified" ? "regression-label regression-unclassified" : "regression-label",
-        text: regressionValueLabel(nature),
-      });
-      head.appendChild(natureLabel);
-    }
-    if (escape) {
-      head.append(document.createTextNode(" · escaped: "));
-      const escapeLabel = el("span", {
-        class: escape === "unclassified" ? "regression-label regression-unclassified" : "regression-label",
-        text: regressionValueLabel(escape),
-      });
-      head.appendChild(escapeLabel);
-    }
-    const severity = regression.severity == null ? "" : String(regression.severity);
-    if (severity) {
-      head.append(document.createTextNode(" · severity: "));
-      head.appendChild(buildRegressionSeverity(severity, regression.severity_source));
-    }
+  const parts = [];
+  if (regression?.nature) parts.push(regressionValueLabel(regression.nature));
+  if (regression?.escape) parts.push(`escaped: ${regressionValueLabel(regression.escape)}`);
+  if (regression?.severity) {
+    const source = regression.severity_source;
+    const suffix = source && source !== "filer" ? ` (${source === "default" ? "unrated" : source})` : "";
+    parts.push(`severity: ${regression.severity}${suffix}`);
   }
-  return head;
+  const sites = regressionSitesOf(entry);
+  if (parts.length || sites.length) {
+    const hint = pinnedInfoHint("");
+    hint.setAttribute("aria-label", `Details for ${target}`);
+    const note = hint.querySelector(".info-hint-text");
+    if (parts.length) note.appendChild(el("div", { text: parts.join(" · ") }));
+    for (const site of sites) note.appendChild(el("div", { class: "mono", text: site }));
+    item.appendChild(hint);
+  }
+  return item;
 }
 
-// A link's severity, with who set it when that is not its filer. A link
-// nobody rated reads as medium by default and is shown muted.
-function buildRegressionSeverity(severity, source) {
-  const from = source == null ? "" : String(source);
-  const unrated = from === "default";
-  const label = el("span", {
-    class: unrated ? "regression-label regression-unclassified" : "regression-label",
-    text: from && from !== "filer" ? `${severity} (${unrated ? "unrated" : from})` : severity,
-    title: unrated ? "Not rated: reads as medium" : `Severity ${severity}, set by ${from || "filer"}`,
+// Detail panels are rebuilt on refresh; release observers when their rows leave.
+const regressionObservers = new Map();
+let regressionRemovalObserver = null;
+function observeRegressionList(list, observer) {
+  regressionObservers.set(list, observer);
+  if (!regressionRemovalObserver) {
+    regressionRemovalObserver = new MutationObserver(() => {
+      for (const [node, resizeObserver] of regressionObservers) {
+        if (!node.isConnected) {
+          resizeObserver.disconnect();
+          regressionObservers.delete(node);
+        }
+      }
+    });
+    regressionRemovalObserver.observe(document.body, { childList: true, subtree: true });
+  }
+  observer.observe(list);
+}
+
+// Measure complete entries at the available width, then hide only whole ids
+// after the third line. ResizeObserver also handles a resized detail pane.
+function buildRegressionRelations(targets, context) {
+  const value = el("span", { class: "value task-delivery-relations regression" });
+  const list = el("span", { class: "regression-list" });
+  const items = targets.map((entry) => buildRegressionEntry(entry, context));
+  for (const item of items) list.appendChild(item);
+  value.appendChild(list);
+  let expanded = false;
+  let hiddenCount = 0;
+  const toggle = buildRelationMoreToggle(0, () => {
+    expanded = !expanded;
+    updateVisibility();
   });
-  label.dataset.severity = severity;
-  if (from) label.dataset.severitySource = from;
-  return label;
+  value.appendChild(toggle);
+  function updateVisibility() {
+    items.forEach((item, index) => { item.hidden = !expanded && index >= items.length - hiddenCount; });
+    toggle.hidden = hiddenCount === 0;
+    syncRelationMoreToggle(toggle, hiddenCount, expanded);
+  }
+  let lastWidth = -1;
+  const observer = new ResizeObserver(([entry]) => {
+    if (!value.isConnected) { observer.disconnect(); return; }
+    const width = entry.contentRect.width;
+    if (!width || width === lastWidth) return;
+    lastWidth = width;
+    for (const item of items) item.hidden = false;
+    let line = 0;
+    let previousTop = null;
+    let firstHidden = items.length;
+    items.forEach((item, index) => {
+      const top = item.getBoundingClientRect().top;
+      if (previousTop === null || top > previousTop + 1) { line++; previousTop = top; }
+      if (line === 4 && firstHidden === items.length) firstHidden = index;
+    });
+    hiddenCount = items.length - firstHidden;
+    if (!hiddenCount) expanded = false;
+    updateVisibility();
+  });
+  observeRegressionList(list, observer);
+  return value;
 }
 
 // The blocked_by ids the Readiness card already lists under "Depends on".
@@ -170,8 +209,7 @@ export function drainDependencyIds(drain) {
 
 // A long relation list collapses after this many targets (STD-07 §R17): the
 // row shows the first few and a "View more (N)" control for the rest. Five
-// keeps a Regression from row to about seven lines with each entry's site
-// disclosure, and the same cap covers the panel's other relation rows.
+// applies to the panel's non-regression relation rows.
 export const RELATION_VISIBLE_LIMIT = 5;
 
 // The collapsed row's toggle: "View more (N)" closed, "Show fewer" open. The
@@ -195,64 +233,16 @@ function syncRelationMoreToggle(toggle, hiddenCount, expanded) {
   toggle.textContent = expanded ? "Show fewer" : `View more (${hiddenCount})`;
 }
 
-// One delivery-card relation row: the type's ids sit inline, wrapping as
-// needed, and each id opens its task. The row keeps the `data-relation` key.
-// A `regression_from` row keeps each target's own classification beside its
-// id, with that target's sites listed under it; a row with no classification
-// and no sites keeps the plain inline ids, like every other relation type.
-// A row longer than RELATION_VISIBLE_LIMIT shows the first few and a
-// "View more (N)" control that reveals the rest in place.
+// One delivery-card relation row. Regression links collapse by wrapped lines;
+// other relation types keep their count-based limit.
 export function buildRelationRow(key, label, targets, context) {
   if (key === "regression_from") {
-    const entries = targets.map((entry) =>
-      typeof entry === "string" ? { target: entry, regression: null } : entry);
-    const hasDetail = entries.some((entry) => {
-      const regression = entry.regression;
-      if (!regression) return false;
-      const nature = regression.nature == null ? "" : String(regression.nature);
-      const escape = regression.escape == null ? "" : String(regression.escape);
-      return Boolean(nature || escape || regressionSitesOf(entry).length);
-    });
-    if (hasDetail) {
-      const value = el("span", { class: "value task-delivery-relations regression" });
-      const items = [];
-      for (const entry of entries) {
-        const item = el("div", { class: "regression-entry" });
-        item.appendChild(buildRegressionHead(entry, context));
-        const sites = regressionSitesOf(entry);
-        if (sites.length) {
-          const siteList = el("div", { class: "regression-site-list" });
-          const sitesWrap = el("details", { class: "regression-sites" }, [
-            el("summary", { text: `${sites.length} ${sites.length === 1 ? "site" : "sites"}` }),
-            siteList,
-          ]);
-          for (const site of sites) {
-            siteList.appendChild(el("div", { class: "mono regression-site", text: site }));
-          }
-          item.appendChild(sitesWrap);
-        }
-        items.push(item);
-        value.appendChild(item);
-      }
-      if (items.length > RELATION_VISIBLE_LIMIT) {
-        const hiddenCount = items.length - RELATION_VISIBLE_LIMIT;
-        const overflow = items.slice(RELATION_VISIBLE_LIMIT);
-        for (const item of overflow) item.hidden = true;
-        const toggle = buildRelationMoreToggle(hiddenCount, (node) => {
-          const expanded = node.getAttribute("aria-expanded") !== "true";
-          for (const item of overflow) item.hidden = !expanded;
-          syncRelationMoreToggle(node, hiddenCount, expanded);
-        });
-        value.appendChild(toggle);
-      }
-      const relationRow = el("div", { class: "property-row fact task-delivery-row relation" }, [
-        el("span", { class: "label", text: label }),
-        value,
-      ]);
-      relationRow.dataset.relation = key;
-      return relationRow;
-    }
-    targets = entries.map((entry) => entry.target);
+    const relationRow = el("div", { class: "property-row fact task-delivery-row relation" }, [
+      el("span", { class: "label", text: label }),
+      buildRegressionRelations(targets, context),
+    ]);
+    relationRow.dataset.relation = key;
+    return relationRow;
   }
   const value = el("span", { class: "value task-delivery-relations" });
   const ids = targets.map((target) => regressionTargetId(target));
