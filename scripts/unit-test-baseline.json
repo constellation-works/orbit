@@ -284,6 +284,7 @@
         "application/job/run/tests/owner.rs::same_pid_namespace_still_detects_a_genuinely_dead_owner",
         "application/job/run/tests/owner.rs::signal_owner_after_exit_returns_already_exited",
         "application/job/run/tests/owner.rs::signal_owner_in_foreign_pid_namespace_never_signals_the_local_process",
+        "application/job/run/tests/reconcile.rs::reconciliation_holds_a_worker_the_host_manager_stopped",
         "application/job/run/tests/reconcile.rs::reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish",
         "application/job/run/tests/reconcile.rs::reconciling_a_reaped_worker_mid_cancel_leaves_the_outcome_to_the_canceller",
         "application/job/tests/crew_pools/activity.rs::empty_final_recovery_pool_refuses_to_draw",

@@ -16,7 +16,12 @@
 //!   `token_mismatch`) names that row in its diagnostic. With no row it says
 //!   no exit status was observed, and reads what the worker's scope, recorded
 //!   when the worker claimed the run, still reports: its systemd unit result
-//!   and counters, or that the scope is gone.
+//!   and counters, or that the scope is gone. A terminating signal that row
+//!   attributes to the host manager (`systemd`), with no recorded memory or
+//!   task-limit breach, is a hold (`operator_stopped`) rather than
+//!   `worker_terminated`. Reconciliation that settles before the row exists
+//!   still writes `interrupted`; a later amendment names the sender and does
+//!   not change that terminal state.
 //! - A supervisor that reaps after reconciliation already wrote "no exit
 //!   status was observed" appends what it observed to that diagnostic.
 //! - Waiting reveals no sender. So on Linux the worker catches its own
@@ -43,6 +48,10 @@ use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
 
 /// The audit row a supervisor writes when it reaps its worker.
 pub(crate) const WORKER_EXIT_AUDIT: &str = "pipeline.worker.exited";
+/// Kernel `comm` of the user or system manager. `systemctl stop` and an
+/// operator shutdown deliver the signal through that process. A direct
+/// `kill` or `systemctl` comm, and `systemd-oomd`, are not this sender.
+const HOST_MANAGER_SENDER: &str = "systemd";
 /// The audit row a supervisor writes when its worker claims the run; it
 /// carries the worker's scope.
 pub(crate) const WORKER_CLAIM_AUDIT: &str = "pipeline.worker.claimed";
@@ -244,6 +253,50 @@ impl WorkerExit {
         }
         text
     }
+
+    /// True when a terminating signal was sent by the host manager.
+    ///
+    /// `systemd` is the kernel comm of the user or system manager, including
+    /// an operator shutdown, a service stop, and a scope stop. A missing or
+    /// unreadable sender, any other command (including `orbit`), an exit no
+    /// signal ended, and a recorded memory or task-limit breach are not
+    /// host-manager stops.
+    pub(crate) fn stopped_by_host_manager(&self) -> bool {
+        if self.signal.is_none() {
+            return false;
+        }
+        if self.scope.as_ref().is_some_and(|scope| {
+            scope.oom_kills.is_some_and(|count| count > 0)
+                || scope.tasks_refused.is_some_and(|count| count > 0)
+        }) {
+            return false;
+        }
+        self.signal_sender
+            .as_ref()
+            .and_then(|sender| sender.command.as_deref())
+            == Some(HOST_MANAGER_SENDER)
+    }
+}
+
+/// Whether `run`'s recorded exit is a host-manager stop.
+///
+/// False when the run is not running, it has no worker pid, no matching exit
+/// row exists, or the audit cannot be read. Callers that cannot prove the
+/// stop keep the worker-terminated failure.
+pub(crate) fn recorded_host_manager_stop(
+    audit_events: &dyn AuditEventStoreBackend,
+    run: &JobRun,
+) -> bool {
+    let Some(pid) = run.pid else {
+        return false;
+    };
+    if run.state != JobRunState::Running {
+        return false;
+    }
+    matches!(
+        recorded_worker_exit(audit_events, &run.run_id, pid),
+        Ok(Some(exit)) if exit.stopped_by_host_manager()
+    )
 }
 
 /// The newest exit a supervisor recorded for `worker_pid` running `run_id`.

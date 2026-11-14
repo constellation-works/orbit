@@ -13,16 +13,18 @@ use std::process::{Child, Command, Stdio};
 use chrono::Utc;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 use serde_json::json;
 
 use super::super::WORKER_TERMINATED_ERROR_CODE;
 use super::super::actions::{CANCELLATION_REQUEST_AUDIT, CancellationRequest};
 use super::super::owner::signal_run_owner_process;
+use super::super::root_cause::{RunFailureContextProfile, RunFailureRead};
 use super::super::types::JobRunCancelOutcome;
 use super::drain_cancel::in_progress_task;
 use super::{insert_pending_run, test_runtime};
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::WORKER_EXIT_AUDIT;
 use crate::application::tests::run_isolated_test;
 
 /// A process alone in its own group, as a pipeline worker runs.
@@ -195,5 +197,160 @@ fn reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish() 
             Some(WORKER_TERMINATED_ERROR_CODE),
             "{case}"
         );
+    }
+}
+
+/// A dead owner whose recorded exit names a systemd-sent signal is a hold.
+/// An unknown sender, a crash, a signal from `orbit`, and a systemd signal
+/// after a memory-limit breach stay interrupted failures.
+#[test]
+fn reconciliation_holds_a_worker_the_host_manager_stopped() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &reconciliation_holds_a_worker_the_host_manager_stopped,
+    )) {
+        return;
+    }
+
+    struct ExitCase {
+        label: &'static str,
+        signal: Option<i32>,
+        exit_code: Option<i32>,
+        command: Option<&'static str>,
+        oom_kills: Option<u64>,
+        held: bool,
+    }
+    let cases = [
+        ExitCase {
+            label: "systemd SIGTERM",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: Some("systemd"),
+            oom_kills: None,
+            held: true,
+        },
+        ExitCase {
+            label: "unknown sender",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: None,
+            oom_kills: None,
+            held: false,
+        },
+        ExitCase {
+            label: "crash exit",
+            signal: None,
+            exit_code: Some(1),
+            command: None,
+            oom_kills: None,
+            held: false,
+        },
+        ExitCase {
+            label: "orbit SIGTERM",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: Some("orbit"),
+            oom_kills: None,
+            held: false,
+        },
+        ExitCase {
+            label: "systemd SIGTERM after oom",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: Some("systemd"),
+            oom_kills: Some(1),
+            held: false,
+        },
+    ];
+
+    for case in cases {
+        let (_root, runtime) = test_runtime();
+        let run = insert_pending_run(&runtime, "task_pr_pipeline");
+        let mut owner = spawn_process();
+        let running = mark_running(&runtime, &run, &owner);
+        let pid = running.pid.expect("owner pid");
+        owner.kill().expect("end owner");
+        owner.wait().expect("reap owner");
+
+        let signal_sender = case.command.map(|command| {
+            json!({
+                "pid": 1,
+                "uid": 0,
+                "command": command,
+            })
+        });
+        let scope = case.oom_kills.map(|oom_kills| {
+            json!({
+                "unit": "orbit-worker-test.scope",
+                "oom_kills": oom_kills,
+                "tasks_refused": 0,
+            })
+        });
+        runtime
+            .record_pipeline_audit(
+                WORKER_EXIT_AUDIT,
+                Some(&running.run_id),
+                Some("supervisor"),
+                AuditEventStatus::Success,
+                json!({
+                    "worker_pid": pid,
+                    "exit_status": case.signal.map(|signal| format!("signal: {signal}"))
+                        .unwrap_or_else(|| "exit status: 1".to_string()),
+                    "exit_code": case.exit_code,
+                    "signal": case.signal,
+                    "signal_name": case.signal.map(|_| "SIGTERM"),
+                    "core_dumped": false,
+                    "scope": scope,
+                    "signal_sender": signal_sender,
+                    "observed_at": Utc::now().to_rfc3339(),
+                }),
+                None,
+            )
+            .expect("record worker exit");
+
+        let reconciled = runtime.show_job_run(&run.run_id).expect("show run");
+        let code = reconciled
+            .steps
+            .last()
+            .and_then(|step| step.error_code.as_deref());
+        let message = reconciled
+            .steps
+            .last()
+            .and_then(|step| step.error_message.as_deref())
+            .unwrap_or("");
+        let context = runtime
+            .run_failure_context(
+                &reconciled,
+                None,
+                RunFailureContextProfile::AllFailedLeaves(RunFailureRead::Observe),
+                &mut |_| {},
+            )
+            .expect("failure query");
+        let counted = context
+            .causes
+            .iter()
+            .any(|cause| cause.run_id == reconciled.run_id);
+        if case.held {
+            assert_eq!(reconciled.state, JobRunState::Held, "{}", case.label);
+            assert_eq!(code, Some(OPERATOR_STOPPED_ERROR_CODE), "{}", case.label);
+            assert!(
+                message.contains("marked held because the host manager stopped its worker"),
+                "{}: {message}",
+                case.label
+            );
+            assert!(
+                !counted,
+                "{} must be absent from the failure query",
+                case.label
+            );
+        } else {
+            assert_eq!(reconciled.state, JobRunState::Interrupted, "{}", case.label);
+            assert_eq!(code, Some(WORKER_TERMINATED_ERROR_CODE), "{}", case.label);
+            assert!(
+                message.contains("marked interrupted"),
+                "{}: {message}",
+                case.label
+            );
+            assert!(counted, "{} must count as a failure", case.label);
+        }
     }
 }

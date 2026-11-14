@@ -28,6 +28,8 @@ use super::record::{self, PipelineAuditRow};
 use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
 use super::*;
 use crate::application::job::pipeline::wait::announce_worker_exit;
+use orbit_types::workflow::OPERATOR_STOPPED_ERROR_CODE;
+
 use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
 use crate::runtime::event_bus::EventLog;
 
@@ -497,8 +499,12 @@ impl PipelineWorkerSupervisor {
                             Some(WORKER_RESOURCE_LIMIT_ERROR_CODE),
                             format!("{}; {exit}{output_detail}", breach.describe()),
                         ),
-                        None => (
-                            {
+                        None => {
+                            let host_stop = run.state == JobRunState::Running
+                                && worker_exit.stopped_by_host_manager();
+                            let code = if host_stop {
+                                Some(OPERATOR_STOPPED_ERROR_CODE)
+                            } else {
                                 #[cfg(unix)]
                                 {
                                     status
@@ -510,12 +516,20 @@ impl PipelineWorkerSupervisor {
                                 {
                                     None
                                 }
-                            },
-                            format!(
-                                "{exit}{output_detail}; verify workspace registration, worker root \
-                             discovery, and action availability"
-                            ),
-                        ),
+                            };
+                            let message = if host_stop {
+                                format!(
+                                    "held because the host manager stopped the worker; \
+                                     {exit}{output_detail}"
+                                )
+                            } else {
+                                format!(
+                                    "{exit}{output_detail}; verify workspace registration, worker \
+                                     root discovery, and action availability"
+                                )
+                            };
+                            (code, message)
+                        }
                     };
                 while !self.finalize_exit_failure(&run, error_code, &message, actor)? {
                     // Reaping the leader does not prove its independently
@@ -623,11 +637,12 @@ impl PipelineWorkerSupervisor {
 
     /// Terminalize a worker process that exited while it still owned a
     /// non-terminal run. `try_wait` has already reaped the process when this is
-    /// called. Pending exits are interrupted startup; a running worker with a
-    /// SIGTERM exit is interrupted like a dead owner found by reconciliation.
-    /// Returns false while provider evidence remains open, so the observer can
-    /// retry with the original diagnostic. A terminal or replaced owner ends
-    /// observation without changing its outcome.
+    /// called. Pending exits are interrupted startup. A running worker the
+    /// host manager stopped is held. A running worker with a SIGTERM exit from
+    /// any other sender is interrupted like a dead owner found by
+    /// reconciliation. Returns false while provider evidence remains open, so
+    /// the observer can retry with the original diagnostic. A terminal or
+    /// replaced owner ends observation without changing its outcome.
     fn finalize_exit_failure(
         &self,
         run: &JobRun,
@@ -659,7 +674,9 @@ impl PipelineWorkerSupervisor {
                 "pipeline.worker.startup",
             ),
             JobRunState::Running => (
-                if error_code == Some(WORKER_TERMINATED_ERROR_CODE) {
+                if error_code == Some(OPERATOR_STOPPED_ERROR_CODE) {
+                    JobRunState::Held
+                } else if error_code == Some(WORKER_TERMINATED_ERROR_CODE) {
                     JobRunState::Interrupted
                 } else {
                     JobRunState::Failed

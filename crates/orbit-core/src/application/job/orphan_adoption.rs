@@ -14,7 +14,9 @@
 //! A completion that exhausts its bounded base chase also yields here as a
 //! typed `BaseChaseExhausted` hold [ORB-21441]. Unlike a repeatedly dead
 //! worker, a resumed completion may yield again; every run retains its own
-//! chase bound and inherited certified recovery. Other holds are excluded.
+//! chase bound and inherited certified recovery. A host-manager stop is
+//! `held` with `operator_stopped` and is scanned the same way as an
+//! interrupted leaf. Other holds are excluded.
 //!
 //! Each owner drain pass resumes such a run through the ordinary checkpoint
 //! resume (`orbit job resume`): the resumed run skips every step that
@@ -187,9 +189,16 @@ impl OrbitRuntime {
         let mut missing_authority = Vec::new();
         let mut reads = PassReads::default();
         for run in interrupted {
-            // Only a typed moving-base hold is an automatic continuation.
-            // Other holds retain their own release/approval contracts.
-            if run.state == JobRunState::Held && !base_chase_held(&run) {
+            // A moving-base hold and a host-manager stop continue
+            // automatically. Other holds retain their own release/approval
+            // contracts.
+            if run.state == JobRunState::Held
+                && !base_chase_held(&run)
+                && !orbit_types::workflow::is_operator_stopped(
+                    run.state,
+                    run.steps.last().and_then(|step| step.error_code.as_deref()),
+                )
+            {
                 continue;
             }
             if adopted.len() >= authority.budget {

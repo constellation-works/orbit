@@ -636,10 +636,14 @@ older binary), stops scheduled routines and worktree GC on that host until those
 processes exit. Every such tick says so on stderr (`clock tick refused by upgrade
 admission (N tick(s) in a row since …)`), followed by the refusal, and `orbit doctor`'s
 `clock-unit` row reports an error naming the run of refused ticks and the latest
-refusal until a tick runs again. A claimed worker terminated without a recorded cancellation (an
-external installer or service restart signalling it) is `interrupted` with
-`worker_terminated` whether its supervisor observes SIGTERM or stale-owner
-reconciliation sees the dead process first.
+refusal until a tick runs again. A claimed worker that exits without a recorded cancellation stays
+`interrupted` with `worker_terminated` when the sender is unknown or the
+process crashed, whether its supervisor observes the exit or stale-owner
+reconciliation sees the dead process first. A terminating signal the recorded
+exit attributes to `systemd` — a service restart or host shutdown — is `held`
+with `operator_stopped` and is outside the failure query. The supervisor and
+reconciliation apply that same rule. An unknown sender, another command, a
+crash, and a memory or task-limit breach stay failures.
 
 #### Rollout beside executable-generation-v1 processes
 

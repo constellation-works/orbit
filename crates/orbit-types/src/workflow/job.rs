@@ -156,6 +156,8 @@ pub enum JobRunState {
     Interrupted,
     /// Delivery ended awaiting external review evidence. Receipt starts a
     /// fresh review; this run is terminal and must not trigger failure recovery.
+    /// A host-manager stop (`operator_stopped`) is also this state: it is not
+    /// a product failure, and it can be resumed.
     Held,
 }
 
