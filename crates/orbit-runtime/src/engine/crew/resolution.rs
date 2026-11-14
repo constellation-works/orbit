@@ -10,7 +10,7 @@ use orbit_types::workflow::activity_job::ProviderSource;
 /// whitespace-only values are skipped (not a selection). Returns the chosen
 /// name and the tier it came from; `None` only when no tier supplies a value.
 /// Pure and table-tested so the precedence cannot drift from the shared
-/// contract or from the `Provider::resolve` surface it mirrors.
+/// contract.
 fn select_crew_name<'a>(
     explicit: Option<&'a str>,
     task_config: Option<&'a str>,

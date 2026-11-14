@@ -1550,7 +1550,7 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 | `copilot` | `copilot` | [GitHub Copilot CLI](#github-copilot-cli) |
 | `antigravity` | `agy` | [Antigravity CLI](#antigravity-cli) |
 | `muse` | `muse` | [Muse Code CLI](#muse-code-cli) |
-| `ollama` | — | Recognized but unsupported at the Orbit CLI entry point (`provider.unsupported`). |
+| `ollama` | — | Recognized but unsupported at the Orbit CLI entry point. |
 | `openai_compat` (`openai-compat`) | — | HTTP-only, no CLI runtime; selecting it fails. |
 
 - Parsing ignores case and surrounding whitespace.

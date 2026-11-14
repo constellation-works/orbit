@@ -1272,8 +1272,8 @@ cases do not earn unit admission because the public boundary costs the same.
 deferred-sandbox cases live in
 [`tests/contracts/main.rs`](../../crates/orbit-types/tests/contracts/main.rs),
 with modules for each surface in one integration binary.
-The admission audit's 40 moved cases use the same inputs and assertions through
-exported helpers and types, including the vendored provider-resolution fixture;
+The admission audit's moved cases use the same inputs and assertions through
+exported helpers and types;
 none needs a provider process or production visibility change.
 
 The two retired filesystem cases are covered by `orbit-policy`'s
