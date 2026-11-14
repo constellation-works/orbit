@@ -1401,9 +1401,13 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence(sa
             "api graphql",
             MERGE_CALL,
         ];
-        for _check in checks.iter().skip(1) {
+        for check in checks.iter().skip(1) {
             expected.push("pr view");
-            expected.push("api graphql");
+            // [ORB-24403] A BLOCKED poll whose rollup still shows the
+            // cached required check pending re-reads no required checks.
+            if *check != "pending" {
+                expected.push("api graphql");
+            }
         }
         if checks.len() == 1 {
             expected.extend(["pr view", "api graphql"]);

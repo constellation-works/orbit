@@ -351,6 +351,14 @@ pub(in crate::executor::automation::vcs) struct UnreportedChecks {
     no_required_check_run: bool,
     /// Adapter-verified workflow failures whose protected checks never ran.
     pub(super) failed_workflow_runs: Vec<orbit_types::workflow::PrInfrastructureEvidence>,
+    /// Last head-verified required-check answer, reused only to answer
+    /// "a required check is still pending" on a later BLOCKED poll of the
+    /// same head. Never consulted on a Mergeable head, so the fresh
+    /// failed-history guard before a merge request is unaffected.
+    cached_required_checks: Option<RequiredChecks>,
+    /// Observation captured with `cached_required_checks`; diagnostic
+    /// only, restored (marked reused) when the cache answers a poll.
+    cached_required_observation: Value,
 }
 
 impl UnreportedChecks {
@@ -363,6 +371,8 @@ impl UnreportedChecks {
             lagging_blocked_polls: 0,
             no_required_check_run: false,
             failed_workflow_runs: Vec::new(),
+            cached_required_checks: None,
+            cached_required_observation: json!({"state":"not_collected"}),
         }
     }
 
@@ -547,6 +557,40 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     {
         return Ok(state);
     }
+    // [ORB-24403] A required check still pending on the same head answers
+    // this BLOCKED poll from the last head-verified answer: which checks
+    // are required for a head does not change between polls, and Pending
+    // authorizes nothing but another wait. Mergeable heads, a changed
+    // head, and polls whose rollup no longer shows a cached-required
+    // pending check all read fresh below.
+    if matches!(state, PrMergeState::Blocked(_)) {
+        if unreported
+            .cached_required_checks
+            .as_ref()
+            .is_some_and(|cached| status.head_sha.as_deref() != Some(cached.head_sha.as_str()))
+        {
+            unreported.cached_required_checks = None;
+            unreported.cached_required_observation = json!({"state":"not_collected"});
+        }
+        let cache_answers_pending =
+            unreported
+                .cached_required_checks
+                .as_ref()
+                .is_some_and(|cached| {
+                    checks.iter().any(|check| {
+                        check.state == Some(CheckState::Pending)
+                            && check.name.as_deref().is_some_and(|name| {
+                                cached.requires(check.workflow_name.as_deref(), name)
+                            })
+                    })
+                });
+        if cache_answers_pending {
+            let mut observation = unreported.cached_required_observation.clone();
+            observation["reused"] = json!(true);
+            unreported.required_observation = observation;
+            return Ok(PrMergeState::Pending);
+        }
+    }
     let mut required_input = json!({"pr":pr,"workspace_path":workspace.to_string_lossy()});
     if let Some(deadline_ms) = deadline_ms {
         required_input["deadline_ms"] = json!(deadline_ms);
@@ -585,6 +629,9 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         return Err("required-check evidence does not identify the current head".into());
     }
     unreported.required_observation["head_matches"] = json!(true);
+    // Only a head-verified answer may answer a later poll.
+    unreported.cached_required_checks = Some(required.clone());
+    unreported.cached_required_observation = unreported.required_observation.clone();
     let mut pending = false;
     let mut failed = None;
     for check in &required.checks {
