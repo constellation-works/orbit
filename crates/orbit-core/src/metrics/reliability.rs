@@ -41,6 +41,12 @@
 //! [`RunOutcome::classify`] still reads such a run as failed and the fold below
 //! separates it.
 //!
+//! A run the host manager stopped — a terminating signal whose recorded
+//! sender command is `systemd`, with no recorded memory or task-limit breach —
+//! is `held` under `operator_stopped`. That state is [`RunOutcome::Held`],
+//! outside the failure rate. An unknown or unreadable sender, a signal from
+//! another command, and a crash exit stay `interrupted` and count as failures.
+//!
 //! Because six of the eight outcomes sit outside the denominator, and a
 //! wrapper that failed only because its child failed is rolled out of
 //! `failed` into [`OutcomeCounts::cascaded`], `succeeded + failed` does

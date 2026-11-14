@@ -44,7 +44,9 @@
 //! stranded by a host reboot behind a status identical to healthy in-flight
 //! work. The distinct event tells an operator to resume rather than diagnose,
 //! and resume re-admits the task (`application::job::resume`), so the block
-//! costs the recovery path nothing.
+//! costs the recovery path nothing. A host-manager stop is `held` with
+//! `operator_stopped` and uses that same interruption block: the worker was
+//! stopped, and `orbit job resume` recovers it.
 //!
 //! `blocked` is a deliberate dead end for automation: workflow admission
 //! accepts only `backlog` and `in-progress`, so drains skip these
@@ -75,7 +77,7 @@ use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     AgentBlocker, BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass,
     ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
-    is_upgrade_pending,
+    is_operator_stopped, is_upgrade_pending,
 };
 
 use crate::RuntimeKernel;
@@ -311,7 +313,12 @@ impl RuntimeKernel {
                 HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()),
                 Some(HeldFailure::OwnerSignoffRequired)
             );
+        // A host-manager stop is not a review, forge, or delivery hold. The
+        // coupled task takes the interruption update, which names `orbit job
+        // resume`.
+        let operator_stopped = is_operator_stopped(state, error_code.as_deref());
         let state = match state {
+            JobRunState::Held if operator_stopped => JobRunState::Interrupted,
             JobRunState::Held => {
                 match HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()) {
                     // The refusing action already recorded its task/repair

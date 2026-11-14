@@ -271,23 +271,27 @@ worker; once it has, the two race to settle the run. A run interrupted with
 job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=4242, pid_start_time=…); worker exit: no supervisor observed or recorded its exit status; worker scope 'orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope' was already gone: no unit result or counters remain (see `journalctl --user -u orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope`)
 ```
 
-The clause adds evidence only; it changes neither which runs are interrupted nor when.
+The clause names the exit. It does not decide which runs are finalized or when. One recorded sender does change the outcome: a terminating signal sent by `systemd` (an operator shutdown, a service stop, or a scope stop), with no recorded memory or task-limit breach, settles `held` under `operator_stopped` and is left out of failure counts. The supervisor and reconciliation apply that same rule. An unknown or unreadable sender, another command (including `orbit`), a crash exit, and a resource-limit breach stay failures (`interrupted` / `worker_terminated`, or `worker_resource_limit` when the scope records the breach). Reconciliation that finalizes before the exit row exists still writes `interrupted`; the later `afterwards` clause can name the sender and does not rewrite that terminal state.
 
 #### Who sent the signal
 
 A signalled exit also names its sender. On Linux a worker catches SIGTERM, SIGINT and
 SIGHUP for its whole life (unless it inherited them ignored or another handler owns
 them). When another process sends one, the worker writes that process's pid, uid and
-command name to its log and then dies from the same signal, so the reaped status and
-the run's classification are unchanged. The observer reads the line before it records
+command name to its log and then dies from the same signal, so the reaped status
+still matches that signal. The sender's command changes the outcome only when it
+is `systemd`, as the previous section describes; every other sender leaves an
+interrupted or failed run. The observer reads the line before it records
 the exit. The `pipeline.worker.exited` row carries it as `signal_sender` (`pid`, `uid`,
 and `command`, which is `null` if the sender had already exited). The diagnostic says
 `sent by pid <pid> (uid <uid>, command '<name>')`, or `command unreadable`. When the observer settles the run
 itself, that clause follows the status:
 
 ```text
-pipeline worker for run '…' exited with status signal: 15 (SIGTERM) (sent by pid 812 (uid 1000, command 'systemd')) after claiming the persisted run …
+held because the host manager stopped the worker; pipeline worker for run '…' exited with status signal: 15 (SIGTERM) (sent by pid 812 (uid 1000, command 'systemd')) after claiming the persisted run …
 ```
+
+That example is a host-manager stop: the run is `held` with `operator_stopped`. Resume it with `orbit job resume`.
 
 Look the pid up in `journalctl --user` or `journalctl -b` around the exit time to find
 the unit or tool behind it. A signalled exit with no captured sender reads `sender
@@ -511,9 +515,10 @@ new work.
 The v2 executor checkpoints every completed top-level step into
 `job_run_states.pipeline_state_json` (one row per run, beside `job_runs`) in
 `~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, a `held` run whose push the
-forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)), and
+forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)),
 a `held` run whose completion could not read the forge
-(`delivery_forge_observation_unavailable`). Any other state errors with `resume requires an interrupted, failed, or timed-out run`.
+(`delivery_forge_observation_unavailable`), and a `held` run the host manager
+stopped (`operator_stopped`). Any other state errors with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh
 orbit job resume <run_id>
@@ -1724,14 +1729,16 @@ An operator attempting to recover a held or blocked delivery may meet two common
 An owner-local delivery leaf (`task_pr_pipeline`) watches the pull request it
 opened: `--complete` merges it, and `--auto-fix` repairs its failed required checks
 and conflicts. If the leaf's worker dies after `pr_open` and the task already moved
-to `review`, orphan reconciliation finalizes the run `interrupted` and the task waits
-in `review`. Nothing is watching the pull request at that point. A leaf that died
+to `review`, orphan reconciliation finalizes the run `interrupted`, or `held`
+with `operator_stopped` when the host manager sent the terminating signal, and
+the task waits in `review`. Nothing is watching the pull request at that point. A leaf that died
 before promoting its task leaves the task `blocked` with a `workflow_run_interrupted`
 history entry; the blocked-task recovery backstop ([final recovery pool](../CONFIG.md#final-recovery-pool)) decides that one,
 not the drain.
 
 Each pass of a running owner drain (`orbit run auto`) adopts such a leaf before it
-admits new work. It resumes the interrupted run from its checkpoints, as
+admits new work, including one held because the host manager stopped its worker.
+It resumes that run from its checkpoints, as
 `orbit job resume` would, so the resumed run continues landing review, completion
 and auto-fix on the same pull request and head. The retry lineage carries the
 run's repair ledger and authority. Completion still refuses a head the run did not

@@ -426,12 +426,18 @@ fn leaf_failure(
     let owner_busy = typed.as_ref().is_some_and(|(class, reason)| {
         *class == ClaimFailureClass::Transient && is_owner_busy(Some(reason))
     });
+    let operator_stopped = orbit_types::workflow::is_operator_stopped(
+        run.state,
+        diagnostic
+            .map(|(code, _)| code)
+            .or_else(|| last_failed.and_then(|step| step.error_code.as_deref())),
+    );
     let (class, reason) = typed.unwrap_or_else(|| {
         let reason = last_failed
             .and_then(|step| step.error_message.clone())
             .or_else(|| diagnostic.map(|(_, message)| message.to_string()))
             .unwrap_or_else(|| format!("leaf {} terminated as {}", run.run_id, run.state));
-        let class = if run.state == JobRunState::Interrupted {
+        let class = if run.state == JobRunState::Interrupted || operator_stopped {
             ClaimFailureClass::Transient
         } else if matches!(
             final_recovery,
@@ -488,7 +494,7 @@ fn leaf_failure(
     // Reconciliation's liveness identity (or a candidate-carry refusal) can
     // exhaust the reason bound before its trailing worker cause. Keep that
     // evidence first without changing the failure class selected above.
-    if run.state == JobRunState::Interrupted
+    if (run.state == JobRunState::Interrupted || operator_stopped)
         && let Some(clause) = diagnostic
             .and_then(|(_, message)| message.split_once("; worker exit: "))
             .or_else(|| reason.split_once("; worker exit: "))

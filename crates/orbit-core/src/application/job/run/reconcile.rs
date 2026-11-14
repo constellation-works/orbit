@@ -3,13 +3,15 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
-use orbit_store::contracts::TaskReservationReleaseReason;
+use orbit_store::contracts::{AuditEventStoreBackend, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
-use crate::application::job::pipeline::reconciled_worker_exit_clause;
+use crate::application::job::pipeline::{
+    reconciled_worker_exit_clause, recorded_host_manager_stop,
+};
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -242,7 +244,9 @@ impl OrbitRuntime {
     /// Interrupted runs are resumable from their step checkpoints via
     /// `orbit job resume <run_id>`. [ORB-12969] Their coupled `in-progress`
     /// tasks are blocked with a `workflow_run_interrupted` note naming the run
-    /// and error code; the resume re-admits them.
+    /// and error code; the resume re-admits them. A running worker whose
+    /// recorded exit shows the host manager sent the terminating signal is
+    /// `held` under `operator_stopped` instead, and is not a failure.
     fn finalize_orphaned_job_run_with_provider_probe<P>(
         &self,
         run_id: &str,
@@ -282,9 +286,15 @@ impl OrbitRuntime {
         // [ORB-15314] Keep a stopped reviewer's repair locally; reconciling
         // also runs when a workspace opens, so it pushes nothing.
         self.keep_interrupted_review(&current, false);
+        // A host-manager stop is classified only from an exit row already
+        // recorded. Reconciliation that wins before that row exists still
+        // writes `interrupted` / `worker_terminated`. The supervisor can name
+        // the sender afterwards and cannot change the terminal state.
+        let (state, error_code, message) =
+            orphan_settlement(self.stores().audit_events(), &current, error_code, message);
         // [ORB-12969] The diagnostic is handed to finalization so the coupled
         // tasks' interruption block names the error code; the step itself is
-        // recorded below, only once the interrupted write has won.
+        // recorded below, only once the terminal write has won.
         // The same call freezes a claimed leaf's settlement. Supply the exit
         // evidence now: enriching only the later step cannot amend the outbox.
         let settlement_message =
@@ -294,7 +304,7 @@ impl OrbitRuntime {
             };
         let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
-            JobRunState::Interrupted,
+            state,
             finished_at,
             duration_ms,
             TaskReservationReleaseReason::StaleRunReconciled,
@@ -307,11 +317,11 @@ impl OrbitRuntime {
         let Some(finalized) = self.get_job_run_backend(&current.run_id)? else {
             return Ok(false);
         };
-        if finalized.state != JobRunState::Interrupted || finalized.finished_at.is_none() {
+        if finalized.state != state || finalized.finished_at.is_none() {
             return Ok(false);
         }
 
-        // [ORB-17179] Read only now that the interrupted write has won, so an
+        // [ORB-17179] Read only now that the terminal write has won, so an
         // exit the worker's supervisor recorded meanwhile is still named.
         let message = match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
             Some(clause) => format!("{message}; {clause}"),
@@ -327,13 +337,13 @@ impl OrbitRuntime {
                 finished_at,
                 Some(&error_code),
                 &message,
-                JobRunState::Interrupted,
+                state,
             ),
         );
         self.record_event(OrbitEvent::JobRunCompleted {
             job_id: current.job_id.clone(),
             run_id: current.run_id.clone(),
-            state: JobRunState::Interrupted.to_string(),
+            state: state.to_string(),
         })?;
         Ok(true)
     }
@@ -524,6 +534,39 @@ impl OrbitRuntime {
             }
         }
         Ok(None)
+    }
+}
+
+/// `held` / `operator_stopped` when `run`'s recorded exit is a host-manager
+/// stop; otherwise the stale diagnostic's interrupted failure.
+fn orphan_settlement(
+    audit_events: &dyn AuditEventStoreBackend,
+    run: &JobRun,
+    error_code: String,
+    message: String,
+) -> (JobRunState, String, String) {
+    let host_stop =
+        error_code == WORKER_TERMINATED_ERROR_CODE && recorded_host_manager_stop(audit_events, run);
+    if host_stop {
+        (
+            JobRunState::Held,
+            OPERATOR_STOPPED_ERROR_CODE.to_string(),
+            host_manager_stop_message(&message),
+        )
+    } else {
+        (JobRunState::Interrupted, error_code, message)
+    }
+}
+
+fn host_manager_stop_message(message: &str) -> String {
+    const INTERRUPTED: &str =
+        "marked interrupted because recorded worker process is no longer alive";
+    const HELD: &str = "marked held because the host manager stopped its worker";
+    match message.split_once(INTERRUPTED) {
+        Some((head, tail)) => format!("{head}{HELD}{tail}"),
+        None => {
+            format!("job run marked held because the host manager stopped its worker; {message}")
+        }
     }
 }
 

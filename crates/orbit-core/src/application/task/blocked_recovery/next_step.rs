@@ -27,10 +27,13 @@ pub struct BlockedNextStep {
     pub requeue_command: String,
 }
 
-fn is_resumable(state: JobRunState) -> bool {
+fn is_resumable(run: &orbit_types::workflow::JobRun) -> bool {
     matches!(
-        state,
+        run.state,
         JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+    ) || orbit_types::workflow::is_operator_stopped(
+        run.state,
+        run.steps.last().and_then(|step| step.error_code.as_deref()),
     )
 }
 
@@ -56,7 +59,7 @@ impl OrbitRuntime {
         let resumable = self.task_run_is_local(task)
             && self
                 .observed_job_run(&run_id)
-                .is_ok_and(|run| is_resumable(run.state));
+                .is_ok_and(|run| is_resumable(&run));
         Some(BlockedNextStep {
             resume_command: resumable.then(|| format!("orbit job resume {run_id}")),
             requeue_command: format!("orbit task update {} --status backlog", task.id),

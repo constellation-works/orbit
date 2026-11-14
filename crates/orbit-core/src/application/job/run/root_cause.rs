@@ -13,7 +13,9 @@
 use std::collections::{HashMap, HashSet};
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState, RunRootCause};
+use orbit_types::workflow::{
+    JobRun, JobRunState, JobTargetType, OPERATOR_STOPPED_ERROR_CODE, PipelineState, RunRootCause,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -382,7 +384,8 @@ impl RunFailureContextWarning {
 }
 
 /// A failed, timed-out, interrupted or cancelled run: one a failure query may
-/// name as a cause.
+/// name as a cause. `held` is outside this set, including a host-manager stop
+/// (`operator_stopped`).
 fn is_chain_failure(state: JobRunState) -> bool {
     matches!(
         state,
@@ -391,6 +394,17 @@ fn is_chain_failure(state: JobRunState) -> bool {
             | JobRunState::Interrupted
             | JobRunState::Cancelled
     )
+}
+
+/// Whether a failure query names `run`. A host-manager stop recorded as
+/// `operator_stopped` is not a cause, including when an earlier writer left
+/// the run in a chain-failure state.
+fn counts_in_failure_query(run: &JobRun) -> bool {
+    if !is_chain_failure(run.state) {
+        return false;
+    }
+    run_error_step(run).and_then(|step| step.error_code.as_deref())
+        != Some(OPERATOR_STOPPED_ERROR_CODE)
 }
 
 struct FailureWalk<'w> {
@@ -421,7 +435,7 @@ impl OrbitRuntime {
         profile: RunFailureContextProfile,
         warn: &mut dyn FnMut(&RunFailureContextWarning),
     ) -> Result<RunFailureContext, OrbitError> {
-        if profile == RunFailureContextProfile::DeepestObserved && !is_chain_failure(run.state) {
+        if profile == RunFailureContextProfile::DeepestObserved && !counts_in_failure_query(run) {
             return Ok(RunFailureContext::default());
         }
         let mut walk = FailureWalk {
@@ -538,7 +552,7 @@ impl OrbitRuntime {
         // Only a failed leaf is a cause; a wrapper's own error stays in its
         // run header and steps.
         let may_be_cause = depth > 0 || !deepest_observed;
-        if found || !may_be_cause || !is_chain_failure(run.state) {
+        if found || !may_be_cause || !counts_in_failure_query(run) {
             return Ok(found);
         }
         if deepest_observed {
