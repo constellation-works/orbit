@@ -77,12 +77,6 @@ pub(crate) fn list_backlog_tasks(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     runtime.reclaim_worktrees_on_admission();
-    runtime
-        .record_backlog_pilot_operator_handoffs()
-        .map_err(|error| DispatchError::DeterministicActionFailed {
-            action: action.into(),
-            message: format!("record pilot operator handoffs: {error}"),
-        })?;
     let max_tasks = input
         .get("max_tasks")
         .and_then(Value::as_u64)
@@ -131,7 +125,9 @@ pub(crate) fn list_backlog_tasks(
             &pools,
             mode,
             review.as_ref(),
-            super::snapshot::BacklogReadMode::Admission,
+            super::snapshot::BacklogReadMode::Admission {
+                prepared_rows: None,
+            },
         )?;
         // [ORB-15191] A ship that fans out to more than one task holds work
         // with no footprint to the drain's rule: it waits for its pilot, or
@@ -186,6 +182,14 @@ pub(crate) fn list_backlog_tasks(
             .collect();
         (tasks, snapshot.excluded)
     } else {
+        // Discovery records handoffs inside the admission snapshot. An
+        // explicit ship never builds that snapshot, so it records here.
+        runtime
+            .record_backlog_pilot_operator_handoffs()
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.into(),
+                message: format!("record pilot operator handoffs: {error}"),
+            })?;
         let mut tasks = Vec::new();
         let mut excluded = Vec::new();
         // [ORB-12500] An override picks which task ships; it does not let a

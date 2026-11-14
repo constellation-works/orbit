@@ -229,6 +229,29 @@ impl TaskV2Store {
         }))
     }
 
+    /// Read the blob `file` already describes, without a bundle read.
+    ///
+    /// Admission holds a listed row's manifest and only needs the one pilot
+    /// receipt. Hashing every artifact in the bundle would repeat that work
+    /// for each backlog task.
+    pub(crate) fn read_manifest_artifact(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<TaskArtifact, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        file.validate()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        self.ensure_recovered()?;
+        let content = self.bundle_store.read_manifest_blob(id, file)?;
+        Ok(TaskArtifact {
+            path: file.path.clone(),
+            media_type: file.media_type.clone(),
+            content,
+            created_by: Some(file.created_by.clone()),
+        })
+    }
+
     pub(crate) fn upsert_task_artifacts(
         &self,
         id: &str,

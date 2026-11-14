@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, ClaimInspection, ExecutionClaimPhase,
 };
@@ -183,7 +184,10 @@ impl OrbitRuntime {
                 Some(receipt) => {
                     let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
                     if super::super::requeue::current_run_requeue_stands(&task, &history)
-                        && task.spec_digest_matches(&receipt.task_spec_digest)
+                        && self
+                            .task_spec_for_settlement(&task)
+                            .map_err(|error| error.to_string())?
+                            .spec_digest_matches(&receipt.task_spec_digest)
                     {
                         Some(
                             receipt
@@ -234,6 +238,16 @@ impl OrbitRuntime {
             return Err("Orbit recorded no delivery pull request for it".to_string());
         }
         Ok(candidate)
+    }
+
+    /// The task whose description and acceptance criteria the settlement
+    /// digest compares. A backlog candidate may be the envelope only; the
+    /// body is read when a preserved handoff receipt needs the digest.
+    fn task_spec_for_settlement(&self, task: &Task) -> Result<Task, OrbitError> {
+        Ok(self
+            .get_listed_task_row(&task.id)?
+            .map(|row| row.task)
+            .unwrap_or_else(|| task.clone()))
     }
 
     /// The task's unsettled claim as a stopped or revoked handoff that may

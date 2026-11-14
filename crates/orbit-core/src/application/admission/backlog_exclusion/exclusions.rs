@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use chrono::Utc;
 use orbit_types::task::{
-    ExecutorOsLimit, NO_DRAIN_TAG, ReadinessGap, ReadinessStage, Task, browser_kit_wait,
-    readiness_gaps, requires_browser_kit,
+    ExecutorOsLimit, NO_DRAIN_TAG, ReadinessGap, ReadinessStage, Task, TaskHistoryEntry,
+    browser_kit_wait, readiness_gaps, requires_browser_kit,
 };
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
@@ -10,7 +11,7 @@ use super::super::pass_error::PassError;
 use super::{BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason};
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
-use crate::application::task::PilotAdmissionHold;
+use crate::application::task::{PilotAdmissionHold, schedule_hold_in};
 
 /// A ship's exclusion for a task the unknown-footprint rule withheld. A
 /// whole-tree conflict is a context lock on every path, named by its holder.
@@ -151,17 +152,35 @@ pub(super) fn scheduled_exclusion(
     task: &Task,
 ) -> Option<BacklogTaskExclusion> {
     match runtime.schedule_hold(task) {
-        Ok(hold) => hold.map(|hold| BacklogTaskExclusion {
-            id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::Scheduled,
-            conflicts: Vec::new(),
-            crew: None,
-            detail: Some(hold.detail()),
-        }),
+        Ok(hold) => hold.map(|hold| scheduled_hold_exclusion(task, hold.detail())),
         Err(error) => {
             tracing::warn!(task_id = %task.id, "could not read scheduled hold: {error}");
             None
         }
+    }
+}
+
+/// [`scheduled_exclusion`] from history the caller already read.
+pub(super) fn scheduled_exclusion_from_history(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+) -> Option<BacklogTaskExclusion> {
+    match schedule_hold_in(task, Utc::now(), &|| Ok(history.to_vec())) {
+        Ok(hold) => hold.map(|hold| scheduled_hold_exclusion(task, hold.detail())),
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read scheduled hold: {error}");
+            None
+        }
+    }
+}
+
+fn scheduled_hold_exclusion(task: &Task, detail: String) -> BacklogTaskExclusion {
+    BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::Scheduled,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(detail),
     }
 }
 
@@ -226,7 +245,17 @@ pub(super) fn pilot_finding_exclusion(
     let hold = runtime
         .pilot_admission_hold(&task.id)
         .map_err(|error| PassError::store(action, "read pilot findings", error))?;
-    Ok(hold.and_then(|hold| {
+    Ok(pilot_hold_exclusion(runtime, task, hold))
+}
+
+/// The exclusion `hold` reports for `task`. `None` admits it. `task` is the
+/// snapshot's task: native-host waits read its tags.
+pub(super) fn pilot_hold_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    hold: Option<PilotAdmissionHold>,
+) -> Option<BacklogTaskExclusion> {
+    hold.and_then(|hold| {
         let (reason, detail) = match hold {
             PilotAdmissionHold::StaleAssessment(detail) => {
                 (BacklogTaskExclusionReason::PilotAssessmentStale, detail)
@@ -263,7 +292,7 @@ pub(super) fn pilot_finding_exclusion(
             crew: None,
             detail: Some(detail),
         })
-    }))
+    })
 }
 
 fn pilot_decision_detail(field: &str) -> String {

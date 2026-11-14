@@ -2,11 +2,14 @@
 //! without lifecycle promotion. Native-host decisions follow unchanged findings;
 //! other decisions are scoped to the latest assessment.
 
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
+use orbit_store::contracts::{TaskListFilter, TaskRow};
 use orbit_types::task::{
-    DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
+    ArtifactManifestFileV2, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
     PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
     TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus, decision_requests_from_history,
 };
@@ -218,6 +221,72 @@ fn records_operator_handoff(entry: &TaskHistoryEntry, handoff: &TaskHistoryEntry
     })
 }
 
+/// Whether `hold`'s operator handoff is already in `history`. A hold with no
+/// handoff event counts as recorded. Missing the receipt counts as not, so
+/// the locked write still runs and reports that.
+fn handoff_recorded_in(
+    comments: &[TaskComment],
+    history: &[TaskHistoryEntry],
+    hold: &PilotAdmissionHold,
+) -> bool {
+    let Some(operation_id) = super::super::latest_pilot_operation_id(comments) else {
+        return false;
+    };
+    let Some((event, _)) = hold.operator_handoff(operation_id) else {
+        return true;
+    };
+    history
+        .iter()
+        .any(|entry| records_operator_handoff(entry, &event))
+}
+
+/// Whether `row` already has an open decision request for its latest pilot
+/// receipt. No receipt is not open: the locked raise then reports it.
+fn pilot_decision_request_open(row: &TaskRow) -> bool {
+    let Some(operation_id) = super::super::latest_pilot_operation_id(&row.comments) else {
+        return false;
+    };
+    let binding = DecisionBinding::PilotOperation {
+        operation_id: operation_id.to_string(),
+    };
+    decision_requests_from_history(
+        &row.task,
+        &row.history,
+        Some(operation_id),
+        chrono::Utc::now(),
+    )
+    .iter()
+    .any(|request| request.binding == binding && request.state == DecisionRequestState::Open)
+}
+
+/// Backlog ids in listing order, from the index when it can answer and
+/// otherwise from envelopes. Neither reads a task bundle.
+fn backlog_ids_for_handoff(runtime: &OrbitRuntime) -> Result<Vec<String>, OrbitError> {
+    let filter = TaskListFilter {
+        statuses: Some(vec![TaskStatus::Backlog]),
+        ..Default::default()
+    };
+    if let Some(keys) = runtime.task_candidate_keys(&filter, usize::MAX)? {
+        let mut items = keys.items;
+        items.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        return Ok(items.into_iter().map(|key| key.id).collect());
+    }
+    let mut tasks = runtime.list_task_metadata()?;
+    tasks.retain(|task| task.status == TaskStatus::Backlog);
+    tasks.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(tasks.into_iter().map(|task| task.id).collect())
+}
+
 /// Whether an operator's `approve-anyway` or `clear` answers the pilot
 /// receipt `operation_id`, releasing its duplicate and already-landed findings.
 fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
@@ -261,6 +330,19 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
     ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
+        self.pilot_admission_hold_with(task, comments, history, None)
+    }
+
+    /// [`Self::pilot_admission_hold_in`] with the artifact manifest of a row
+    /// the caller already read. `None` resolves a receipt through the
+    /// canonical bundle read.
+    pub(crate) fn pilot_admission_hold_with(
+        &self,
+        task: &Task,
+        comments: &[TaskComment],
+        history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+    ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
         // [ORB-21238] An operator's `no-pilot` skip bypasses stale assessments
         // and ordinary pilot findings. A current host-operational hold is
         // checked below first because skipping a pilot cannot resolve the
@@ -291,7 +373,7 @@ impl OrbitRuntime {
             let Some((_, receipt)) = receipts.next() else {
                 continue;
             };
-            let audit = self.task_pilot_audit(&task.id, receipt)?;
+            let audit = self.task_pilot_audit_with(&task.id, receipt, manifest)?;
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
@@ -445,6 +527,22 @@ impl OrbitRuntime {
         Ok(None)
     }
 
+    /// [`Self::pilot_admission_hold`] from one listed row: the task, its
+    /// comments, its history and its manifest, with no further bundle read
+    /// unless a receipt names an artifact.
+    pub(crate) fn pilot_admission_hold_from_row(
+        &self,
+        row: &TaskRow,
+    ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
+        let history = &row.history;
+        self.pilot_admission_hold_with(
+            &row.task,
+            &row.comments,
+            &|| Ok(history.clone()),
+            Some(&row.artifacts),
+        )
+    }
+
     /// Backfill the typed record for a still-current legacy pilot receipt.
     /// New pilot audits already committed this evidence atomically. This is
     /// called only by admission, never by read-only readiness projections.
@@ -525,47 +623,74 @@ impl OrbitRuntime {
             })
     }
 
-    /// Whether `hold`'s operator handoff is already in the task's history,
-    /// from plain reads. Every drain pass runs the backlog sweep below, and
-    /// almost every hold it meets was recorded by an earlier pass; checking
-    /// first keeps those passes from taking the task's write lock, and the
-    /// task-store sections under it, only to find nothing to write. The
-    /// locked write re-checks, so a hold this misses is still recorded once.
-    fn pilot_operator_handoff_recorded(
+    /// Record operator handoffs for the backlog rows of one admission pass.
+    ///
+    /// `order` is the listing order (newest `created_at`, then id). A missing
+    /// row is an in-flight bundle the listing sweep skips. A write still goes
+    /// through the locked recorder, which re-reads before it appends, so a
+    /// hold is recorded once. Returns the ids that took that path, whose
+    /// preloaded rows are stale.
+    pub(crate) fn record_pilot_handoffs_from_rows(
         &self,
-        task_id: &str,
-        hold: &PilotAdmissionHold,
-    ) -> Result<bool, OrbitError> {
-        let comments = self.get_task_comments(task_id)?;
-        let Some(operation_id) = super::super::latest_pilot_operation_id(&comments) else {
-            return Ok(false);
-        };
-        let Some((event, _)) = hold.operator_handoff(operation_id) else {
-            return Ok(true);
-        };
-        Ok(self
-            .get_task_history(task_id)?
-            .iter()
-            .any(|entry| records_operator_handoff(entry, &event)))
-    }
-
-    pub(crate) fn record_backlog_pilot_operator_handoffs(&self) -> Result<(), OrbitError> {
-        for task in
-            self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
-        {
-            if let Some(hold) = self.pilot_admission_hold(&task.id)? {
-                if matches!(
-                    hold,
-                    PilotAdmissionHold::OperatorValidation(_)
-                        | PilotAdmissionHold::HostOperational(_)
-                ) && !self.pilot_operator_handoff_recorded(&task.id, &hold)?
-                {
-                    self.record_pilot_operator_handoff(&task.id, &hold)?;
-                }
-                self.raise_pilot_decision_request(&task.id)?;
+        rows: &BTreeMap<String, Option<TaskRow>>,
+        order: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        let mut written = Vec::new();
+        for id in order {
+            let Some(row) = rows.get(id).and_then(Option::as_ref) else {
+                continue;
+            };
+            let Some(hold) = self.pilot_admission_hold_from_row(row)? else {
+                continue;
+            };
+            let mut wrote = false;
+            if matches!(
+                hold,
+                PilotAdmissionHold::OperatorValidation(_) | PilotAdmissionHold::HostOperational(_)
+            ) && !handoff_recorded_in(&row.comments, &row.history, &hold)
+            {
+                self.record_pilot_operator_handoff(id, &hold)?;
+                wrote = true;
+            }
+            if self.decision_channel_enabled() && !pilot_decision_request_open(row) {
+                self.raise_pilot_decision_request(id)?;
+                wrote = true;
+            }
+            if wrote {
+                written.push(id.clone());
             }
         }
-        Ok(())
+        Ok(written)
+    }
+
+    /// One lightweight row per backlog task, with operator handoffs recorded
+    /// from those rows and any row a write made stale refreshed.
+    ///
+    /// A drain admission pass does this before its other task-store work, then
+    /// feeds the rows to the snapshot, so the pass reads each backlog bundle
+    /// once and a busy task-commit lock still stops the pass at this step.
+    /// Ids come from the index or from envelopes, not from bundle hydration.
+    pub(crate) fn load_backlog_handoff_rows(
+        &self,
+    ) -> Result<BTreeMap<String, Option<TaskRow>>, OrbitError> {
+        let order = backlog_ids_for_handoff(self)?;
+        let mut rows = BTreeMap::new();
+        for id in &order {
+            rows.insert(id.clone(), self.get_listed_task_row(id)?);
+        }
+        let written = self.record_pilot_handoffs_from_rows(&rows, &order)?;
+        for id in &written {
+            rows.insert(id.clone(), self.get_listed_task_row(id)?);
+        }
+        Ok(rows)
+    }
+
+    /// The explicit-ship sweep. A drain pass keeps the rows from
+    /// [`Self::load_backlog_handoff_rows`] instead of listing the backlog twice.
+    /// Discovery that builds an admission snapshot without those rows records
+    /// from the snapshot.
+    pub(crate) fn record_backlog_pilot_operator_handoffs(&self) -> Result<(), OrbitError> {
+        self.load_backlog_handoff_rows().map(|_| ())
     }
 
     /// Raise the one open decision request for `task_id`'s current pilot

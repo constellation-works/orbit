@@ -578,6 +578,14 @@ impl TaskArtifactStoreBackend for TaskV2Store {
         self.in_boundary(|| self.get_task_artifact(id, path))
     }
 
+    fn read_manifest_artifact(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<TaskArtifact, OrbitError> {
+        self.in_boundary(|| TaskV2Store::read_manifest_artifact(self, id, file))
+    }
+
     fn upsert_task_artifacts(
         &self,
         id: &str,

@@ -90,6 +90,35 @@ pub struct BaselineHoldRefresh {
     pub skipped: Option<String>,
 }
 
+/// Why `task` is withheld for a red base, from history the caller already
+/// read. A task that is not `backlog` has none. The verdict is the clock
+/// tick's or its refresh run's, never computed here.
+pub(crate) fn standing_baseline_hold_from_history(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+) -> Option<String> {
+    if task.status != TaskStatus::Backlog {
+        return None;
+    }
+    let standing = StandingHold::latest(history)?;
+    match standing.verdict {
+        Some(verdict) if verdict.lifted => None,
+        Some(verdict) => Some(verdict.reason),
+        None => Some(format!(
+            "required validation `{}` fails on `{}` at {}{}; the hold stands until the \
+             owner's clock checks a new base tip and the command passes there",
+            standing.hold.command,
+            if standing.hold.base_ref.is_empty() {
+                "the base"
+            } else {
+                standing.hold.base_ref.as_str()
+            },
+            standing.hold.base_sha,
+            standing.hold.failures_clause()
+        )),
+    }
+}
+
 impl OrbitRuntime {
     /// Why `task` is withheld from admission for a red base, or `None` when
     /// no hold stands. Reads only the task's history: the verdict is the
@@ -99,25 +128,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let history = self.get_task_history(&task.id)?;
-        let Some(standing) = StandingHold::latest(&history) else {
-            return Ok(None);
-        };
-        Ok(match standing.verdict {
-            Some(verdict) if verdict.lifted => None,
-            Some(verdict) => Some(verdict.reason),
-            None => Some(format!(
-                "required validation `{}` fails on `{}` at {}{}; the hold stands until the \
-                 owner's clock checks a new base tip and the command passes there",
-                standing.hold.command,
-                if standing.hold.base_ref.is_empty() {
-                    "the base"
-                } else {
-                    standing.hold.base_ref.as_str()
-                },
-                standing.hold.base_sha,
-                standing.hold.failures_clause()
-            )),
-        })
+        Ok(standing_baseline_hold_from_history(task, &history))
     }
 
     /// One clock tick's check of the standing baseline-red holds
