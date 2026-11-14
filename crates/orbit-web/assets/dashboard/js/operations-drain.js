@@ -155,6 +155,47 @@ function hostFleetFailure(row) {
 }
 // The Drain host select shared by All workspaces and an owner's concrete
 // board. One listener covers both: the select is removed when the scope resets.
+// Re-measure the actual row, including the current labels, when the dock is
+// resized or a fresh readiness response replaces its contents. Resetting first
+// lets every member return as soon as it fits again.
+let drainRowObserver;
+function fitDrainRow(row, stages) {
+  if (!row || !row.isConnected || row.clientWidth === 0) return;
+  for (const stage of stages) row.classList.remove(stage);
+  for (const stage of stages) {
+    if (row.scrollWidth <= row.clientWidth) break;
+    row.classList.add(stage);
+  }
+}
+function fitDrainHeader() {
+  const header = $("auto-drain-panel")?.querySelector("header");
+  if (!header) return;
+  const pill = $("auto-drain-phase");
+  const phase = $("auto-drain-phase-label")?.textContent || "";
+  if (pill) { pill.title = phase; pill.setAttribute("role", "img"); pill.setAttribute("aria-label", phase); }
+  const host = $("auto-drain-host");
+  const workspace = $("auto-drain-workspace");
+  const summary = [$("auto-drain-title")?.textContent,
+    workspace?.selectedOptions[0]?.textContent, host?.selectedOptions[0]?.textContent,
+    phase, $("auto-drain-when")?.textContent].filter(Boolean).join(" · ");
+  header.title = summary;
+  header.setAttribute("role", "group");
+  header.setAttribute("aria-label", summary);
+  fitDrainRow(header, ["drain-compact", "drain-hide-title", "drain-hide-time"]);
+}
+function observeDrainRows() {
+  drainRowObserver?.disconnect();
+  const header = $("auto-drain-panel")?.querySelector("header");
+  const stats = $("auto-drain-live");
+  drainRowObserver = new ResizeObserver(() => {
+    fitDrainHeader();
+    fitDrainRow(stats, ["drain-compact", "drain-hide-held", "drain-hide-admitted", "drain-hide-approved"]);
+  });
+  if (header) drainRowObserver.observe(header);
+  if (stats) drainRowObserver.observe(stats);
+  fitDrainHeader();
+  fitDrainRow(stats, ["drain-compact", "drain-hide-held", "drain-hide-admitted", "drain-hide-approved"]);
+}
 function paintDrainHostSelect(ordered, selected) {
   const phase = $("auto-drain-phase");
   if (!phase) return;
@@ -174,6 +215,7 @@ function paintDrainHostSelect(ordered, selected) {
     select.dataset.hosts = signature;
   }
   select.value = selected || "";
+  fitDrainHeader();
 }
 function onDrainHostChanged(value) {
   if (isAggregateView()) {
@@ -293,13 +335,21 @@ function autoDrainWindow(payload) {
     figure.dataset.stat = key;
     stats.appendChild(figure);
   };
+  stat("running", "running", running);
   if (capacity.admitted_workers != null) {
-    stat("running", "running", running);
     stat("admitted", "admitted", capacity.admitted_workers);
   }
   const approvals = autoDrainApprovals(payload.approvals);
   if (approvals) stat("approved", "approved", approvals.approved, approvals.held, approvals.title);
   if (stats.children.length === 0) return null;
+  const summaryText = `This window: ${Array.from(stats.children, figure => {
+    const value = figure.querySelector("dd")?.textContent;
+    const label = figure.querySelector("dt")?.textContent;
+    const detail = figure.querySelector(".drain-window-stat-detail")?.textContent;
+    return [value, label, detail].filter(Boolean).join(" ");
+  }).join(", ")}`;
+  stats.title = summaryText;
+  stats.setAttribute("aria-label", summaryText);
   if (!approvals || !approvals.reasons.length) return stats;
   const summary = el("div", { class: "drain-approval-summary" });
   approvals.reasons.forEach(([reason, count], index) => {
@@ -524,6 +574,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
     retargetDrainLinks(body, scope);
     renderAutoDrainStart(payload, reasons);
+    observeDrainRows();
     return;
   }
   body.append(...[
@@ -535,6 +586,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     autoDrainQueued(payload),
   ].filter(Boolean));
   retargetDrainLinks(body, scope);
+  observeDrainRows();
   if (!isAggregateView() || scope) renderAutoDrainStart(payload, reasons);
   else clearStartCard("auto-drain-quick-start");
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();

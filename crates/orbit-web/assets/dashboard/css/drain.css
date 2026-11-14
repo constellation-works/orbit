@@ -33,7 +33,15 @@
 #auto-drain-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; min-width: 0; }
 
 /* The status card's header: title, phase pill, then the window's deadline. */
-#dock-pane-drain #auto-drain-panel > header { justify-content: flex-start; align-items: center; }
+#dock-pane-drain #auto-drain-panel > header { justify-content: flex-start; align-items: center; flex-wrap: nowrap; min-width: 0; white-space: nowrap; }
+#auto-drain-panel > header > * { flex: 0 0 auto; }
+#auto-drain-panel > header .workspace-select { text-overflow: ellipsis; overflow: hidden; }
+#auto-drain-panel > header.drain-compact { gap: 6px; }
+#auto-drain-panel > header.drain-compact .workspace-select { width: 80px; min-width: 0; }
+#auto-drain-panel > header.drain-compact #auto-drain-phase-label,
+#auto-drain-panel > header.drain-hide-title .drain-title,
+#auto-drain-panel > header.drain-hide-time .drain-when { display: none; }
+#auto-drain-panel > header.drain-compact .drain-phase { padding: 0 7px; }
 .drain-when { margin-left: auto; color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; }
 .drain-when:empty { display: none; }
 
@@ -43,7 +51,13 @@
 #auto-drain-body .operations-readonly-note { margin: 0; }
 
 /* The live window: one row of figures, number then word. */
-.drain-window-stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin: 0; }
+.drain-window-stats { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 18px; margin: 0; min-width: 0; white-space: nowrap; min-height: 24px; }
+.drain-window-stats.drain-compact { gap: 8px; }
+.drain-window-stats.drain-compact .drain-window-stat { gap: 3px; }
+.drain-window-stats.drain-compact dd { font-size: 16px; }
+.drain-window-stats.drain-hide-held .drain-window-stat-detail,
+.drain-window-stats.drain-hide-admitted [data-stat="admitted"],
+.drain-window-stats.drain-hide-approved [data-stat="approved"] { display: none; }
 .drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 .drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
 .drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); }
