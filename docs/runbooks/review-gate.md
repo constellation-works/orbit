@@ -357,11 +357,34 @@ Repeated stops of the same review leave its preservation evidence unchanged.
 
 Final recovery may repair a rejected candidate once. If it appends a commit,
 the engine records the exact HEAD advance around that invocation and resumes
-at commit or an earlier requested step. Required validation and before-PR
+at commit or an earlier requested step. Required validation and the applicable
 review run again for the new candidate; the rejected attempt cannot approve
-it. The commit guard accepts only the recorded repair HEAD in the same
-worktree, descended from the pinned base. Any later unrecorded HEAD change
-still fails with `worktree_head_changed`.
+it. On the final-recovery route the commit guard accepts only the recorded
+repair HEAD in the same worktree, descended from the pinned base. Any later
+unrecorded HEAD change still fails with `worktree_head_changed`.
+
+There is a second, independent route that needs no final-recovery repair
+receipt. A before-landing reviewer may commit its own repair in the same
+worktree and settle with that commit as its final candidate. When the
+settlement the gate published for this task — the typed record in the task's
+history, or a legacy comment settlement in the gate's own format that the
+decoder recognizes — records that exact HEAD and the HEAD descends from
+the pinned base, the commit step admits it as the candidate instead of
+failing with `worktree_head_changed`. A clean tree is accepted as already
+committed; a
+resumed implementation that edits on top of that HEAD has its changes
+committed as one workflow-authored commit on top of it. The match is exact:
+an extra commit above the recorded final commit, a HEAD no settlement
+recorded, or a recorded HEAD that does not descend from the pin still fails
+closed. Legacy settlements that abbreviate the commit id only authorize the
+commit their hexadecimal prefix resolves to; a symbolic revision such as
+`HEAD` proves nothing. Settlements from a before-PR review never grant this
+permission, so a before-PR verdict still needs its own delivery route.
+
+Admission is not approval. Neither route accepts the candidate for landing:
+the admitted HEAD re-enters the pipeline at the commit step and still needs
+fresh required validation and a fresh review verdict for its tree, exactly
+like any other newly committed candidate.
 
 For file repairs made before review, final recovery's resume uses the host's
 guarded recovery commit path before rewinding delivery. The agent's Git metadata
