@@ -229,17 +229,20 @@ export function setDockRouteShown(shown) {
   $("tasks-main")?.classList.toggle("dock-route", Boolean(shown));
 }
 
-/// Level the active tab's first card with the first task block.
-/// The filter bar spans the full Tasks width above the list and the dock, so
-/// both start below it. `--tasks-dock-lead` on #tasks-dock is the room above
-/// #side-dock that takes, and tasks.css gives it to the fixed message area;
-/// the tab bar sits inside that room, above the line. It is measured from the
-/// dock's own top and the card's place inside #side-dock, neither of which
-/// the lead moves, so a repeat run settles on the same value. When the tab
-/// bar is taller than the bar's own room, the dock has no room to give, so
-/// `--tasks-list-lead` on #tasks-panel lowers the list instead; the list's
-/// own lead is taken back out of the measurement.
+/// Place the filter bar, then level the active tab's first card with the
+/// first task block. The bar heads the list column, or spans the list and
+/// dock columns where that takes fewer rows (`placeTaskFilterBar`); either
+/// way the measurement below is relative to the dock's own top.
+/// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that
+/// takes, and tasks.css gives it to the fixed message area; the tab bar sits
+/// inside that room, above the line. It is measured from the dock's own top
+/// and the card's place inside #side-dock, neither of which the lead moves,
+/// so a repeat run settles on the same value. When the tab bar is taller than
+/// the room the filter bar leaves above the list, the dock has no room to
+/// give, so `--tasks-list-lead` on #tasks-panel lowers the list instead; the
+/// list's own lead is taken back out of the measurement.
 export function alignTasksDock() {
+  placeTaskFilterBar();
   const dock = $("tasks-dock");
   const body = $("tasks-body");
   const side = $("side-dock");
@@ -263,6 +266,71 @@ export function alignTasksDock() {
   setLead(panel, "--tasks-list-lead", Math.max(0, -room));
 }
 
+// The filter bar spans the list and dock columns (`filter-spans` on
+// #tasks-main, tasks.css) only while the dock is beside the list and the
+// status chips would take more rows in the list column than across both
+// columns: the default chips wrapping at about 1024px while the space to
+// their right is empty. Where they fit the list column, the dock's tab bar
+// keeps its place level with them. The inputs are the chips' own widths and
+// the grid's column widths, none of which the placement changes, so the
+// decision is stable; a misjudged case wraps, it never overlaps.
+function placeTaskFilterBar() {
+  const main = $("tasks-main");
+  const filter = $("task-filter");
+  const bar = filter?.parentElement;
+  const list = main?.querySelector(":scope > .col-tasks");
+  const dock = $("tasks-dock");
+  const side = $("side-dock");
+  if (!main || !filter || !bar || !list || !dock) return;
+  let spans = false;
+  const beside = side && dock.contains(side) && dock.getClientRects().length && side.getClientRects().length
+    && !main.classList.contains("task-pane-open");
+  if (beside) {
+    const style = getComputedStyle(bar);
+    const inset = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const listRect = list.getBoundingClientRect();
+    const narrow = listRect.width - inset;
+    const wide = dock.getBoundingClientRect().right - listRect.left - inset;
+    const gap = parseFloat(getComputedStyle(filter).columnGap) || 0;
+    const widths = filterItemWidths(filter);
+    spans = widths.length > 0 && wrappedRows(widths, gap, wide) < wrappedRows(widths, gap, narrow);
+  }
+  main.classList.toggle("filter-spans", spans);
+}
+
+// The rendered widths of #task-filter's flex items: the chips inside the
+// chip groups (which are `display: contents`), More and the workspace filter.
+// Hidden items (quiet chips behind a closed More) take no room.
+function filterItemWidths(filter) {
+  const widths = [];
+  const visit = (node) => {
+    for (const child of node.children) {
+      if (getComputedStyle(child).display === "contents") visit(child);
+      else if (child.getClientRects().length) widths.push(child.getBoundingClientRect().width);
+    }
+  };
+  visit(filter);
+  return widths;
+}
+
+// How many rows a wrapping flex row of these widths takes in `room` pixels:
+// each row takes items while they fit, as flex-wrap lays them out. A fit
+// within a twentieth of a pixel counts as a wrap: sub-pixel widths make it a
+// coin toss, and a wrongly predicted wrap costs at most a spanning bar.
+function wrappedRows(widths, gap, room) {
+  let rows = 1;
+  let used = -gap;
+  for (const width of widths) {
+    if (used + gap + width > room - 0.05 && used > 0) {
+      rows += 1;
+      used = width;
+    } else {
+      used += gap + width;
+    }
+  }
+  return rows;
+}
+
 // How far below #side-dock's top the active tab's first shown card starts:
 // Auto-drain on Drain, Locks held on Locks held, the log on Log. The pane's
 // scroll is added back so a scrolled Drain pane measures the same.
@@ -273,13 +341,15 @@ function firstDockCardOffset(side) {
   return card.getBoundingClientRect().top + pane.scrollTop - side.getBoundingClientRect().top;
 }
 
-// Re-level whenever the dock itself changes size: the dock coming back after
-// a task closes, or the tab bar changing height. The filter bar spans the
-// full width above both, so its wrapping and the pager coming and going move
-// the list and the dock together and need no re-level; the bar is still
-// watched so a future asymmetric change re-levels. The create dialog is in
-// the top layer and moves nothing. A tab switch re-levels from applyDockMode.
-// Passing notices sit in the message area and move nothing.
+// Re-place the filter bar and re-level whenever something above the first
+// task block, or the dock itself, changes size: the view's width, the status
+// chips wrapping, the dock coming back after a task closes, the tab bar
+// changing height. The chip set changing (More opening, a count or the
+// workspace filter coming and going) can change the bar's placement without
+// resizing anything watched, so the chips are watched for that too. The
+// create dialog is in the top layer and moves nothing. A tab switch re-levels
+// from applyDockMode. Passing notices sit in the message area and move
+// nothing.
 function wireDockAlignment() {
   const dock = $("tasks-dock");
   const panel = $("tasks-panel");
@@ -294,8 +364,15 @@ function wireDockAlignment() {
   resize.observe(dock);
   const head = dock.querySelector("#side-dock > .dock-head");
   if (head) resize.observe(head);
-  const bar = document.querySelector("main.tasks-layout > .controls");
-  if (bar) for (const node of bar.children) resize.observe(node);
+  const main = $("tasks-main");
+  if (main) resize.observe(main);
+  const filter = $("task-filter");
+  if (filter) {
+    resize.observe(filter);
+    new MutationObserver(queue).observe(filter, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "hidden"],
+    });
+  }
   for (const node of panel.children) resize.observe(node);
   for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
   queue();
