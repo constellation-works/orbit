@@ -62,6 +62,7 @@ class CpuUtilisationTests(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
+            timeout=120,
         )
 
     def test_counter_delta_reports_busy_idle_and_iowait(self):
