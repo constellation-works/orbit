@@ -124,7 +124,12 @@ impl OrbitRuntime {
     /// those chunks; only tasks without that coverage (not yet indexed, or
     /// indexed before it was recorded) still go through the bundle matcher,
     /// so a fully covered store performs no bundle-document reads and one
-    /// index freshness pass for the whole search. When the status
+    /// index freshness pass for the whole search. Coverage is a freshness
+    /// claim as well as a field-shape claim: every task write that can
+    /// change searchable text — ordinary updates and committed claim
+    /// mutations alike (see `mutate_execution_claim_outcome`) — replaces
+    /// the task's chunks from its settled row before returning, so a
+    /// covered task's chunks hold its current text. When the status
     /// selection cannot be answered from the generated index (or there is
     /// no lexical index), the bundle matcher supplements every task as
     /// before. Neither source opens artifact payloads.
