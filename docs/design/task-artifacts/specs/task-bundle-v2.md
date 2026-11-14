@@ -317,6 +317,12 @@ once at refresh, so warm scans traverse one row vector without rebuilding
 lookup maps or formatting unchanged proof stamps.
 Registries admitted read-only retain their direct reads, including the
 existing immutable-main-file fallback when live WAL observation is unavailable.
+Change-stamp reads for the dashboard stream use the same version gate on
+their own query-only connection: one partition's stamps are kept and handed
+back until a commit on another connection changes `data_version`, which is
+sampled before the index load. A failed sample or load leaves the previous
+snapshot in place. Read-only registries keep reading `task_bundle_index`
+directly.
 
 Within a process, a successful comparison of a parsed envelope with an
 immutable index row is also reused while that exact row and the envelope's

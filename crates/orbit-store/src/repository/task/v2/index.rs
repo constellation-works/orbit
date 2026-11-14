@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::envelope_cache;
@@ -116,7 +117,7 @@ impl TaskV2Store {
 
     pub(crate) fn task_change_stamps(
         &self,
-    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+    ) -> Result<Arc<Vec<crate::contracts::TaskChangeStamp>>, OrbitError> {
         self.registry.task_change_stamps(&self.workspace_id)
     }
 

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::policy::PolicyDef;
@@ -329,14 +330,16 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
     }
 
-    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+    fn task_change_stamps(
+        &self,
+    ) -> Result<Arc<Vec<crate::contracts::TaskChangeStamp>>, OrbitError> {
         TaskV2Store::task_change_stamps(self)
     }
 
     fn task_metadata_scan_stamps(
         &self,
     ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
-        TaskV2Store::task_change_stamps(self)
+        Ok(TaskV2Store::task_change_stamps(self)?.as_ref().clone())
     }
 
     fn task_ids_with_tag(
