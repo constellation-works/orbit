@@ -60,6 +60,50 @@ def _libproc_handle():
         _libproc = lib
     return _libproc
 
+def _darwin_short_info(pid):
+    # PROC_PIDT_SHORTBSDINFO stays readable for other users' and protected
+    # processes whose full BSD info is refused: it proves parent and owner.
+    # A dict on success, None when the process is gone, False when refused.
+    lib = _libproc_handle()
+    if lib is None:
+        return False
+    info = ctypes.create_string_buffer(64)
+    ctypes.set_errno(0)
+    if lib.proc_pidinfo(pid, 13, 0, info, 64) != 64:
+        return None if ctypes.get_errno() == errno.ESRCH else False
+    found_pid, ppid, pgrp, status = struct.unpack_from("=IIII", info, 0)
+    uid, = struct.unpack_from("=I", info, 36)
+    if found_pid != pid:
+        return False
+    return {"pid": pid, "ppid": ppid, "pgrp": pgrp, "uid": uid,
+            "state": "Z" if status == 5 else "R"}
+
+def darwin_is_descendant(pid, ancestor=None):
+    # True, False only when the short-info parent chain provably ends
+    # without ancestor, or None when a link in that chain is refused.
+    if ancestor is None:
+        ancestor = os.getpid()
+    if pid == ancestor:
+        return True
+    seen = set()
+    current = pid
+    for _ in range(1024):
+        if current == ancestor:
+            return True
+        if current <= 1 or current in seen:
+            return False
+        seen.add(current)
+        info = _darwin_short_info(current)
+        if info is None:
+            return False
+        if info is False:
+            return None
+        parent = info["ppid"]
+        if parent == current:
+            return False
+        current = parent
+    return None
+
 def darwin_cmdline(pid):
     try:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -126,7 +170,22 @@ def darwin_snapshot(with_cmdline=True):
     found = {}
     for pid in pids[:got // 4]:
         if pid > 0:
+            denied_before = len(DARWIN_DENIED)
             info = darwin_identity(pid, with_cmdline)
+            if len(DARWIN_DENIED) > denied_before and info is None:
+                # Full BSD info was refused. Another user's process that
+                # provably does not descend from here cannot be a worker
+                # of this command, so its refusal is irrelevant. A
+                # descendant, an indeterminate chain, or this user's own
+                # process (which may be a detached worker under an owned
+                # root, findable only by its unreadable identity) keeps
+                # the denial: unknown stays unknown.
+                short = _darwin_short_info(pid)
+                if (darwin_is_descendant(pid) is False
+                        and isinstance(short, dict)
+                        and short["uid"] != os.geteuid()):
+                    del DARWIN_DENIED[denied_before:]
+                    continue
             if info is not None:
                 found[pid] = info
     return found
