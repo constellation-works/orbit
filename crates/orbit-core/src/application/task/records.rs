@@ -4,7 +4,8 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_search::LexicalIndex;
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
-    TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
+    TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskRow,
+    TaskStoreBackend,
 };
 use orbit_types::task::Task;
 
@@ -119,6 +120,17 @@ impl TaskRecordService<'_> {
         id: &str,
         params: TaskRecordUpdateParams,
     ) -> Result<Task, OrbitError> {
+        Ok(self.update_returning_row(id, params)?.task)
+    }
+
+    /// [`Self::update`], keeping the post-write row a document or history
+    /// commit already holds so the response is not another bundle read.
+    /// Artifact-only and no-op writes still read the row once.
+    pub(crate) fn update_returning_row(
+        &self,
+        id: &str,
+        params: TaskRecordUpdateParams,
+    ) -> Result<TaskRow, OrbitError> {
         #[cfg(test)]
         if FAIL_NEXT_UPDATE.with(|fail| fail.replace(false)) {
             return Err(OrbitError::Execution(
@@ -155,8 +167,11 @@ impl TaskRecordService<'_> {
         }
 
         let attribution_in_history = params.attribution_joins_history_commit();
+        // History runs after the document commit and its bundle includes both,
+        // so the later row replaces the earlier one.
+        let mut written = None;
         if params.has_document_changes() && !attribution_in_history {
-            self.document.update_task_document(
+            written = Some(self.document.update_task_document(
                 id,
                 TaskDocumentUpdateParams {
                     actor: params.actor.clone(),
@@ -189,42 +204,47 @@ impl TaskRecordService<'_> {
                     origin: params.origin,
                     context_creation: params.context_creation.clone(),
                 },
-            )?;
+            )?);
         }
 
         if params.has_history_changes() {
-            self.history.update_task_history(
-                id,
-                TaskHistoryUpdateParams {
-                    actor: params.actor.clone(),
-                    status: params.status,
-                    status_event: params.status_event.clone(),
-                    status_note: params.status_note.clone(),
-                    status_decision: params.status_decision.clone(),
-                    append_history: params.append_history.clone(),
-                    append_comments: params.append_comments.clone(),
-                    expected_status: params.expected_status.clone(),
-                    operator_comment: params.operator_comment,
-                    planned_by: params.planned_by.clone().filter(|_| attribution_in_history),
-                    implemented_by: params
-                        .implemented_by
-                        .clone()
-                        .filter(|_| attribution_in_history),
-                },
-            )?;
+            written = Some(
+                self.history.update_task_history(
+                    id,
+                    TaskHistoryUpdateParams {
+                        actor: params.actor.clone(),
+                        status: params.status,
+                        status_event: params.status_event.clone(),
+                        status_note: params.status_note.clone(),
+                        status_decision: params.status_decision.clone(),
+                        append_history: params.append_history.clone(),
+                        append_comments: params.append_comments.clone(),
+                        expected_status: params.expected_status.clone(),
+                        operator_comment: params.operator_comment,
+                        planned_by: params.planned_by.clone().filter(|_| attribution_in_history),
+                        implemented_by: params
+                            .implemented_by
+                            .clone()
+                            .filter(|_| attribution_in_history),
+                    },
+                )?,
+            );
         }
 
-        let task = self
-            .store
-            .get_task(id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?;
+        let row = match written {
+            Some(row) => row,
+            None => self
+                .store
+                .get_task_row(id, false)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?,
+        };
         if params.has_document_changes()
             || params.has_history_changes()
             || params.has_artifact_changes()
         {
-            self.index_task(&task);
+            self.index_task(&row.task);
         }
-        Ok(task)
+        Ok(row)
     }
 
     pub(crate) fn delete(&self, id: &str) -> Result<bool, OrbitError> {

@@ -176,7 +176,7 @@ pub fn task_show_json(
         .iter()
         .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
     {
-        let open = runtime.open_decisions_json(&row.task.id)?;
+        let open = runtime.open_decisions_json_in(&row.task, &row.history, &row.comments)?;
         if open.as_array().is_some_and(|items| !items.is_empty()) {
             object.insert("open_decisions".to_string(), open);
         }

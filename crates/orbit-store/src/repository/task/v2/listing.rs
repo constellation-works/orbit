@@ -467,7 +467,7 @@ impl TaskV2Store {
         Ok(envelopes)
     }
 
-    fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {
+    pub(crate) fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {
         let comments = std::mem::take(&mut bundle.comments)
             .into_iter()
             .map(super::sidecars::task_comment_from_row)

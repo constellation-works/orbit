@@ -223,14 +223,19 @@ fn settled_claim_phases_keep_unscoped_task_commits() {
 }
 
 fn update_unscoped_document(owner: &Coordinated, task_id: &str) -> Result<(), OrbitError> {
-    owner.backends.task.document.update_task_document(
-        task_id,
-        TaskDocumentUpdateParams {
-            actor: "test".into(),
-            title: Some("unscoped update probe".into()),
-            ..Default::default()
-        },
-    )
+    owner
+        .backends
+        .task
+        .document
+        .update_task_document(
+            task_id,
+            TaskDocumentUpdateParams {
+                actor: "test".into(),
+                title: Some("unscoped update probe".into()),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
 }
 
 fn assert_unscoped_update_names_recovery(

@@ -4,6 +4,7 @@ use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskComment, TaskEnvelopeV2, TaskHistoryEntry,
     TaskOrigin, TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
 };
+use serde::{Deserialize, Serialize};
 
 use super::TaskIndexFilter;
 
@@ -319,7 +320,7 @@ pub struct TaskChangeStamp {
 }
 
 /// One fully validated bundle, retaining sidecars from that same read.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRow {
     pub task: Task,
     pub comments: Vec<TaskComment>,

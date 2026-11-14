@@ -1,3 +1,4 @@
+use crate::contracts::TaskRow;
 use crate::contracts::params::*;
 use orbit_common::OrbitError;
 use orbit_types::task::{
@@ -9,7 +10,7 @@ pub trait TaskDocumentStoreBackend: Send + Sync {
         &self,
         id: &str,
         params: TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError>;
+    ) -> Result<TaskRow, OrbitError>;
     /// Rewrite the task's stored pre-family tool names (`required_tools`,
     /// `granted_tools`) to family actions and record the rewrite in its
     /// history. `Ok(false)` when it holds none; no other field changes.
@@ -50,7 +51,7 @@ pub trait TaskHistoryStoreBackend: Send + Sync {
         &self,
         id: &str,
         params: TaskHistoryUpdateParams,
-    ) -> Result<(), OrbitError>;
+    ) -> Result<TaskRow, OrbitError>;
     /// Refuse a work-starting history write whose effective footprint
     /// overlaps a protecting execution claim, before a coordinated caller
     /// persists any companion document or artifact edits. The guard inside

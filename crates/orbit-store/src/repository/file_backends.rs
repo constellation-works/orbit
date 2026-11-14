@@ -507,7 +507,7 @@ impl TaskDocumentStoreBackend for TaskV2Store {
         &self,
         id: &str,
         params: TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         self.update_task_document(id, &params)
     }
 
@@ -547,7 +547,7 @@ impl TaskHistoryStoreBackend for TaskV2Store {
         &self,
         id: &str,
         params: TaskHistoryUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         self.update_task_history(id, &params)
     }
 

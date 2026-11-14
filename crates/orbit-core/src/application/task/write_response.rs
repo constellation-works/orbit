@@ -183,11 +183,29 @@ pub fn task_write_response_json(
     policy: &TaskWriteResponsePolicy,
     metadata: &TaskWriteMetadata,
 ) -> Result<Value, OrbitError> {
+    task_write_response_from_row(runtime, task, None, policy, metadata)
+}
+
+/// [`task_write_response_json`] using `row` for a full record when the write
+/// already holds that bundle. `None` reads the sidecars, as before.
+pub(crate) fn task_write_response_from_row(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    row: Option<&TaskRow>,
+    policy: &TaskWriteResponsePolicy,
+    metadata: &TaskWriteMetadata,
+) -> Result<Value, OrbitError> {
     let mut response = match policy {
         TaskWriteResponsePolicy::FullRecord | TaskWriteResponsePolicy::DashboardFullRecord => {
             let status_by_id = runtime.dependency_status_index([task])?;
-            let row = runtime.task_row_with_sidecars(task.clone())?;
-            let object = task_record_json(runtime, &row, &status_by_id)?;
+            let loaded;
+            let row = if let Some(row) = row {
+                row
+            } else {
+                loaded = runtime.task_row_with_sidecars(task.clone())?;
+                &loaded
+            };
+            let object = task_record_json(runtime, row, &status_by_id)?;
             if *policy == TaskWriteResponsePolicy::DashboardFullRecord {
                 with_dashboard_extras(runtime, &row.task, object)?
             } else {
@@ -219,9 +237,10 @@ pub fn screened_task_write_response_json(
     written: &ScreenedTaskWrite,
     policy: &TaskWriteResponsePolicy,
 ) -> Result<Value, OrbitError> {
-    task_write_response_json(
+    task_write_response_from_row(
         runtime,
         &written.task,
+        written.row.as_ref(),
         policy,
         &TaskWriteMetadata::from_screened(written),
     )
