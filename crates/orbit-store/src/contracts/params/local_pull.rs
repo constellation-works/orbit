@@ -81,6 +81,17 @@ pub struct LocalPullAdmission {
     /// once the owner accepts it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement_refusal: Option<SettlementRefusal>,
+    /// Set once this settled leaf's run is terminal and its worktree has no
+    /// reclaimable build output, so a later drain pass does not read the run
+    /// again. Absent on records written before the marker existed, which is
+    /// the same as not set: the next pass still checks.
+    #[serde(default, skip_serializing_if = "reclaim_marker_unset")]
+    pub build_output_reclaim_complete: bool,
+}
+
+/// `skip_serializing_if` for [`LocalPullAdmission::build_output_reclaim_complete`].
+fn reclaim_marker_unset(complete: &bool) -> bool {
+    !*complete
 }
 
 /// The settled claims that make up a pull drain's failure-breaker streak

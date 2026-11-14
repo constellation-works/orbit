@@ -82,6 +82,32 @@ pub trait JobRunStoreBackend: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Settled claims that may still have rebuildable build output, as leaf
+    /// run ids in admission order.
+    ///
+    /// Idle polls and refused requests are not decoded. A settled leaf whose
+    /// run was already found terminal with nothing left to reclaim is omitted;
+    /// [`Self::note_settled_leaf_build_output_clear`] records that, and the
+    /// omission survives a restart. A leaf settled while its run is still
+    /// going stays in the result until that note is written. Read without
+    /// creating the feature schema.
+    fn settled_leaf_run_ids_pending_build_reclaim(&self) -> Result<Vec<String>, OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
+    }
+
+    /// Remember that `leaf_run_id`'s settled claim is terminal and has no
+    /// reclaimable build output, so a later pass does not read the run again.
+    ///
+    /// No-op when that admission is missing or no longer settled. The phase
+    /// and the settlement are left as they are.
+    fn note_settled_leaf_build_output_clear(&self, _leaf_run_id: &str) -> Result<(), OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
+    }
+
     /// How much leaf capacity both admission paths are already using
     /// [ORB-12617].
     ///

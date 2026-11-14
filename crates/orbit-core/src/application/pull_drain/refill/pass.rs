@@ -225,6 +225,21 @@ pub(crate) fn pull_refill(
         && streak.is_some();
     // Whether `refill` ran, and so already reconciled this pass.
     let mut refilled = false;
+    // Leaves already settled before this pass reconciles. Reclaim marks only
+    // these when they have nothing to give back: a leaf settled in this pass
+    // can still grow a checkout afterwards, and the next pass reclaims it.
+    let settled_before_pass = runtime
+        .stores()
+        .jobs()
+        .settled_leaf_run_ids_pending_build_reclaim()
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.core.pull",
+                %error,
+                "could not list settled leaves before reconciliation; this pass will not record them clear"
+            );
+            Vec::new()
+        });
     if admitting && let Err(failure) = runtime.recover_pull_auth_exclusions(&run_id) {
         error.get_or_insert(failure.to_string());
         admitting = false;
@@ -405,7 +420,7 @@ pub(crate) fn pull_refill(
     // Settled leaves give back their build output here, not on an external
     // GC schedule: a follower's disk would otherwise grow by a leaf's
     // `target/` per claim [ORB-13920].
-    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output();
+    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output(&settled_before_pass);
     // Count after this pass's settlements, so a breaker that opened during it
     // is reported now rather than on the next poll.
     match drain.consecutive_failed_settlements(&destination, &run_id) {

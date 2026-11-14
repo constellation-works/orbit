@@ -43,10 +43,21 @@ pub(super) fn cancelling_pass(
             .iter()
             .any(|(to, id)| *to == record.destination && *id == record.request.request_id)
     };
+    // Same bound as a live pass: only leaves settled before this cancel
+    // releases work may be marked clear. A claim this pass settles stays
+    // unmarked until the next one.
+    let settled_before_pass = runtime
+        .stores()
+        .jobs()
+        .settled_leaf_run_ids_pending_build_reclaim()
+        .unwrap_or_else(|failure| {
+            error.get_or_insert(failure.to_string());
+            Vec::new()
+        });
     if let Err(failure) = drain.release_pending(&carries, &cause) {
         error.get_or_insert(failure.to_string());
     }
-    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output();
+    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output(&settled_before_pass);
     let unsettled = match runtime.pull_drain_admissions(run_id) {
         Ok(records) => Some(records.len()),
         Err(failure) => {
