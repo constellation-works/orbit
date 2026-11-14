@@ -116,9 +116,19 @@ const SOURCE_LABELS = { default: 'Default', 'built-in': 'Default', unset: 'Unset
 export function settingsLayerLabel(layer) {
   return SOURCE_LABELS[layer] || (layer ? `${layer[0].toUpperCase()}${layer.slice(1)}` : '');
 }
+/// Layers that count as set for the source dot: a value written in one of
+/// these files (or the environment) gets the accent, `built-in` alone does not.
+const SETTING_LAYERS = new Set(['workspace', 'global', 'environment']);
+/// Whether a (possibly composite, `+`-joined) source names a layer that sets
+/// the value — e.g. `global+workspace` from a crew defined in both files.
+export function settingsSourceIsSet(layer) {
+  return String(layer ?? '').split('+').some((part) => SETTING_LAYERS.has(part));
+}
 /// Where a value comes from, as text; the dot marks a value set in a layer.
+/// A composite source (`global+workspace`) names each layer it came from.
 export function settingsSource(layer, { set = false, title = null } = {}) {
-  return el('div', { class: `settings-src${set ? ' set' : ''}`, text: settingsLayerLabel(layer), title });
+  const text = String(layer ?? '').split('+').map((part) => settingsLayerLabel(part)).join(' + ');
+  return el('div', { class: `settings-src${set ? ' set' : ''}`, text, title });
 }
 export function settingsRowSource(row) {
   const set = row.state === 'set';
