@@ -96,6 +96,9 @@ sccache_asset() {
 }
 
 cmd_status() {
+  if [[ $# -ne 0 ]]; then
+    die "unknown status flag: $1"
+  fi
   local dir wrapper rustc_wrapper cache_bin cache_size server_uds
   dir="${SCCACHE_DIR:-$(compiler_dir)}"
   cache_size="${SCCACHE_CACHE_SIZE:-$DEFAULT_SIZE}"

@@ -65,7 +65,7 @@ def summarise_run(run):
     check = jobs.get(CHECK, {})
     conclusion = check.get("conclusion")
     duration = job_duration(check) if check else None
-    executed = conclusion not in (None, "skipped", "cancelled") and duration is not None and duration > 0
+    executed = conclusion not in (None, "skipped", "cancelled") and duration is not None
     last = None
     last_completed = None
     for name in AWAITED:

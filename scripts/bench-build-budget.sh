@@ -312,7 +312,7 @@ cleanup() {
       fi
     done
   fi
-  return "$status"
+  exit "$status"
 }
 trap cleanup EXIT
 

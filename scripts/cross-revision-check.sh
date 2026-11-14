@@ -295,7 +295,7 @@ verify_markers() {
     fi
   fi
 
-  if [[ -n "$other" ]] && grep -Fq -- "$other" "$log"; then
+  if [[ -n "$own" && -n "$other" ]] && grep -Fq -- "$other" "$log"; then
     printf 'cross-revision-check: %s log contains the sibling revision marker: %s\n' "$arm" "$other" >&2
     printf 'contaminated'
     return 1

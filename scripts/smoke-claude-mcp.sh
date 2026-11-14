@@ -17,7 +17,7 @@ if [[ ! -f .mcp.json ]]; then
   exit 2
 fi
 
-for bin in claude orbit sqlite3 jq python3; do
+for bin in claude orbit sqlite3 python3; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "FAIL: required binary '$bin' not on PATH" >&2
     exit 2

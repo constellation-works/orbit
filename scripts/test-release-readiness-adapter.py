@@ -161,7 +161,16 @@ class NativeReadinessRegression(unittest.TestCase):
                        "outcome": "PASS", "assertions": scenario.get("assertions", [])}
                 if scenario.get("capability") == "macos":
                     row["native_evidence"] = cls.native
+                if scenario.get("capability") == "browser":
+                    row["retained_evidence"] = {"directory": "/retained", "files": [{"path": "proof.json", "sha256": "0" * 64}]}
+                if scenario.get("command"):
+                    row["command"] = scenario["command"]
                 report["results"].append(row)
+                for case in scenario.get("retired_cases") or []:
+                    if isinstance(case, dict) and case.get("command"):
+                        report["results"].append({
+                            "scenario": scenario["id"], "candidate_id": CANDIDATE,
+                            "outcome": "PASS", "assertions": [], "command": case["command"]})
         artifacts = {"qa-full-sweep-report.json": {"json": report}, "proof.json": {"json": {}}}
         artifacts["forecast-history-qa.json"] = {"json": {
             "candidate_id": CANDIDATE, "source_revision": REVISION,
@@ -223,6 +232,79 @@ class NativeReadinessRegression(unittest.TestCase):
             with self.subTest(name=name):
                 verdict = self.verdict(native)
                 self.assertEqual(verdict["status"], "unavailable", verdict)
+
+
+    def test_browser_and_retired_parity_with_producer(self):
+        # Both probes must fail in the producer (scenario_decision) and in
+        # this adapter on the same shapes, not only in one gate.
+        harness = runpy.run_path(str(ROOT / "scripts/test-qa-full-sweep.py"))
+        inventory = {"scenarios": [
+            {"id": "browser-x", "required": True, "capability": "browser",
+             "assertions": ["a"]},
+            {"id": "retired-y", "required": True, "capability": "local",
+             "assertions": ["b"],
+             "retired_cases": [{"retired": "old::case", "command": ["cargo", "test", "x"]}]},
+        ], "required_capability_gaps": {}}
+        results = [
+            {"scenario": "browser-x", "outcome": "PASS", "candidate_id": CANDIDATE,
+             "assertions": ["a"]},
+            {"scenario": "retired-y", "outcome": "PASS", "candidate_id": CANDIDATE,
+             "assertions": ["b"]},
+        ]
+        import copy as _copy
+        passed, failures = harness["scenario_decision"](
+            _copy.deepcopy(inventory), _copy.deepcopy(results), CANDIDATE)
+        self.assertFalse(passed, failures)
+        self.assertTrue(any("retained" in row.get("retained_evidence_error", "") or
+                            row.get("outcome") == "FAIL" for row in results) or failures, failures)
+
+        # Adapter verdict on the same inventory/report shapes.
+        inputs = Path(tempfile.mkdtemp(dir=ROOT / ".orbit/tmp", prefix="readiness-parity-"))
+        self.addCleanup(shutil.rmtree, inputs, True)
+        inventory_bytes = json.dumps(inventory).encode()
+        (inputs / "qa-full-sweep-inventory.json").write_bytes(inventory_bytes)
+        report = {
+            "schema_version": 2, "candidate": {"id": CANDIDATE, "source_revision": REVISION},
+            "source_state": {"status": []}, "environment": {"os": "Linux"}, "decision": "PASS",
+            "inventory_sha256": hashlib.sha256(inventory_bytes).hexdigest(),
+            "results": _copy.deepcopy(results),
+        }
+        # Producer mutates browser rows to FAIL; restore PASS shapes for adapter.
+        for row in report["results"]:
+            row["outcome"] = "PASS"
+        request = {"contract": "release-readiness/v1", "form": "qa-full-sweep",
+                   "trusted": {"source_revision": REVISION, "task_id": "fixture"},
+                   "tasks": {}, "evidence": {"artifacts": {
+                       "qa-full-sweep-report.json": {"json": report},
+                       "proof.json": {"json": {}},
+                       "forecast-history-qa.json": {"json": {
+                           "candidate_id": CANDIDATE, "source_revision": REVISION,
+                           "scenarios": [{"id": name, "outcome": "PASS", "evidence": ["proof.json"]}
+                                         for name in ("legacy-history", "forecast-contract",
+                                                      "rendered-behavior", "historical-evidence")]}},
+                   }}}
+        result = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
+            input=json.dumps(request), text=True, capture_output=True, timeout=30,
+            cwd=inputs, env={**os.environ, "ORBIT_SCRIPT_IN": str(inputs)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        verdict = json.loads(result.stdout)
+        self.assertEqual(verdict["status"], "unavailable", verdict)
+        self.assertIn(verdict["reasons"][0]["code"],
+                      ("retained-evidence-missing", "retired-case-not-executed"), verdict)
+
+        # Fixing only the browser shape still fails on the retired shape.
+        for row in report["results"]:
+            if row["scenario"] == "browser-x":
+                row["retained_evidence"] = {"directory": "/retained", "files": []}
+        request["evidence"]["artifacts"]["qa-full-sweep-report.json"]["json"] = report
+        result = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
+            input=json.dumps(request), text=True, capture_output=True, timeout=30,
+            cwd=inputs, env={**os.environ, "ORBIT_SCRIPT_IN": str(inputs)})
+        verdict = json.loads(result.stdout)
+        self.assertEqual(verdict["status"], "unavailable", verdict)
+        self.assertEqual(verdict["reasons"][0]["code"], "retired-case-not-executed", verdict)
 
 
 class PrepReadinessRegression(unittest.TestCase):

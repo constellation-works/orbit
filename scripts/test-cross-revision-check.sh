@@ -260,6 +260,14 @@ assert_eq "$status" "1" "a sibling marker in an arm's log must fail the run"
 assert_contains "$out" "contains the sibling revision marker" "the helper should name the contamination"
 assert_contains "$out" "provenance=contaminated" "the report should mark the arm contaminated"
 
+# With only one marker given, sibling contamination does not apply (usage:
+# it applies when both markers are given), so the leaking baseline arm passes.
+work="$TMP/work-single-marker"
+out="$TMP/single-marker.out"
+status="$(run_helper "$out" --workdir "$work" \
+  --candidate-marker MARKER_CANDIDATE -- ./leak.sh)"
+assert_eq "$status" "0" "a single marker must not trigger sibling contamination"
+
 # --- 5. Read-only Git metadata and an unmodified source checkout -------------
 
 before="$TMP/snapshot-before"

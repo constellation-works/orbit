@@ -46,7 +46,7 @@ if [[ "${1:-}" == "--check" ]]; then
       drifted=1
     fi
   done
-  for name in "${target_skill_dirs[@]}"; do
+  for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
     is_canonical=0
     for canonical_name in "${skill_dirs[@]}"; do
       if [[ "$name" == "$canonical_name" ]]; then
@@ -72,7 +72,7 @@ if [[ "$#" -ne 0 ]]; then
 fi
 
 mkdir -p "$target_root"
-for name in "${target_skill_dirs[@]}"; do
+for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
   is_canonical=0
   for canonical_name in "${skill_dirs[@]}"; do
     if [[ "$name" == "$canonical_name" ]]; then
