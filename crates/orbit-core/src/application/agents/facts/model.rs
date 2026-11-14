@@ -108,8 +108,27 @@ pub(in crate::application::agents) struct Runner {
     /// The reasoning effort a pulled attempt's follower reported on its claim
     /// settlement, in the shared encoding (`Some(None)` is the provider
     /// default); `None` when it reported none. Used only when the owner holds
-    /// no invocation evidence of its own for the attempt's run.
+    /// no invocation evidence of its own for the attempt's run. Serialized in
+    /// three states: absent is `None`, `null` is `Some(None)`, a name is
+    /// `Some(Some(name))`; a derived `Option<Option<_>>` writes both `None`
+    /// and `Some(None)` as `null` and the stored-facts cache would lose the
+    /// provider default on reload [ORB-24640].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reported_effort_three_state"
+    )]
     pub(in crate::application::agents) reported_effort: Option<Option<String>>,
+}
+
+/// Deserialize a present reported effort, `null` included, as `Some`; an
+/// absent one stays `None` through `#[serde(default)]`. The same three-state
+/// contract as the claim settlement's reported effort.
+fn reported_effort_three_state<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// One implementation attempt: a run span from task history, and the job
