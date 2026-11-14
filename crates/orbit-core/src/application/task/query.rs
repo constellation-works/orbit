@@ -683,6 +683,51 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::Store("task read section did not run its operation".into()))
     }
 
+    /// Run `op` while holding this task's write lock, returning its value.
+    ///
+    /// The store lock takes `&mut dyn FnMut() -> Result<(), OrbitError>` so
+    /// it stays object-safe; this wrapper adapts a value-returning `FnOnce`
+    /// to it, so callers need no captured `Option` plumbing or unreachable
+    /// "did not run" branch of their own. `op` consumes its inputs, so
+    /// values used only inside the lock are moved rather than cloned.
+    pub(crate) fn with_task_write_locked<T>(
+        &self,
+        id: &str,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        self.with_task_locked_via(id, run_under_task_write_lock, op)
+    }
+
+    /// [`Self::with_task_write_locked`] under the comment write lock, for
+    /// an operator's comment-only update admitted under an execution claim.
+    pub(crate) fn with_task_comment_write_locked<T>(
+        &self,
+        id: &str,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        self.with_task_locked_via(id, run_under_task_comment_write_lock, op)
+    }
+
+    /// Run `op` under the task lock `lock` selects, returning its value.
+    fn with_task_locked_via<T>(
+        &self,
+        id: &str,
+        lock: TaskLockFn,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let mut op = Some(op);
+        let mut output = None;
+        lock(self.stores().tasks(), id, &mut || {
+            if let Some(op) = op.take() {
+                output = Some(op()?);
+            }
+            Ok(())
+        })?;
+        output.ok_or_else(|| {
+            OrbitError::Execution("task write lock did not run its operation".into())
+        })
+    }
+
     pub fn search_tasks_filtered(
         &self,
         query: &str,
@@ -698,6 +743,28 @@ impl OrbitRuntime {
         }
         self.stores().tasks().search_tasks_filtered(query, tags)
     }
+}
+
+type TaskLockFn = fn(
+    &dyn orbit_store::TaskStoreBackend,
+    &str,
+    &mut dyn FnMut() -> Result<(), OrbitError>,
+) -> Result<(), OrbitError>;
+
+fn run_under_task_write_lock(
+    tasks: &dyn orbit_store::TaskStoreBackend,
+    id: &str,
+    op: &mut dyn FnMut() -> Result<(), OrbitError>,
+) -> Result<(), OrbitError> {
+    tasks.with_task_write_lock(id, op)
+}
+
+fn run_under_task_comment_write_lock(
+    tasks: &dyn orbit_store::TaskStoreBackend,
+    id: &str,
+    op: &mut dyn FnMut() -> Result<(), OrbitError>,
+) -> Result<(), OrbitError> {
+    tasks.with_task_comment_write_lock(id, op)
 }
 
 /// Whether `error` is an older owner's refusal of an unavailable dependency

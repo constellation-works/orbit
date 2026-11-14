@@ -145,14 +145,12 @@ impl OrbitRuntime {
         id: &str,
     ) -> Result<(Task, ContextFileRestoration), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let mut outcome: Option<(Task, ContextFileRestoration)> = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             let history = self.get_task_history(id)?;
             let restoration = self.compute_context_file_restore(&task, &history);
             if restoration.restored.is_empty() {
-                outcome = Some((task, restoration));
-                return Ok(());
+                return Ok((task, restoration));
             }
 
             let mut context_files = task.context_files.clone();
@@ -169,20 +167,13 @@ impl OrbitRuntime {
                     ..Default::default()
                 },
             )?;
-            outcome = Some((
+            Ok((
                 updated,
                 ContextFileRestoration {
                     applied: true,
                     ..restoration
                 },
-            ));
-            Ok(())
-        })?;
-
-        outcome.ok_or_else(|| {
-            OrbitError::Execution(
-                "context restore body did not run under the task lock".to_string(),
-            )
+            ))
         })
     }
 

@@ -105,17 +105,13 @@ impl OrbitRuntime {
             });
         }
         self.ensure_coordination_task_write_permitted()?;
-        let mut applied = None;
-        let mut replayed = false;
         // The status and note this run wrote, for the after-lock PR closure.
-        let mut transition = None;
-        self.stores()
-            .tasks()
-            .with_task_write_lock(&request.task_id, &mut || {
+        let (outcome, replayed, transition) =
+            self.with_task_write_locked(&request.task_id, || {
                 if let Some(recorded) =
                     self.recorded_final_recovery(&request.task_id, &request.run_id)?
                 {
-                    transition = self
+                    let transition = self
                         .get_task_history(&request.task_id)?
                         .into_iter()
                         .find(|entry| {
@@ -127,9 +123,7 @@ impl OrbitRuntime {
                         .and_then(|entry| {
                             Some((entry.from_status?, entry.to_status?, entry.note?))
                         });
-                    applied = Some(recorded);
-                    replayed = true;
-                    return Ok(());
+                    return Ok((recorded, true, transition));
                 }
                 let task = self.get_task(&request.task_id)?;
                 let current = self.final_recovery_revision_after(&request.observed, &task)?;
@@ -151,15 +145,9 @@ impl OrbitRuntime {
                     )?;
                 }
                 self.write_plan(&task, request, &decision, &fault, &plan)?;
-                transition = Some((task.status, plan.status, plan.note.clone()));
-                applied = Some(plan.outcome);
-                Ok(())
+                let transition = Some((task.status, plan.status, plan.note.clone()));
+                Ok((plan.outcome, false, transition))
             })?;
-        let outcome = applied.ok_or_else(|| {
-            OrbitError::Execution(
-                "final recovery applier did not run under the task lock".to_string(),
-            )
-        })?;
         if let Some((previous_status, committed_status, note)) = transition
             && committed_status.is_terminal()
         {

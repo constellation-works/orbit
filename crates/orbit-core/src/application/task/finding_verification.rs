@@ -550,95 +550,83 @@ impl OrbitRuntime {
         let note = serde_json::to_string(record)
             .map_err(|error| OrbitError::Execution(format!("encode verdict: {error}")))?;
         let comment = record.comment()?;
-        let mut outcome = None;
-        self.stores()
-            .tasks()
-            .with_task_write_lock(task_id, &mut || {
-                let task = self.get_task(task_id)?;
-                if task.status != prepared_status {
-                    outcome = Some(VerdictWrite::Superseded {
-                        reason: "status_changed",
-                        detail: format!(
-                            "task moved from {prepared_status} to {} during verification",
-                            task.status
-                        ),
-                    });
-                    return Ok(());
+        self.with_task_write_locked(task_id, || {
+            let task = self.get_task(task_id)?;
+            if task.status != prepared_status {
+                return Ok(VerdictWrite::Superseded {
+                    reason: "status_changed",
+                    detail: format!(
+                        "task moved from {prepared_status} to {} during verification",
+                        task.status
+                    ),
+                });
+            }
+            if !verdict_admits_status(record.source, task.status) {
+                return Ok(VerdictWrite::Superseded {
+                    reason: STATUS_NOT_VERIFIABLE,
+                    detail: format!(
+                        "a {} verdict cannot be written on a {} task",
+                        record.source.label(),
+                        task.status
+                    ),
+                });
+            }
+            if !is_review_finding(&task) {
+                return Ok(VerdictWrite::Superseded {
+                    reason: "not_a_review_finding",
+                    detail: "task is no longer a review-filed bug".into(),
+                });
+            }
+            if record.finding_fingerprint.as_deref() != Some(&finding_fingerprint(&task)) {
+                return Ok(VerdictWrite::Superseded {
+                    reason: "material_changed",
+                    detail: "finding material changed or its prepared fingerprint is missing"
+                        .into(),
+                });
+            }
+            if verified_since(&self.get_task_history(task_id)?, history_len) {
+                return Ok(VerdictWrite::Superseded {
+                    reason: "verified_elsewhere",
+                    detail: "another verification recorded a verdict during this run".into(),
+                });
+            }
+            let now = Utc::now();
+            let rejected = record.verdict == FindingVerdict::Rejected;
+            let relations = match (record.verdict, record.severity) {
+                (FindingVerdict::Confirmed, Some(severity)) => {
+                    verified_relations(&task.relations, severity)
                 }
-                if !verdict_admits_status(record.source, task.status) {
-                    outcome = Some(VerdictWrite::Superseded {
-                        reason: STATUS_NOT_VERIFIABLE,
-                        detail: format!(
-                            "a {} verdict cannot be written on a {} task",
-                            record.source.label(),
-                            task.status
-                        ),
-                    });
-                    return Ok(());
-                }
-                if !is_review_finding(&task) {
-                    outcome = Some(VerdictWrite::Superseded {
-                        reason: "not_a_review_finding",
-                        detail: "task is no longer a review-filed bug".into(),
-                    });
-                    return Ok(());
-                }
-                if record.finding_fingerprint.as_deref() != Some(&finding_fingerprint(&task)) {
-                    outcome = Some(VerdictWrite::Superseded {
-                        reason: "material_changed",
-                        detail: "finding material changed or its prepared fingerprint is missing"
-                            .into(),
-                    });
-                    return Ok(());
-                }
-                if verified_since(&self.get_task_history(task_id)?, history_len) {
-                    outcome = Some(VerdictWrite::Superseded {
-                        reason: "verified_elsewhere",
-                        detail: "another verification recorded a verdict during this run".into(),
-                    });
-                    return Ok(());
-                }
-                let now = Utc::now();
-                let rejected = record.verdict == FindingVerdict::Rejected;
-                let relations = match (record.verdict, record.severity) {
-                    (FindingVerdict::Confirmed, Some(severity)) => {
-                        verified_relations(&task.relations, severity)
-                    }
-                    _ => None,
-                };
-                let updated = self.stores().task_records().update(
-                    task_id,
-                    TaskRecordUpdateParams {
-                        actor: FINDING_VERIFICATION_ACTOR.to_string(),
-                        status: rejected.then_some(TaskStatus::Rejected),
-                        status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
-                        status_note: rejected.then(|| record.rejection_note()),
-                        relations,
-                        append_history: vec![TaskHistoryEntry {
-                            at: now,
-                            by: FINDING_VERIFICATION_ACTOR.to_string(),
-                            event: FINDING_VERIFIED_EVENT.to_string(),
-                            note: Some(note.clone()),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        }],
-                        append_comments: vec![TaskComment {
-                            at: now,
-                            by: FINDING_VERIFICATION_ACTOR.to_string(),
-                            message: comment.clone(),
-                            operation_id: None,
-                        }],
-                        expected_status: Some(vec![prepared_status]),
-                        ..Default::default()
-                    },
-                )?;
-                outcome = Some(VerdictWrite::Recorded(updated.status));
-                Ok(())
-            })?;
-        outcome.ok_or_else(|| {
-            OrbitError::Execution("verdict write did not run under the task lock".into())
+                _ => None,
+            };
+            let updated = self.stores().task_records().update(
+                task_id,
+                TaskRecordUpdateParams {
+                    actor: FINDING_VERIFICATION_ACTOR.to_string(),
+                    status: rejected.then_some(TaskStatus::Rejected),
+                    status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
+                    status_note: rejected.then(|| record.rejection_note()),
+                    relations,
+                    append_history: vec![TaskHistoryEntry {
+                        at: now,
+                        by: FINDING_VERIFICATION_ACTOR.to_string(),
+                        event: FINDING_VERIFIED_EVENT.to_string(),
+                        note: Some(note.clone()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    append_comments: vec![TaskComment {
+                        at: now,
+                        by: FINDING_VERIFICATION_ACTOR.to_string(),
+                        message: comment.clone(),
+                        operation_id: None,
+                    }],
+                    expected_status: Some(vec![prepared_status]),
+                    ..Default::default()
+                },
+            )?;
+            Ok(VerdictWrite::Recorded(updated.status))
         })
     }
 }

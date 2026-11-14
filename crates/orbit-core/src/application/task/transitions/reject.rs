@@ -43,13 +43,11 @@ impl OrbitRuntime {
         let comment = comment.map(|value| redact_all(&value));
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
-        let mut result = None;
-        let mut previous_status = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        let (result, previous_status) = self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
-            previous_status = Some(task.status);
+            let previous_status = task.status;
             let status_event = match task.status {
                 TaskStatus::Proposed => "proposal_rejected",
                 TaskStatus::Review => "review_rejected",
@@ -61,7 +59,7 @@ impl OrbitRuntime {
                     )));
                 }
             };
-            result = Some(self.stores().task_records().update(
+            let updated = self.stores().task_records().update(
                 id,
                 StoreTaskUpdateParams {
                     actor: effective_label.clone(),
@@ -72,15 +70,10 @@ impl OrbitRuntime {
                     expected_status: Some(vec![task.status]),
                     ..Default::default()
                 },
-            )?);
-            Ok(())
+            )?;
+            Ok((updated, previous_status))
         })?;
-        let result = result.ok_or_else(|| {
-            OrbitError::Execution("task reject body did not run under the task lock".to_string())
-        })?;
-        if let Some(previous_status) = previous_status {
-            self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
-        }
+        self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
 
         Ok(result)
     }
@@ -119,7 +112,7 @@ impl OrbitRuntime {
         // The preflight can go stale while a local run starts owning the
         // task. Re-read ownership under the task write lock and hold it
         // through the archive write, like `delete_task_guarded` does.
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        self.with_task_write_locked(id, || {
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             #[cfg(any(test, feature = "test-support"))]
@@ -183,7 +176,7 @@ impl OrbitRuntime {
         self.apply_transition_read_hook(id)?;
         // The preflight can go stale while a transition owns the task lock.
         // Re-read eligibility under that lock and hold it through deletion.
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             ensure_task_delete_allowed(&task.id, task.status, force)?;
             self.delete_task(id)

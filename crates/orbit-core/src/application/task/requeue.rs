@@ -376,8 +376,7 @@ impl OrbitRuntime {
                     || (local == Some(kept.machine_id.as_str())
                         && task.job_run_id == kept.candidate.source_run_id))
         });
-        let mut answer = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        let task = self.with_task_write_locked(id, || {
             let current = self.get_task(id)?;
             self.ensure_requeueable(&current)?;
             if current.updated_at != task.updated_at || current.job_run_id != task.job_run_id {
@@ -468,11 +467,8 @@ impl OrbitRuntime {
                     history,
                 },
             )?;
-            answer = Some(updated);
-            Ok(())
+            Ok(updated)
         })?;
-        let task =
-            answer.ok_or_else(|| OrbitError::Execution("requeue wrote no decision".into()))?;
         // After the write, like every PR closure: a forge error leaves the
         // requeue standing and is reported instead. The same closure as
         // `orbit task update --status backlog --discard-candidate`.

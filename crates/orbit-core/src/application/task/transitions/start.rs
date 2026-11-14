@@ -306,8 +306,7 @@ impl OrbitRuntime {
             )?,
         };
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
-        let mut started = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             if actor_label_override.is_none() && task.status != TaskStatus::InProgress {
                 ensure_status_change_not_run_owned(self, id)?;
@@ -485,12 +484,7 @@ impl OrbitRuntime {
                     ..StoreTaskUpdateParams::from(start_edits.clone())
                 },
             ).map_err(start_error)?;
-            started = Some(task);
-
-            Ok(())
-        })?;
-        started.ok_or_else(|| {
-            OrbitError::Execution("task start body did not run under the task lock".to_string())
+            Ok(task)
         })
     }
 }

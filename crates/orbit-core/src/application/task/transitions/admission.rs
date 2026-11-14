@@ -125,13 +125,7 @@ impl OrbitRuntime {
         } else {
             workflow
         };
-        let mut admitted = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
-            admitted = Some(self.admit_task_for_workflow_locked(id, workflow)?);
-            Ok(())
-        })?;
-        admitted
-            .ok_or_else(|| OrbitError::Execution("workflow admission lock body did not run".into()))
+        self.with_task_write_locked(id, || self.admit_task_for_workflow_locked(id, workflow))
     }
 
     /// Admit under the per-task write lock: start a `backlog` task, or
