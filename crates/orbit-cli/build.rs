@@ -1,4 +1,8 @@
-//! Embed source identity while building, never by consulting a run's workspace.
+//! Embed source identity while compiling the `orbit` binary.
+//!
+//! The script lives on the leaf package. A rerun recompiles that binary
+//! alone, not `orbit-common` and every crate that depends on it. Identity is
+//! decided here, never by reading a run's workspace at execution time.
 #![allow(
     clippy::print_stdout,
     reason = "Cargo reads rustc-env and rerun-if-changed instructions only from build script stdout"
@@ -69,8 +73,9 @@ fn main() {
     // refs), so a rebuild after checkout or commit cannot reuse stale identity.
     // Cargo treats a missing watched path as always stale, so a path git has
     // not created is never watched: a CI checkout (`git init`, then a fetch
-    // by commit) has no packed-refs, and watching it reran this script and
-    // recompiled every workspace crate on each later Cargo command.
+    // by commit) has no packed-refs, and watching it reran this script on
+    // every later Cargo command. When the script lived in `orbit-common`,
+    // that rebuilt the whole workspace.
     for name in ["HEAD", "index", "packed-refs"] {
         if let Some(path) = git_output(&["rev-parse", "--path-format=absolute", "--git-path", name])
         {
@@ -98,6 +103,7 @@ fn main() {
         watch_existing(path);
     }
     // Track source edits too: a dirty build must never prove fix ancestry.
+    // Paths are relative to this package (`crates/orbit-cli`).
     for path in [
         "../",
         "../../Cargo.toml",

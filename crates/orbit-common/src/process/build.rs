@@ -1,15 +1,32 @@
 //! Compiled identity of this Orbit process, independent of its runtime checkout.
+//!
+//! The shipped `orbit` binary registers the value its build script embedded.
+//! A process that never registers reports unknown provenance: this package's
+//! version, no source commit, and `dirty: true`.
+
+use std::sync::OnceLock;
 
 use orbit_types::workflow::OrbitBuild;
 
-/// Build identity embedded during compilation, never read from the runtime environment.
+static REGISTERED_ORBIT_BUILD: OnceLock<OrbitBuild> = OnceLock::new();
+
+/// Record the compiled identity of the shipped binary. The first call wins.
+pub fn register_orbit_build(build: OrbitBuild) {
+    let _ = REGISTERED_ORBIT_BUILD.set(build);
+}
+
+/// Build identity of this process: the registered value, or unknown provenance.
 pub fn current_orbit_build() -> OrbitBuild {
+    REGISTERED_ORBIT_BUILD
+        .get()
+        .cloned()
+        .unwrap_or_else(unknown_orbit_build)
+}
+
+fn unknown_orbit_build() -> OrbitBuild {
     OrbitBuild {
         version: env!("CARGO_PKG_VERSION").into(),
-        source_commit: match env!("ORBIT_BUILD_SOURCE_COMMIT") {
-            "" => None,
-            commit => Some(commit.into()),
-        },
-        dirty: env!("ORBIT_BUILD_DIRTY") != "false",
+        source_commit: None,
+        dirty: true,
     }
 }
