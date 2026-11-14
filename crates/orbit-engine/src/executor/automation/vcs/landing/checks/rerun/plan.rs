@@ -1,6 +1,5 @@
 //! Planning and admitting the unchanged-head failed-jobs retry.
 
-use super::super::super::super::operations;
 use super::super::super::super::pr::PullRequestStatus;
 use super::super::rerun_diagnostic::{self, CiRerunDiagnostic, CiRerunStage};
 use super::super::{
@@ -14,14 +13,16 @@ use super::send::{
     infrastructure_backoff, record_cancellation_exhausted, record_retry_exhausted,
     record_retry_history, send_reserved_rerun,
 };
-use super::{CiRerunStep, SHARED_RETRY_BUDGET_SPENT};
+use super::{
+    CiRerunStep, PlanMismatch, RerunPlanRequest, SHARED_RETRY_BUDGET_SPENT, authenticated_plan,
+    is_no_authenticated_plan_error,
+};
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
-    CiInfrastructureRetryBackoffRecord, CiRerunAdmission, CiRerunPlan, CiRerunRoot,
+    CiInfrastructureRetryBackoffRecord, CiRerunAdmission, CiRerunRoot,
 };
-use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -313,13 +314,33 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     let Some((run_id, roots)) = roots.into_iter().next() else {
         return Ok(CiRerunStep::NotEligible);
     };
-    let request = json!({"workspace_path":workspace,"pr":pr.to_string(),"head_sha":head,"head_branch":branch,"base_branch":base_branch,"accepted_base":base,"run_id":run_id,"roots":roots,"deadline_ms":deadline_ms});
+    let request = RerunPlanRequest {
+        workspace,
+        pr: pr.to_string(),
+        head,
+        head_branch: branch,
+        base_branch,
+        accepted_base: base,
+        run_id,
+        roots: &roots,
+        deadline_ms,
+    };
     diagnostic.stage = CiRerunStage::Authentication;
     diagnostic.run_id = Some(run_id);
     diagnostic.job_id = None;
-    let response = match host.run_private_vcs_operation(operations::CI_RERUN_PLAN, request) {
-        Ok(response) => response,
+    let plan = match authenticated_plan(host, &request) {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(PlanMismatch)) => {
+            diagnostic.stage = CiRerunStage::PlanIdentity;
+            return Ok(CiRerunStep::Wait(
+                "CI retry plan differs from the exact classified request".into(),
+            ));
+        }
         Err(error) => {
+            if is_no_authenticated_plan_error(&error) {
+                diagnostic.stage = CiRerunStage::PlanIdentity;
+                return Err(error);
+            }
             *diagnostic = diagnostic.clone().with_error(&error);
             if error
                 .private_vcs_failure()
@@ -365,23 +386,6 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             )));
         }
     };
-    diagnostic.stage = CiRerunStage::PlanIdentity;
-    let plan: CiRerunPlan = serde_json::from_value(response["plan"].clone()).map_err(|_| {
-        OrbitError::Execution("CI retry adapter returned no authenticated plan".into())
-    })?;
-    if plan.schema_version != 1
-        || plan.head_sha != head
-        || plan.pr_number != pr.to_string()
-        || plan.head_branch != branch
-        || plan.base_branch != base_branch
-        || plan.accepted_base != base
-        || plan.run_id != run_id
-        || plan.roots != roots
-    {
-        return Ok(CiRerunStep::Wait(
-            "CI retry plan differs from the exact classified request".into(),
-        ));
-    }
     diagnostic.stage = CiRerunStage::Admission;
     match host.admit_ci_rerun(
         tasks,
