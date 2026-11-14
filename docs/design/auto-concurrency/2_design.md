@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-14
 last_validated: 2026-11-04
 status: Draft
 feature: auto-concurrency
@@ -1551,5 +1551,6 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   tags change.
 - [ORB-21826] — bounded resource-profile refresh request tails and re-read
   only changed runs during a rebuild.
+- [ORB-22808] — fixed the remaining auto-concurrency bounds at their former defaults and deprecated their keys
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

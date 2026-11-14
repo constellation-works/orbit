@@ -1,7 +1,7 @@
 ---
 title: Operator Attention — Design
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-14
 last_validated: 2026-11-04
 status: Draft
 feature: operator-attention
@@ -133,9 +133,9 @@ default; the keys load with a deprecation warning and are ignored until 2026-12-
 | `fanout_budget_seconds` | `20` | Outer deadline for a cross-host call |
 | `per_workspace_item_cap` | `200` | Items kept per workspace |
 
-Slice 1 owns `orbit_config::AttentionSettings` and all eight registry keys. Supported readback is `orbit config get attention.<key> --json` (effective values), `orbit config keys` (descriptions and types), and `orbit config show` (layer provenance). No setting is changed by querying attention.
+The eight former keys are now fixed constants in code (for example `ATTENTION_CURSOR_TTL_HOURS` in `crates/orbit-common/src/governance/attention/cursor.rs` and the `ATTENTION_*` constants in `crates/orbit-core/src/application/attention/mod.rs`); [ORB-22808] left each key loading with a deprecation warning and ignored until 2026-12-08. No setting is changed by querying attention, and there is no supported `attention.<key>` readback of an effective value.
 
-Integer keys must be positive. Upper bounds are 8760 cursor hours, 87600 run-window hours, 525600 stuck minutes, 86400 cache seconds, 3600 source/fan-out seconds and 10000 workspace items. `age_bump_hours` accepts an empty list to disable aging; otherwise values must be strictly increasing positive hours up to 87600. Registry resolution validates these before admitting configuration. Slice 1 consumes cursor TTL, severity thresholds and item caps. Slices 2–4 own runtime/provider/fan-out behavior consuming the remaining fields.
+Slice 1 consumed cursor TTL, severity thresholds and item caps from the former settings; slices 2–4 consume the remaining fixed values for runtime, provider and fan-out behaviour.
 
 Configuration changes thresholds only. It does not add kinds, change `next`, or change what
 counts as a condition; those are code and spec, so two operators' lists mean the same thing.
@@ -236,5 +236,6 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
 - [ORB-21171] — slice 4: federation across workspaces and hosts, and `host_unhealthy`
 - [ORB-21680] — made CI attention use the fetched base-branch head
+- [ORB-22808] — fixed the former `[attention]` bounds at their defaults and deprecated the keys
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

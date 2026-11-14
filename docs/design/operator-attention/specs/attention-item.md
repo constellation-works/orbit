@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-08
+last_updated: 2026-11-14
 ---
 
 # Spec: Attention item
@@ -271,5 +271,6 @@ Specified by claude in [ORB-21164].
 ## Task References
 
 - [ORB-21164] — specified the attention item contract
+- [ORB-22808] — fixed the attention bounds at their defaults and deprecated the `[attention]` keys
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
