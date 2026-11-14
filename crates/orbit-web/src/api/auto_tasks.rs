@@ -15,7 +15,8 @@ use orbit_common::governance::authorization::{
 use orbit_core::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
 use orbit_core::application::auto_tasks::projection::AutoTaskListingProfile;
 use orbit_core::application::auto_tasks::{
-    AutoTaskDeleteParams, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
+    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskToggleError,
+    AutoTaskToggleOutcome, AutoTaskToggleProfile,
 };
 use orbit_core::{OrbitRuntime, Task};
 use orbit_types::workflow::auto_task_tag;
@@ -307,7 +308,7 @@ pub(super) async fn delete_auto_task(
         let reason = reason.clone();
         let force = body.force;
         move || {
-            Ok(runtime.auto_task_delete(AutoTaskDeleteParams {
+            Ok(runtime.auto_task_delete_command(AutoTaskDeleteParams {
                 name,
                 reason,
                 force,
@@ -341,27 +342,12 @@ fn trimmed_delete_reason(reason: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Task ids from core's open-minted-task refusal. The sentence is the contract
-/// `auto_task_delete` returns; the response carries the ids so the dashboard
-/// does not scrape it.
-fn open_minted_task_ids(message: &str) -> Option<Vec<String>> {
-    const MARKER: &str = "still has open minted tasks: ";
-    let start = message.find(MARKER)? + MARKER.len();
-    let list = message[start..].split(';').next()?.trim();
-    let ids = list
-        .split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    (!ids.is_empty()).then_some(ids)
-}
-
-fn delete_refusal(name: &str, error: orbit_core::OrbitError) -> Response {
+fn delete_refusal(name: &str, error: AutoTaskDeleteError) -> Response {
     match error {
-        orbit_core::OrbitError::InvalidInput(message) => {
-            if let Some(open_tasks) = open_minted_task_ids(&message) {
-                return (
+        AutoTaskDeleteError::Refusal(refusal) => {
+            let message = refusal.message();
+            match refusal {
+                AutoTaskDeleteRefusal::OpenMintedTasks { open_tasks, .. } => (
                     StatusCode::CONFLICT,
                     Json(json!({
                         "error": message,
@@ -369,17 +355,14 @@ fn delete_refusal(name: &str, error: orbit_core::OrbitError) -> Response {
                         "open_tasks": open_tasks,
                     })),
                 )
-                    .into_response();
-            }
-            if message == format!("no such auto-task '{name}'") {
-                return named_entity_not_found(
+                    .into_response(),
+                AutoTaskDeleteRefusal::NotFound { .. } => named_entity_not_found(
                     "auto_task_not_found",
                     format!("auto-task '{name}' was not found"),
-                );
+                ),
             }
-            auto_task_control_error(orbit_core::OrbitError::InvalidInput(message))
         }
-        other => auto_task_control_error(other),
+        AutoTaskDeleteError::Other(error) => auto_task_control_error(error),
     }
 }
 

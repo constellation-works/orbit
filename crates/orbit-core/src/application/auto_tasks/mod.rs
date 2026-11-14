@@ -61,7 +61,9 @@ pub mod state;
 pub mod toggle;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
-pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
+pub use delete::{
+    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskDeleteReport,
+};
 pub use listing::{AutoTaskListing, AutoTaskListingRow, AutoTaskSkip};
 pub use loader::{
     AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,
