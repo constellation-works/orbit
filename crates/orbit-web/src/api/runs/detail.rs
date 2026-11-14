@@ -1,7 +1,8 @@
 //! Run detail JSON and supplementary audit projections.
 
 use orbit_core::application::job::{
-    RecordedJobRun, job_run_to_json_with_activity_provenance, run_display_steps,
+    JobRunProjectionEvidence, JobRunProjectionProfile, RecordedJobRun,
+    display_steps_with_agent_execution_to_json, project_job_run, run_display_steps,
 };
 use orbit_core::runtime::audit::run::RunProviderProcess;
 use orbit_core::{JobRun, OrbitRuntime};
@@ -18,13 +19,15 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         run_id,
         "invocation evidence",
     );
-    let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
-    // The shared projection leaves the submitted input and the claimed worker
-    // identity to each surface. Run detail carries the same three fields MCP
-    // already adds, so the dashboard and `orbit run show --json` name one run.
-    full["input"] = json!(run.input);
-    full["pid"] = json!(run.pid);
-    full["pid_start_time"] = json!(run.pid_start_time);
+    let mut full = project_job_run(
+        run,
+        JobRunProjectionProfile::FullDetailSiblingSteps,
+        JobRunProjectionEvidence {
+            state: state.as_ref(),
+            activity_evidence: Some(&evidence),
+            ..JobRunProjectionEvidence::default()
+        },
+    );
     // Child dispatches persist lineage rather than task input. Resolve their
     // runs first, then share one task-title lookup with the parent header.
     let children = state
@@ -69,22 +72,9 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             }
         }
     }
-    // Keep pass health visible after terminalization, independently of the
-    // live waiting-state fields the shared run projection omits then.
-    full["drain_last_pass"] = serde_json::to_value(
-        state
-            .as_ref()
-            .and_then(|state| state.pull_drain.drain_last_pass.as_ref()),
-    )
-    .unwrap_or(Value::Null);
     // The failure chain and the cancel record are detail-only. One response
     // carries both, so the page does not fetch each child to find the cause.
     super::failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
-    // Reshape into `{run, steps}` per the dashboard contract: the displayed
-    // steps replace the record's own `steps` in the flat projection.
-    if let Some(fields) = full.as_object_mut() {
-        fields.remove("steps");
-    }
     let steps = run_display_steps(run, || {
         or_warn(
             runtime.collect_run_audit_steps(run_id),
@@ -154,7 +144,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "pull_breaker": pull_breaker,
         "refused_settlements": refused_settlements,
         "crew_window": crew_window,
-        "steps": steps.records.iter().map(|step| step.to_json_with_agent_execution(state.as_ref(), &evidence)).collect::<Vec<_>>(),
+        "steps": display_steps_with_agent_execution_to_json(&steps, state.as_ref(), &evidence),
         "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
             .iter()
@@ -176,22 +166,21 @@ pub(super) fn recorded_run_detail_to_json(
     let run = &recorded.run;
     let run_id = run.run_id.as_str();
     let state = recorded.state.as_ref();
-    let mut full = job_run_to_json_with_activity_provenance(run, state, &[]);
-    full["input"] = json!(run.input);
-    full["pid"] = json!(run.pid);
-    full["pid_start_time"] = json!(run.pid_start_time);
+    let mut full = project_job_run(
+        run,
+        JobRunProjectionProfile::FullDetailSiblingSteps,
+        JobRunProjectionEvidence {
+            state,
+            activity_evidence: Some(&[]),
+            ..JobRunProjectionEvidence::default()
+        },
+    );
     let titles = or_warn(
         super::tasks::task_titles(reader, std::iter::once(run)),
         run_id,
         "task titles",
     );
     super::tasks::add_tasks(&mut full, run, &titles);
-    full["drain_last_pass"] =
-        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_last_pass.as_ref()))
-            .unwrap_or(Value::Null);
-    if let Some(fields) = full.as_object_mut() {
-        fields.remove("steps");
-    }
     let steps = run_display_steps(run, Vec::new);
     json!({
         "run": full,
@@ -205,7 +194,7 @@ pub(super) fn recorded_run_detail_to_json(
         "pull_breaker": state.and_then(|state| state.pull_drain.pull_breaker.as_ref()),
         "refused_settlements": [],
         "crew_window": Value::Null,
-        "steps": steps.records.iter().map(|step| step.to_json_with_agent_execution(state, &[])).collect::<Vec<_>>(),
+        "steps": display_steps_with_agent_execution_to_json(&steps, state, &[]),
         "steps_source": steps.source.as_str(),
         "provider_processes": [],
     })

@@ -10,9 +10,11 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::runtime::audit::run::{RunExecutionProgress, RunProviderProcess, RunRecoveryAttempts};
+use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::runtime::run_input::carried_task_ids;
 
-use super::display_steps::RunDisplayStep;
+use super::display_steps::{RunDisplayStep, RunDisplaySteps};
 
 /// Durable provider/model evidence for one completed agent invocation.
 ///
@@ -267,7 +269,14 @@ impl JobRunListStates {
 
     /// The shared row for a listed run, projected with its state.
     pub fn row(&self, run: &JobRun) -> Value {
-        job_run_to_json(run, self.state(&run.run_id))
+        project_job_run(
+            run,
+            JobRunProjectionProfile::ListRow,
+            JobRunProjectionEvidence {
+                state: self.state(&run.run_id),
+                ..JobRunProjectionEvidence::default()
+            },
+        )
     }
 }
 
@@ -351,4 +360,308 @@ pub fn job_run_to_json_with_activity_provenance(
     })).collect::<Vec<_>>());
     value["activity_provenance"] = Value::Array(activities);
     value
+}
+
+/// Named wire profiles for run inspection [ORB-24357].
+///
+/// Every profile preserves one established surface shape exactly: which
+/// worker fields ride on the run object, where displayed steps sit, and
+/// which drain/recovery sections the run object carries. Surfaces pick a
+/// profile and keep only input parsing, evidence reads (with their own
+/// degradation/logging) and envelope/text rendering; the JSON policy lives
+/// in [`project_job_run`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobRunProjectionProfile {
+    /// Full detail whose run object keeps its stored `steps`; displayed
+    /// steps are a sibling the caller renders with
+    /// [`display_steps_with_agent_execution_to_json`] (CLI `run show`).
+    FullDetailStoredSteps,
+    /// Full detail whose run object drops `steps`; displayed steps are a
+    /// sibling (HTTP run detail, including the recorded-only variant).
+    FullDetailSiblingSteps,
+    /// Full detail whose run object carries the displayed steps,
+    /// `steps_source`, `drain_last_pass`, `drain_approvals` and
+    /// `recovery_attempts` (workflow tool show/list/observe).
+    FullDetailEmbeddedSteps,
+    /// History list row: provenance sections and `pid` only — no submitted
+    /// input, no `pid_start_time` (CLI `run history`).
+    ListHistory,
+    /// Plain list row: the base projection with no worker fields and no
+    /// provenance sections (HTTP run list via [`JobRunListStates::row`]).
+    ListRow,
+    /// Bounded summary: `id` alias plus `run_id`, core timing/state fields
+    /// and `usage.state = unavailable` (desktop bounded read).
+    BoundedSummary,
+}
+
+/// Evidence a surface gathered for one run, handed to [`project_job_run`].
+///
+/// Gathering stays with the caller because each profile promises a
+/// different read/degradation contract (reconciling vs observed, warn vs
+/// propagate); this struct is the shared input shape so no surface
+/// re-derives the JSON from the pieces.
+#[derive(Clone, Copy, Default)]
+pub struct JobRunProjectionEvidence<'a> {
+    /// The run's persisted pipeline state, when readable.
+    pub state: Option<&'a PipelineState>,
+    /// Activity invocation evidence. `Some` (even empty) renders the
+    /// provenance sections; `None` renders the base projection without them.
+    pub activity_evidence: Option<&'a [ActivityInvocationEvidence]>,
+    /// Displayed steps chosen by `run_display_steps`; required only by
+    /// [`JobRunProjectionProfile::FullDetailEmbeddedSteps`].
+    pub display_steps: Option<&'a RunDisplaySteps>,
+    /// Recovery evidence for the embedded profile; `None` renders the
+    /// explicit `unavailable` shape.
+    pub recovery: Option<&'a RunRecoveryAttempts>,
+}
+
+/// Add the claimed worker's identity and the submitted input a full-detail
+/// run object carries on every surface.
+fn add_run_worker_fields(value: &mut Value, run: &JobRun) {
+    value["input"] = json!(run.input);
+    value["pid"] = json!(run.pid);
+    value["pid_start_time"] = json!(run.pid_start_time);
+}
+
+/// Drain pass health, kept visible after terminalization independently of
+/// the live waiting-state fields the base projection omits then.
+fn run_drain_last_pass_to_json(state: Option<&PipelineState>) -> Value {
+    serde_json::to_value(state.and_then(|state| state.pull_drain.drain_last_pass.as_ref()))
+        .unwrap_or(Value::Null)
+}
+
+/// Displayed steps beside their source, with recorded agent executions:
+/// the step array every full-detail surface renders, embedded or sibling.
+pub fn display_steps_with_agent_execution_to_json(
+    steps: &RunDisplaySteps,
+    state: Option<&PipelineState>,
+    evidence: &[ActivityInvocationEvidence],
+) -> Value {
+    json!(
+        steps
+            .records
+            .iter()
+            .map(|step| step.to_json_with_agent_execution(state, evidence))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Project one run under a named profile; see [`JobRunProjectionProfile`].
+pub fn project_job_run(
+    run: &JobRun,
+    profile: JobRunProjectionProfile,
+    evidence: JobRunProjectionEvidence<'_>,
+) -> Value {
+    if profile == JobRunProjectionProfile::BoundedSummary {
+        return json!({"id": run.run_id, "run_id": run.run_id, "job_id": run.job_id,
+            "state": run.state, "attempt": run.attempt, "scheduled_at": run.scheduled_at,
+            "started_at": run.started_at, "finished_at": run.finished_at,
+            "created_at": run.created_at, "duration_ms": run.duration_ms,
+            "usage": {"state": "unavailable"}});
+    }
+    let mut value = match evidence.activity_evidence {
+        Some(activity) => job_run_to_json_with_activity_provenance(run, evidence.state, activity),
+        None => job_run_to_json(run, evidence.state),
+    };
+    match profile {
+        JobRunProjectionProfile::ListRow | JobRunProjectionProfile::BoundedSummary => {}
+        JobRunProjectionProfile::ListHistory => {
+            value["pid"] = json!(run.pid);
+        }
+        JobRunProjectionProfile::FullDetailStoredSteps => {
+            add_run_worker_fields(&mut value, run);
+        }
+        JobRunProjectionProfile::FullDetailSiblingSteps => {
+            add_run_worker_fields(&mut value, run);
+            value["drain_last_pass"] = run_drain_last_pass_to_json(evidence.state);
+            if let Some(fields) = value.as_object_mut() {
+                fields.remove("steps");
+            }
+        }
+        JobRunProjectionProfile::FullDetailEmbeddedSteps => {
+            add_run_worker_fields(&mut value, run);
+            if let Some(steps) = evidence.display_steps {
+                value["steps"] = display_steps_with_agent_execution_to_json(
+                    steps,
+                    evidence.state,
+                    evidence.activity_evidence.unwrap_or_default(),
+                );
+                value["steps_source"] = json!(steps.source.as_str());
+            }
+            value["drain_last_pass"] = run_drain_last_pass_to_json(evidence.state);
+            // [ORB-14117] What an `--approve-proposed` drain approved and held.
+            value["drain_approvals"] = serde_json::to_value(
+                evidence
+                    .state
+                    .and_then(|state| state.pull_drain.drain_approvals.as_ref()),
+            )
+            .unwrap_or(Value::Null);
+            // Recovery evidence stays separate from run/step errors: an
+            // attempt never rewrites the failure that triggered it.
+            // Unreadable trails stay explicit `unavailable`.
+            value["recovery_attempts"] = match evidence.recovery {
+                Some(attempts) => attempts.to_json(),
+                None => RunRecoveryAttempts::unavailable().to_json(),
+            };
+        }
+    }
+    value
+}
+
+/// Drop the raw answer duplicates a full tool-show run carries: the parsed
+/// answer already holds the useful fields, while `final_message` repeats
+/// the provider envelope and `preview` its head. Durable blob refs stay.
+pub fn trim_full_show_agent_invocation_answer(value: &mut Value) {
+    if let Some(invocation) = value["agent_invocation"].as_object_mut()
+        && invocation.get("answer").is_some_and(Value::is_object)
+    {
+        invocation.remove("preview");
+        invocation.remove("preview_truncated");
+        if let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) {
+            answer.remove("final_message");
+        }
+    }
+}
+
+/// What a run is doing right now: active step and provider processes.
+/// Shared by the full tool show and the bounded read [ORB-11752].
+pub fn run_execution_progress_to_json(progress: &RunExecutionProgress) -> Value {
+    json!({
+        "state": progress.state,
+        "active_step": progress.active_step.as_ref().map(|step| json!({
+            "step_id": step.step_id,
+            "step_index": step.step_index,
+            "started_at": step.started_at.map(|value| value.to_rfc3339()),
+        })),
+        "provider_processes": {
+            "limit": progress.limit,
+            "truncated": progress.truncated,
+            "items": progress
+                .provider_processes
+                .iter()
+                .map(RunProviderProcess::to_json)
+                .collect::<Vec<_>>(),
+        },
+    })
+}
+
+/// Byte cap on a bounded read's agent answer.
+pub const BOUNDED_RUN_ANSWER_MAX_BYTES: usize = 4096;
+/// Step cap on a bounded read's displayed steps.
+pub const BOUNDED_RUN_STEP_LIMIT: usize = 50;
+
+/// Render a bounded read's displayed steps onto its run summary: capped
+/// steps, `steps_source`, `steps_total` (null when the trail is
+/// incomplete) and `steps_truncated`. Provider responses and original
+/// inputs stay absent; error messages are bounded and redacted.
+pub fn add_bounded_display_steps_to_json(
+    value: &mut Value,
+    steps: &RunDisplaySteps,
+    state: Option<&PipelineState>,
+    steps_complete: bool,
+) {
+    value["steps"] = json!(
+        steps
+            .records
+            .iter()
+            .take(BOUNDED_RUN_STEP_LIMIT)
+            .map(|step| {
+                let output = step.command_output_summary(state);
+                let exit_code = step
+                    .exit_code
+                    .map(|code| json!(code))
+                    .or_else(|| output.as_ref().map(|output| output["exit_code"].clone()));
+                let mut step_value = json!({
+                    "step_index": step.step_index, "target_id": step.target_id,
+                    "target_type": step.target_type, "state": step.state,
+                    "started_at": step.started_at, "finished_at": step.finished_at,
+                    "duration_ms": step.duration_ms, "exit_code": exit_code,
+                    "error_code": step.error_code,
+                    "error_message": step.error_message.as_deref().map(|message| bounded_redacted_text(message, 4096).0),
+                });
+                if let Some(output) = output {
+                    step_value["output"] = output;
+                }
+                step_value
+            })
+            .collect::<Vec<_>>()
+    );
+    value["steps_source"] = json!(steps.source.as_str());
+    value["steps_total"] = json!(steps_complete.then_some(steps.records.len()));
+    value["steps_truncated"] =
+        json!(!steps_complete || steps.records.len() > BOUNDED_RUN_STEP_LIMIT);
+}
+
+/// Bound a bounded read's agent answer to [`BOUNDED_RUN_ANSWER_MAX_BYTES`]:
+/// summary first, then whole fields that still fit; dropped fields are
+/// named and `answer_retrieval` (built by the caller from its own routing
+/// input) points at the full read. Persisted/full-view answers stay intact.
+pub fn bound_bounded_agent_invocation_answer(
+    invocation: &mut Value,
+    answer_retrieval: Value,
+) -> Result<(), OrbitError> {
+    let Some(invocation) = invocation.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    answer.remove("final_message");
+    let mut original = std::mem::take(answer);
+    let mut omitted = Vec::new();
+    let mut truncated = false;
+    let summary = original.remove("summary");
+    for (key, mut field) in summary
+        .map(|value| ("summary".to_string(), value))
+        .into_iter()
+        .chain(original)
+    {
+        if key == "summary"
+            && let Some(text) = field.as_str()
+        {
+            // {"summary": ...} costs 12 bytes beside the JSON string.
+            let prefix = json_string_prefix(text, BOUNDED_RUN_ANSWER_MAX_BYTES - 12);
+            truncated |= prefix.len() < text.len();
+            field = json!(prefix);
+        }
+        answer.insert(key.clone(), field);
+        let bytes = serde_json::to_vec(answer)
+            .map_err(|error| OrbitError::Execution(format!("compact agent answer: {error}")))?;
+        if bytes.len() > BOUNDED_RUN_ANSWER_MAX_BYTES {
+            answer.remove(&key);
+            omitted.push(key);
+            truncated = true;
+        }
+    }
+    let summary = answer.get("summary").cloned().unwrap_or(Value::Null);
+    invocation.remove("preview");
+    invocation.remove("preview_truncated");
+    invocation.insert("summary".into(), summary);
+    invocation.insert(
+        "answer_max_bytes".into(),
+        json!(BOUNDED_RUN_ANSWER_MAX_BYTES),
+    );
+    invocation.insert("answer_truncated".into(), json!(truncated));
+    invocation.insert("answer_omitted_fields".into(), json!(omitted));
+    invocation.insert("answer_retrieval".into(), answer_retrieval);
+    Ok(())
+}
+
+/// Prefix measured as a JSON string, counting quotes and escapes.
+fn json_string_prefix(text: &str, max_bytes: usize) -> &str {
+    let mut remaining = max_bytes.saturating_sub(2);
+    let mut end = 0;
+    for (index, ch) in text.char_indices() {
+        let bytes = match ch {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{0008}' | '\u{000c}' => 2,
+            ch if ch <= '\u{001f}' => 6,
+            ch => ch.len_utf8(),
+        };
+        if bytes > remaining {
+            break;
+        }
+        remaining -= bytes;
+        end = index + ch.len_utf8();
+    }
+    &text[..end]
 }
