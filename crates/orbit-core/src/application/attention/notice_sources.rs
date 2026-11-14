@@ -7,12 +7,14 @@ use orbit_types::{
     record::{EffectiveStatus, Notice, NoticeKind},
     tool::{
         AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity,
-        AttentionTask, AttentionWorkspace,
+        AttentionWorkspace,
     },
 };
 use serde_json::json;
 
-use super::sources::{SharedOpenTasks, Subject, attention_reason, finalize_attention_item};
+use super::sources::{
+    SharedOpenTasks, Subject, attention_reason, attention_task, finalize_attention_item,
+};
 
 fn notice_attention_severity(notice: &Notice, now: DateTime<Utc>) -> AttentionSeverity {
     use AttentionSeverity as S;
@@ -70,13 +72,7 @@ pub(super) fn notice_attention_items(
             refs["task_id"] = json!(linked.id);
             runtime
                 .notice_linked_task(&linked.id)
-                .map(|task| AttentionTask {
-                    status: task.status,
-                    tags: task.tags.clone(),
-                    crew: task.crew.clone(),
-                    orchestrator: task.orchestrator.clone(),
-                    title: task.title.clone(),
-                })
+                .map(|task| attention_task(&task))
         });
         let ws = workspace.id.replace('\'', "'\\''");
         let show = AttentionNext {
@@ -98,18 +94,11 @@ pub(super) fn notice_attention_items(
             }],
         };
         let mut item = AttentionItem {
-            id: format!(
-                "att_notice_open_{}",
-                cursor::attention_digest(
-                    json!([
-                        AttentionKind::NoticeOpen,
-                        host.machine_id,
-                        notice.workspace.id,
-                        notice.id
-                    ])
-                    .to_string()
-                    .as_bytes()
-                )
+            id: cursor::attention_item_id(
+                AttentionKind::NoticeOpen,
+                &host.machine_id,
+                &notice.workspace.id,
+                &json!(notice.id),
             ),
             kind: AttentionKind::NoticeOpen,
             severity,
@@ -191,18 +180,11 @@ pub(super) fn friction_attention_items(
             AttentionSeverity::Low
         };
         let mut item = AttentionItem {
-            id: format!(
-                "att_friction_untriaged_{}",
-                cursor::attention_digest(
-                    json!([
-                        AttentionKind::FrictionUntriaged,
-                        host.machine_id,
-                        workspace.id,
-                        record.id
-                    ])
-                    .to_string()
-                    .as_bytes()
-                )
+            id: cursor::attention_item_id(
+                AttentionKind::FrictionUntriaged,
+                &host.machine_id,
+                &workspace.id,
+                &json!(record.id),
             ),
             kind: AttentionKind::FrictionUntriaged,
             severity,
