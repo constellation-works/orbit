@@ -69,7 +69,10 @@
 //!   such as every readable job carrying the same inherited or candidate
 //!   signature. The landing stays unclassified, and spends nothing, only
 //!   when no readable job decides; that stay holds the run as
-//!   `delivery_check_evidence_inconclusive`. A missing log of a `cancelled` or
+//!   `delivery_forge_observation_unavailable` after 5/10/20-second read
+//!   backoffs within the landing deadline. Its `job_logs_unavailable` waiting
+//!   gate lets the owner sweep re-read the evidence and resume classification
+//!   even while CI remains red. Unreadable answers are never cached. A missing log of a `cancelled` or
 //!   `timed_out` job is not this case: that conclusion is transient without
 //!   the log.
 //! - **inconclusive**: a log was read and still does not decide: it names no
@@ -95,7 +98,8 @@
 //! durable budget. Inherited handoff updates share a
 //! persisted count across polls, restarts and retries; auto-fix and
 //! absent-emission recovery keep their one-update budget. Unreadable
-//! evidence stops in review without spending recovery.
+//! evidence waits in review without spending recovery; unavailable failed-job
+//! logs retain a resumable waiting gate.
 //!
 //! A branch update moves the pull request's head off the accepted candidate.
 //! [`verified_base_update`] accepts the new head only when it reaches that
@@ -136,7 +140,10 @@ pub(in crate::executor::automation::vcs) use base_update::verify_published_base_
 pub(in crate::executor::automation::vcs) use head::{
     CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
-pub(in crate::executor::automation::vcs) use read_wait::{ReadWait, landing_read_wait};
+pub(super) use log::failed_job_logs_readable;
+pub(in crate::executor::automation::vcs) use read_wait::{
+    ReadWait, landing_log_read_wait, landing_read_wait,
+};
 pub(in crate::executor::automation::vcs) use recovery::{
     CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks,
 };

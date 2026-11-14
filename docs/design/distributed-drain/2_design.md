@@ -1192,6 +1192,16 @@ subject to fresh candidate and authority checks. The sweep allows at most three 
 ceiling. Other stops and stops after the automatic retry budget is exhausted use the operator's
 **Retry landing** or `orbit task retry-handoff` procedure. An operator-revoked refusal requires a
 recorded revoked authority.
+When no failed-job log can be read, including a collector timeout, landing retries the read
+after 5, 10 and 20 seconds within its original deadline. Exhaustion records a resumable
+`delivery_forge_observation_unavailable` hold with the `job_logs_unavailable` waiting gate.
+The owner sweep probes the failed jobs' logs, with a shared 60-second log-read deadline,
+and wakes the existing landing when they become readable even if the checks remain red.
+The ordinary classification then admits candidate requeue or base update/wait; the evidence
+gap itself authorizes neither. This gate shares the three automatic retries and authority
+checks above. A readable job can still decide a mixed set with an unreadable sibling.
+Only attributable readable log answers are cached; older cache entries that could retain
+unattributable output are ignored.
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch

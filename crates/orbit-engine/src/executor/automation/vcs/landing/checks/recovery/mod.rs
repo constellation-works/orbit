@@ -73,6 +73,8 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     handled_checks: BTreeSet<(Option<String>, String)>,
     /// Waits this attempt took for rate-limited check reads.
     pub(in crate::executor::automation::vcs) throttled_read_waits: u64,
+    /// Backoffs this attempt took when no failed-job log could be read.
+    pub(in crate::executor::automation::vcs) unavailable_log_waits: u64,
     /// The classification each action was taken on, for the evidence.
     actions: Vec<String>,
     /// Dependency ids authenticated for a waiter job in this attempt, or
@@ -136,6 +138,9 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     /// The provider rate-limited a job or log read: wait for its reset and
     /// read again, without classifying around the missing evidence.
     ReadDeferred(super::read_wait::ThrottledRead),
+    /// No readable failed-job log decided the failure: back off and read again,
+    /// then retain a waiting gate if the bounded reads still fail.
+    LogsUnavailable(String),
 }
 
 /// The names of the checks the rollup reports failed, with their workflow.

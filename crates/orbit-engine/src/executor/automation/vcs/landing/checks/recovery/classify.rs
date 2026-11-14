@@ -369,13 +369,18 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
         .failures
         .record(host, context, head, pr, &jobs, &code);
     // No readable job decided. An unknown log is not itself a class.
-    if jobs.is_empty()
-        || jobs
-            .iter()
-            .all(|job| job.class == CheckFailureClass::Unknown)
-    {
+    if jobs.is_empty() {
         return Ok(ControlFlow::Break(unclassified(unreadable_job_text(&jobs))));
     }
+    if jobs
+        .iter()
+        .all(|job| job.class == CheckFailureClass::Unknown)
+    {
+        return Ok(ControlFlow::Break(CheckRecoveryStep::LogsUnavailable(
+            unreadable_job_text(&jobs),
+        )));
+    }
+    recovery.unavailable_log_waits = 0;
     Ok(ControlFlow::Continue(ClassifiedFailures {
         moved_tip,
         jobs,
