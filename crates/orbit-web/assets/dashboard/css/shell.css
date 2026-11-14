@@ -163,14 +163,22 @@
    label. Keep the volume beside the label and the attention pill below it.
    The horizontal mobile rail has intrinsic-width buttons and needs no wrap. */
 @media (min-width: 761px) {
-  /* Short windows: the rail itself does not scroll. The selectors, every
-     destination and the foot stay put, and only the open destination's
-     views shrink into their own scrolling region. Tall windows are
-     unchanged: nothing grows, and the foot's margin-top:auto still takes
-     the spare room below the destinations. */
+  /* Short windows: the rail itself does not scroll; selectors and foot stay
+     put. When destination content exceeds the available height, the destination
+     column (.tabs) scrolls, and an open destination's views shrink into
+     their own scrolling region. Tall windows are unchanged: nothing grows,
+     and the foot's margin-top:auto still takes the spare room below the
+     destinations. */
   .rail { overflow-y: hidden; }
   .rail-host, .rail-workspace, .rail-foot { flex: 0 0 auto; }
-  .rail .tabs { flex: 0 1 auto; min-height: 0; overflow: hidden; }
+  .rail .tabs {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-padding-block: 4px;
+    scrollbar-width: thin;
+  }
   .rail-group { flex: 0 0 auto; min-height: 0; }
   .rail-group:has(> .rail-subtabs:not(.dimmed)) { flex: 0 1 auto; }
   .rail-group > .rail-group-label, .rail-group > .tab { flex: 0 0 auto; }
