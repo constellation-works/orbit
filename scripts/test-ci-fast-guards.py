@@ -3179,6 +3179,37 @@ class DoctestFenceGuardTests(unittest.TestCase):
         with self.subTest(name="inner"):
             self.assert_fence_at(inner, 1)
 
+    def test_long_runnable_fences_fail_in_line_and_block_docs(self):
+        cases = {
+            "line-four-backtick": ("/// ````rust\n/// assert_eq!(1, 2);\n/// ````\npub fn value() {}\n", 1),
+            "line-five-backtick": ("/// `````rust\n/// assert_eq!(1, 2);\n/// `````\npub fn value() {}\n", 1),
+            "line-four-tilde": ("/// ~~~~rust\n/// assert_eq!(1, 2);\n/// ~~~~\npub fn value() {}\n", 1),
+            "block-four-backtick": ("/**\n````rust\nassert_eq!(1, 2);\n````\n*/\npub fn value() {}\n", 2),
+            "block-four-tilde": ("/**\n~~~~rust\nassert_eq!(1, 2);\n~~~~\n*/\npub fn value() {}\n", 2),
+        }
+        for name, (source, line) in cases.items():
+            with self.subTest(name=name):
+                self.assert_fence_at(source, line)
+
+    def test_long_fence_closes_only_on_long_run_without_info(self):
+        short_stays = "/**\n````rust\n```\nassert_eq!(1, 2);\n````\n*/\npub fn value() {}\n"
+        result = self.assert_fence_at(short_stays, 2)
+        self.assertNotIn("crates/probe/src/lib.rs:3:", result.stderr)
+        longer_closes = "/**\n````rust\nassert_eq!(1, 2);\n`````\n*/\npub fn value() {}\n"
+        self.assert_fence_at(longer_closes, 2)
+        info_stays = "/// ````rust\n/// assert_eq!(1, 2);\n/// ```` rust\n/// ````\npub fn value() {}\n"
+        result = self.assert_fence_at(info_stays, 1)
+        self.assertNotIn("crates/probe/src/lib.rs:3:", result.stderr)
+
+    def test_embedded_close_inside_long_ignore_stays_clean(self):
+        cases = {
+            "line-ignore": "/// ````ignore\n/// ```\n/// not rust\n/// ````\npub fn value() {}\n",
+            "block-text": "/**\n````text\n```\nnot rust\n````\n*/\npub fn value() {}\n",
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assert_clean(source)
+
     def test_ignored_and_non_rust_fences_pass(self):
         cases = {
             "line-ignore": "/// ```rust,ignore\n/// assert_eq!(1, 2);\n/// ```\n",
