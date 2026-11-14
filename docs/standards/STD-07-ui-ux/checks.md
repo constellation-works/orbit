@@ -47,4 +47,5 @@ the same review by hand at 375px, 768px and 1440px in each theme it ships.
 | R36 | review-only: read the ranked column down each tied group |
 | R37 | review-only: compare the control with the previous release in the PR's screenshots |
 | R38 | review-only at 768px and 1440px. A candidate for a `ui.early-wrap` rule (for a wrapping flex row of controls, fail when it has more than one line and its first line plus the next item would fit its column plus the empty space beside it; also fail when a row that fits its column sits in a row of its own above the neighbouring column) |
+| R39 | review-only at 375px, 768px and 1440px, and at a side panel's narrowest width. A candidate for a `ui.header-wrap` rule (fail when a panel header or a row of summary figures has more than one line box) |
 | R26 | review-only: the fix task quotes the correction and names the rule, or the friction it filed |
