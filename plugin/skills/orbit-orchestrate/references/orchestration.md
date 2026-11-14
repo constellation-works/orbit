@@ -516,7 +516,7 @@ surface holds no context lock, so it protects no files.
 `context_files` while a drain is live.** File it `proposed`, run the pilot or
 set selectors, then promote. On 2026-10-10 three tasks filed straight into a
 live four-slot drain's backlog with no selectors were admitted together and
-all edited `website/src/styles/custom.css`; two of the runs were cancelled.
+all edited the website's then-shared stylesheet; two of the runs were cancelled.
 A drain or ship with more than one slot now treats such a task (no
 `context_files`, no `no-diff-expected` tag) as a whole-tree footprint. While
 an enabled task-pilot routine this host owns would still prepare it, the task
