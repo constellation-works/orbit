@@ -15,6 +15,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use super::agent_family;
 use super::{AgentFamily, CrewEnvVar, IdentityError, ProviderModelError};
 
 /// A resolved (orchestrator, helper) duo for a given agent family.
@@ -162,10 +163,10 @@ pub fn validate_antigravity_model(model: Option<&str>) -> Result<(), ProviderMod
 }
 
 fn is_legacy_gemini_cli_model_id(model: &str) -> bool {
-    if !model.starts_with("gemini-") {
+    let Some(rest) = model.strip_prefix("gemini-") else {
         return false;
-    }
-    !(model.ends_with("-low") || model.ends_with("-medium") || model.ends_with("-high"))
+    };
+    !(rest.ends_with("-low") || rest.ends_with("-medium") || rest.ends_with("-high"))
 }
 
 impl fmt::Display for ReasoningEffort {
@@ -403,28 +404,7 @@ pub fn infer_agent_family_from_model(model: &str) -> Option<String> {
         return Some(model);
     }
 
-    if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
-        return Some("codex".to_string());
-    }
-    if model.starts_with("claude-")
-        || model.starts_with("opus")
-        || model.starts_with("sonnet")
-        || model.starts_with("fable")
-    {
-        return Some("claude".to_string());
-    }
-    if model.starts_with("gemini-") {
-        return Some("gemini".to_string());
-    }
-    // Grok (xAI) — supports both grok-4 style and the shorter grok3* naming
-    if model.starts_with("grok-") || model.starts_with("grok3") {
-        return Some("grok".to_string());
-    }
-    if model.starts_with("muse-") {
-        return Some("muse".to_string());
-    }
-
-    None
+    agent_family::agent_family_from_model_prefix(&model).map(|family| family.as_str().to_string())
 }
 
 /// Normalize an optional legacy agent family and optional model into the agent

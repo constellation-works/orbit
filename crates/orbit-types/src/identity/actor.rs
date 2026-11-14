@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::identity::MACHINE_ID_PREFIX;
+use crate::identity::agent_family::{self, AgentFamily};
 use crate::identity::agent_pair::{agent_family_from_cli, all_agent_families};
 
 /// Typed identity for attribution across all Orbit artifacts.
@@ -79,31 +80,14 @@ pub fn agent_from_model(model: &str) -> Option<&'static str> {
         return None;
     }
 
-    if model.starts_with("claude-")
-        || model.starts_with("opus")
-        || model.starts_with("sonnet")
-        || model.starts_with("fable")
-    {
-        return Some("claude");
-    }
-    if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
-        return Some("codex");
-    }
-    if model.starts_with("gemini-") {
-        return Some("gemini");
-    }
     if model.starts_with("ollama:") {
         return Some("ollama");
     }
-    // Grok (xAI) family — covers grok-4, grok-3, and grok3* short names
-    if model.starts_with("grok-") || model.starts_with("grok3") {
-        return Some("grok");
-    }
-    if model == "muse" || model.starts_with("muse-") {
+    if model == "muse" {
         return Some("muse");
     }
 
-    None
+    agent_family::agent_family_from_model_prefix(&model).map(AgentFamily::as_str)
 }
 
 /// Infer a provider family from a model identifier.
