@@ -686,8 +686,8 @@ PIDS=()
 if [[ "$d_status" -eq 0 ]]; then
   fail "shared TCP daemon should not succeed for a different-source namespace"
 fi
-if ! grep -E -q 'does not exist|extern location|/tmp/orbit-workspace' "$WORKDIR/logs/bad-d.err" \
-  && ! grep -E -q 'does not exist|extern location|/tmp/orbit-workspace' "$WORKDIR/logs/bad-d"; then
+if ! grep -E -q 'does not exist|extern location' "$WORKDIR/logs/bad-d.err" \
+  && ! grep -E -q 'does not exist|extern location' "$WORKDIR/logs/bad-d"; then
   fail "shared-daemon failure did not look like the missing-artifact mismatch"
 fi
 

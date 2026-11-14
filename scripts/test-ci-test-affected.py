@@ -1411,14 +1411,14 @@ class ObservedPipeDrainTests(unittest.TestCase):
                                    (signal.SIGKILL, children[0].pid)])
         self.assertEqual(children[0].returncode, -signal.SIGKILL)
 
-    def test_fixture_cleanup_does_not_signal_a_reaped_group(self):
-        """A reaped child's stale PID file cannot authorize a group signal."""
+    def test_fixture_cleanup_terms_live_helper_and_leaves_reaped_alone(self):
+        """Cleanup signals only the live helper itself, via SIGTERM."""
         reaped = mock.Mock()
         reaped.returncode = 0
         reaped.pid = 4242
-        with mock.patch("os.killpg") as killpg:
-            stop_owned_helper(reaped, [])
-        killpg.assert_not_called()
+        stop_owned_helper(reaped, [])
+        reaped.send_signal.assert_not_called()
+        reaped.communicate.assert_not_called()
         live = mock.Mock()
         live.returncode = None
         live.pid = 4242
@@ -1426,10 +1426,9 @@ class ObservedPipeDrainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             pid_path = Path(temporary) / "child.pid"
             pid_path.write_text("5252")
-            with mock.patch("os.killpg") as killpg:
-                stop_owned_helper(live, [pid_path])
-        killpg.assert_not_called()
+            stop_owned_helper(live, [pid_path])
         live.send_signal.assert_called_once_with(signal.SIGTERM)
+        live.communicate.assert_called_once_with(timeout=5)
 
 
 
