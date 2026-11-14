@@ -4,7 +4,8 @@ use orbit_config::{
 };
 use orbit_types::identity::Crew;
 use orbit_types::task::{
-    CrewSource, Task, TaskComplexity, TaskOsRequirement, TaskPriority, TaskStatus, TaskType,
+    CrewSource, RedrawReason, Task, TaskComplexity, TaskOsRequirement, TaskPriority, TaskStatus,
+    TaskType,
 };
 use serde_json::Value;
 
@@ -172,12 +173,12 @@ impl OrbitRuntime {
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
         allowlist: Option<&CrewAllowlist>,
-    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        let (candidates, source) =
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
+        let (candidates, source, reason) =
             self.auto_task_crew_candidates_unresolved(task, pools, explicit, allowlist)?;
         let candidates =
             self.reresolve_auto_candidates(candidates, &task_auto_effort_subject(task))?;
-        Ok((candidates, source))
+        Ok((candidates, source, reason))
     }
 
     fn auto_task_crew_candidates_unresolved(
@@ -186,13 +187,14 @@ impl OrbitRuntime {
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
         allowlist: Option<&CrewAllowlist>,
-    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
         if explicit.and_then(non_empty).is_some() {
             return Ok((
                 vec![sole_candidate(
                     self.resolve_crew_for_task(explicit, task.crew.as_deref())?,
                 )],
                 "explicit".to_string(),
+                Some(RedrawReason::RunCrew),
             ));
         }
         let result = match self.usage_pressure_redraw_view(task)? {
@@ -250,7 +252,11 @@ impl OrbitRuntime {
         {
             return Ok(result);
         }
-        Ok((candidates, format!("{pool_source}; allowlist redraw")))
+        Ok((
+            candidates,
+            format!("{pool_source}; allowlist redraw"),
+            Some(RedrawReason::Allowlist),
+        ))
     }
 
     /// `task` as an admission re-draw sees it [ORB-17770]: with no crew and
@@ -393,7 +399,8 @@ impl OrbitRuntime {
         let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
             return Ok(None);
         };
-        let (crews, draw_source) = self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
+        let (crews, draw_source, _) =
+            self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
         let mut crews = self.reresolve_auto_candidates(crews, &task_auto_effort_subject(&view))?;
         // This re-draw weighs this host's usage pressure.
         let weighting = weighted_candidates(

@@ -3,8 +3,8 @@ use orbit_config::ComplexityCrewPools;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
     CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CrewAssignmentState, CrewSource,
-    RecordedCrewAssignment, Task, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
-    TaskStatus,
+    RecordedCrewAssignment, RedrawReason, Task, TaskComment, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskStatus,
 };
 use serde_json::{Value, json};
 
@@ -274,7 +274,7 @@ impl OrbitRuntime {
             .get("crew")
             .and_then(Value::as_str)
             .and_then(non_empty);
-        let (candidates, source) =
+        let (candidates, source, _) =
             self.auto_task_crew_candidates(task, &pools, explicit, Some(allowlist))?;
         if let [only] = candidates.as_slice()
             && only.weight > 0
@@ -359,7 +359,7 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let (mut crews, mut source) =
+        let (mut crews, mut source, mut reason) =
             self.auto_task_crew_candidates(task, &pools, explicit, allowlist.as_ref())?;
         // [ORB-17770] Weigh the narrowed pool by usage pressure; an
         // explicit run crew is the operator's call and has no draw to weigh.
@@ -374,6 +374,9 @@ impl OrbitRuntime {
         };
         if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
             source = format!("{source}; usage pressure");
+            if reason.is_none() {
+                reason = Some(RedrawReason::UsagePressure);
+            }
         }
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = match planned.as_deref().and_then(|planned| {
@@ -404,7 +407,7 @@ impl OrbitRuntime {
                 replacement: selected.crew.name.clone(),
             });
         }
-        if source.contains("; allowlist redraw")
+        if reason == Some(RedrawReason::Allowlist)
             && let Some(original) = task.crew.as_deref()
             && original != selected.crew.name
             && let Some(automatic) = self.task_crew_source(task)?
@@ -436,7 +439,7 @@ impl OrbitRuntime {
         });
         let written = match &experiment_pool {
             Some(pool) => AdmittedCrewSource::experiment(&pool.experiment, &pool.arm),
-            None => AdmittedCrewSource::redraw(&source, explicit.is_some()),
+            None => AdmittedCrewSource::redraw_reason(reason.unwrap_or(RedrawReason::Pool)),
         };
         input[SELECTION_KEY] = json!({
             "task_id": task.id,

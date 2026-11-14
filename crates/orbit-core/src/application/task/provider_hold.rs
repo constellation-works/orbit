@@ -25,13 +25,21 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::ProviderLimitExplicitCrews;
-use orbit_types::task::{CrewSource, Task, TaskHistoryEntry};
+use orbit_types::task::{CrewSource, RedrawReason, Task, TaskHistoryEntry};
 use orbit_types::workflow::{ProviderCrewOutage, ProviderFailureClass, ProviderFailureHold};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::CrewCandidate;
 use crate::application::task::{CrewPools, TaskJobPort};
 use crate::runtime::task::provider_hold::{same_provider, standing_provider_hold_from_history};
+
+/// The held draw, its standing hold, and the reason represented in its source.
+type HeldCandidates = (
+    Vec<CrewCandidate>,
+    String,
+    Option<ProviderFailureHold>,
+    Option<RedrawReason>,
+);
 
 /// One admission snapshot's provider-outage read and the widened holds it
 /// produced. Nested snapshots share the outer read.
@@ -328,7 +336,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         pools: &CrewPools,
-    ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
+    ) -> Result<HeldCandidates, OrbitError> {
         self.held_crew_candidates_for(task, pools, false)
     }
 
@@ -339,7 +347,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         pools: &CrewPools,
-    ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
+    ) -> Result<HeldCandidates, OrbitError> {
         self.held_crew_candidates_for(task, pools, true)
     }
 
@@ -348,18 +356,18 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CrewPools,
         claimed_leaf: bool,
-    ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
+    ) -> Result<HeldCandidates, OrbitError> {
         let (candidates, source) = if claimed_leaf {
             self.claimed_leaf_candidates_before_holds(task, pools)?
         } else {
             self.crew_candidates_before_holds(task, pools)?
         };
         let Some(hold) = self.admission_provider_hold(task) else {
-            return Ok((candidates, source, None));
+            return Ok((candidates, source, None, None));
         };
-        let (candidates, source) = self
-            .provider_held_candidates(task, pools, &hold, &candidates, &source)?
-            .unwrap_or((candidates, source));
-        Ok((candidates, source, Some(hold)))
+        let held = self.provider_held_candidates(task, pools, &hold, &candidates, &source)?;
+        let reason = held.is_some().then_some(RedrawReason::ProviderHold);
+        let (candidates, source) = held.unwrap_or((candidates, source));
+        Ok((candidates, source, Some(hold), reason))
     }
 }

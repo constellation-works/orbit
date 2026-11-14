@@ -521,7 +521,7 @@ pub(super) fn backlog_snapshot_in_mode(
             return true;
         }
         let resolution = runtime.auto_task_crew_candidates(task, pools, None, allowlist);
-        if let Ok((crews, _)) = &resolution {
+        if let Ok((crews, _, _)) = &resolution {
             let candidates = crews
                 .iter()
                 .filter(|candidate| candidate.weight > 0)
@@ -577,7 +577,7 @@ pub(super) fn backlog_snapshot_in_mode(
             reason: BacklogTaskExclusionReason::CrewNotAllowed,
             conflicts: Vec::new(),
             crew: Some(match resolution {
-                Ok((crews, _)) => crews
+                Ok((crews, _, _)) => crews
                     .into_iter()
                     .map(|candidate| candidate.crew.name)
                     .collect::<Vec<_>>()
