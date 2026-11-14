@@ -553,8 +553,8 @@
     },
     "orbit-registry": {
       "test_function_paths": [
-        "tests/workspace_registry.rs::injected_migration_write_failure_preserves_readable_legacy_registry",
-        "tests/workspace_registry.rs::migrating_read_rechecks_under_lock_and_preserves_interleaved_registration"
+        "tests/workspace_registry.rs::canonicalizing_read_rechecks_under_lock_and_preserves_interleaved_registration",
+        "tests/workspace_registry.rs::injected_canonicalizing_write_failure_preserves_readable_registry"
       ]
     },
     "orbit-runtime": {

@@ -642,14 +642,20 @@ pub fn verify_claimed_known_red_base(
                 "this owner could not read its base '{base_branch}': {error}"
             ))
         })?;
+    // The tip is a fully qualified ref (ORB-24726); name the branch the way
+    // the owner configured it, `agent-main` or `origin/agent-main`.
+    let shown = tip
+        .strip_prefix("refs/heads/")
+        .or_else(|| tip.strip_prefix("refs/remotes/"))
+        .unwrap_or(&tip);
     match crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, &tip) {
         Ok(true) => Ok(()),
         Ok(false) => Err(Inconclusive(format!(
-            "base {base_sha} is not in the history of this owner's {tip}, so its failures are \
+            "base {base_sha} is not in the history of this owner's {shown}, so its failures are \
              not the integration branch's"
         ))),
         Err(error) => Err(Inconclusive(format!(
-            "this owner could not place base {base_sha} in {tip}: {error}"
+            "this owner could not place base {base_sha} in {shown}: {error}"
         ))),
     }
 }

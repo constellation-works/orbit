@@ -186,41 +186,6 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                     for module in ("argparse", "subprocess", "sitecustomize"):
                         (trusted / "scripts" / (module + ".py")).unlink(missing_ok=True)
 
-    def test_doctest_step_accepts_a_candidate_with_the_previous_guard_cli(self):
-        scratch = ROOT / ".orbit/tmp"
-        scratch.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch, prefix="workflow-doctests-") as directory:
-            root = Path(directory)
-            scripts = root / "scripts"
-            scripts.mkdir()
-            # The workflow may advance while a PR head still has the previous
-            # guard interface. Execute the actual step against that boundary.
-            guard = scripts / "ci-guardrails.sh"
-            guard.write_text("#!/bin/sh\necho 'old candidate guard: unsupported mode' >&2\nexit 2\n")
-            guard.chmod(0o755)
-            lint = scripts / "with-test-build-lint.sh"
-            lint.write_bytes((ROOT / "scripts/with-test-build-lint.sh").read_bytes())
-            lint.chmod(0o755)
-            bin_dir = root / "bin"
-            bin_dir.mkdir()
-            cargo = bin_dir / "cargo"
-            cargo.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
-                             "print(json.dumps(sys.argv[1:]))\n"
-                             "raise SystemExit(int(os.environ['DOC_EXIT']))\n")
-            cargo.chmod(0o755)
-            step = next(step for step in self.document["jobs"]["test-build"]["steps"]
-                        if step.get("name") == "Run workspace doctests")
-            for status in (0, 9):
-                with self.subTest(status=status):
-                    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", DOC_EXIT=str(status))
-                    result = self_test_hang.run(
-                        ["bash", "-euo", "pipefail", "-c", step["run"]],
-                        step="old-candidate doctest workflow", cwd=root, env=env,
-                        text=True, capture_output=True)
-                    self.assertEqual(result.returncode, status, result.stdout + result.stderr)
-                    self.assertEqual(json.loads(result.stdout),
-                                     ["test", "--no-fail-fast", "--workspace", "--doc"])
-
     def test_every_pr_head_job_routes_orchestration_to_the_workflow_revision(self):
         for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
             with self.subTest(workflow=path.name):

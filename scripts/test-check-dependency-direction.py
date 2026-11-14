@@ -414,13 +414,14 @@ class RelativeImportTests(unittest.TestCase):
              for lower in lowers],
             rejected=True)
 
-    def test_task_names_the_forecast_only_in_its_two_shim_lines(self):
+    def test_task_cannot_name_the_forecast(self):
         shim = ("pub use crate::application::backlog_forecast::BacklogForecastHistory;\n"
                 "pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV;\n")
-        self.check_files({"task/mod.rs": shim}, rejected=False)
         # One batch per detector in the task chain (direct paths, grouped
         # trees, super chains): the guard stops at the first detector with a
         # hit, so a mixed batch could hide a row behind an earlier detector.
+        # The retired task/mod.rs re-exports are no longer an exception.
+        self.check_files({"task/mod.rs": shim}, rejected=True)
         self.check_rows([
             ("task/mod.rs", "pub use crate::application::backlog_forecast::Options;\n"),
             ("task/worker.rs", shim),
