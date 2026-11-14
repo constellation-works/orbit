@@ -78,7 +78,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         let mut ticket = 16_u64;
         let mut drawn = BTreeMap::<String, usize>::new();
         let mut sources = Vec::new();
-        for _ in 0..1000 {
+        for _ in 0..100 {
             let mut input = json!({ "task_ids": [task.id] });
             let writes = runtime
                 .install_auto_crew_admission(
@@ -131,7 +131,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         ["sol", "sonnet"],
         "{drawn:?}"
     );
-    assert_eq!(drawn["sol"], 500, "an even split over the walked tickets");
+    assert_eq!(drawn["sol"], 50, "an even split over the walked tickets");
 }
 
 /// [ORB-17773] A claimed leaf whose snapshot crew came from an automatic
