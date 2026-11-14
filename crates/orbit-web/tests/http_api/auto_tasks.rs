@@ -299,8 +299,8 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
 }
 
 /// The panel reads the listing every surface shares: the effective enabled
-/// state, which a legacy-enabled consumer no longer shows as disabled, and the
-/// ownership skip, which no longer looks like a live delivery trigger.
+/// state, and the ownership skip, which no longer looks like a live delivery
+/// trigger.
 #[test]
 fn list_reports_effective_enabled_and_the_ownership_skip() {
     isolated(
@@ -320,21 +320,10 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
                 seed_auto_task_with_schedule(&fixture, name, schedule);
             }
             fixture.runtime.auto_task_toggle("elsewhere", true).unwrap();
-            // Leave the consumer as the seed does: added disabled and written
-            // by no operator, so the deprecated policy still enables it.
-            let consumer = fixture.work.join("auto_tasks/delivery-code-review.yaml");
-            let body = fs::read_to_string(&consumer).unwrap();
-            let seeded = body
-                .lines()
-                .filter(|line| !line.starts_with("updated_by:"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert_ne!(seeded, body.trim_end(), "{body}");
-            fs::write(&consumer, seeded).unwrap();
-            let config = fixture.global.join("config.toml");
-            let mut global = fs::read_to_string(&config).unwrap_or_default();
-            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
-            fs::write(&config, global).unwrap();
+            fixture
+                .runtime
+                .auto_task_toggle("delivery-code-review", true)
+                .unwrap();
 
             let server = fixture.server(false);
             let listed = json_ok(server.get(URL));
@@ -342,7 +331,7 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
             let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
 
             let consumer = row("delivery-code-review");
-            assert_eq!(consumer["enabled"], false, "{consumer}");
+            assert_eq!(consumer["enabled"], true, "{consumer}");
             assert_eq!(consumer["effective_enabled"], true, "{consumer}");
             assert_ne!(
                 consumer["next_evaluation"]["state"], "disabled",
@@ -500,36 +489,18 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
     );
 }
 
-fn strip_operator_stamp(fixture: &Fixture, name: &str) {
-    let path = fixture.work.join(format!("auto_tasks/{name}.yaml"));
-    let body = fs::read_to_string(&path).unwrap();
-    let seeded = body
-        .lines()
-        .filter(|line| !line.starts_with("updated_by:"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_ne!(seeded, body.trim_end(), "{body}");
-    fs::write(&path, seeded).unwrap();
-}
-
-/// Disable on a legacy-enabled consumer must stamp the operator. The raw flag
-/// is already false, so compare-and-set still sends `expected_enabled: false`,
-/// and the write is what makes the next read effectively disabled. An ordinary
+/// Disable on an already-disabled consumer is a no-op: the raw flag is
+/// already false, so the effective switch already matches. An ordinary
 /// raw-off definition stays a no-op, and a stale raw token is still a conflict.
 #[test]
-fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
+fn disable_disabled_consumer_is_a_no_op_and_keeps_raw_cas() {
     isolated(
-        "auto_tasks::disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas",
+        "auto_tasks::disable_disabled_consumer_is_a_no_op_and_keeps_raw_cas",
         || {
             let fixture = Fixture::new();
             seed_auto_task_with_schedule(&fixture, "delivery-code-review", deliveries(None));
             seed_auto_task_with_schedule(&fixture, "parked", deliveries(None));
             definition(&fixture, "nightly");
-            strip_operator_stamp(&fixture, "delivery-code-review");
-            let config = fixture.global.join("config.toml");
-            let mut global = fs::read_to_string(&config).unwrap_or_default();
-            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
-            fs::write(&config, global).unwrap();
 
             let server = fixture.server(true);
             let toggle = "/api/auto-tasks/toggle?workspace=ws_http_fixture";
@@ -545,7 +516,7 @@ fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
             let listed = json_ok(server.get(URL));
             let consumer = row(&listed, "delivery-code-review");
             assert_eq!(consumer["enabled"], false, "{consumer}");
-            assert_eq!(consumer["effective_enabled"], true, "{consumer}");
+            assert_eq!(consumer["effective_enabled"], false, "{consumer}");
             let parked = row(&listed, "parked");
             assert_eq!(parked["enabled"], false, "{parked}");
             assert_eq!(parked["effective_enabled"], false, "{parked}");
@@ -579,7 +550,7 @@ fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
                 toggle,
                 json!({"name":"delivery-code-review","expected_enabled":false,"enabled":false}),
             ));
-            assert_eq!(disabled["changed"], true, "{disabled}");
+            assert_eq!(disabled["changed"], false, "{disabled}");
             assert_eq!(disabled["enabled"], false, "{disabled}");
             let listed = json_ok(server.get(URL));
             let consumer = row(&listed, "delivery-code-review");

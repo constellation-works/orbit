@@ -36,6 +36,7 @@ use orbit_types::task::{
     task_fields_updated_documents,
 };
 use orbit_types::workflow::DrainHoldFinding;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::application::agents::effort::{
@@ -62,6 +63,19 @@ pub(super) const MISSED: &str = "missed_scope_blocks";
 /// The unit the warning terms are rated per 100 of.
 pub(super) const SETTLED_UNIT: &str = "settled assessments";
 
+const EXCLUDED_NOT_PROPOSED: &str = "not proposed when assessed";
+const EXCLUDED_SUPERSEDED: &str = "superseded by a later assessment";
+const EXCLUDED_DROPPED: &str = "dropped while proposed";
+const EXCLUDED_BARE_EDIT: &str = "approved after a field edit naming no document";
+const EXCLUDED_ARCHIVED: &str = "archived after approval";
+const EXCLUDED_REASONS: &[&str] = &[
+    EXCLUDED_NOT_PROPOSED,
+    EXCLUDED_SUPERSEDED,
+    EXCLUDED_DROPPED,
+    EXCLUDED_BARE_EDIT,
+    EXCLUDED_ARCHIVED,
+];
+
 /// How an assessment settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::application::agents) enum Outcome {
@@ -77,8 +91,54 @@ pub(in crate::application::agents) enum Outcome {
     Pending,
 }
 
+#[derive(Serialize, Deserialize)]
+enum StoredOutcome {
+    Confirmed,
+    Dismissed,
+    Missed,
+    Clean,
+    Excluded(String),
+    Pending,
+}
+
+impl Serialize for Outcome {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            Self::Confirmed => StoredOutcome::Confirmed,
+            Self::Dismissed => StoredOutcome::Dismissed,
+            Self::Missed => StoredOutcome::Missed,
+            Self::Clean => StoredOutcome::Clean,
+            Self::Excluded(reason) => StoredOutcome::Excluded(reason.to_string()),
+            Self::Pending => StoredOutcome::Pending,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Outcome {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredOutcome::deserialize(deserializer)? {
+            StoredOutcome::Confirmed => Self::Confirmed,
+            StoredOutcome::Dismissed => Self::Dismissed,
+            StoredOutcome::Missed => Self::Missed,
+            StoredOutcome::Clean => Self::Clean,
+            StoredOutcome::Excluded(reason) => {
+                let known = EXCLUDED_REASONS
+                    .iter()
+                    .find(|known| **known == reason)
+                    .copied()
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(format!("unknown excluded reason '{reason}'"))
+                    })?;
+                Self::Excluded(known)
+            }
+            StoredOutcome::Pending => Self::Pending,
+        })
+    }
+}
+
 /// One task-pilot assessment and how it settled.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Assessment {
     /// When the receipt was written.
     pub(in crate::application::agents) at: DateTime<Utc>,
@@ -91,6 +151,7 @@ pub(in crate::application::agents) struct Assessment {
     /// When the outcome settled and the record that settled it.
     pub(in crate::application::agents) settled: Option<(DateTime<Utc>, String)>,
     /// The pilot run the receipt is attributed to, set after the scan.
+    #[serde(skip)]
     pub(in crate::application::agents) run: Option<PilotRun>,
     /// `full` or `recheck`; a receipt written before modes was a full pilot.
     pub(in crate::application::agents) mode: String,
@@ -134,7 +195,7 @@ impl Assessment {
 }
 
 /// A task's assessments and its block-triage markers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Warnings {
     pub(in crate::application::agents) assessments: Vec<Assessment>,
     /// When block triage recorded any disposition on the task.

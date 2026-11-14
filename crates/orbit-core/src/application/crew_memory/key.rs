@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use serde::Serialize;
 
 /// The key of the memory every model shares.
-pub const GLOBAL_MEMORY_KEY: &str = "global";
+pub(crate) const GLOBAL_MEMORY_KEY: &str = "global";
 
 /// Longest accepted model id.
 const MAX_KEY_LEN: usize = 128;
@@ -22,7 +22,7 @@ impl MemoryKey {
         Self(GLOBAL_MEMORY_KEY.to_string())
     }
 
-    pub fn is_global(&self) -> bool {
+    pub(crate) fn is_global(&self) -> bool {
         self.0 == GLOBAL_MEMORY_KEY
     }
 
@@ -32,7 +32,7 @@ impl MemoryKey {
 
     /// The directory `orbit memory export` renders a model's files into: the
     /// key with `/` and `:` replaced by `_`, so every key is one path segment.
-    pub fn export_dir_name(&self) -> String {
+    pub(crate) fn export_dir_name(&self) -> String {
         self.0.replace(['/', ':'], "_")
     }
 }
@@ -63,7 +63,7 @@ pub fn memory_key(recorded_crew_model: Option<&str>) -> Option<MemoryKey> {
 
 /// An operator-named key: `global`, or a model id under the same rule as a
 /// run's recorded model.
-pub fn parse_memory_key(raw: &str) -> Result<MemoryKey, OrbitError> {
+pub(crate) fn parse_memory_key(raw: &str) -> Result<MemoryKey, OrbitError> {
     let raw = raw.trim();
     if raw == GLOBAL_MEMORY_KEY {
         return Ok(MemoryKey::global());

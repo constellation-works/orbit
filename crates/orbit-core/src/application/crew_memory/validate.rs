@@ -10,13 +10,13 @@ use serde::Serialize;
 use super::{MemoryKey, MemoryWrite, MemoryWriter};
 
 /// Most files a model space holds.
-pub const MODEL_SPACE_MAX_FILES: usize = 8;
+pub(crate) const MODEL_SPACE_MAX_FILES: usize = 8;
 /// Most UTF-8 bytes a model space holds across its files.
-pub const MODEL_SPACE_MAX_BYTES: usize = 6 * 1024;
+pub(crate) const MODEL_SPACE_MAX_BYTES: usize = 6 * 1024;
 /// Most files the global memory holds.
-pub const GLOBAL_MAX_FILES: usize = 1;
+pub(crate) const GLOBAL_MAX_FILES: usize = 1;
 /// Most UTF-8 bytes the global memory holds.
-pub const GLOBAL_MAX_BYTES: usize = 3 * 1024;
+pub(crate) const GLOBAL_MAX_BYTES: usize = 3 * 1024;
 /// Longest file name stem before `.md`.
 const MAX_NAME_STEM: usize = 40;
 
@@ -135,7 +135,7 @@ pub struct MemoryWriteContext<'a> {
 /// Check `write` against every rule, in order: rewrite-whole, caps,
 /// provenance, score-blind, not-instructions. The first broken rule refuses
 /// the whole write.
-pub fn validate_memory_write(
+pub(crate) fn validate_memory_write(
     write: &MemoryWrite,
     context: &MemoryWriteContext<'_>,
 ) -> Result<(), MemoryWriteRefusal> {

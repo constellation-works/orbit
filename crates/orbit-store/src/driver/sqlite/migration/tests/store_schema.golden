@@ -562,3 +562,6 @@ v90 task_coordination_claim_indexes
 + ["index","idx_task_coordination_lifecycle_by_run","task_coordination_rows","CREATE INDEX idx_task_coordination_lifecycle_by_run\n         ON task_coordination_rows(workspace_id, json_extract(payload_json,'$.claim.run_context.run_id'))\n         WHERE kind = 'distributed-claim-lifecycle-v1'"]
 + ["index","idx_task_coordination_lifecycle_by_task","task_coordination_rows","CREATE INDEX idx_task_coordination_lifecycle_by_task\n         ON task_coordination_rows(workspace_id, json_extract(payload_json,'$.claim.task_id'))\n         WHERE kind = 'distributed-claim-lifecycle-v1'"]
 
+v91 agent_task_facts
++ ["table","agent_task_facts","agent_task_facts","CREATE TABLE agent_task_facts (\n            workspace_id TEXT NOT NULL,\n            task_id TEXT NOT NULL,\n            format_version INTEGER NOT NULL,\n            source TEXT NOT NULL,\n            facts_json TEXT NOT NULL,\n            PRIMARY KEY (workspace_id, task_id)\n        ) WITHOUT ROWID"]
+

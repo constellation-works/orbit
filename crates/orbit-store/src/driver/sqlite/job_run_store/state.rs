@@ -127,29 +127,29 @@ impl Store {
         state
             .checkpoint_write_supported()
             .map_err(OrbitError::Store)?;
-        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        // [ORB-20158] Never overwrite a checkpoint a newer binary wrote.
-        if let Some(raw) = read_state_json_conn(&conn, workspace_id, run_id)? {
-            refuse_unsupported_stored_checkpoint(&raw)?;
-        }
-        // A snapshot written after the run finished must not bring back what
-        // finalization compacted away.
-        let compacted = run_state_conn(&conn, workspace_id, run_id)?.and_then(|run_state| {
-            let mut compacted = state.clone();
-            compacted
-                .compact_for_terminal(run_state)
-                .then_some(compacted)
-        });
-        let state_json = serde_json::to_string(compacted.as_ref().unwrap_or(state))
-            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
-        if !write_state_json_conn(&conn, workspace_id, run_id, &state_json)? {
-            return Err(OrbitError::not_found(
-                NotFoundKind::JobRun,
-                run_id.to_string(),
-            ));
-        }
-        Ok(())
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            // [ORB-20158] Never overwrite a checkpoint a newer binary wrote.
+            if let Some(raw) = read_state_json_conn(&tx.tx, workspace_id, run_id)? {
+                refuse_unsupported_stored_checkpoint(&raw)?;
+            }
+            // A snapshot written after the run finished must not bring back what
+            // finalization compacted away.
+            let compacted = run_state_conn(&tx.tx, workspace_id, run_id)?.and_then(|run_state| {
+                let mut compacted = state.clone();
+                compacted
+                    .compact_for_terminal(run_state)
+                    .then_some(compacted)
+            });
+            let state_json = serde_json::to_string(compacted.as_ref().unwrap_or(state))
+                .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+            if !write_state_json_conn(&tx.tx, workspace_id, run_id, &state_json)? {
+                return Err(OrbitError::not_found(
+                    NotFoundKind::JobRun,
+                    run_id.to_string(),
+                ));
+            }
+            Ok(())
+        })
     }
 
     /// Initialize without replacing a checkpoint another writer supplied.

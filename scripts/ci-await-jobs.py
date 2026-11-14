@@ -51,6 +51,22 @@ wait then lists the run's artifacts and returns only once each name is present,
 unexpired and non-empty. A missing part stays pending until the timeout, which
 names it (`archive parts <name>`). A failed artifact listing is retried the
 same way and is never treated as an empty set.
+
+When a job or artifact listing fails (a non-200 or malformed, partial or
+total_count-mismatched page, or a failed `gh` call), the wait tracks
+consecutive failures. At the deadline it reports the listing as unavailable
+(`listing has been unavailable for <duration> (<n> consecutive failures, last
+error <signature>)`) instead of reporting a stale job status from the last
+successful listing as current; a listing killed at the deadline likewise
+reports every job as unknown. A 304 response only reuses the cached listing
+because GitHub's conditional-request semantics say a 304 confirms the cached
+representation is still current: a completed job changes that representation
+and its ETag, so the next poll returns 200. When a 403 or 429 response's
+explicit Retry-After, or its X-RateLimit-Reset once the primary quota is
+exhausted, lies beyond the remaining --timeout-seconds budget, the wait fails
+promptly with a distinct `ci-await: rate limit:` message for job and artifact
+listings alike instead of sleeping out the budget. A rate-limited or failed
+listing is never read as success.
 """
 
 import argparse
@@ -132,9 +148,20 @@ class JobListingPoller:
         self.not_modified = 0
         self.server_minimum = 0
         self.primary_remaining = 1000
+        self.job_failures = 0
+        self.job_failure_since = None
+        self.job_last_error = ""
+        self.job_rate_wait = None
+        self.artifact_failures = 0
+        self.artifact_failure_since = None
+        self.artifact_last_error = ""
+        self.artifact_rate_wait = None
+        self._page_rate_wait = None
+        self._last_http_status = ""
 
     def _backoff_minimum(self, headers, http_status):
         """Fold one response's backoff headers into the poll interval floor."""
+        self._last_http_status = http_status or self._last_http_status
         try:
             self.server_minimum = float(headers.get("x-poll-interval", str(self.server_minimum)))
             minimum = max(self.server_minimum, float(headers.get("retry-after", "0")))
@@ -143,9 +170,61 @@ class JobListingPoller:
                 minimum = max(minimum, float(headers["x-ratelimit-reset"]) - time.time())
             if http_status in ("403", "429") and "retry-after" not in headers:
                 minimum = max(minimum, 60)
+            if http_status in ("403", "429"):
+                explicit = None
+                if "retry-after" in headers:
+                    explicit = float(headers["retry-after"])
+                elif self.primary_remaining == 0 and "x-ratelimit-reset" in headers:
+                    explicit = float(headers["x-ratelimit-reset"]) - time.time()
+                if explicit is not None:
+                    self._page_rate_wait = (explicit if self._page_rate_wait is None
+                                            else max(self._page_rate_wait, explicit))
         except ValueError:
             minimum, self.primary_remaining = self.fallback_seconds, 0
         return minimum
+
+    def _error_signature(self):
+        if self._last_http_status in ("403", "429"):
+            return f"rate limit exceeded (HTTP {self._last_http_status})"
+        if self._last_http_status:
+            return f"HTTP {self._last_http_status}"
+        return "listing failed or malformed"
+
+    def _note_failure(self, kind):
+        now = time.monotonic()
+        signature = self._error_signature()
+        if kind == "job":
+            self.job_failures += 1
+            if self.job_failure_since is None:
+                self.job_failure_since = now
+            self.job_last_error = signature
+            self.job_rate_wait = self._page_rate_wait
+        else:
+            self.artifact_failures += 1
+            if self.artifact_failure_since is None:
+                self.artifact_failure_since = now
+            self.artifact_last_error = signature
+            self.artifact_rate_wait = self._page_rate_wait
+
+    def _note_success(self, kind):
+        if kind == "job":
+            self.job_failures, self.job_failure_since = 0, None
+            self.job_last_error, self.job_rate_wait = "", None
+        else:
+            self.artifact_failures, self.artifact_failure_since = 0, None
+            self.artifact_last_error, self.artifact_rate_wait = "", None
+
+    def unavailable_text(self, kind):
+        if kind == "job":
+            failures, since, error = self.job_failures, self.job_failure_since, self.job_last_error
+            label = "job listing"
+        else:
+            failures, since, error = self.artifact_failures, self.artifact_failure_since, self.artifact_last_error
+            label = "artifact listing"
+        duration = 0 if since is None else max(time.monotonic() - since, 0)
+        return (f"{label} has been unavailable for {duration:g} s "
+                f"({failures} consecutive failure{'s' if failures != 1 else ''}, "
+                f"last error {error or 'listing failed'})")
 
     def _parse_paginated_listing(self, stdout):
         """Split a --paginate --include --jq listing into per-page responses."""
@@ -175,6 +254,19 @@ class JobListingPoller:
         return pages
 
     def read_job_listing(self, remaining):
+        self._page_rate_wait = None
+        self._last_http_status = ""
+        try:
+            result = self._read_job_listing(remaining)
+        except ListingTimeout:
+            raise
+        if result is None:
+            self._note_failure("job")
+        else:
+            self._note_success("job")
+        return result
+
+    def _read_job_listing(self, remaining):
         started = time.monotonic()
         self.poll_seconds = max(self.server_minimum, self.fallback_seconds)
         self.requests += 1
@@ -232,7 +324,7 @@ class JobListingPoller:
                 remaining -= time.monotonic() - started
                 if remaining <= 0:
                     raise ListingTimeout
-                jobs = self.read_job_listing(remaining)
+                jobs = self._read_job_listing(remaining)
                 self.poll_seconds = max(self.poll_seconds, first_minimum, self.fallback_seconds)
                 return jobs
             # A truncated, HTML, or non-object body is an unusable listing.
@@ -258,6 +350,19 @@ class JobListingPoller:
         return self.jobs
 
     def read_artifact_names(self, remaining):
+        self._page_rate_wait = None
+        self._last_http_status = ""
+        try:
+            result = self._read_artifact_names(remaining)
+        except ListingTimeout:
+            raise
+        if result is None:
+            self._note_failure("artifact")
+        else:
+            self._note_success("artifact")
+        return result
+
+    def _read_artifact_names(self, remaining):
         """Return unexpired, non-empty artifact names, or None when the listing is unusable.
 
         A non-200 response, a short page, or a total_count that does not match
@@ -422,6 +527,14 @@ def await_workflow_jobs(args, poller):
             except ListingTimeout:
                 blocked = True
                 listing = "job listing still running at the deadline, killed"
+        if jobs is None and not blocked:
+            remaining_now = deadline - time.monotonic()
+            if (poller.job_rate_wait is not None and remaining_now > 0
+                    and poller.job_rate_wait > remaining_now):
+                print(f"ci-await: rate limit: {poller.unavailable_text('job')}; "
+                      f"retry/reset after {poller.job_rate_wait:g} s exceeds "
+                      f"remaining {remaining_now:g} s", file=sys.stderr)
+                return 1
         if jobs is not None and time.monotonic() < deadline:
             pending = []
             absent = []
@@ -469,6 +582,14 @@ def await_workflow_jobs(args, poller):
                     blocked = True
                     listing = "artifact listing still running at the deadline, killed"
                 if available is None:
+                    remaining_now = deadline - time.monotonic()
+                    if (not blocked and poller.artifact_rate_wait is not None
+                            and remaining_now > 0
+                            and poller.artifact_rate_wait > remaining_now):
+                        print(f"ci-await: rate limit: {poller.unavailable_text('artifact')}; "
+                              f"retry/reset after {poller.artifact_rate_wait:g} s exceeds "
+                              f"remaining {remaining_now:g} s", file=sys.stderr)
+                        return 1
                     pending.append("archive parts (listing unavailable)")
                 else:
                     missing = [name for name in args.artifacts if name not in available]
@@ -483,7 +604,11 @@ def await_workflow_jobs(args, poller):
                 return 0
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            if jobs is None and pending:
+            if blocked and jobs is None:
+                waiting = f"every job ({listing})"
+            elif jobs is None and poller.job_failures:
+                waiting = f"every job ({poller.unavailable_text('job')})"
+            elif jobs is None and pending:
                 waiting = ", ".join(pending)
                 if blocked:
                     waiting += f" (latest {listing})"

@@ -145,26 +145,18 @@ fn read_cpu_ticks(pid: u32) -> CpuRead {
     }
 }
 
-/// `utime + stime + cutime + cstime` from `/proc/<pid>/stat`.
-///
-/// Fields after the last `)`: state, ppid, pgrp, session, tty_nr, tpgid,
-/// flags, minflt, cminflt, majflt, cmajflt, then those four.
+/// `utime + stime + cutime + cstime` from `/proc/<pid>/stat`, parsed through
+/// the shared [`orbit_common::process::identity::parse_linux_process_stat`]
+/// owner.
 #[cfg(target_os = "linux")]
 fn parse_cpu_ticks(stat: &str) -> Option<u64> {
-    let (_, tail) = stat.rsplit_once(')')?;
-    let mut fields = tail.split_whitespace();
-    for _ in 0..11 {
-        fields.next()?;
-    }
-    let utime: u64 = fields.next()?.parse().ok()?;
-    let stime: u64 = fields.next()?.parse().ok()?;
-    let cutime: u64 = fields.next()?.parse().ok()?;
-    let cstime: u64 = fields.next()?.parse().ok()?;
+    let parsed = orbit_common::process::identity::parse_linux_process_stat(stat)?;
     Some(
-        utime
-            .saturating_add(stime)
-            .saturating_add(cutime)
-            .saturating_add(cstime),
+        parsed
+            .utime_ticks
+            .saturating_add(parsed.stime_ticks)
+            .saturating_add(parsed.cutime_ticks)
+            .saturating_add(parsed.cstime_ticks),
     )
 }
 

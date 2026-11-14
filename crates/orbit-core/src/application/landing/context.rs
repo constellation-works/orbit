@@ -170,9 +170,7 @@ impl OrbitRuntime {
             context =
                 context.with_handoff_observation(self.landing_observation(update, &accepted)?);
         }
-        self.stores()
-            .tasks()
-            .mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
+        self.mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
         if let Some(previous_task) = previous_task {
             let task = self.get_task(&previous_task.id)?;
             self.record_resolves_side_effects(previous_task.status, &task);
@@ -195,7 +193,7 @@ impl OrbitRuntime {
             .ok_or_else(|| missing_attempt(handoff_id))?
             .attempt;
         let digest = orbit_common::security::release::sha256_hex(reason.as_bytes());
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&context),
             &format!("landing-wait:{handoff_id}:{attempt}:{digest}"),
             &ClaimMutation::RecordLandingWait {
@@ -222,7 +220,7 @@ impl OrbitRuntime {
             .ok_or_else(|| missing_attempt(handoff_id))?
             .attempt;
         let digest = orbit_common::security::release::sha256_hex(note.as_bytes());
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&context),
             &format!("landing-history:{handoff_id}:{attempt}:{event}:{digest}"),
             &ClaimMutation::RecordLandingHistory {
@@ -252,7 +250,7 @@ impl OrbitRuntime {
             .ok_or_else(|| missing_attempt(handoff_id))?
             .attempt;
         let digest = orbit_common::security::release::sha256_hex(comment.as_bytes());
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&context),
             &format!("landing-completion-hold:{handoff_id}:{attempt}:{digest}"),
             &ClaimMutation::RecordLandingCompletionHold {

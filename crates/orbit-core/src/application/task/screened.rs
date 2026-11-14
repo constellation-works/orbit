@@ -18,6 +18,7 @@ use orbit_types::task::{
 use crate::OrbitRuntime;
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
+use super::TaskRow;
 use super::human_format::human_task_format_warnings;
 use super::params::{TaskAddParams, TaskUpdateParams};
 use super::paths::{ContextCreationAuthorization, compute_task_add_warnings};
@@ -69,6 +70,10 @@ impl TaskWriteScreen {
 #[derive(Debug, Clone)]
 pub struct ScreenedTaskWrite {
     pub task: Task,
+    /// Post-write bundle when the write already holds one. Absent when a
+    /// later read is required (evidence resume, a status change, or a write
+    /// that does not publish a document or history row).
+    pub(crate) row: Option<TaskRow>,
     /// Advisory signals about the stored task. None of them refused the write.
     pub warnings: Vec<String>,
     /// Canonical selectors stored without a verified anchor because the
@@ -82,6 +87,7 @@ impl From<Task> for ScreenedTaskWrite {
     fn from(task: Task) -> Self {
         Self {
             task,
+            row: None,
             warnings: Vec::new(),
             context_files_unverified: Vec::new(),
         }
@@ -154,6 +160,7 @@ impl OrbitRuntime {
         }
         Ok(ScreenedTaskWrite {
             task,
+            row: None,
             warnings,
             context_files_unverified: Vec::new(),
         })
@@ -171,10 +178,10 @@ impl OrbitRuntime {
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.write_screened_update(id, params, screen, |params| match authority {
             TaskUpdateAuthority::Lifecycle => {
-                self.update_task_with_identity(id, params, agent, model)
+                self.update_task_with_identity_applied(id, params, agent, model)
             }
             TaskUpdateAuthority::Forced => {
-                self.force_update_task_with_identity(id, params, agent, model)
+                self.force_update_task_with_identity_applied(id, params, agent, model)
             }
         })
     }
@@ -220,6 +227,7 @@ impl OrbitRuntime {
                 params,
                 owner,
             )
+            .map(|task| (task, None))
         })
     }
 
@@ -271,7 +279,7 @@ impl OrbitRuntime {
         id: &str,
         mut params: TaskUpdateParams,
         screen: &TaskWriteScreen,
-        write: impl FnOnce(TaskUpdateParams) -> Result<Task, OrbitError>,
+        write: impl FnOnce(TaskUpdateParams) -> Result<(Task, Option<TaskRow>), OrbitError>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         if let Some(relations) = params.relations.as_mut() {
@@ -306,12 +314,13 @@ impl OrbitRuntime {
             || params.tags.is_some()
             || params.context_files.is_some()
             || params.complexity.is_some();
-        let task = write(params)?;
+        let (task, row) = write(params)?;
         if updates_readiness {
             warnings.extend(backlog_footprint_warning(&task));
         }
         Ok(ScreenedTaskWrite {
             task,
+            row,
             warnings,
             context_files_unverified,
         })
@@ -396,6 +405,7 @@ impl OrbitRuntime {
         warnings.extend(backlog_footprint_warning(&task));
         ScreenedTaskWrite {
             task,
+            row: None,
             warnings,
             context_files_unverified: Vec::new(),
         }

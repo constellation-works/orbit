@@ -308,7 +308,7 @@ operator settings unless an authorized change is requested. See
 
 `operation.review_policy` and `operation.review_minutes` are deprecated: they
 still load, translated with a warning (`before-pr` → `review.timing = "before_pr"`;
-`after-landing` enables `delivery-code-review` until an operator toggles it;
+`after-landing` no longer enables `delivery-code-review` (its own `enabled` flag decides);
 `none` → `review.timing = "off"`), and a later release makes them errors. Move
 them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` and
 `operation.review_repair_cycles` are ignored with a warning; delete them.

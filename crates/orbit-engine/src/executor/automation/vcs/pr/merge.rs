@@ -206,13 +206,15 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         )));
     }
 
-    // Find the GitHub PR external ref from the first task that has one. The
-    // ref is re-recorded on every task below, link included when known.
+    // Find the current GitHub PR external ref (the latest recorded) from the
+    // first task that has one. The ref is re-recorded on every task below,
+    // link included when known.
     let pr_ref = batch_tasks
         .iter()
         .find_map(|task| {
             task.external_refs
                 .iter()
+                .rev()
                 .find(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
         })
         .cloned()

@@ -32,16 +32,16 @@ use crate::application::agents::memory_evidence::{
 use crate::application::task::{TaskAddParams, TaskRecordUpdateParams, TaskRecords};
 
 /// The tag every dreaming task carries.
-pub const CREW_MEMORY_DREAM_TAG: &str = "crew-memory-dream";
+pub(crate) const CREW_MEMORY_DREAM_TAG: &str = "crew-memory-dream";
 /// The external reference system that carries a dreaming task's
 /// `crew_memory_key`: its id is the model key the task reflects on.
-pub const CREW_MEMORY_KEY_REF_SYSTEM: &str = "crew-memory-key";
+pub(crate) const CREW_MEMORY_KEY_REF_SYSTEM: &str = "crew-memory-key";
 /// The task artifact holding a dreaming task's frozen evidence pack.
-pub const CREW_MEMORY_EVIDENCE_ARTIFACT: &str = "crew-memory-evidence.json";
+pub(crate) const CREW_MEMORY_EVIDENCE_ARTIFACT: &str = "crew-memory-evidence.json";
 /// Implementer units in the trailing 7 days a model needs to dream.
-pub const CREW_MEMORY_DREAM_MIN_SUPPORT: usize = 10;
+pub(crate) const CREW_MEMORY_DREAM_MIN_SUPPORT: usize = 10;
 /// The evidence pack's size cap.
-pub const CREW_MEMORY_EVIDENCE_MAX_BYTES: usize = 64 * 1024;
+pub(crate) const CREW_MEMORY_EVIDENCE_MAX_BYTES: usize = 64 * 1024;
 /// The agent tools a dreaming task's implementer is granted.
 pub(crate) const CREW_MEMORY_AGENT_TOOLS: &[&str] = &[
     "orbit.memory.show",

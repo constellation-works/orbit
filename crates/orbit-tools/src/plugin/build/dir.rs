@@ -43,21 +43,10 @@ pub fn is_live_plugin_build_dir(name: &OsStr) -> bool {
     else {
         return false;
     };
-    process_is_alive(pid)
-}
-
-#[cfg(unix)]
-fn process_is_alive(pid: i32) -> bool {
-    // SAFETY: signal 0 checks for existence and permission; it sends nothing.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(not(unix))]
-fn process_is_alive(_pid: i32) -> bool {
-    false
+    // The caller filters to positive pids, so the cast widens without loss;
+    // the zombie-aware owner reports unreaped zombies (and out-of-range pids
+    // on non-Unix) as dead.
+    orbit_common::process::identity::process_is_alive(pid as u32)
 }
 
 /// `<namespace_dir>/.build-<pid>-<nonce>/` with `src/`, `home/`, `tmp/`,

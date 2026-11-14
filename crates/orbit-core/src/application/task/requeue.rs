@@ -64,7 +64,6 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task,
     TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
@@ -244,32 +243,24 @@ impl OrbitRuntime {
                     fault_judged_by: None,
                 }),
             });
-        self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                &task.id,
-                StoreTaskUpdateParams {
-                    actor: requeue.actor.clone(),
-                    status: Some(TaskStatus::Backlog),
-                    status_event: Some(requeue.status_event.to_string()),
-                    status_note: Some(requeue.status_note.clone()),
-                    append_comments: requeue.comment.clone().into_iter().collect(),
-                    append_history: decided
-                        .clone()
-                        .into_iter()
-                        .chain(requeue.preserved.clone())
-                        .chain(requeue.history.clone())
-                        .collect(),
-                    expected_status: Some(vec![TaskStatus::Blocked]),
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task.id.clone(),
-                },
-            ))
-        })
+        self.stores().task_records().update(
+            &task.id,
+            StoreTaskUpdateParams {
+                actor: requeue.actor.clone(),
+                status: Some(TaskStatus::Backlog),
+                status_event: Some(requeue.status_event.to_string()),
+                status_note: Some(requeue.status_note.clone()),
+                append_comments: requeue.comment.clone().into_iter().collect(),
+                append_history: decided
+                    .clone()
+                    .into_iter()
+                    .chain(requeue.preserved.clone())
+                    .chain(requeue.history.clone())
+                    .collect(),
+                expected_status: Some(vec![TaskStatus::Blocked]),
+                ..Default::default()
+            },
+        )
     }
 
     /// Why `task`'s current run cannot be requeued yet, or `None` once it has

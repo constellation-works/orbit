@@ -45,7 +45,12 @@
 //! crews are also recorded as this host's [`ProviderCrewOutage`]s, which
 //! outlive the held task's status: until that failure's backoff ends, this
 //! host's local admission draws no task onto them, whether or not the held
-//! task is still in the backlog.
+//! task is still in the backlog. An authentication failure is its provider
+//! account's, not one model's, so the outage records every crew sharing
+//! that account (the provider's default-login crews, or the one crew that
+//! sets `env` for its own credential): local admission then draws another
+//! account's crew or defers, instead of dispatching the next task onto the
+//! same expired login in turn.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -119,6 +124,17 @@ impl RuntimeKernel {
             .on_machine(machine)
     }
 
+    /// [`Self::provider_hold_on`] from history the caller already read, so
+    /// an admission pass that has the task's bundle does not read it again.
+    pub fn provider_hold_on_from_history(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        machine: Option<&str>,
+    ) -> Option<ProviderFailureHold> {
+        standing_provider_hold_from_history(task, history, Utc::now())?.on_machine(machine)
+    }
+
     /// The hold a run that failed with `class` places on `task`.
     ///
     /// The failing provider is the one the failure names, else the run
@@ -168,7 +184,26 @@ impl RuntimeKernel {
             now,
         )?;
         if class == ProviderFailureClass::Unavailable {
-            for crew in failure.excluded_crews {
+            // The outage is the failing account's: every configured crew
+            // sharing it, plus any excluded crew the registry no longer
+            // names, so the next admission cannot dispatch onto the same
+            // expired login through a sibling crew of the same account.
+            let registry = self.context.settings().crews();
+            let mut outage_crews: Vec<String> = registry
+                .values()
+                .filter(|crew| {
+                    Some(&crew.assignment.provider) == failure.provider.as_ref()
+                        || failure.provider.as_deref().is_some_and(|provider| {
+                            same_provider(Some(&crew.assignment.provider), Some(provider))
+                        })
+                })
+                .filter(|crew| crew.account() == failure.account.as_deref())
+                .map(|crew| crew.name.clone())
+                .collect();
+            outage_crews.extend(failure.excluded_crews.iter().cloned());
+            outage_crews.sort();
+            outage_crews.dedup();
+            for crew in outage_crews {
                 let outage = ProviderCrewOutage {
                     provider: failure.provider.clone(),
                     crew,

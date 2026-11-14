@@ -99,3 +99,23 @@ fn only_a_clean_exit_without_an_envelope_at_the_injected_budget_is_a_timeout() {
         );
     }
 }
+
+// An accepted envelope used to keep the agent's `provider` and `exit_code`
+// and list both as the agent's answer.
+#[test]
+fn an_agent_result_cannot_replace_orbit_owned_provider_or_exit_code() {
+    let envelope = concat!(
+        r#"{"schemaVersion":1,"status":"success","result":{"#,
+        r#""provider":"spoofed","exit_code":7,"marker":"kept"},"error":null}"#
+    );
+    let outcome = project_stdout("fixture", envelope.as_bytes(), true, false, false);
+    assert!(
+        outcome.success,
+        "accepted envelope should succeed: {}",
+        outcome.message.unwrap_or_default()
+    );
+    assert_eq!(outcome.output["provider"], json!("fixture"));
+    assert_eq!(outcome.output["exit_code"], json!(0));
+    assert_eq!(outcome.output["marker"], json!("kept"));
+    assert_eq!(outcome.output["response_result_fields"], json!(["marker"]));
+}
