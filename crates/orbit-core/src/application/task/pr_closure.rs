@@ -349,7 +349,11 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<ClaimInspection>, String> {
-        match self.stores().tasks().inspect_execution_claims() {
+        match self
+            .stores()
+            .tasks()
+            .inspect_task_execution_claims(&task.id)
+        {
             Ok(claims) => Self::unsettled_task_claim_with_claims(task, Some(&claims)),
             Err(_) => Self::unsettled_task_claim_with_claims(task, None),
         }
@@ -430,7 +434,7 @@ impl OrbitRuntime {
     /// claims, or a failed read, contributes none: those PRs then stay open
     /// rather than being guessed at.
     pub(super) fn accepted_handoff_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
-        match self.stores().tasks().inspect_execution_claims() {
+        match self.stores().tasks().inspect_task_execution_claims(task_id) {
             Ok(claims) => self.accepted_handoff_pull_requests_with_claims(task_id, Some(&claims)),
             Err(_) => self.accepted_handoff_pull_requests_with_claims(task_id, None),
         }

@@ -40,11 +40,9 @@ impl ClaimHolders {
     pub(crate) fn read_for_admission(runtime: &OrbitRuntime) -> Result<Self, OrbitError> {
         Ok(Self {
             by_task: runtime
-                .inspect_execution_claims()?
+                .inspect_live_execution_claims()?
                 .into_iter()
-                .map(|inspection| inspection.claim)
-                .filter(|claim| claim.phase.protects_footprint())
-                .map(|claim| (claim.task_id.clone(), claim))
+                .map(|inspection| (inspection.claim.task_id.clone(), inspection.claim))
                 .collect(),
         })
     }

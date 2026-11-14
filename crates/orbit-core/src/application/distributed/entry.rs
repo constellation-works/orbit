@@ -159,14 +159,11 @@ impl crate::OrbitRuntime {
         // already being executed" is the more actionable of the two, and a
         // saturated host would otherwise mask it.
         if !task_ids.is_empty() {
-            let claims = self.inspect_execution_claims()?;
+            let claims = self.inspect_live_execution_claims()?;
             if let Some(claim) = claims
                 .iter()
                 .map(|inspection| &inspection.claim)
-                .find(|claim| {
-                    claim.phase.protects_footprint()
-                        && task_ids.iter().any(|task_id| task_id == &claim.task_id)
-                })
+                .find(|claim| task_ids.iter().any(|task_id| task_id == &claim.task_id))
             {
                 decision.refusal = Some(DrainEntryRefusal::Claimed {
                     task_id: claim.task_id.clone(),

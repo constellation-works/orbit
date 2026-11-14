@@ -74,12 +74,10 @@ impl TaskV2Store {
         let write_disabled_reason = if readonly {
             Some("task storage is read-only".into())
         } else if let Some(boundary) = &self.coordination {
-            match boundary.inspect_execution_claims() {
+            match boundary.inspect_task_execution_claims(id) {
                 Ok(claims) => claims
                     .iter()
-                    .find(|claim| {
-                        claim.claim.task_id == id && claim.claim.phase.protects_footprint()
-                    })
+                    .find(|claim| claim.claim.phase.protects_footprint())
                     .map(|claim| active_claim_reason(&claim.claim)),
                 Err(error) => Some(error.to_string()),
             }
