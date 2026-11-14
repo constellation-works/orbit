@@ -1,13 +1,13 @@
-//! Public provider timeout derivation and usage-limit reset instants, including
-//! resets read across the year boundary.
+//! Public provider timeout derivation, usage-limit reset instants (including
+//! resets read across the year boundary) and billing-quota classification.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::time::Duration;
 
 use chrono::{FixedOffset, TimeZone, Utc};
 use orbit_agent::{
-    apply_antigravity_print_timeout, provider_usage_limit, provider_usage_limit_details,
-    provider_usage_windows,
+    apply_antigravity_print_timeout, provider_quota_exceeded, provider_usage_limit,
+    provider_usage_limit_details, provider_usage_windows,
 };
 use orbit_types::workflow::activity_job::Provider;
 
@@ -259,6 +259,27 @@ fn grok_failure_texts_are_classified_as_provider_usage_limits() {
     assert!(
         provider_usage_limit(older_402),
         "should detect limit in grok 1.0.46 402 text"
+    );
+}
+
+/// [ORB-24803] Claude Code's billing diagnostic, as its terminal `result`
+/// frame carries it, is a quota exhaustion. Explicit usage-limit wording in
+/// the same text keeps precedence, so its reset stays available to scheduling.
+#[test]
+fn claude_credit_balance_text_is_quota_exhaustion_unless_a_usage_limit_is_named() {
+    let billing = "Credit balance is too low";
+    assert!(
+        provider_quota_exceeded(billing),
+        "Claude's exact billing diagnostic must classify as quota exhaustion"
+    );
+    assert!(!provider_usage_limit(billing));
+
+    let overlapping =
+        format!("{billing}\nYou've hit your limit · resets Jan 2, 3am (America/Los_Angeles)");
+    assert!(provider_usage_limit(&overlapping));
+    assert!(
+        !provider_quota_exceeded(&overlapping),
+        "an explicit usage limit must take precedence over the billing phrase"
     );
 }
 
