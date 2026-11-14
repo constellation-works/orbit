@@ -192,6 +192,12 @@ pub(crate) fn execute(
                 serde_json::to_value(runtime.task_defect_filings(optional_field(input, "since")?)?)
             }
             "task" => serde_json::to_value(runtime.get_task(id)?),
+            // Lightweight row for a show whose canonical bundle read failed.
+            // `null` when the id has no settled bundle.
+            "listed_task" => match runtime.get_listed_task_row(id)? {
+                Some(row) => serde_json::to_value(row),
+                None => Ok(Value::Null),
+            },
             "artifacts" => serde_json::to_value(runtime.get_task_artifacts(id)?),
             "manifest" => serde_json::to_value(runtime.get_task_artifact_manifest(id)?),
             // Compatibility from 2026-11-09: pre-artifact followers decode

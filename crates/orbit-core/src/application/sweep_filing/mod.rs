@@ -81,11 +81,6 @@ pub(crate) fn full_revision(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Prefix of the run-store error when this workspace has no delivery run for
-/// the task. `latest_delivery_run_id` in the delivery observation builds it.
-const ABSENT_DELIVERY_RUN_PREFIX: &str =
-    "no task delivery run in this workspace was submitted with task ";
-
 /// Read the merged landed commit for `task_id`, if delivery evidence is valid.
 ///
 /// An owner-run delivery is read from this workspace's run store. A pull
@@ -93,27 +88,18 @@ const ABSENT_DELIVERY_RUN_PREFIX: &str =
 /// owner's `landing_completed` note. A present run, merged or not, stays on
 /// the run-store result.
 pub(crate) fn landed_task_commit(runtime: &OrbitRuntime, task_id: &str) -> Option<String> {
-    match runtime.observe_task_delivery(task_id, None) {
-        Ok(observation) => {
+    match runtime.find_task_delivery(task_id) {
+        Ok(Some(observation)) => {
             return (observation.landing.status == LandingObservationStatus::Merged)
                 .then_some(observation.landing.landed_commit)
                 .flatten()
                 .filter(|commit| full_revision(commit));
         }
-        Err(error) if absent_delivery_run(&error) => {}
+        Ok(None) => {}
         Err(_) => return None,
     }
     let history = runtime.get_task_history(task_id).ok()?;
     owner_landing_commit(&history).filter(|commit| full_revision(commit))
-}
-
-/// Whether `error` is the run store reporting that no delivery run for the
-/// task exists in this workspace.
-fn absent_delivery_run(error: &OrbitError) -> bool {
-    matches!(
-        error,
-        OrbitError::InvalidInput(message) if message.starts_with(ABSENT_DELIVERY_RUN_PREFIX)
-    )
 }
 
 /// Merge commit on the latest owner `landing_completed` note.
