@@ -1,12 +1,12 @@
 use super::super::super::super::response_diagnostics::declared_failure_code;
 use orbit_types::workflow::{
-    ClaimFailureClass, HeldFailure, OWNER_SIGNOFF_REQUIRED_ERROR_CODE, STALLED_ERROR_CODE,
-    STALLED_MARKER, StepFailureCode, TRANSIENT_FAILURE_MARKER, failed_provider,
-    is_owner_route_unavailable, is_provider_unavailable,
+    ClaimFailureClass, HeldFailure, OWNER_SIGNOFF_REQUIRED_ERROR_CODE, ProviderFailureClass,
+    ProviderLimitFailure, STALLED_ERROR_CODE, STALLED_MARKER, StepFailureCode,
+    TRANSIENT_FAILURE_MARKER, failed_provider, is_owner_route_unavailable, is_provider_unavailable,
 };
 use serde_json::json;
 
-use super::projection::{project, project_stdout};
+use super::projection::{project, project_provider_output, project_stdout};
 use crate::DispatchError;
 
 #[test]
@@ -127,6 +127,90 @@ fn a_codex_quota_turn_failure_is_provider_unavailable() {
             "ordinary Codex exit keeps its classification: {message}"
         );
     }
+    // Billing quota, timed usage limits and host disk quota must retain distinct
+    // completion classifications, even when a limit also says quota exceeded.
+    const GEMINI_LIMIT: &str = "You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 10. Please retry in 34s.";
+    const BILLING: &str = "Quota exceeded. Check your plan and billing details.";
+    const DISK: &str = "Disk quota exceeded (os error 122)";
+    let overlapping_limit = format!("{BILLING}\nUsage limit reached. Please retry in 34s.");
+    let mut failures = Vec::new();
+    for (provider, text, expected, frame) in [
+        (
+            "gemini",
+            GEMINI_LIMIT,
+            "limit",
+            json!({"type":"error", "error":{"message":GEMINI_LIMIT}}).to_string(),
+        ),
+        (
+            "claude",
+            overlapping_limit.as_str(),
+            "limit",
+            format!(
+                "{}\n{}",
+                json!({"type":"result", "is_error":true, "result":BILLING}),
+                json!({"type":"result", "is_error":true, "result":overlapping_limit}),
+            ),
+        ),
+        (
+            "codex",
+            overlapping_limit.as_str(),
+            "limit",
+            json!({"type":"turn.failed", "error":{"message":overlapping_limit}}).to_string(),
+        ),
+        (
+            "codex",
+            BILLING,
+            "billing",
+            json!({"type":"turn.failed", "error":{"message":BILLING}}).to_string(),
+        ),
+        (
+            "codex",
+            DISK,
+            "host",
+            json!({"type":"turn.failed", "error":{"message":DISK}}).to_string(),
+        ),
+    ] {
+        let frame = frame.as_bytes();
+        for (stdout, stderr, exit_success) in [
+            (frame, b"".as_slice(), false),
+            (b"".as_slice(), text.as_bytes(), false),
+        ]
+        .into_iter()
+        .chain((provider == "claude" || expected == "billing").then_some((
+            frame,
+            b"".as_slice(),
+            true,
+        ))) {
+            let before = chrono::Utc::now();
+            let outcome =
+                project_provider_output(provider, stdout, stderr, exit_success, false, false);
+            let after = chrono::Utc::now();
+            let message = outcome.message.as_deref().unwrap_or_default();
+            let limit = ProviderLimitFailure::from_text(message);
+            let classified_correctly = match expected {
+                "limit" => {
+                    limit
+                        .and_then(|limit| limit.resets_at)
+                        .is_some_and(|reset| {
+                            reset >= before + chrono::Duration::seconds(33)
+                                && reset <= after + chrono::Duration::seconds(34)
+                        })
+                        && ProviderFailureClass::of(None, Some(message))
+                            == Some(ProviderFailureClass::Limit)
+                }
+                "billing" => is_provider_unavailable(None, Some(message)) && limit.is_none(),
+                "host" => !is_provider_unavailable(None, Some(message)) && limit.is_none(),
+                _ => unreachable!("known fixture classification"),
+            };
+            if outcome.success || !classified_correctly {
+                failures.push(format!(
+                    "{provider} {expected} stdout={} exit_success={exit_success}: {message}",
+                    !stdout.is_empty()
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// [ORB-23956] An implement step that declares `owner_signoff_required` is
