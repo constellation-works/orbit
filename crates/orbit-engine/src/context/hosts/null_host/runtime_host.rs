@@ -3,7 +3,6 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
-use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
@@ -580,14 +579,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn resolved_crew_model(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         NullRuntimeHost::resolved_crew_model(self, run_id)
     }
-    fn run_tool_with_context_and_role(
+    fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
-        NullRuntimeHost::run_tool_with_context_and_role(self, name, input, role, tool_context)
+        NullRuntimeHost::run_tool_with_context(self, name, input, tool_context)
     }
     fn run_private_vcs_operation(
         &self,

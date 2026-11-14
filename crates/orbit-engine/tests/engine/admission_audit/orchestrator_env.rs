@@ -752,6 +752,51 @@ fn run_cli_backend_redacts_live_env_values_in_stored_blobs() {
     }
 }
 
+/// [ORB-24556] An accepted envelope whose `result` names `provider` and
+/// `exit_code` cannot replace the supervisor's values or list them as the
+/// agent's answer. A non-colliding key stays the agent's answer.
+#[test]
+fn run_cli_backend_keeps_orbit_owned_output_over_an_agent_result() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::run_cli_backend_keeps_orbit_owned_output_over_an_agent_result"
+    )) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"provider":"spoofed","exit_code":7,"marker":"kept"},"error":null}'
+"##,
+    );
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-orbit-owned-output", "grok:grok-build");
+
+    let outcome = run_cli_backend(
+        &TestHost::with_command(script.display().to_string()),
+        &test_agent_loop_spec_for("grok", Duration::from_secs(10)),
+        "test_activity",
+        "job-orbit-owned-output",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["provider"], serde_json::json!("grok"));
+    assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
+    assert_eq!(outcome.output["marker"], serde_json::json!("kept"));
+    assert_eq!(
+        outcome.output["response_result_fields"],
+        serde_json::json!(["marker"])
+    );
+}
+
 /// [ORB-14090] A provider that dirties its read-only inspection checkout still
 /// leaves stdout/stderr blobs and `CliInvocationFinished` on the run, and the
 /// step error names those blobs.

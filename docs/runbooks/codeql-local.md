@@ -8,7 +8,8 @@ last_validated: 2026-11-08
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
 
-Hosted CodeQL analyses `agent-main` pushes (not pull requests). Use this
+Hosted CodeQL analyses `main` pushes and runs daily on `agent-main` (not pull
+requests). Use this
 procedure before handoff only when the agent guide (`CLAUDE.md`, "Local Rust
 CodeQL") requires it: a code-scanning or CodeQL repair, a task tagged
 `security` or `security-review`, or a change to `.github/codeql/**` or
@@ -408,9 +409,9 @@ this check returns `incomplete` with an `external_evidence` entry of kind
 `codeql`, name `Linux CodeQL (rust)`, that exact command, and the result
 artifact `evidence/codeql-rust-linux.json`. Settlement then holds the review
 for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). This repository's hosted `CodeQL / Analyze (rust)`
-job runs only on pushes to `main` and `agent-main` and on the weekly schedule,
-never for a pull request, so it cannot supply evidence for a candidate before
-its PR opens or lands.
+job runs on pushes to `main` and on the daily schedule for `agent-main`, never
+for a pull request, so it cannot supply evidence for a candidate before its PR
+opens or lands.
 
 A claimed leaf does not depend on its reviewer to name the check. The owner
 declares a workspace rule that a Rust change owes it:

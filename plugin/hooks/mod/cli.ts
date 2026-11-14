@@ -21,8 +21,7 @@ export function ownerHost(value: unknown): string | null {
 
 /**
  * The SSH hosts Orbit's federated MCP muxes: the `orbit host add` file
- * (`~/.orbit/hosts.toml`, one `ssh = "<host>"` per `[[hosts]]`) or, before its
- * first migration, the legacy `~/.orbit/mcp-destinations.toml`. In file order;
+ * (`~/.orbit/hosts.toml`, one `ssh = "<host>"` per `[[hosts]]`). In file order;
  * hosts SSH could read as an option are dropped.
  */
 export function federatedHosts(toml: string): string[] {
@@ -30,11 +29,11 @@ export function federatedHosts(toml: string): string[] {
   return [...new Set(hosts.filter(host => HOST.test(host)))]
 }
 
-/** Reads `~/.orbit/hosts.toml`, else the legacy `~/.orbit/mcp-destinations.toml`; empty when neither exists. */
+/** Reads `~/.orbit/hosts.toml`; empty when it does not exist. */
 export const destinationsArgv: readonly string[] = [
   '/bin/sh',
   '-c',
-  'cat "$HOME/.orbit/hosts.toml" 2>/dev/null || cat "$HOME/.orbit/mcp-destinations.toml" 2>/dev/null || true',
+  'cat "$HOME/.orbit/hosts.toml" 2>/dev/null || true',
 ]
 
 /** `orbit` from PATH, or from ~/.orbit/bin where the installer puts it. */

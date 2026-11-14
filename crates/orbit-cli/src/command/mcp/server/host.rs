@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSelection};
-use orbit_cmd::task_owner::{self, WorkspaceIdentity};
+use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::protocol::tool_input::required_string;
@@ -40,12 +40,26 @@ pub(super) struct ServerMcpHost {
     workspace_runtimes: WorkspaceRuntimeCache,
     pub(super) plugin_surface: HostPluginMcpCache,
     definitions: Mutex<Option<CachedMcpDefinitions>>,
+    /// Owner-route SSH sessions parked between a claimed worker's calls. The
+    /// probe is rebuilt per call, so the pool lives here to outlast it.
+    owner_route_sessions: federated::RoutedSessionPool,
+    /// One task-registry handle for id-routed owner lookups, so a warm server
+    /// does not reopen the registry on every `orbit.task.show`.
+    task_owners: TaskOwnerLookup,
 }
 
 /// The combined tool surface and the plugin snapshot it was built from.
 struct CachedMcpDefinitions {
     plugins: Arc<HostPluginMcpSurface>,
     value: Arc<Vec<McpToolDefinition>>,
+}
+
+/// One advertised-definitions resolution: the combined definitions and
+/// the plugin snapshot they were built from (`None` when the plugin read
+/// failed and plugin tools were omitted).
+pub(super) struct AdvertisedMcpSurface {
+    pub(super) definitions: Arc<Vec<McpToolDefinition>>,
+    pub(super) plugins: Option<Arc<HostPluginMcpSurface>>,
 }
 
 impl ServerMcpHost {
@@ -63,6 +77,8 @@ impl ServerMcpHost {
             workspace_runtimes: WorkspaceRuntimeCache::default(),
             plugin_surface: HostPluginMcpCache::default(),
             definitions: Mutex::new(None),
+            owner_route_sessions: federated::RoutedSessionPool::default(),
+            task_owners: TaskOwnerLookup::default(),
         }
     }
 
@@ -71,16 +87,33 @@ impl ServerMcpHost {
         name: &str,
         context: &ToolSessionContext,
     ) -> Result<McpToolDefinition, OrbitError> {
-        self.advertised_definitions()?
+        let surface = self.advertised_surface()?;
+        self.definition_from_advertised(&surface, name, context)
+    }
+
+    /// Find `name` in one already-resolved advertised surface, building the
+    /// unknown-tool error (with suggestions) from that same snapshot.
+    pub(super) fn definition_from_advertised(
+        &self,
+        surface: &AdvertisedMcpSurface,
+        name: &str,
+        context: &ToolSessionContext,
+    ) -> Result<McpToolDefinition, OrbitError> {
+        surface
+            .definitions
             .iter()
             .find(|definition| definition.schema.name == name)
             .cloned()
             .ok_or_else(|| {
-                let definitions = self.advertised_definitions().unwrap_or_default();
-                let hidden = self.hidden_tool_names(context);
+                let hidden = self.hidden_tool_names_from_surface(
+                    context,
+                    Some(surface.plugins.as_ref()),
+                    Some(&surface.definitions),
+                );
                 orbit_core::adapter::command::tool_suggestions::unknown_tool_error(
                     name,
-                    definitions
+                    surface
+                        .definitions
                         .iter()
                         .filter(|definition| {
                             definition.schema.builtin && !hidden.contains(&definition.schema.name)
@@ -94,10 +127,68 @@ impl ServerMcpHost {
             })
     }
 
+    /// Hidden tool names, reusing a resolved plugin snapshot when the
+    /// caller already has one. `plugins` is `None` to resolve the snapshot
+    /// here, or `Some(snapshot)` to reuse it (`Some(None)` when that
+    /// resolution omitted plugin tools, which hides nothing).
+    pub(super) fn hidden_tool_names_from_surface(
+        &self,
+        context: &ToolSessionContext,
+        plugins: Option<Option<&Arc<HostPluginMcpSurface>>>,
+        definitions: Option<&[McpToolDefinition]>,
+    ) -> BTreeSet<String> {
+        let owners = match plugins {
+            Some(Some(surface)) if !surface.workspace_tool_owners.is_empty() => {
+                surface.workspace_tool_owners.clone()
+            }
+            Some(_) => return BTreeSet::new(),
+            None => match self.plugin_surface.resolve(&self.global_root) {
+                Ok(surface) if !surface.workspace_tool_owners.is_empty() => {
+                    surface.workspace_tool_owners.clone()
+                }
+                _ => return BTreeSet::new(),
+            },
+        };
+        let switched_off: BTreeSet<String> = if context.workspace.is_some() {
+            let Some(probe) = owners.keys().next() else {
+                return BTreeSet::new();
+            };
+            let input = Value::Object(Default::default());
+            let probe_definition = definitions.and_then(|definitions| {
+                definitions
+                    .iter()
+                    .find(|definition| &definition.schema.name == probe)
+            });
+            let Ok((runtime, _)) =
+                self.resolve_workspace_runtime(probe, &input, context, probe_definition)
+            else {
+                return BTreeSet::new();
+            };
+            owners
+                .values()
+                .filter(|plugin| runtime.ensure_plugin_enabled_in_workspace(plugin).is_err())
+                .cloned()
+                .collect()
+        } else {
+            self.plugins_off_in_every_workspace(owners.values())
+        };
+        owners
+            .into_iter()
+            .filter(|(_, plugin)| switched_off.contains(plugin))
+            .map(|(tool, _)| tool)
+            .collect()
+    }
+
     /// Reuse the validated combined surface while the plugin snapshot is unchanged.
     /// The plugin cache retains config and its store handle; row and file stamps
     /// pick up lifecycle changes and admission-file edits on the next request.
     pub(super) fn advertised_definitions(&self) -> Result<Arc<Vec<McpToolDefinition>>, OrbitError> {
+        Ok(self.advertised_surface()?.definitions)
+    }
+
+    /// Resolve the combined surface once: canonical definitions plus the
+    /// plugin snapshot they were built from.
+    pub(super) fn advertised_surface(&self) -> Result<AdvertisedMcpSurface, OrbitError> {
         let plugins = match self.plugin_surface.resolve(&self.global_root) {
             Ok(plugins) => Some(plugins),
             Err(error) => {
@@ -114,7 +205,10 @@ impl ServerMcpHost {
             && let Some(previous) = cached.as_ref()
             && Arc::ptr_eq(&previous.plugins, plugins)
         {
-            return Ok(Arc::clone(&previous.value));
+            return Ok(AdvertisedMcpSurface {
+                definitions: Arc::clone(&previous.value),
+                plugins: Some(Arc::clone(plugins)),
+            });
         }
         let mut definitions = orbit_mcp::canonical_mcp_tool_definitions()
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
@@ -125,23 +219,14 @@ impl ServerMcpHost {
         orbit_types::tool::validate_mcp_tool_definitions(&definitions)
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
         let definitions = Arc::new(definitions);
-        *cached = plugins.map(|plugins| CachedMcpDefinitions {
+        *cached = plugins.clone().map(|plugins| CachedMcpDefinitions {
             plugins,
             value: Arc::clone(&definitions),
         });
-        Ok(definitions)
-    }
-
-    /// Plugin classification uses the same snapshot as discovery.
-    pub(super) fn is_plugin_tool(&self, name: &str) -> bool {
-        self.plugin_surface
-            .resolve(&self.global_root)
-            .is_ok_and(|surface| {
-                surface
-                    .definitions
-                    .iter()
-                    .any(|definition| definition.schema.name == name)
-            })
+        Ok(AdvertisedMcpSurface {
+            definitions,
+            plugins,
+        })
     }
 
     /// The plugins every registered checkout on this host has switched off.
@@ -307,8 +392,9 @@ impl ServerMcpHost {
         name: &str,
         input: &Value,
         context: &ToolSessionContext,
+        definition: Option<&McpToolDefinition>,
     ) -> Result<(Arc<OrbitRuntime>, ResolvedWorkspaceSelection), OrbitError> {
-        let selected = self.workspace_selection(name, input, context)?;
+        let selected = self.workspace_selection(name, input, context, definition)?;
         // Canonical dotted name: the MCP adapter maps the advertised
         // underscore form before this host sees the call. Federated workspace
         // discovery without crews does not open a runtime. Crew attachment
@@ -329,8 +415,15 @@ impl ServerMcpHost {
         &self,
         selected: &ResolvedWorkspaceSelection,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-        self.workspace_runtimes
-            .resolve_observation(&self.global_root, selected, || {
+        let host_plugins = self
+            .plugin_surface
+            .host_installed_plugin_rows(&self.global_root)
+            .unwrap_or_default();
+        self.workspace_runtimes.resolve_observation(
+            &self.global_root,
+            selected,
+            host_plugins,
+            || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_observational(
                     &self.global_root,
                     &selected.workspace,
@@ -343,7 +436,8 @@ impl ServerMcpHost {
                     "{OPENED_WORKSPACE_RUNTIME_LOG}"
                 );
                 Ok(runtime)
-            })
+            },
+        )
     }
 
     /// The shared long-lived runtime for one resolved checkout.
@@ -354,8 +448,12 @@ impl ServerMcpHost {
         &self,
         selected: &ResolvedWorkspaceSelection,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        let host_plugins = self
+            .plugin_surface
+            .host_installed_plugin_rows(&self.global_root)
+            .unwrap_or_default();
         self.workspace_runtimes
-            .resolve(&self.global_root, selected, || {
+            .resolve(&self.global_root, selected, host_plugins, || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
                     &self.global_root,
                     &selected.workspace,
@@ -388,6 +486,7 @@ impl ServerMcpHost {
         name: &str,
         input: &Value,
         context: &ToolSessionContext,
+        definition: Option<&McpToolDefinition>,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let explicit = call_workspace_selector(input)?;
         let operation = tool_operation_name(name, input);
@@ -405,7 +504,7 @@ impl ServerMcpHost {
             if ID_RESOLVED_WORKSPACE_TOOLS.contains(&operation)
                 || Self::workspace_selector(None, context).is_none()
             {
-                return task_owner::resolve_task_owner(&self.global_root, &task_id);
+                return self.task_owners.resolve(&self.global_root, &task_id);
             }
         }
         if let Some(selector) = Self::workspace_selector(explicit, context) {
@@ -414,7 +513,7 @@ impl ServerMcpHost {
                 selector,
             );
         }
-        if self.workspace_optional_aggregate(name, input, context) {
+        if self.workspace_optional_aggregate(name, input, context, definition) {
             return self.local_aggregate_selection(name, federated::McpToolClass::ControlPlane);
         }
         Err(self.workspace_required(name))
@@ -429,6 +528,7 @@ impl ServerMcpHost {
         name: &str,
         input: &Value,
         context: &ToolSessionContext,
+        definition: Option<&McpToolDefinition>,
     ) -> bool {
         context.worker_invocation.is_none()
             && call_workspace_selector(input)
@@ -436,9 +536,12 @@ impl ServerMcpHost {
                 .flatten()
                 .is_none_or(|selector| selector.trim().is_empty())
             && Self::workspace_selector(None, context).is_none()
-            && self
-                .definition(name, context)
-                .is_ok_and(|definition| definition.rules.workspace_optional)
+            && match definition {
+                Some(definition) => definition.rules.workspace_optional,
+                None => self
+                    .definition(name, context)
+                    .is_ok_and(|definition| definition.rules.workspace_optional),
+            }
     }
 
     /// An active local checkout that can lend the aggregate its runtime.
@@ -490,6 +593,7 @@ impl ServerMcpHost {
         name: &str,
         mut input: Value,
         mut context: ToolSessionContext,
+        definition: Option<&McpToolDefinition>,
     ) -> Result<Value, OrbitError> {
         if name == "orbit.attention" {
             return self.call_attention_tool(input, context);
@@ -548,21 +652,23 @@ impl ServerMcpHost {
                 federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
                 context.orchestrator.clone(),
                 McpSessionAuthority::Agent,
-            );
+            )
+            .with_session_pool(self.owner_route_sessions.clone());
             return federated::FederatedMcpHost::new(destinations, Arc::new(probe))
                 .call_tool(name, input, context);
         }
-        if self.workspace_optional_aggregate(name, &input, &context)
+        if self.workspace_optional_aggregate(name, &input, &context, definition)
             && let Some(object) = input.as_object_mut()
         {
             object.insert("all".into(), Value::Bool(true));
         }
-        let (runtime, selected) = match self.resolve_workspace_runtime(name, &input, &context) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                return self.audit_global_failure(name, input, context, error);
-            }
-        };
+        let (runtime, selected) =
+            match self.resolve_workspace_runtime(name, &input, &context, definition) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    return self.audit_global_failure(name, input, context, error);
+                }
+            };
         let repo_root = selected.checkout.repo_root.to_string_lossy().into_owned();
 
         context.workspace_id = Some(selected.workspace.id.clone());

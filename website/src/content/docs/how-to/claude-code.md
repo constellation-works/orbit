@@ -236,8 +236,8 @@ route calls:
 2. **Replica or unregistered checkouts**: If the directory is a replica or an
    unregistered clone named after a workspace:
    - Commands route to `ownerHost` over SSH if configured.
-   - Otherwise, the mod queries the federated host registry (`~/.orbit/hosts.toml`
-     or legacy `~/.orbit/mcp-destinations.toml`, configured via `orbit host add`)
+   - Otherwise, the mod queries the federated host registry (`~/.orbit/hosts.toml`,
+     configured via `orbit host add`)
      and selects the first host that owns the workspace.
 
 All remote executions use non-interactive batch mode (`ssh -o BatchMode=yes`),

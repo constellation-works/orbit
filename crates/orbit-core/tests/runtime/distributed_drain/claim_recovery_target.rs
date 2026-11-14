@@ -212,10 +212,9 @@ fn recover_through_tool(
         "reason": reason,
         "request_key": request_key,
     });
-    pair.wire.owner.run_tool_with_context_and_role(
+    pair.wire.owner.run_tool_with_context(
         "orbit.task.recover_claim",
         input,
-        Role::Admin,
         ToolContext {
             session_context: ToolSessionContext {
                 effective_capabilities: BTreeSet::from([McpCapability::Operator]),

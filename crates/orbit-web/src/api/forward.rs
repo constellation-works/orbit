@@ -348,11 +348,6 @@ async fn resolve(state: &DashboardState, host: &str) -> Result<Addressed, Forwar
                 machine_id: entry.machine_id.clone(),
                 ssh: entry.ssh.clone(),
             })),
-            Ok(ResolvedHost::Legacy(row)) => Ok(Addressed::Remote(HostTarget {
-                name: row.ssh.clone(),
-                machine_id: row.machine_id.clone(),
-                ssh: row.ssh.clone(),
-            })),
             Err(error) => Err((host_error_code(&error).to_string(), error.to_string())),
         }
     })

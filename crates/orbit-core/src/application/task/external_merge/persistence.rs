@@ -1,6 +1,5 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInvocation, ClaimMutation};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_missing};
 
 use crate::OrbitRuntime;
@@ -103,28 +102,25 @@ impl OrbitRuntime {
                 history_actor,
             ),
         )?;
-        self.with_mutation(|| {
-            self.mutate_execution_claim(
-                Some(&context),
-                &format!(
-                    "external-merge:{}:{number}:{}",
-                    revoked.handoff_id, landing.merge_commit
-                ),
-                &ClaimMutation::SettleExternalMerge {
-                    handoff_id: revoked.handoff_id.clone(),
-                    pull_request: number,
-                    base_branch: landing.base_branch.clone(),
-                    merge_commit: landing.merge_commit.clone(),
-                    note: note.clone(),
-                    verified_candidate_head: revoked
-                        .candidate
-                        .as_ref()
-                        .map(|_| landing.head_sha.clone()),
-                },
-            )
-            .map_err(|error| refusal::refused(id, &error.to_string()))?;
-            Ok(((), OrbitEvent::TaskUpdated { id: id.to_string() }))
-        })?;
+        self.mutate_execution_claim(
+            Some(&context),
+            &format!(
+                "external-merge:{}:{number}:{}",
+                revoked.handoff_id, landing.merge_commit
+            ),
+            &ClaimMutation::SettleExternalMerge {
+                handoff_id: revoked.handoff_id.clone(),
+                pull_request: number,
+                base_branch: landing.base_branch.clone(),
+                merge_commit: landing.merge_commit.clone(),
+                note: note.clone(),
+                verified_candidate_head: revoked
+                    .candidate
+                    .as_ref()
+                    .map(|_| landing.head_sha.clone()),
+            },
+        )
+        .map_err(|error| refusal::refused(id, &error.to_string()))?;
         let task = self.get_task(id)?;
         tracing::info!(
             target: "orbit.core.external_merge",
@@ -209,25 +205,19 @@ impl OrbitRuntime {
                 .trim()
                 .is_empty()
                 .then(|| format!("Delivered by {landed}."));
-            let updated = self.with_mutation(|| {
-                let updated = self.stores().task_records().update(
-                    id,
-                    TaskRecordUpdateParams {
-                        actor: history_actor.clone(),
-                        status: Some(TaskStatus::Done),
-                        status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.to_string()),
-                        status_note: Some(note.clone()),
-                        execution_summary,
-                        external_refs: Some(external_refs),
-                        expected_status: Some(vec![task.status]),
-                        ..TaskRecordUpdateParams::default()
-                    },
-                )?;
-                Ok((
-                    updated.clone(),
-                    OrbitEvent::TaskUpdated { id: id.to_string() },
-                ))
-            })?;
+            let updated = self.stores().task_records().update(
+                id,
+                TaskRecordUpdateParams {
+                    actor: history_actor.clone(),
+                    status: Some(TaskStatus::Done),
+                    status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.to_string()),
+                    status_note: Some(note.clone()),
+                    execution_summary,
+                    external_refs: Some(external_refs),
+                    expected_status: Some(vec![task.status]),
+                    ..TaskRecordUpdateParams::default()
+                },
+            )?;
             written = Some(updated);
             Ok(())
         })?;

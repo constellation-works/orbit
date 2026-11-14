@@ -14,7 +14,6 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::json;
@@ -56,10 +55,9 @@ fn an_agent_session_cannot_delete_a_task_through_any_tool_path() {
     let task_id = seed_task(&runtime);
 
     let error = runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.delete",
             json!({ "id": task_id, "force": true }),
-            Role::Admin,
             context_with([McpCapability::Agent]),
         )
         .expect_err("agent capability must not reach task deletion");
@@ -93,10 +91,9 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
         })
         .unwrap();
     runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.update",
             json!({"id": task.id, "granted_tools": ["orbit.auto_task:update"]}),
-            Role::Admin,
             context_with([McpCapability::Operator]),
         )
         .unwrap();
@@ -115,10 +112,9 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
         disallow_list: vec!["orbit.auto_task:update".into()],
     });
     let error = runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.auto_task.update",
             json!({"name": "never-applied"}),
-            Role::Admin,
             context,
         )
         .expect_err("a mutating grant must remain denied live");

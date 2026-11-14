@@ -334,10 +334,9 @@ impl orbit_tools::DrainOwnerTransport for CredentialOwnerProbe {
     fn call(&self, _selector: &str, name: &str, input: Value) -> Result<Value, OrbitError> {
         assert_eq!(name, "orbit.drain.probe");
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.owner.run_tool_with_context_and_role(
+        self.owner.run_tool_with_context(
             name,
             input,
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     caller_machine_id: Some("credential-follower".into()),

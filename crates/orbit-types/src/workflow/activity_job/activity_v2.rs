@@ -175,10 +175,11 @@ pub struct AgentLoopSpec {
     /// start a fresh invocation with the same crew, tools and sandbox, inside
     /// the unspent part of this activity's wall-clock budget, and only a newly
     /// valid reply succeeds. Asset load requires the read-only filesystem
-    /// profile and denies the built-in Orbit mutation tools, including writes
-    /// to coordination state outside the worktree
-    /// ([`validate_response_correction_activity`]), so those mutations cannot
-    /// be repeated by a correction. A task's `required_tools` cannot add one
+    /// profile and refuses an allowlist grant of the built-in Orbit mutation
+    /// tools, including writes to coordination state outside the worktree
+    /// ([`validate_response_correction_activity`]). Dispatch denies every such
+    /// tool on each invocation, so those mutations cannot be repeated by a
+    /// correction. A task's `required_tools` cannot add one
     /// either: the runtime grant drops such a requirement with a note.
     ///
     /// [`validate_response_correction_activity`]: crate::workflow::activity_job::validate_response_correction_activity

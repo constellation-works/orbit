@@ -134,36 +134,6 @@ impl StoreTx<'_> {
 }
 
 impl Store {
-    pub(crate) fn schema_meta_value(&self, key: &str) -> Result<Option<String>, OrbitError> {
-        let conn = self.read()?;
-        match conn.query_row(
-            "SELECT value FROM schema_meta WHERE key = ?1",
-            [key],
-            |row| row.get::<_, String>(0),
-        ) {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) => Err(sqlite_store_error(err)),
-        }
-    }
-
-    pub(crate) fn set_schema_meta_value(&self, key: &str, value: &str) -> Result<(), OrbitError> {
-        if let Some(refusal) = self.refuse_forward_compatible_write("write store metadata") {
-            return Err(refusal);
-        }
-        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        conn.execute(
-            r#"INSERT INTO schema_meta(key, value, updated_at)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at"#,
-            rusqlite::params![key, value, crate::now_string()],
-        )
-        .map_err(sqlite_store_error)?;
-        Ok(())
-    }
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
         let opened = open_private(path)?;
         let conn = opened.connection;

@@ -126,7 +126,11 @@ impl OrbitRuntime {
 
     /// One notice in any effective state; the history is included for the
     /// operator capability.
-    pub fn show_notice(&self, id: &str, with_history: bool) -> Result<NoticeView, OrbitError> {
+    pub(crate) fn show_notice(
+        &self,
+        id: &str,
+        with_history: bool,
+    ) -> Result<NoticeView, OrbitError> {
         let store = self.sqlite_store()?;
         let row = store
             .notice_row(id)?

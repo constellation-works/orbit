@@ -75,7 +75,7 @@ fn attention_local_workspace(runtime: &OrbitRuntime) -> Result<AttentionWorkspac
 ///
 /// Each checkout reports what its host is authoritative for: an owner its
 /// task-level kinds, every checkout its own host health.
-pub fn attention_query(
+pub(crate) fn attention_query(
     runtime: &OrbitRuntime,
     input: Value,
     session_context: &ToolSessionContext,
@@ -214,12 +214,12 @@ pub fn attention_query(
                 }
                 Err(error) => {
                     for kind in &filter.kinds {
-                        degraded.push(AttentionDegraded {
-                            scope: format!("workspace:{}", workspace.id),
-                            kind: kind.as_str().into(),
-                            code: "source_unavailable".into(),
-                            message: error.to_string(),
-                        });
+                        degraded.push(sources::workspace_degraded(
+                            &workspace,
+                            kind.as_str(),
+                            "source_unavailable",
+                            error.to_string(),
+                        ));
                     }
                     continue;
                 }
@@ -242,12 +242,12 @@ pub fn attention_query(
                     AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
                         || **kind == AttentionKind::NoticeOpen
                 }) {
-                    degraded.push(AttentionDegraded {
-                        scope: format!("workspace:{}", workspace.id),
-                        kind: kind.as_str().into(),
-                        code: "source_unavailable".into(),
-                        message: error.to_string(),
-                    });
+                    degraded.push(sources::workspace_degraded(
+                        &workspace,
+                        kind.as_str(),
+                        "source_unavailable",
+                        error.to_string(),
+                    ));
                 }
                 sources::AttentionCandidates {
                     items: Vec::new(),
@@ -281,12 +281,12 @@ pub fn attention_query(
             match host::read_doctor_host_item(runtime, selected, &workspace, &host, owner) {
                 Ok(Some(item)) => candidates.items.push(item),
                 Ok(None) => {}
-                Err(error) => candidates.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: AttentionKind::HostUnhealthy.as_str().into(),
-                    code: "source_unavailable".into(),
-                    message: error.to_string(),
-                }),
+                Err(error) => candidates.degraded.push(sources::workspace_degraded(
+                    &workspace,
+                    AttentionKind::HostUnhealthy.as_str(),
+                    "source_unavailable",
+                    error.to_string(),
+                )),
             }
         }
         source_costs.insert(workspace.id.clone(), candidates.timings);
@@ -304,12 +304,12 @@ pub fn attention_query(
                 .map(|item| item.kind.as_str())
                 .collect::<BTreeSet<_>>();
             for kind in dropped {
-                candidates.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: kind.into(),
-                    code: "item_cap".into(),
-                    message: format!("Per-workspace candidate cap {cap} reached"),
-                });
+                candidates.degraded.push(sources::workspace_degraded(
+                    &workspace,
+                    kind,
+                    "item_cap",
+                    format!("Per-workspace candidate cap {cap} reached"),
+                ));
             }
             candidates.items.truncate(cap);
             capped = true;

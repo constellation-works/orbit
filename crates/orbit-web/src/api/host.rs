@@ -263,10 +263,9 @@ pub(super) fn status_for(code: &str) -> StatusCode {
         | "host_identity_mismatch"
         | "host_too_old"
         | "ambiguous_destination" => StatusCode::CONFLICT,
-        "unreachable_destination"
-        | "legacy_host_unreachable"
-        | "outcome_unknown"
-        | "process_timeout" => StatusCode::BAD_GATEWAY,
+        "unreachable_destination" | "outcome_unknown" | "process_timeout" => {
+            StatusCode::BAD_GATEWAY
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

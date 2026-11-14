@@ -4,7 +4,8 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_search::{LexicalIndex, TaskSidecarSearchText};
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
-    TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
+    TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskRow,
+    TaskStoreBackend,
 };
 use orbit_types::task::Task;
 
@@ -144,6 +145,17 @@ impl TaskRecordService<'_> {
         id: &str,
         params: TaskRecordUpdateParams,
     ) -> Result<Task, OrbitError> {
+        Ok(self.update_returning_row(id, params)?.task)
+    }
+
+    /// [`Self::update`], keeping the post-write row a document or history
+    /// commit already holds so the response is not another bundle read.
+    /// Artifact-only and no-op writes still read the row once.
+    pub(crate) fn update_returning_row(
+        &self,
+        id: &str,
+        params: TaskRecordUpdateParams,
+    ) -> Result<TaskRow, OrbitError> {
         #[cfg(test)]
         if FAIL_NEXT_UPDATE.with(|fail| fail.replace(false)) {
             return Err(OrbitError::Execution(
@@ -180,8 +192,11 @@ impl TaskRecordService<'_> {
         }
 
         let attribution_in_history = params.attribution_joins_history_commit();
+        // History runs after the document commit and its bundle includes both,
+        // so the later row replaces the earlier one.
+        let mut written = None;
         if params.has_document_changes() && !attribution_in_history {
-            self.document.update_task_document(
+            written = Some(self.document.update_task_document(
                 id,
                 TaskDocumentUpdateParams {
                     actor: params.actor.clone(),
@@ -214,42 +229,47 @@ impl TaskRecordService<'_> {
                     origin: params.origin,
                     context_creation: params.context_creation.clone(),
                 },
-            )?;
+            )?);
         }
 
         if params.has_history_changes() {
-            self.history.update_task_history(
-                id,
-                TaskHistoryUpdateParams {
-                    actor: params.actor.clone(),
-                    status: params.status,
-                    status_event: params.status_event.clone(),
-                    status_note: params.status_note.clone(),
-                    status_decision: params.status_decision.clone(),
-                    append_history: params.append_history.clone(),
-                    append_comments: params.append_comments.clone(),
-                    expected_status: params.expected_status.clone(),
-                    operator_comment: params.operator_comment,
-                    planned_by: params.planned_by.clone().filter(|_| attribution_in_history),
-                    implemented_by: params
-                        .implemented_by
-                        .clone()
-                        .filter(|_| attribution_in_history),
-                },
-            )?;
+            written = Some(
+                self.history.update_task_history(
+                    id,
+                    TaskHistoryUpdateParams {
+                        actor: params.actor.clone(),
+                        status: params.status,
+                        status_event: params.status_event.clone(),
+                        status_note: params.status_note.clone(),
+                        status_decision: params.status_decision.clone(),
+                        append_history: params.append_history.clone(),
+                        append_comments: params.append_comments.clone(),
+                        expected_status: params.expected_status.clone(),
+                        operator_comment: params.operator_comment,
+                        planned_by: params.planned_by.clone().filter(|_| attribution_in_history),
+                        implemented_by: params
+                            .implemented_by
+                            .clone()
+                            .filter(|_| attribution_in_history),
+                    },
+                )?,
+            );
         }
 
-        let task = self
-            .store
-            .get_task(id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?;
+        let row = match written {
+            Some(row) => row,
+            None => self
+                .store
+                .get_task_row(id, false)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?,
+        };
         if params.has_document_changes()
             || params.has_history_changes()
             || params.has_artifact_changes()
         {
-            self.index_task(&task);
+            self.index_task(&row.task);
         }
-        Ok(task)
+        Ok(row)
     }
 
     pub(crate) fn delete(&self, id: &str) -> Result<bool, OrbitError> {
@@ -290,10 +310,9 @@ impl crate::OrbitRuntime {
         mutation_id: &str,
         mutation: &orbit_store::contracts::ClaimMutation,
     ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        self.stores()
-            .tasks()
-            .mutate_execution_claim(context, mutation_id, mutation)
+        Ok(self
+            .mutate_execution_claim_outcome(context, mutation_id, mutation)?
+            .result)
     }
 
     /// [`Self::mutate_execution_claim`], also reporting whether this call
@@ -306,9 +325,28 @@ impl crate::OrbitRuntime {
         mutation: &orbit_store::contracts::ClaimMutation,
     ) -> Result<orbit_store::contracts::ClaimMutationOutcome, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.stores()
-            .tasks()
-            .mutate_execution_claim_outcome(context, mutation_id, mutation)
+        let outcome =
+            self.stores()
+                .tasks()
+                .mutate_execution_claim_outcome(context, mutation_id, mutation)?;
+        // A committed claim mutation writes searchable text (evidence
+        // summary, comments, artifact paths, plan, external refs, and any
+        // deferred branch observation it lands in the same commit) outside
+        // `TaskRecordService::update`, so its recorded sidecar coverage
+        // would otherwise vouch for chunks the index does not hold. Refresh
+        // this task's chunks from its settled row before returning, so an
+        // ordinary owner search sees the evidence without a reindex or a
+        // later ordinary write. A replay committed nothing and leaves the
+        // index untouched; indexing is best-effort, so a refresh failure
+        // (read-only index, unreadable row) never fails the committed
+        // mutation — the next reindex repairs it, as for ordinary writes.
+        if outcome.committed
+            && let Some(task_id) = context.map(|invocation| invocation.task_id())
+            && let Ok(Some(task)) = self.stores().tasks().get_task(task_id)
+        {
+            self.stores().task_records().index_task(&task);
+        }
+        Ok(outcome)
     }
 
     /// Refuse a worker whose claim could no longer take its own update: the
@@ -361,7 +399,9 @@ impl crate::OrbitRuntime {
         // refresh the owner's chunks or its recorded sidecar coverage
         // would vouch for text the index does not hold. A deferred
         // receipt has written nothing yet; settlement lands it inside a
-        // claim commit, whose next ordinary task write re-indexes.
+        // claim commit, and the claim seam in
+        // `mutate_execution_claim_outcome` re-indexes that commit before
+        // it returns, so no later ordinary write is needed.
         if matches!(
             outcome,
             orbit_store::contracts::BranchObservationOutcome::Retained

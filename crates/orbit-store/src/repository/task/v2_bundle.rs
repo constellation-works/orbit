@@ -759,7 +759,7 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
         return read_bundle_at(bundle_dir);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     hold_step(BUNDLE_READ_STEP, || {
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
@@ -775,7 +775,7 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
         target: "orbit.store.task_query", "task_bundle_lightweight_read",
     )
     .entered();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     LIGHTWEIGHT_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     if !bundle_dir.try_exists()? {
         return read_bundle_lightweight_at(bundle_dir);
@@ -806,7 +806,7 @@ fn read_artifact_manifest_consistently(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Listing-path bundle reads on this thread, so tests can bound what a
     /// read costs while the generated index is degraded.
@@ -819,7 +819,7 @@ thread_local! {
 }
 
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     LISTING_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     match read_bundle_lightweight_consistently(bundle_dir) {
         Ok(bundle) => Ok(Some(bundle)),

@@ -12,12 +12,6 @@
 //! machine's `machine.task_prefix` and each entry's `task_prefix` to the host
 //! that writes those ids, so a call addressing one task by id goes to the host
 //! its prefix names and nowhere else [ORB-14449].
-//!
-//! One release of compatibility: when only the legacy
-//! `~/.orbit/mcp-destinations.toml` exists, its rows are read as routes with
-//! no name or prefix. The first `orbit host` mutation migrates them and
-//! deletes the legacy file. Both files at once is refused on every load,
-//! because they are two answers to one question.
 
 use std::collections::HashSet;
 use std::io::{self, Read};
@@ -36,7 +30,7 @@ use crate::{MachineIdentityState, inspect_machine_identity};
 
 /// The machine-global host file, beside `workspaces.json`.
 pub const HOSTS_FILE: &str = "hosts.toml";
-/// The hand-edited predecessor of [`HOSTS_FILE`], read for one release.
+/// The retired predecessor of [`HOSTS_FILE`], rejected when present.
 pub const LEGACY_DESTINATIONS_FILE: &str = "mcp-destinations.toml";
 /// The host file schema this build reads and writes.
 pub const HOSTS_SCHEMA_VERSION: u32 = 1;
@@ -61,27 +55,12 @@ pub struct HostEntry {
     pub host_os: Option<orbit_types::task::HostOs>,
 }
 
-/// One row of the legacy destinations file: a route with no name or prefix.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LegacyHost {
-    pub ssh: String,
-    pub machine_id: String,
-}
-
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostFileDocument {
     schema_version: u32,
     #[serde(default)]
     hosts: Vec<HostEntry>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyDocument {
-    #[serde(default)]
-    destinations: Vec<LegacyHost>,
 }
 
 /// The remote host set as it was loaded.
@@ -91,8 +70,6 @@ pub enum RegisteredHosts {
     None,
     /// The host file.
     Hosts(Vec<HostEntry>),
-    /// Only the legacy destinations file exists.
-    Legacy(Vec<LegacyHost>),
 }
 
 impl RegisteredHosts {
@@ -107,29 +84,14 @@ impl RegisteredHosts {
                     machine_id: entry.machine_id.clone(),
                 })
                 .collect(),
-            Self::Legacy(rows) => rows
-                .iter()
-                .map(|row| HostRoute {
-                    ssh: row.ssh.clone(),
-                    machine_id: row.machine_id.clone(),
-                })
-                .collect(),
         }
     }
 
-    /// The registered entries; empty while only the legacy file exists.
+    /// The registered entries; empty when no host file exists.
     pub fn entries(&self) -> &[HostEntry] {
         match self {
             Self::Hosts(entries) => entries,
-            Self::None | Self::Legacy(_) => &[],
-        }
-    }
-
-    /// The legacy rows; empty unless only the legacy file exists.
-    pub fn legacy(&self) -> &[LegacyHost] {
-        match self {
-            Self::Legacy(rows) => rows,
-            Self::None | Self::Hosts(_) => &[],
+            Self::None => &[],
         }
     }
 }
@@ -146,7 +108,6 @@ pub struct HostRoute {
 pub enum ResolvedHost<'a> {
     Local(&'a MachineIdentity),
     Entry(&'a HostEntry),
-    Legacy(&'a LegacyHost),
 }
 
 impl ResolvedHost<'_> {
@@ -154,7 +115,6 @@ impl ResolvedHost<'_> {
         match self {
             Self::Local(identity) => &identity.id,
             Self::Entry(entry) => &entry.machine_id,
-            Self::Legacy(row) => &row.machine_id,
         }
     }
 }
@@ -176,9 +136,8 @@ pub enum TaskPrefixRoute {
 }
 
 /// The prefix table one process builds: the local `machine.task_prefix` and
-/// each host-file entry's `task_prefix`. Legacy destination rows carry no
-/// prefix and contribute nothing. Host-file validation keeps prefixes unique,
-/// so a lookup is exact.
+/// each host-file entry's `task_prefix`. Host-file validation keeps prefixes
+/// unique, so a lookup is exact.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskPrefixTable {
     local: Option<String>,
@@ -292,10 +251,10 @@ pub fn legacy_destinations_path(global_root: &Path) -> PathBuf {
     global_root.join(LEGACY_DESTINATIONS_FILE)
 }
 
-/// Load and validate the host file, or the legacy file when it is the only one.
+/// Load and validate the host file, refusing the retired destinations file.
 ///
 /// Missing files are a valid local-only configuration. Invalid content, an
-/// unsupported schema or both files at once fail closed and leave the bytes
+/// unsupported schema or a legacy destinations file fail closed and leave the bytes
 /// untouched.
 pub fn load_host_registry(global_root: &Path) -> Result<HostRegistry, OrbitError> {
     load_host_registry_with_identity(global_root, &inspect_machine_identity(global_root)?)
@@ -357,7 +316,7 @@ impl HostRegistry {
     }
 
     /// Resolve `<host>` by exact host name (case-insensitive) or exact
-    /// `machine_id`. A legacy row has no name, so its SSH target stands in.
+    /// `machine_id`.
     pub fn resolve(&self, selector: &str) -> Result<ResolvedHost<'_>, OrbitError> {
         let selector = selector.trim();
         if let Some(local) = &self.local
@@ -372,20 +331,11 @@ impl HostRegistry {
         {
             return Ok(ResolvedHost::Entry(entry));
         }
-        if let Some(row) = self
-            .hosts
-            .legacy()
-            .iter()
-            .find(|row| row.machine_id == selector || row.ssh == selector)
-        {
-            return Ok(ResolvedHost::Legacy(row));
-        }
         let mut known = self
             .local
             .iter()
             .map(|local| local.name.clone())
             .chain(self.hosts.entries().iter().map(|entry| entry.name.clone()))
-            .chain(self.hosts.legacy().iter().map(|row| row.ssh.clone()))
             .collect::<Vec<_>>();
         known.sort();
         Err(OrbitError::host_registry(
@@ -408,8 +358,7 @@ impl HostRegistry {
         validate_entries(entries, self.local.as_ref())
     }
 
-    /// Replace the host file with `entries`, atomically, and retire the
-    /// legacy file if that is what was loaded.
+    /// Replace the host file with `entries`, atomically.
     ///
     /// The entries are validated first and serialized canonically, sorted by
     /// name. Under the host-file lock both files are re-read; if either
@@ -440,9 +389,6 @@ impl HostRegistry {
             }
             atomic_write_text(&path, &text)
                 .map_err(|error| OrbitError::from_write_io(&path, error))?;
-            if self.snapshot.legacy.is_some() {
-                remove_legacy_file(&self.global_root)?;
-            }
             Ok(())
         })
     }
@@ -482,13 +428,14 @@ fn parse_hosts(
     let path = hosts_path(global_root);
     let legacy_path = legacy_destinations_path(global_root);
     match (&snapshot.hosts, &snapshot.legacy) {
-        (Some(hosts), Some(legacy)) => Err(OrbitError::host_registry(
+        (_, Some(_)) => Err(OrbitError::host_registry(
             HostRegistryCode::HostFileConflict,
             format!(
-                "both '{}' and the legacy '{}' exist, and Orbit will not choose between them. {}",
-                path.display(),
+                "the legacy '{}' is no longer supported. Move it aside, run \
+                 `orbit host add <ssh-target>` for each `ssh` row to register it in '{}', \
+                 then delete the moved file",
                 legacy_path.display(),
-                conflict_remedy(hosts, legacy, local)
+                path.display(),
             ),
         )),
         (Some(bytes), None) => {
@@ -506,57 +453,8 @@ fn parse_hosts(
             validate_entries(&document.hosts, local).map_err(|error| in_file(error, &path))?;
             Ok(RegisteredHosts::Hosts(document.hosts))
         }
-        (None, Some(bytes)) => {
-            let document: LegacyDocument = toml::from_str(&utf8(bytes, &legacy_path)?)
-                .map_err(|error| invalid_file(&legacy_path, error))?;
-            validate_legacy(&document.destinations, &legacy_path)?;
-            Ok(RegisteredHosts::Legacy(document.destinations))
-        }
         (None, None) => Ok(RegisteredHosts::None),
     }
-}
-
-/// What to do about both files, worked out here because every `orbit host`
-/// command refuses while they coexist: the legacy routes the host file lacks,
-/// compared by `machine_id`, each with the command that registers it once the
-/// legacy file is gone.
-fn conflict_remedy(hosts: &[u8], legacy: &[u8], local: Option<&MachineIdentity>) -> String {
-    let parsed = |bytes: &[u8]| String::from_utf8(bytes.to_vec()).ok();
-    let hosts = parsed(hosts).and_then(|text| toml::from_str::<HostFileDocument>(&text).ok());
-    let legacy = parsed(legacy).and_then(|text| toml::from_str::<LegacyDocument>(&text).ok());
-    let (Some(hosts), Some(legacy)) = (hosts, legacy) else {
-        return "One of them does not parse, so compare them by hand: every legacy \
-                `machine_id` should appear in a host-file entry. Then delete the legacy file"
-            .to_string();
-    };
-    let missing = legacy
-        .destinations
-        .iter()
-        .filter(|row| local.is_none_or(|local| local.id != row.machine_id))
-        .filter(|row| {
-            !hosts
-                .hosts
-                .iter()
-                .any(|entry| entry.machine_id == row.machine_id)
-        })
-        .collect::<Vec<_>>();
-    if missing.is_empty() {
-        return "Every legacy row is already in the host file, so delete the legacy file"
-            .to_string();
-    }
-    format!(
-        "The host file lacks these legacy rows: {}. Delete the legacy file, then run {}",
-        missing
-            .iter()
-            .map(|row| format!("ssh {} ({})", row.ssh, row.machine_id))
-            .collect::<Vec<_>>()
-            .join(", "),
-        missing
-            .iter()
-            .map(|row| format!("`orbit host add {}`", row.ssh))
-            .collect::<Vec<_>>()
-            .join(" and ")
-    )
 }
 
 fn validate_entries(
@@ -599,36 +497,6 @@ fn validate_entries(
         }
         if !prefixes.insert(entry.task_prefix.as_str()) {
             return Err(prefix_conflict(&entry.task_prefix, "another entry"));
-        }
-    }
-    Ok(())
-}
-
-/// The legacy file keeps the rules it always had: required keys, valid and
-/// unique `machine_id`, non-blank `ssh`.
-fn validate_legacy(rows: &[LegacyHost], path: &Path) -> Result<(), OrbitError> {
-    let mut machine_ids = HashSet::with_capacity(rows.len());
-    for row in rows {
-        if !machine_ids.insert(row.machine_id.as_str()) {
-            return Err(OrbitError::AmbiguousDestination(format!(
-                "machine_id '{}' appears more than once in '{}'",
-                row.machine_id,
-                path.display()
-            )));
-        }
-        validate_machine_id(&row.machine_id).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "'{}' has invalid machine_id '{}': {error}",
-                path.display(),
-                row.machine_id
-            ))
-        })?;
-        if row.ssh.trim().is_empty() {
-            return Err(OrbitError::InvalidInput(format!(
-                "'{}' has a blank ssh target for '{}'",
-                path.display(),
-                row.machine_id
-            )));
         }
     }
     Ok(())
@@ -703,30 +571,4 @@ fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, OrbitError> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(read_error)?;
     Ok(Some(bytes))
-}
-
-/// Remove the migrated legacy file from beneath the canonical global root.
-fn remove_legacy_file(global_root: &Path) -> Result<(), OrbitError> {
-    let canonical_root = global_root.canonicalize().map_err(|error| {
-        OrbitError::Io(format!(
-            "failed to canonicalize '{}': {error}",
-            global_root.display()
-        ))
-    })?;
-    let path = canonical_root.join(LEGACY_DESTINATIONS_FILE);
-    if !path.starts_with(&canonical_root) {
-        return Err(OrbitError::InvalidInput(format!(
-            "legacy destinations path escapes its parent: {}",
-            path.display()
-        )));
-    }
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(OrbitError::Io(format!(
-            "wrote the host file but could not remove the migrated '{}': {error}; delete it by \
-             hand, since every consumer refuses while both files exist",
-            path.display()
-        ))),
-    }
 }

@@ -104,10 +104,9 @@ fn requeue_ignores_a_colliding_owner_run_for_a_settled_follower() {
 }
 
 fn requeue(owner: &OrbitRuntime, task: &str) -> Result<Value, OrbitError> {
-    owner.run_tool_with_context_and_role(
+    owner.run_tool_with_context(
         "orbit.task.requeue",
         json!({"id": task, "reason": "retry after the delivery stops"}),
-        Role::Admin,
         ToolContext {
             trusted_actor_label: Some("human".into()),
             session_context: ToolSessionContext {

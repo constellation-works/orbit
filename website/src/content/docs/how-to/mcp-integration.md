@@ -68,8 +68,9 @@ host itself and records them in `~/.orbit/hosts.toml`. `orbit host list` shows
 every host with its live reachability, Orbit version, pull protocol and
 workspaces, and flags a version or protocol that differs from this machine's.
 `orbit host rename` and `orbit host remove` manage the entries. An older
-`~/.orbit/mcp-destinations.toml` is still read until the first
-`orbit host add`, `orbit host rename` or `orbit host remove` migrates it.
+`~/.orbit/mcp-destinations.toml` causes `host_file_conflict` until moved aside.
+Run `orbit host add <ssh-target>` for each of its `ssh` rows, then delete the
+moved file.
 
 Then register the federated server with a client:
 

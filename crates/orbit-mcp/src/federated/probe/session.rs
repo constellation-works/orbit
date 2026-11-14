@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant};
 
 use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError, RemoteToolCode};
@@ -37,6 +37,11 @@ const MAX_TOOL_RESULT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 /// once; this only bounds a transport whose pipe some other process still
 /// holds open.
 const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(1);
+
+/// Ceiling on the `ping` a parked session must answer before it is reused.
+/// A live remote server answers at once; the bound exists so a wedged one
+/// costs the call seconds, not a whole probe budget, before it is replaced.
+const REUSE_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Bytes of the session's stderr kept for a failure message. The stream is
 /// drained to its end so the destination never blocks on a full pipe, but
@@ -105,7 +110,12 @@ pub(in crate::federated) struct DestinationSession {
     /// before a routed `tools/call` is written, so it is never lower than the
     /// phase in flight even while the reader is already blocked mid-line.
     line_cap: Arc<AtomicU64>,
+    probe_line_cap: u64,
     tool_result_line_cap: u64,
+    /// Whether the last request's answer arrived as one well-framed JSON-RPC
+    /// response. Only then is nothing of it left on the wire, so the session
+    /// may carry a later call.
+    answered: bool,
     peer_version: Option<String>,
     deadline: Instant,
     next_id: i64,
@@ -192,7 +202,9 @@ impl DestinationSession {
             writer: Some(writer),
             lines,
             line_cap,
+            probe_line_cap,
             tool_result_line_cap,
+            answered: false,
             peer_version: None,
             deadline: Instant::now() + timeout,
             next_id: 0,
@@ -205,6 +217,59 @@ impl DestinationSession {
     /// previous phases left of the old one.
     pub(super) fn restart_budget(&mut self, timeout: Duration) {
         self.deadline = Instant::now() + timeout;
+    }
+
+    /// Prepare an idle pooled session for the next call: a fresh probe
+    /// budget, and the probe line ceiling the last `tools/call` raised.
+    pub(super) fn rearm_for_reuse(&mut self, probe_timeout: Duration) {
+        self.line_cap.store(self.probe_line_cap, Ordering::Release);
+        self.restart_budget(probe_timeout);
+    }
+
+    /// Whether this session may be parked for a later call: its framing is
+    /// intact (every write completed, the last request was answered, and
+    /// nothing the destination sent is still unread) and its process still
+    /// runs. Any unread line means the stream no longer lines up with the
+    /// next request, so the session is discarded instead.
+    pub(super) fn reusable(&mut self) -> bool {
+        self.writer.is_some() && self.answered && !self.has_exited() && !self.has_pending_line()
+    }
+
+    /// Whether a parked session is fit to carry the next call. Liveness
+    /// alone is not enough — a process can be alive yet desynchronised or
+    /// wedged — so this also requires an empty inbound queue and an exact
+    /// answer to a bounded MCP `ping`. `ping` is read-only, so failing it
+    /// costs nothing dispatched: the caller discards the session and opens
+    /// a fresh one.
+    pub(super) fn health_check_for_reuse(&mut self, probe_timeout: Duration) -> bool {
+        if self.writer.is_none() || self.has_exited() || self.has_pending_line() {
+            return false;
+        }
+        self.line_cap.store(self.probe_line_cap, Ordering::Release);
+        self.restart_budget(probe_timeout.min(REUSE_HEALTH_TIMEOUT));
+        match self.request("ping", json!({}), LostAnswer::Unreachable, true) {
+            Ok(_) => !self.has_pending_line(),
+            Err(error) => {
+                tracing::debug!(
+                    machine_id = %self.destination.machine_id,
+                    %error,
+                    "parked federated session failed its reuse health check"
+                );
+                false
+            }
+        }
+    }
+
+    /// Whether the destination has sent a line nobody is awaiting, or its
+    /// stream has ended. Consumes one queued line when there is one; a
+    /// session this reports on is discarded either way.
+    fn has_pending_line(&self) -> bool {
+        !matches!(self.lines.try_recv(), Err(TryRecvError::Empty))
+    }
+
+    /// Whether the session's process has ended. Never waits.
+    pub(super) fn has_exited(&mut self) -> bool {
+        !matches!(self.child.try_wait(), Ok(None))
     }
 
     #[cfg(test)]
@@ -303,6 +368,7 @@ impl DestinationSession {
                 "arguments": arguments,
             }),
             LostAnswer::OutcomeUnknown { tool: name },
+            false,
         )?;
         self.dispatched_content(&response, name)
     }
@@ -343,6 +409,7 @@ impl DestinationSession {
             crate::internal_drain::CALL_METHOD,
             json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL, "name": name, "arguments": arguments}),
             LostAnswer::OutcomeUnknown { tool: name },
+            false,
         )?;
         self.dispatched_content(&response, name)
     }
@@ -353,7 +420,7 @@ impl DestinationSession {
         method: &str,
         params: Value,
     ) -> Result<Value, OrbitError> {
-        self.request(method, params, LostAnswer::Unreachable)
+        self.request(method, params, LostAnswer::Unreachable, false)
     }
 
     fn request(
@@ -361,12 +428,14 @@ impl DestinationSession {
         method: &str,
         params: Value,
         lost: LostAnswer<'_>,
+        reject_unexpected_response_id: bool,
     ) -> Result<Value, OrbitError> {
         let context = OversizedContext::pending(
             method,
             &params,
             matches!(lost, LostAnswer::OutcomeUnknown { .. }),
         );
+        self.answered = false;
         self.next_id += 1;
         let id = self.next_id;
         self.send(
@@ -379,7 +448,7 @@ impl DestinationSession {
             }),
             |destination, reason| lost.classify(destination, id, reason),
         )?;
-        self.await_response(method, id, lost, context)
+        self.await_response(method, id, lost, context, reject_unexpected_response_id)
     }
 
     fn notify(&mut self, method: &str) -> Result<(), OrbitError> {
@@ -467,6 +536,7 @@ impl DestinationSession {
         id: i64,
         lost: LostAnswer<'_>,
         context: OversizedContext,
+        reject_unexpected_response_id: bool,
     ) -> Result<Value, OrbitError> {
         loop {
             // Checked before every read: a zero-length wait still returns a
@@ -546,6 +616,16 @@ impl DestinationSession {
                 }
                 continue;
             }
+            if reject_unexpected_response_id
+                && let Some(response_id) = message.get("id")
+                && response_id.as_i64() != Some(id)
+            {
+                return Err(lost.classify(
+                    &self.destination,
+                    id,
+                    format!("emitted a response with an unexpected id while awaiting '{method}'"),
+                ));
+            }
             if message.get("id").and_then(Value::as_i64) == Some(id) {
                 if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
                     || message.get("result").is_some() == message.get("error").is_some()
@@ -556,6 +636,7 @@ impl DestinationSession {
                         format!("emitted an invalid JSON-RPC response while awaiting '{method}'"),
                     ));
                 }
+                self.answered = true;
                 if let Some(error) = message.get("error") {
                     // Preserve the JSON-RPC error's structured code and
                     // message; the formatted text is only diagnostic detail.

@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 use super::tool_support::{managed_tool_env_guard, run_tool_as_operator, test_runtime};
 use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use std::collections::BTreeSet;
 
@@ -138,7 +137,7 @@ fn seed_running_run(runtime: &OrbitRuntime) -> String {
 /// Nothing here states a run id to the tool layer. `ORBIT_MANAGED_RUN_CONTEXT`
 /// authenticates the envelope and `ORBIT_RUN_ID` carries the id;
 /// `trusted_env_run_id` turns that pair into the host's task scope during
-/// `run_tool_with_context_and_role`, and the scope is what the guard reads.
+/// `run_tool_with_context`, and the scope is what the guard reads.
 /// That env-to-scope step is the one the ORB-10534 suite mocked away, and the
 /// one GitHub CI cannot exercise because it exports no `ORBIT_*` at all.
 ///
@@ -165,10 +164,9 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
     ));
     assert!(resume.contains("managed runs cannot dispatch"), "{resume}");
 
-    let managed_show = runtime.run_tool_with_context_and_role(
+    let managed_show = runtime.run_tool_with_context(
         "orbit.workflow.run.show",
         json!({"id": source_run_id}),
-        Role::Admin,
         ToolContext {
             session_context: ToolSessionContext {
                 effective_capabilities: BTreeSet::from([McpCapability::Agent]),

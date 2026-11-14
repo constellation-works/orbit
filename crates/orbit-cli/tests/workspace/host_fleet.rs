@@ -219,10 +219,6 @@ impl Fleet {
         self.local.home.join(".orbit/hosts.toml")
     }
 
-    pub(crate) fn legacy_file(&self) -> PathBuf {
-        self.local.home.join(".orbit/mcp-destinations.toml")
-    }
-
     pub(crate) fn hosts_bytes(&self) -> Option<Vec<u8>> {
         fs::read(self.hosts_file()).ok()
     }

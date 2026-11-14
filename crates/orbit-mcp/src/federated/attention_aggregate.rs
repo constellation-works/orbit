@@ -862,13 +862,8 @@ fn host_item(
     also: Vec<AttentionNext>,
 ) -> AttentionItem {
     let kind = AttentionKind::HostUnhealthy;
-    let identity = json!([kind, host.machine_id, "", cause]);
     let mut item = AttentionItem {
-        id: format!(
-            "att_{}_{}",
-            kind.as_str(),
-            cursor::attention_digest(identity.to_string().as_bytes())
-        ),
+        id: cursor::attention_item_id(kind, &host.machine_id, "", &json!(cause)),
         kind,
         severity,
         workspace: AttentionWorkspace::none(),

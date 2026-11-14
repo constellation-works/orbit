@@ -2,11 +2,13 @@
 //!
 //! A correction is one more invocation of the whole activity. Only the prompt
 //! asks it to change nothing but its reply. Admission therefore requires the
-//! read-only filesystem profile and denies the built-in Orbit mutation tools
-//! below, including coordination writes outside the worktree. That denial
-//! also covers a task's `required_tools` at run time: the runtime grant path
-//! drops a mutating requirement with an omitted-requirement note instead of
-//! adding it to the effective grant of a correction activity.
+//! read-only filesystem profile and refuses an allowlist grant of the built-in
+//! Orbit mutation tools below, including coordination writes outside the
+//! worktree. Dispatch denies every one of them to each invocation, whatever a
+//! disallow list names. That denial also covers a task's `required_tools` at
+//! run time: the runtime grant path drops a mutating requirement with an
+//! omitted-requirement note instead of adding it to the effective grant of a
+//! correction activity.
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 use super::tool_allowlist::tool_allowed;
@@ -16,9 +18,9 @@ const READ_ONLY_FS_PROFILE: &str = "reviewer";
 
 /// Registered built-in Orbit tools classified as mutating, including writes
 /// to coordination state outside the worktree, as policy names: a family's
-/// mutating actions appear as `family:action`. Keep this table and the
-/// shipped correction activities' disallow lists in sync with the tool
-/// registry.
+/// mutating actions appear as `family:action`. Keep this table in sync with
+/// the tool registry. A disallow-list activity need not name a new entry:
+/// dispatch denies every entry on top of the activity's own list.
 /// File and process access is separately confined by the filesystem profile.
 pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.auto_task:add",
@@ -106,8 +108,11 @@ pub enum ResponseCorrectionActivityError {
     },
 }
 
-/// Refuse `response_correction` unless workspace writes and the built-in
-/// Orbit mutations above are denied. Called from asset load in either grant mode.
+/// Refuse `response_correction` unless the activity is read-only and no
+/// built-in Orbit mutation in [`MUTATING_TOOLS`] is granted by an allowlist.
+/// Called from asset load in either grant mode. A disallow-list activity is
+/// admitted whatever the list names: the dispatch path denies every
+/// [`MUTATING_TOOLS`] entry on top of it.
 pub fn validate_response_correction_activity(
     activity: &ActivityV2,
 ) -> Result<(), ResponseCorrectionActivityError> {
@@ -129,11 +134,19 @@ pub fn validate_response_correction_activity(
     if spec.trusted_host_execution {
         return Err(ResponseCorrectionActivityError::TrustedHost);
     }
-    let granted = |tool: &str| match &spec.tool_disallow_list {
-        Some(disallowed) => !tool_allowed(tool, disallowed),
-        None => tool_allowed(tool, &spec.tools),
-    };
-    if let Some(tool) = MUTATING_TOOLS.iter().copied().find(|tool| granted(tool)) {
+    // A disallow list is a deny-by-default-for-mutation grant: the dispatch
+    // path appends every name in `MUTATING_TOOLS` to it, so a mutating tool
+    // a release adds later is denied without the file naming it. Requiring
+    // the list to name each one would turn a previously valid workspace
+    // copy into a refused file on the release that registers the tool
+    // [ORB-24639]. Only an allowlist grant, which names what it grants, is
+    // checked here.
+    if spec.tool_disallow_list.is_none()
+        && let Some(tool) = MUTATING_TOOLS
+            .iter()
+            .copied()
+            .find(|tool| tool_allowed(tool, &spec.tools))
+    {
         return Err(ResponseCorrectionActivityError::MutatingTool { tool });
     }
     Ok(())

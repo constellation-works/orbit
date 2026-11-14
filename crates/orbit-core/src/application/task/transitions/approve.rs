@@ -246,54 +246,36 @@ impl OrbitRuntime {
             }
 
             result = Some(match task.status {
-                TaskStatus::Proposed => self.with_mutation(|| {
-                    let task = self.stores().task_records().update(
-                        id,
-                        StoreTaskUpdateParams {
-                            actor: effective_label.clone(),
-                            status_event: Some("proposal_approved".to_string()),
-                            status_note: note.clone(),
-                            status_decision: decision.clone(),
-                            append_comments: append_comments.clone(),
-                            expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::Backlog),
-                                ..Default::default()
-                            })
-                        },
-                    )?;
-                    Ok((
-                        task.clone(),
-                        OrbitEvent::TaskProposalApproved {
-                            id: id.to_string(),
-                            approved_by: effective_label.clone(),
-                        },
-                    ))
-                }),
-                TaskStatus::Review => self.with_mutation(|| {
-                    let task = self.stores().task_records().update(
-                        id,
-                        StoreTaskUpdateParams {
-                            actor: effective_label.clone(),
-                            status_event: Some("review_approved".to_string()),
-                            status_note: note.clone(),
-                            implemented_by: implemented_by.clone().map(Some),
-                            append_comments: append_comments.clone(),
-                            expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::Done),
-                                ..Default::default()
-                            })
-                        },
-                    )?;
-                    Ok((
-                        task.clone(),
-                        OrbitEvent::TaskReviewApproved {
-                            id: id.to_string(),
-                            approved_by: effective_label.clone(),
-                        },
-                    ))
-                }),
+                TaskStatus::Proposed => self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        status_event: Some("proposal_approved".to_string()),
+                        status_note: note.clone(),
+                        status_decision: decision.clone(),
+                        append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
+                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                            status: Some(TaskStatus::Backlog),
+                            ..Default::default()
+                        })
+                    },
+                ),
+                TaskStatus::Review => self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        status_event: Some("review_approved".to_string()),
+                        status_note: note.clone(),
+                        implemented_by: implemented_by.clone().map(Some),
+                        append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
+                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                            status: Some(TaskStatus::Done),
+                            ..Default::default()
+                        })
+                    },
+                ),
                 other => Err(OrbitError::InvalidInput(format!(
                     "task '{id}' is in status '{other}'; approve requires 'proposed' or 'review'"
                 ))),

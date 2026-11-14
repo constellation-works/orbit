@@ -1,7 +1,7 @@
 //! Stateless atc1 cursor and canonical material fingerprints, shared by the
 //! local derivation and the federated aggregator so one cursor spans hosts.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use orbit_types::tool::{AttentionCursorStatus, AttentionItem};
+use orbit_types::tool::{AttentionCursorStatus, AttentionItem, AttentionKind};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -16,6 +16,21 @@ pub fn attention_digest(bytes: &[u8]) -> String {
         .take(8)
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+/// Item id `att_<kind>_<digest>`: the digest covers `[kind, machine_id, workspace_id, subject]`,
+/// so every source and the federated aggregator derive the same id for the same item.
+pub fn attention_item_id(
+    kind: AttentionKind,
+    machine_id: &str,
+    workspace_id: &str,
+    subject: &Value,
+) -> String {
+    let identity = json!([kind, machine_id, workspace_id, subject]);
+    format!(
+        "att_{}_{}",
+        kind.as_str(),
+        attention_digest(identity.to_string().as_bytes())
+    )
 }
 /// `fp_` digest over the item's identity, severity and canonical material state.
 pub fn attention_fingerprint(item: &AttentionItem, state: Value) -> String {

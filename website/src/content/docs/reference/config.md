@@ -320,35 +320,13 @@ one-way and stores no SSH credentials.
 
 ### Legacy migration
 
-`~/.orbit/mcp-destinations.toml` is the legacy destination file. Its reader
-remains for one release. Use `orbit host` to migrate it; do not add new rows
-to the legacy file.
+`~/.orbit/mcp-destinations.toml` is no longer read. Its presence, alone or
+beside `hosts.toml`, fails every host-registry load with `host_file_conflict`;
+`orbit doctor` reports an error. Move it aside, run `orbit host add <ssh-target>`
+for each `ssh` row to register the hosts in `hosts.toml`, then delete the moved
+file. Automatic migration is no longer available.
 
-- **Only the legacy file exists:** federated MCP, pull drains, and replica
-  worktree cleanup still read it. `orbit host list` marks rows **legacy**.
-  They have no stored task prefix, so they cannot supply prefix routes.
-- **First add, rename, or remove:** Orbit probes every retained legacy host,
-  writes `hosts.toml`, applies the operation, and deletes the legacy file.
-  `orbit host add <existing-ssh-target>` migrates an already-listed host
-  successfully, preserving its SSH target and chosen migration name;
-  `--name` applies only to a new host. Migrated names use the remote's
-  `machine.name`, falling back to its SSH target when the name is taken.
-- **A retained host does not answer:** `legacy_host_unreachable` refuses the
-  mutation and neither file changes. Restore SSH access or remove the
-  decommissioned row with `orbit host remove <ssh-target-or-machine-id>`.
-  The removed legacy host is never contacted; all remaining hosts must
-  answer. `--force` only overrides replica and pull-drain dependents.
-- **Both files exist:** every consumer, including `orbit host`, refuses
-  with `host_file_conflict`. The diagnostic compares them by machine ID
-  and lists missing routes with their `orbit host add` commands. Preserve
-  a backup, retire the legacy file, then run those commands to register
-  any missing hosts. Orbit does not choose one file for you.
-
-`orbit doctor` warns while only the legacy file exists and gives an
-`orbit host add` command using an existing SSH target. The next release
-drops the legacy reader and retains the both-files conflict check for one
-additional release. The older singular `host.toml` identity file is
-unrelated to this migration.
+The older singular `host.toml` identity file is unrelated to this retirement.
 
 ## Crews
 
@@ -842,6 +820,7 @@ sets them:
 | `workflow.light_delivery_paths` | array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]`<br>Path globs (`*` within a component, `**` across components; a leading `!` excludes) a candidate must change only within for a task tagged `skip-review` or `skip-validation` to skip agent review or local validation. Any other changed path ignores both tags, and the task's history records why. `[]` disables both tags. |
 | `workflow.test_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]`<br>Path globs (`*` within a component, `**` across components; a leading `!` excludes) whose changed lines count as tests in each landed delivery's diff stats, charted under Analytics › Metrics › Lines changed. Checked before `workflow.non_code_paths`. Changes apply to deliveries recorded afterwards. |
 | `workflow.non_code_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]`<br>Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats. A path matching neither this nor `workflow.test_paths` counts as code. |
+| `workflow.regression_layers` | **Advanced.** array&lt;table&gt; · **Default:** a `ci_tests` row (`.github/`; `tests`, `testdata` and `fixtures` directories) and a `docs_skills` row (`docs/`; `.md` files)<br>Ordered layers that `orbit codebase analytics` and `show` classify a regression fix into, by its landed paths, else its declared footprint. Each `[[workflow.regression_layers]]` entry has a unique non-empty `name` (never `other` or `unknown`) and at least one of `prefixes`, `dirs` (single path components) or `suffixes`; a path takes the first layer with a matching rule, else `other`. Setting the list replaces the defaults; `[]` puts every path in `other`. Breakdowns list the layers in order, and `--layer` accepts exactly these names plus `other` and `unknown`. |
 | `workflow.non_reviewable_paths` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Path globs left out of the reviewable-lines denominator (`cost_per_line` and `lead_time_per_line`). Docs and config stay reviewable. List lockfiles, goldens, snapshots and generated files here; empty counts every line that is not a pure rename. Distinct from `workflow.non_code_paths`. Changes apply to deliveries recorded afterwards. |
 | `workflow.task_pilot_freshness.material_fields` | **Advanced.** array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. A new `orbit init` seeds only `description` and `criteria`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
 | `workflow.task_pilot_freshness.source_sensitivity` | **Advanced.** string · **Default:** `ignore`<br>Whether branch-head changes are checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Values: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
@@ -900,7 +879,7 @@ sets them:
 | `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
 | `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
 | `completion.hold` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[completion.hold]]` rules that keep a `--complete` run's task in `review` instead of `done`. Each rule sets at least one of `paths` (globs matched against the files the pull request changes; a leading `!` excludes), `complexity_at_least` (`low`, `medium`, `hard` or `xhard`), `types` (`feature`, `bug`, `refactor`, `chore`) and `tags`, plus an optional `name`. A rule holds when any field matches, and the first matching rule is recorded on the task (`orbit task show` prints it as `Completion Hold:`). A held run leaves the pull request open and unmerged. A rule never grants completion, and a run without `--complete` is unchanged. An unknown key, a bad glob or an unknown complexity or type fails config load. Approve a held task with `orbit task update <id> --approve` once its pull request is merged. |
-| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command-audit rows, this workspace's run-audit rows, and run-audit rows whose workspace id is no longer registered become reclaimable, along with audit blobs no remaining row names. Another registered workspace keeps its own window. Health > Events, Incidents, Denials, `orbit audit` and diagnostics friction lose older raw history, with no rollups. Durable lock-denial facts preserve Lock contention. Nothing is deleted until you run `orbit gc audit --apply` or enable the `store-gc` routine. |
+| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command-audit rows, this workspace's run-audit rows, and run-audit rows whose workspace id is no longer registered become reclaimable, along with audit blobs no remaining row names. Another registered workspace keeps its own window. Health > Events, Incidents, Denials, `orbit audit` and diagnostics friction lose older raw history, with no rollups. Durable lock-denial facts preserve Lock contention. Nothing is deleted until you run `orbit gc audit --confirm` or enable the `store-gc` routine. |
 | `retention.runs_days` | integer · **Default:** `60`<br>Days after a run finishes before `orbit gc runs` may drop its pipeline state (30–36500). Run rows, steps, summaries and commit outcomes stay, preserving succeeded implement_one durations. Unregistered workspace ids are included. Consider 30 days on a large store; smaller values, including command overrides, are refused because Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares need 30 days of run state. Older raw checkpoints are lost. Resource minutes and admission forecasts older than 30 days are pruned separately, except rows kept at any age by count: each workspace, work class and complexity's newest 200 deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward. Auto-concurrency profiles and forecast accuracy keep working on those rows; older raw samples outside them are lost. |
 | `worktree.reclaim` | **Advanced.** array&lt;string&gt; · **Default:** `["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]`<br>Rebuildable paths in kept terminal run worktrees. Relative globs use `*` within a component and whole-component `**` across components. An explicit list replaces earlier layers; `[]` disables reclamation. Absolute, parent and root-matching patterns fail config load. Only ignored or untracked paths without tracked content are deleted, after registration, confinement, symlink and worker checks. Inspect with `orbit gc worktrees --reclaim`, apply with `--confirm`. |
 | `worktree.reclaim_below_free_mib` | **Advanced.** integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this threshold, oldest terminal worktrees first. Active runs and live or undecidable workers stay protected. |

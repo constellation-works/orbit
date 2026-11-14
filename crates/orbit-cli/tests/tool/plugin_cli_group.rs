@@ -1845,7 +1845,7 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
         .command(["plugin", "remove", "demo"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("pass --yes to proceed"));
+        .stderr(predicate::str::contains("pass --confirm to proceed"));
 
     let removed = fixture.json(["plugin", "remove", "demo", "--yes"]);
     assert_eq!(removed["name"], "demo");
@@ -1938,33 +1938,6 @@ fn remove_prints_retained_state_path_and_purge_removes_only_that_state() {
             );
         }
     }
-}
-
-#[test]
-fn tool_scaffold_still_works_and_points_at_plugin_scaffold() {
-    let fixture = Fixture::new();
-    let script = fixture.home.join("legacy/hello_orbit.py");
-
-    fixture
-        .success([
-            "tool",
-            "scaffold",
-            script.to_str().expect("utf8 path"),
-            "--name",
-            "demo.hello",
-        ])
-        .stderr(predicate::str::contains("deprecated"))
-        .stderr(predicate::str::contains("orbit plugin scaffold"))
-        .stdout(predicate::str::contains("Created starter plugin"));
-
-    assert!(script.is_file(), "the v1 executable is still written");
-    assert!(
-        fixture
-            .home
-            .join("legacy/hello_orbit.orbit-tool.yaml")
-            .is_file(),
-        "the v1 sidecar is still written"
-    );
 }
 
 /// A backend that can write `orbit.db` can point its own row anywhere, and the

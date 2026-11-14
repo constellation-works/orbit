@@ -4,8 +4,9 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskDecision, TaskStatus};
 use orbit_types::workflow::{
-    REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION, RecordedReviewFixValidationFailure,
-    ReviewGateAdmissionOutput, ReviewGateHistoryNote, ReviewGateRefusal,
+    FailureHandoffDecision, REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION,
+    RecordedReviewFixValidationFailure, ReviewGateAdmissionOutput, ReviewGateHistoryNote,
+    ReviewGateRefusal,
 };
 use serde_json::{Value, json};
 
@@ -134,25 +135,25 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         (
             TaskStatus::InProgress,
             "review_awaiting_evidence",
-            "awaiting_review_evidence",
+            FailureHandoffDecision::AwaitingReviewEvidence,
         )
     } else if timeout_exhausted {
         (
             TaskStatus::Blocked,
             "review_timeout_requeue_exhausted",
-            "blocked_review_gate",
+            FailureHandoffDecision::BlockedReviewGate,
         )
     } else if timed_out {
         (
             TaskStatus::Backlog,
             "review_timeout_incomplete",
-            "incomplete_review_timeout",
+            FailureHandoffDecision::IncompleteReviewTimeout,
         )
     } else {
         (
             TaskStatus::Blocked,
             REVIEW_GATE_EVENT,
-            "blocked_review_gate",
+            FailureHandoffDecision::BlockedReviewGate,
         )
     };
     let continuation = if evidence_hold {
@@ -254,7 +255,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": decision,
+        "decision": decision.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,

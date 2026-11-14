@@ -2,7 +2,6 @@
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionRequest,
     FINAL_RECOVERY_DECIDED_EVENT, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
@@ -667,38 +666,30 @@ impl OrbitRuntime {
             .map(|infra| self.task_corpus_appends_for_recovery(&task.id, infra, "escalated"))
             .transpose()?
             .unwrap_or_default();
-        self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                &task.id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    status: transition.then_some(plan.status),
-                    status_event: record_status.then(|| plan.event.to_string()),
-                    status_note: record_status.then(|| plan.note.clone()),
-                    status_decision: record_status.then(|| TaskDecision::RunTransition {
-                        run_id: request.run_id.clone(),
-                    }),
-                    execution_summary: plan.execution_summary.clone(),
-                    append_comments: vec![comment.clone()],
-                    append_history: decided
-                        .clone()
-                        .into_iter()
-                        .chain(published.clone())
-                        .chain(infra.clone())
-                        .chain(corpus_appends.clone())
-                        .chain(plan.history.clone())
-                        .collect(),
-                    expected_status: (!plan.readmitted).then(|| vec![task.status]),
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task.id.clone(),
-                },
-            ))
-        })?;
+        self.stores().task_records().update(
+            &task.id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                status: transition.then_some(plan.status),
+                status_event: record_status.then(|| plan.event.to_string()),
+                status_note: record_status.then(|| plan.note.clone()),
+                status_decision: record_status.then(|| TaskDecision::RunTransition {
+                    run_id: request.run_id.clone(),
+                }),
+                execution_summary: plan.execution_summary.clone(),
+                append_comments: vec![comment.clone()],
+                append_history: decided
+                    .clone()
+                    .into_iter()
+                    .chain(published.clone())
+                    .chain(infra.clone())
+                    .chain(corpus_appends.clone())
+                    .chain(plan.history.clone())
+                    .collect(),
+                expected_status: (!plan.readmitted).then(|| vec![task.status]),
+                ..Default::default()
+            },
+        )?;
         if let Some(raise) = &plan.raise
             && plan.status == TaskStatus::Blocked
         {
@@ -743,23 +734,15 @@ impl OrbitRuntime {
             request = request.with_human_action(action.clone());
         }
         let entry = request.history_entry(SYSTEM_ACTOR_LABEL);
-        self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                task_id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    append_history: vec![entry.clone()],
-                    expected_status: Some(vec![TaskStatus::Blocked]),
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task_id.to_string(),
-                },
-            ))
-        })?;
+        self.stores().task_records().update(
+            task_id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_history: vec![entry.clone()],
+                expected_status: Some(vec![TaskStatus::Blocked]),
+                ..Default::default()
+            },
+        )?;
         Ok(())
     }
 }

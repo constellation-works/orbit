@@ -128,9 +128,67 @@ fn reject_guarded_unknown_fields(
     }
     Ok(())
 }
+fn guarded_required_string(input: &Value, field: &str, create: bool) -> Result<String, OrbitError> {
+    if input.get(field).is_some() {
+        return required_string(input, &[field], field);
+    }
+    let required: &[&str] = if create {
+        &[
+            "workspace",
+            "request_id",
+            "title",
+            "description",
+            "acceptance_criteria",
+        ]
+    } else {
+        &["workspace", "request_id", "id", "expected_revision"]
+    };
+    let missing: Vec<_> = required
+        .iter()
+        .copied()
+        .filter(|key| input.get(*key).is_none())
+        .collect();
+    let selectors = guarded_selectors_present(input);
+    let verb = if selectors.len() == 1 {
+        "selects"
+    } else {
+        "select"
+    };
+    let mode = if create {
+        "guarded creation"
+    } else {
+        "guarded update"
+    };
+    let remedy = if create {
+        format!("drop {} for an ordinary create", quote_list(&selectors))
+    } else {
+        "read 'expected_revision' from orbit.task.show with snapshot: true; drop 'request_id', 'expected_revision', 'verdict', 'complete' for an ordinary update".to_string()
+    };
+    let previous = orbit_common::protocol::tool_input::missing_tool_field(input, field);
+    let suggestions = previous
+        .did_you_mean()
+        .map(|names| names.to_vec())
+        .unwrap_or_default();
+    let prefix = match previous {
+        OrbitError::InvalidInput(message) | OrbitError::InvalidInputDiagnostic { message, .. } => {
+            message
+        }
+        other => other.to_string(),
+    };
+    let message = format!(
+        "{prefix}; {} {verb} {mode}, which requires {}; missing {}; {remedy}",
+        quote_list(&selectors),
+        quote_list(required),
+        quote_list(&missing)
+    );
+    Err(OrbitError::invalid_input_with_suggestions(
+        message,
+        suggestions,
+    ))
+}
 pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
-    let workspace = required_string(&input, &["workspace"], "workspace")?;
-    let request_id = required_string(&input, &["request_id"], "request_id")?;
+    let workspace = guarded_required_string(&input, "workspace", create)?;
+    let request_id = guarded_required_string(&input, "request_id", create)?;
     let mut operation = serde_json::Map::new();
     let (allowed, mode): (&[&str], &str) = if create {
         operation.insert("kind".into(), json!("create"));
@@ -145,13 +203,16 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
             "creation",
         )
     } else {
-        operation.insert("id".into(), json!(required_string(&input, &["id"], "id")?));
+        operation.insert(
+            "id".into(),
+            json!(guarded_required_string(&input, "id", create)?),
+        );
         operation.insert(
             "expected_revision".into(),
-            json!(required_string(
+            json!(guarded_required_string(
                 &input,
-                &["expected_revision"],
-                "expected_revision"
+                "expected_revision",
+                create
             )?),
         );
         if input.get("verdict").is_some() {

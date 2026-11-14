@@ -132,8 +132,8 @@ impl Destination {
 
 /// Load the registered SSH remotes from the operator's host file.
 ///
-/// The host file, its one-release legacy fallback and its fail-closed
-/// validation live in [`orbit_registry::hosts`]; the mux, pull drains and
+/// The host file and its fail-closed validation live in
+/// [`orbit_registry::hosts`]; the mux, pull drains and
 /// worktree GC all read membership through this one loader. A missing file is
 /// a valid local-only configuration.
 pub fn load_destinations(global_orbit_root: &Path) -> Result<Vec<HostRoute>, OrbitError> {

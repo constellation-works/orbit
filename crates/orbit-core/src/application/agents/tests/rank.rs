@@ -14,9 +14,10 @@ use orbit_types::workflow::ReviewVerdict;
 use serde_json::Value;
 
 use super::super::facts::{Attempt, RegressionLink, RejectOutcome, Review, TaskFacts};
+use super::super::rank::agent_rank_calibration;
 use super::super::{
     AgentFacts, AgentQuery, AgentRole, ExecutionMode, RankQuery, RankSeasons, agent_rank,
-    agent_rank_calibration, agent_scorecard, attribution,
+    agent_scorecard, attribution,
 };
 
 /// One model's fixture work: crews it runs under, tasks per tier (low and

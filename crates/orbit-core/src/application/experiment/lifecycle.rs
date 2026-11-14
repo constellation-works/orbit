@@ -135,7 +135,7 @@ impl OrbitRuntime {
     }
 
     /// Copy an experiment's definition into a new draft named `name`.
-    pub fn clone_experiment(
+    pub(crate) fn clone_experiment(
         &self,
         id_or_name: &str,
         name: &str,
@@ -359,7 +359,7 @@ impl OrbitRuntime {
     }
 
     /// The workspace's experiments, oldest first.
-    pub fn experiment_views(
+    pub(crate) fn experiment_views(
         &self,
         status: Option<&str>,
     ) -> Result<Vec<ExperimentView>, OrbitError> {

@@ -81,13 +81,8 @@ fn doctor_item(
             also: Vec::new(),
         }],
     };
-    let identity = json!([kind, host.machine_id, workspace.id, "doctor"]);
     let mut item = AttentionItem {
-        id: format!(
-            "att_{}_{}",
-            kind.as_str(),
-            cursor::attention_digest(identity.to_string().as_bytes())
-        ),
+        id: cursor::attention_item_id(kind, &host.machine_id, &workspace.id, &json!("doctor")),
         kind,
         severity: if owner {
             AttentionSeverity::Critical

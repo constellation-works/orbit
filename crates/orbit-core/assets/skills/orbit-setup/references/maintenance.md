@@ -657,15 +657,15 @@ The host store (`~/.orbit/orbit.db`) also keeps every run's audit events and
 pipeline state, and the commit decision of every task transition (the task
 commit journal). Each workspace keeps the blobs those events name under
 `.orbit/state/audit/blobs/`. Three commands bound them. Each only reports
-until you pass `--apply`:
+until you pass `--confirm`:
 
 ```bash
 orbit gc audit                        # rows and bytes past retention.audit_days, and unreferenced blobs
-orbit gc audit --apply                # delete them
+orbit gc audit --confirm              # delete them
 orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
-orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
+orbit gc runs --confirm               # drop that state; the run, its steps and summary stay
 orbit gc journal                      # applied commit journal rows older than 14 days
-orbit gc journal --apply              # delete them; unsettled rows and each task's newest stay
+orbit gc journal --confirm            # delete them; unsettled rows and each task's newest stay
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
 

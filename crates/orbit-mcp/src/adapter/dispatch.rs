@@ -94,13 +94,6 @@ impl OrbitToolServer {
             .map(|surface| Arc::clone(&surface.definitions))
     }
 
-    fn name_map(&self) -> Result<Arc<std::collections::HashMap<String, String>>, McpError> {
-        self.load_tool_surface()
-            .map_err(invalid_definitions_mcp_error)?
-            .name_map
-            .clone()
-    }
-
     /// Resolve the advertised wire input schema for one canonical definition.
     pub(super) fn input_schema_for(
         &self,
@@ -112,13 +105,16 @@ impl OrbitToolServer {
             .flatten();
         let mut schema = match definition.input_schema.as_ref().and_then(Value::as_object) {
             Some(declared) => super::schema::declared_input_schema(declared),
-            None => super::schema::build_input_schema_with_friction_taxonomy(
+            None => super::schema::build_input_schema(
                 &definition.schema.name,
                 &definition.schema.parameters,
-                taxonomy.as_deref(),
-                definition.rules.input_decoration,
             ),
         };
+        super::schema::apply_input_decoration(
+            &mut schema,
+            definition.rules.input_decoration,
+            taxonomy.as_deref(),
+        );
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
         slim_advertised_property_descriptions(&mut schema, &definition.schema.name);
         Ok(schema)
@@ -147,6 +143,7 @@ impl OrbitToolServer {
         &self,
         mut result: ListToolsResult,
         definitions: &[McpToolDefinition],
+        name_map: &super::CachedNameMap,
     ) -> Result<ListToolsResult, McpError> {
         let context = self.session_context();
         let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&context));
@@ -182,7 +179,7 @@ impl OrbitToolServer {
         if hidden.is_empty() {
             return Ok(result);
         }
-        let name_map = self.name_map()?;
+        let name_map = name_map.clone()?;
         result.tools.retain(|tool| {
             name_map
                 .get(tool.name.as_ref())
@@ -249,14 +246,6 @@ impl OrbitToolServer {
         context
     }
 
-    pub(super) fn canonical_name(&self, advertised: &str) -> Result<String, McpError> {
-        let map = self.name_map()?;
-        Ok(map
-            .get(advertised)
-            .cloned()
-            .unwrap_or_else(|| advertised.to_string()))
-    }
-
     async fn dispatch_tool_call(
         &self,
         request: CallToolRequestParams,
@@ -288,15 +277,22 @@ impl OrbitToolServer {
             });
         }
         let mut call_context = self.context_for_tool_call();
-        let canonical = self.canonical_name(request.name.as_ref())?;
+        // One surface load for this call: the name map and the definitions
+        // both come from the same snapshot.
+        let surface = self
+            .load_tool_surface()
+            .map_err(invalid_definitions_mcp_error)?;
+        let name_map = surface.name_map.clone()?;
+        let canonical = name_map
+            .get(request.name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| request.name.to_string());
         let mut input = request
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(Map::new()));
 
-        let definitions = self
-            .load_tool_definitions()
-            .map_err(invalid_definitions_mcp_error)?;
+        let definitions = &surface.definitions;
         let definition = definitions
             .iter()
             .find(|definition| definition.schema.name == canonical);
@@ -331,9 +327,27 @@ impl OrbitToolServer {
                 .as_deref()
                 .is_none_or(|selector| selector.trim().is_empty())
         {
-            // Name `view` only when the caller set it. Other echo conditions,
-            // such as `mode` on `auto`, need a selector and nothing else.
-            let guidance = if input.get("view").is_some() {
+            let fields = definition
+                .map(|definition| {
+                    definition
+                        .rules
+                        .workspace_echo
+                        .matching_input_fields(&input)
+                })
+                .unwrap_or_default();
+            let trigger = if fields.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "input {} requires this selector; ",
+                    fields
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let guidance = if fields.contains(&"view") {
                 "`view` reads never use the session's bound workspace. Pass `workspace` with a \
                  selector copied from `orbit_workspace_list`, or omit `view` to use the bound \
                  workspace"
@@ -342,7 +356,7 @@ impl OrbitToolServer {
             };
             return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
                 "tool '{canonical}' requires an explicit workspace selector from discovery: \
-                 {guidance}"
+                 {trigger}{guidance}"
             ))));
         }
         let host = Arc::clone(&self.host);
@@ -629,7 +643,11 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(cache) = surface.lists.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
-            return self.without_hidden_tools((**cached).clone(), &surface.definitions);
+            return self.without_hidden_tools(
+                (**cached).clone(),
+                &surface.definitions,
+                &surface.name_map,
+            );
         }
 
         // Build and validate the map on the same first pass as the list. This
@@ -679,7 +697,7 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(mut cache) = surface.lists.lock() {
             cache.insert(cache_key, Arc::new(result.clone()));
         }
-        self.without_hidden_tools(result, &surface.definitions)
+        self.without_hidden_tools(result, &surface.definitions, &surface.name_map)
     }
 
     async fn list_resources(

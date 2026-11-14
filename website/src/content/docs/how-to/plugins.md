@@ -254,10 +254,10 @@ orbit plugin upgrade notes ./my-plugin-v0.2
 ## Remove
 
 ```bash
-orbit plugin remove notes --yes
+orbit plugin remove notes --confirm
 ```
 
-- `--yes` confirms the permanent removal of the install. Removal also deletes the
+- `--confirm` confirms the permanent removal of the install. Removal also deletes the
   plugin's secrets.
 - `--purge-state` also deletes the plugin's Orbit-owned state directory.
 - `--record-only` removes only this machine's record and leaves the installed files in

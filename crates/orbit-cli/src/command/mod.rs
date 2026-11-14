@@ -72,81 +72,11 @@ pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), Or
     )))
 }
 
-// Clap derive does not support per-variant subcommand `help_heading`
-// (`next_help_heading` is args-only; `subcommand_help_heading` only renames
-// the single `Commands:` block). To render grouped sections in `--help` we
-// hand-roll the template below. Keep the variant order and the template's
-// section order in sync when adding new commands — the variant order also
-// determines where a missing-from-template command would otherwise appear.
-//
-// It is a named constant rather than an inline literal because `main`
-// splices in a `Plugins:` section for the host's installed plugin groups
-// before parsing, and clap does not hand a built template back out.
-pub(crate) const ROOT_HELP_TEMPLATE: &str = "\
-{name} {version}
-
-{usage-heading} {usage}
-
-Setup:
-  init         Initialize the global Orbit root (~/.orbit)
-  workspace    Manage workspaces
-  config       Show or update Orbit configuration
-  host         Register and inspect remote Orbit hosts
-  plugin       Install and manage Orbit plugins
-  migrate      Apply or inspect pending .orbit layout/schema migrations
-  update       Install a published Orbit release and converge to it
-
-Work:
-  task         Create, update, and manage tasks
-  friction     Report, list, and triage friction records
-  search       Search tasks and frictions
-
-Operate:
-  run          Run workflows, drain the backlog, and inspect runs
-  job          Define, list, and manage job workflows
-  script       Grant and inspect workspace scripts a job step may run
-  notice       Post, close and list fleet notices
-  tool         Manage and run Orbit tools, including external MCP plugins
-  gc           Inspect and explicitly reap Orbit-managed garbage
-
-Observe:
-  attention    List what waits on an operator
-  audit        Query the audit event log
-  log          Tail the unified Orbit log feed
-  doctor       Diagnose workspace health, provider CLIs, and filesystem access
-
-Analytics:
-  agents       Score agents by model and recorded effort
-  codebase     Rank the repository paths that are risky for agents to change
-
-Scheduler:
-  clock        Inspect, control, and manually tick the machine scheduler
-  routine      Inspect and control scheduled routines on this machine
-  auto-task    Define recurring auto-task templates
-  automation   Explain what condition-triggered routines and auto-tasks would match
-
-Services:
-  mcp          Register MCP client integrations and run the MCP server
-  web          Run the Orbit dashboard
-
-Advanced:
-  application  Consent to scoped application calls and manage credentials
-  decision     List, show and answer human decision requests on held work
-  evolution    Record and inspect capability gaps and their measured costs
-  experiment   Define, run and conclude experiments over agent treatments
-  memory       Inspect, export and reset crew memory (experimental)
-  resident     Grant, narrow and inspect resident orchestrator mandates
-
-Options:
-{options}";
-
+// Grouped `--help` sections come from the row tables in `help.rs`, attached in `entry/discover.rs`.
 #[derive(Parser)]
 #[command(name = "orbit")]
 #[command(about = "Orbit CLI", version)]
-#[command(
-    disable_help_subcommand = true,
-    help_template = ROOT_HELP_TEMPLATE
-)]
+#[command(disable_help_subcommand = true)]
 pub struct Cli {
     /// Orbit data directory to use (overrides every other source)
     #[arg(long, global = true)]

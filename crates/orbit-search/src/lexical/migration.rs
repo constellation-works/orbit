@@ -18,7 +18,8 @@ const CHUNKS_DDL: &str = r#"
 
 /// Which task fields each source's chunks cover: `1` is the fields a
 /// [`Task`](orbit_types::task::Task) alone carries, `2` also carries the
-/// sidecars it does not — comments and artifact paths. A source with no
+/// sidecars it does not — comments and artifact paths — in word-normalized
+/// chunks, and `3` carries them in raw-preserving chunks. A source with no
 /// row was indexed before coverage was recorded and counts as `1`, so an
 /// upgraded store keeps the bundle-matcher fallback for it until a reindex
 /// or an ordinary task write re-indexes it at the current version.

@@ -14,10 +14,8 @@ use crate::OrbitRuntime;
 use chrono::{DateTime, Local, Utc};
 use orbit_automation::routines::sweep::duplicate_ownership_skipped;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
-use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::contracts::{JobRunQuery, RoutineFireRecord, RoutineFireState};
-use orbit_types::workflow::{JobRun, JobRunState, RoutineTarget};
+use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -38,8 +36,10 @@ pub(crate) use checkout::{
 pub use display::{FireField, RoutineFailureStreak, RoutineField, RoutineStatus, project_fire};
 pub use fires::recent_fires;
 pub use report::{RoutineStatusReport, routine_statuses_with_providers};
-pub use toggle::{
-    RoutineToggleOutcome, pause_routine, resume_routine, select_listed_routine,
-    set_routine_enabled, toggle_listed_routine,
+pub(crate) use toggle::{
+    next_scheduled_occurrence, rewrite_enabled_line, select_listed_routine_for_target,
 };
-pub(crate) use toggle::{next_scheduled_occurrence, rewrite_enabled_line};
+pub use toggle::{
+    pause_routine, resume_routine, select_listed_routine, set_routine_enabled,
+    toggle_listed_routine,
+};

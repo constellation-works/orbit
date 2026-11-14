@@ -166,7 +166,6 @@ fn registered_owner(global_root: &Path, owner_machine_id: &str) -> Option<String
     let registry = orbit_registry::hosts::load_host_registry(global_root).ok()?;
     match registry.resolve(owner_machine_id).ok()? {
         orbit_registry::hosts::ResolvedHost::Entry(entry) => Some(entry.name.clone()),
-        orbit_registry::hosts::ResolvedHost::Legacy(row) => Some(row.ssh.clone()),
         orbit_registry::hosts::ResolvedHost::Local(_) => None,
     }
 }

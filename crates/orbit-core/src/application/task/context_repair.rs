@@ -13,7 +13,6 @@
 //! operator repair rather than handed a guessed or inherited scope.
 
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 
 use super::TaskRecordUpdateParams;
@@ -161,21 +160,15 @@ impl OrbitRuntime {
             let actor = self.actor().resolve_write_label(None, None)?;
             let history_entry =
                 context_files_restored_history_entry(actor.as_str(), &restoration.restored);
-            let updated = self.with_mutation(|| {
-                let updated = self.stores().task_records().update(
-                    id,
-                    TaskRecordUpdateParams {
-                        actor: actor.clone(),
-                        context_files: Some(context_files.clone()),
-                        append_history: vec![history_entry.clone()],
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    updated.clone(),
-                    OrbitEvent::TaskUpdated { id: id.to_string() },
-                ))
-            })?;
+            let updated = self.stores().task_records().update(
+                id,
+                TaskRecordUpdateParams {
+                    actor: actor.clone(),
+                    context_files: Some(context_files.clone()),
+                    append_history: vec![history_entry.clone()],
+                    ..Default::default()
+                },
+            )?;
             outcome = Some((
                 updated,
                 ContextFileRestoration {
