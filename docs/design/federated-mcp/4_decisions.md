@@ -257,7 +257,7 @@ The rule forbids carrying anything a destination *said* from one call to the nex
 ### Consequences
 
 - N sequential routed calls to one destination inside the idle window spawn one `ssh` child and send one `initialize`; discovery still runs N times.
-- ORB-11023 semantics hold: a lost answer is `outcome_unknown` and its session is discarded; a parked session that fails its reuse health check or this call's discovery is discarded and replaced by a fresh one before anything is dispatched. A later pre-dispatch `tools/list` failure, and any failure of the fresh session, stays a delivery miss — never a replay of a routed mutation.
+- ORB-11023 semantics hold: a lost answer is `outcome_unknown` and its session is discarded; a parked session that fails its reuse health check or this call's discovery is discarded and replaced by a fresh one before anything is dispatched. A later pre-dispatch `tools/list` failure, and a fresh session's failure before dispatch, stays a delivery miss; a fresh session's loss after dispatch is `outcome_unknown`. No path here replays a routed mutation.
 - Cost: an idle remote `orbit mcp serve` per destination lives up to 60 seconds after its last call, and a wedged parked session costs the next call one bounded `ping` (or one discovery) before it is replaced.
 
 ## Task References
