@@ -375,7 +375,9 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             .unwrap()
             .spec;
             let mut catalog = V2ActivityCatalog::new();
-            catalog.load_dir(&assets.join("activities")).unwrap();
+            catalog
+                .load_dir_skipping_retired_prefer_existing(&assets.join("activities"))
+                .unwrap();
             resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
             // Keep the loaded/resolved continuation, including the claimed
             // review steps. Seed only the already-completed preparation.

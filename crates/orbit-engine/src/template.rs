@@ -7,8 +7,6 @@ use serde_json::Value;
 #[derive(Debug, Clone, Default)]
 pub struct TemplateContext {
     pub input: Value,
-    pub env: HashMap<String, String>,
-    pub workspace_path: Option<String>,
     pub item: Option<Value>,
     pub iteration: Option<u32>,
     /// Accumulated outputs from completed steps, keyed by step id (or
@@ -50,11 +48,6 @@ where
 }
 
 fn resolve_token(token: &str, ctx: &TemplateContext) -> Result<String, OrbitError> {
-    if token == "workspace_path" {
-        return ctx.workspace_path.clone().ok_or_else(|| {
-            OrbitError::InvalidInput("workspace_path is unavailable in this context".to_string())
-        });
-    }
     if token == "item" {
         return resolve_input_path(ctx.item.as_ref(), &[]);
     }
@@ -71,24 +64,19 @@ fn resolve_token(token: &str, ctx: &TemplateContext) -> Result<String, OrbitErro
         .ok_or_else(|| OrbitError::InvalidInput("empty template token".to_string()))?;
     let path = parts.collect::<Vec<_>>();
     if path.is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
-            "template token '{token}' must include a key path"
-        )));
+        return match namespace {
+            "input" | "steps" => Err(OrbitError::InvalidInput(format!(
+                "template token '{token}' must include a key path"
+            ))),
+            other => Err(OrbitError::InvalidInput(format!(
+                "unknown template namespace: {other}"
+            ))),
+        };
     }
 
     match namespace {
         "input" => resolve_input_path(Some(&ctx.input), &path),
         "item" => resolve_input_path(ctx.item.as_ref(), &path),
-        "env" => {
-            if path.len() != 1 {
-                return Err(OrbitError::InvalidInput(format!(
-                    "env template token '{token}' must reference a single variable"
-                )));
-            }
-            ctx.env.get(path[0]).cloned().ok_or_else(|| {
-                OrbitError::InvalidInput(format!("missing environment variable '{}'", path[0]))
-            })
-        }
         "steps" => {
             // steps.<step_id>.<namespace>.<field>...
             // where <namespace> is "state", "output" or "files".
@@ -122,9 +110,6 @@ fn resolve_token(token: &str, ctx: &TemplateContext) -> Result<String, OrbitErro
                 ))),
             }
         }
-        "secrets" => Err(OrbitError::InvalidInput(
-            "secrets namespace is not yet supported".to_string(),
-        )),
         other => Err(OrbitError::InvalidInput(format!(
             "unknown template namespace: {other}"
         ))),
