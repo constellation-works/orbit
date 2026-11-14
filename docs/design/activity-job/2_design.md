@@ -231,6 +231,22 @@ loading. Global and explicit catalog layers stay fail-closed, and duplicate name
 inside one directory remain a hard error. `orbit doctor` reports the same
 stale file as an activity fault with its path and the fix-or-remove remedy.
 
+Older workspace initialization also materialized copies of still-shipped
+activities and jobs under `.orbit/resources/`. Every writable runtime open
+(including direct registered-checkout composition) now refreshes those copies
+against the binary's embedded defaults when their bytes match their recorded
+managed digest. This pass is independent of the host-global defaults stamp.
+`orbit workspace sync` performs the same pass, and `--check` reports it without
+writing. It only refreshes existing tracked files: it never creates missing
+workspace catalog defaults, adopts untracked files, changes opt-outs, or retires
+files. Modified copies and user-authored definitions keep their bytes and
+provenance. Existing retirement and preservation paths remain unchanged.
+An unreadable legacy manifest or denied refresh warns without preventing
+unrelated jobs from opening; explicit sync returns the repair error. Doctor
+checks these workspace manifests too, naming an unmodified stale managed copy
+and the writable-path / `orbit workspace sync` remedy if refresh could not
+persist. Observation-only and foreign-generation runtime opens do not refresh.
+
 Activity *fault* detection is the exception: it walks every production catalog
 directory (env override, global managed tree, workspace `.orbit/resources/activities/`)
 and applies the same `load_activity_catalog_asset` + tool-policy validation catalog

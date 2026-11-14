@@ -105,6 +105,9 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
 
     let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
     let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
+    if mode.refreshes_existing() && previous.is_none() {
+        return Ok(ManagedAssetReconciliation::default());
+    }
     #[cfg(feature = "test-support")]
     if asset_kind == "auto_task" {
         super::test_support::after_auto_task_manifest_read();
@@ -117,20 +120,27 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
                 .opted_out
                 .iter()
                 .filter(|name| {
-                    current_names.contains(name.as_str()) || left_out.contains(name.as_str())
+                    mode.refreshes_existing()
+                        || current_names.contains(name.as_str())
+                        || left_out.contains(name.as_str())
                 })
                 .cloned()
                 .collect()
         })
         .unwrap_or_default();
     let mut result = ManagedAssetReconciliation::default();
-    // Create-only keeps every recorded digest; only absent files gain new ones.
+    // Partial reconciliation keeps provenance for files it does not visit.
     let mut next_assets: BTreeMap<String, String> = match &previous {
-        Some(previous) if mode.creates_only() => previous.assets.clone(),
+        Some(previous) if mode.creates_only() || mode.refreshes_existing() => {
+            previous.assets.clone()
+        }
         _ => BTreeMap::new(),
     };
 
-    if let Some(previous) = previous.as_ref().filter(|_| !mode.creates_only()) {
+    if let Some(previous) = previous
+        .as_ref()
+        .filter(|_| !mode.creates_only() && !mode.refreshes_existing())
+    {
         for (name, managed_digest) in &previous.assets {
             if current_names.contains(name.as_str()) {
                 continue;
@@ -261,11 +271,14 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
             });
             continue;
         }
-        let rendered = render(name, embedded)?;
-        let rendered_digest = sha256_hex(rendered.as_bytes());
         let previous_digest = previous
             .as_ref()
             .and_then(|manifest| manifest.assets.get(*name));
+        if mode.refreshes_existing() && previous_digest.is_none() {
+            continue;
+        }
+        let rendered = render(name, embedded)?;
+        let rendered_digest = sha256_hex(rendered.as_bytes());
 
         let resolved = resolve_confined_asset_path(dir, &relative)?;
         if let ConfinedAssetPath::Unsafe(component) = &resolved {
@@ -291,6 +304,9 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
         }
 
         let exists = matches!(resolved, ConfinedAssetPath::File(_));
+        if !exists && mode.refreshes_existing() {
+            continue;
+        }
         if exists && mode.creates_only() {
             // Its recorded digest was carried forward unchanged above.
             continue;
@@ -349,7 +365,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
                 if sha256_hex(existing.as_bytes()) == *previous_digest
                     && previous_digest != &rendered_digest
                 {
-                    if mode == ManagedAssetReconcileMode::Apply {
+                    if mode.writes() {
                         write_confined_asset(&path, &rendered, true, asset_kind)?;
                     }
                     next_assets.insert((*name).to_string(), rendered_digest);
@@ -420,6 +436,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
     if previous.is_none()
         && layout == ManagedAssetLayout::YamlStem
         && !mode.creates_only()
+        && !mode.refreshes_existing()
         && dir.exists()
     {
         let ambiguous = ambiguous_legacy_yaml_files(dir, &next_assets)?;

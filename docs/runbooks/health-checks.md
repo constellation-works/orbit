@@ -319,6 +319,24 @@ claims once, deletes empty unclaimed partitions and populated partitions whose c
 confirmed gone, retires any registry rows naming them, and is idempotent: running it again after a partition is gone is a
 no-op.
 
+### Stale managed workspace catalog copies
+
+Older releases seeded workspace copies under `.orbit/resources/activities/`
+and `.orbit/resources/jobs/`. Normal writable workspace opening automatically
+refreshes a still-shipped copy only when its bytes match the SHA-256 recorded
+in that directory's `.orbit-managed-assets.json`. This also runs when the
+host-global defaults are already current. `orbit workspace sync` runs the same
+refresh; `orbit workspace sync --check` previews it without writing.
+
+Doctor names a remaining unmodified copy as a **stale managed workspace copy**.
+Check that the named catalog and manifest are writable, repair any reported
+path or manifest error, then run `orbit workspace sync`. Observation-only reads
+do not perform the automatic refresh. Modified managed files and user-authored
+files are preserved byte-for-byte; no missing workspace activity/job default is
+created. This refresh does not retire removed defaults or alter retirement
+preservation. A malformed legacy manifest warns during startup rather than
+preventing unrelated jobs from opening, and doctor reports that manifest.
+
 ### Repair retired activity backends
 
 `artifacts-activities` uses the same load and tool-allowlist path as production activity

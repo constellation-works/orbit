@@ -17,7 +17,7 @@ use super::application_port::APPLICATION_PORT;
 use crate::application::task::legacy_decisions::record_typed_decisions_boundary;
 use crate::application::workspace_product_profile::ProductProfile;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
-use crate::bootstrap::init::ensure_orbit_root_initialized;
+use crate::bootstrap::init;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::bootstrap::workspace_authority::{
@@ -61,7 +61,7 @@ impl OrbitRuntime {
             // refuse before bootstrap writes under them [ORB-20244].
             verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
         }
-        ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
+        init::ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
             &roots.global_root,
             &roots.shared_root,
@@ -349,6 +349,7 @@ fn build_runtime(
     };
     let config_loader = runtime_config_loader(global_root, shared_root);
     if !write_free && !read_only {
+        init::refresh_workspace_catalog_copies_on_open(global_root, shared_root);
         // Before this runtime can write a task record, so text-form decisions
         // an older binary wrote stay legacy and text written from now on does
         // not.

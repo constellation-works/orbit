@@ -46,6 +46,233 @@ fn add_managed_manifest_entry(dir: &Path, name: &str, content: &str) {
     .expect("write previous managed manifest");
 }
 
+/// Older workspace init versions materialized host defaults locally. Opening
+/// the workspace after an upgrade must refresh only copies Orbit still owns.
+#[test]
+fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "runtime_open_refreshes_unmodified_workspace_catalog_copies",
+    ) {
+        return;
+    }
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("isolated roots");
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    init_global(&global);
+
+    for (kind, directory, name) in [
+        ("activity", "activities", "task_pilot"),
+        ("job", "jobs", "task_pilot_pipeline"),
+    ] {
+        let catalog = workspace.join("resources").join(directory);
+        std::fs::create_dir_all(&catalog).expect("legacy workspace catalog");
+        let shipped = std::fs::read_to_string(
+            global
+                .join("resources")
+                .join(directory)
+                .join(format!("{name}.yaml")),
+        )
+        .expect("current shipped body");
+        let old = format!("# earlier release\n{shipped}");
+        std::fs::write(catalog.join(format!("{name}.yaml")), &old).expect("older managed body");
+        // A second shipped name has managed provenance but changed bytes.
+        let edited_name = if kind == "activity" {
+            "agent_implement"
+        } else {
+            "task_pr_pipeline"
+        };
+        let edited_shipped = std::fs::read_to_string(
+            global
+                .join("resources")
+                .join(directory)
+                .join(format!("{edited_name}.yaml")),
+        )
+        .expect("second shipped default");
+        let edited_old = format!("# earlier release\n{edited_shipped}");
+        let edited = format!("# operator edit\n{edited_old}");
+        std::fs::write(catalog.join(format!("{edited_name}.yaml")), &edited).expect("edited copy");
+        let authored = b"# user-authored activity or job\n";
+        std::fs::write(catalog.join("operator.yaml"), authored).expect("user file");
+        let collision_name = if kind == "activity" {
+            "candidate_resume"
+        } else {
+            "task_local_pipeline"
+        };
+        std::fs::write(catalog.join(format!("{collision_name}.yaml")), authored)
+            .expect("untracked shipped-name collision");
+        // Retired entries and operator opt-outs must retain their provenance.
+        std::fs::write(catalog.join("removed_default.yaml"), &old).expect("retired copy");
+        std::fs::write(
+            catalog.join(MANAGED_ASSET_MANIFEST_FILE),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 1,
+                "assetKind": kind,
+                "assets": {name: sha256(&old), edited_name: sha256(&edited_old), "removed_default": sha256(&old)},
+                "optedOut": ["removed_opt_out"]
+            })).expect("legacy manifest"),
+        ).expect("record older shipped digests");
+    }
+
+    // The global stamp is already current: workspace convergence must not
+    // depend on this open also upgrading the host-global catalogs.
+    let runtime =
+        OrbitRuntime::from_roots(&global, &workspace).expect("automatic upgrade on runtime open");
+    for (directory, name, edited_name) in [
+        ("activities", "task_pilot", "agent_implement"),
+        ("jobs", "task_pilot_pipeline", "task_pr_pipeline"),
+    ] {
+        let catalog = workspace.join("resources").join(directory);
+        let shipped = std::fs::read(
+            global
+                .join("resources")
+                .join(directory)
+                .join(format!("{name}.yaml")),
+        )
+        .expect("current shipped bytes");
+        assert_eq!(
+            std::fs::read(catalog.join(format!("{name}.yaml"))).unwrap(),
+            shipped,
+            "an unmodified managed workspace copy must converge automatically"
+        );
+        let old = format!(
+            "# earlier release\n{}",
+            String::from_utf8(shipped.clone()).unwrap()
+        );
+        let edited_shipped = std::fs::read_to_string(
+            global
+                .join("resources")
+                .join(directory)
+                .join(format!("{edited_name}.yaml")),
+        )
+        .expect("second shipped default");
+        let edited_old = format!("# earlier release\n{edited_shipped}");
+        assert_eq!(
+            std::fs::read(catalog.join(format!("{edited_name}.yaml"))).unwrap(),
+            format!("# operator edit\n{edited_old}").as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(catalog.join("operator.yaml")).unwrap(),
+            b"# user-authored activity or job\n"
+        );
+        let collision_name = if directory == "activities" {
+            "candidate_resume"
+        } else {
+            "task_local_pipeline"
+        };
+        assert_eq!(
+            std::fs::read(catalog.join(format!("{collision_name}.yaml"))).unwrap(),
+            b"# user-authored activity or job\n",
+            "even a shipped-name collision remains operator-owned"
+        );
+        assert_eq!(
+            std::fs::read(catalog.join("removed_default.yaml")).unwrap(),
+            old.as_bytes()
+        );
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(catalog.join(MANAGED_ASSET_MANIFEST_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest["assets"][name],
+            sha256(std::str::from_utf8(&shipped).unwrap())
+        );
+        assert_eq!(manifest["assets"][edited_name], sha256(&edited_old));
+        assert_eq!(manifest["assets"]["removed_default"], sha256(&old));
+        assert!(
+            manifest["assets"].get(collision_name).is_none(),
+            "refresh must not adopt an untracked copy"
+        );
+        assert_eq!(manifest["optedOut"], serde_json::json!(["removed_opt_out"]));
+        assert!(
+            !catalog
+                .join(if directory == "activities" {
+                    "candidate_validate.yaml"
+                } else {
+                    "task_auto_pipeline.yaml"
+                })
+                .exists(),
+            "refresh must not seed absent workspace defaults"
+        );
+        // Reproduce a denied/deferred upgrade on an already-open runtime:
+        // doctor and check mode must explain it without changing the files.
+        std::fs::write(catalog.join(format!("{name}.yaml")), &old).expect("stale copy again");
+        add_managed_manifest_entry(&catalog, name, &old);
+    }
+    use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactProvenance};
+    use orbit_core::{
+        ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
+    };
+    let health = runtime
+        .inspect_definition_artifacts()
+        .expect("doctor diagnoses legacy copies");
+    let preview = reconcile_workspace_managed_artifacts(&global, &workspace, None, "main", true)
+        .expect("preview local copy refresh");
+    for (directory, name) in [
+        ("activities", "task_pilot"),
+        ("jobs", "task_pilot_pipeline"),
+    ] {
+        let path = workspace
+            .join("resources")
+            .join(directory)
+            .join(format!("{name}.yaml"));
+        let finding = health
+            .iter()
+            .flat_map(|health| &health.findings)
+            .find(|finding| finding.path == path && finding.condition == ArtifactCondition::Stale)
+            .expect("doctor identifies the unmodified stale workspace copy");
+        assert_eq!(finding.provenance, ArtifactProvenance::OrbitWritten);
+        assert!(finding.detail.contains("stale managed workspace copy"));
+        assert!(finding.remediation.contains("orbit workspace sync"));
+        assert!(preview.actions.iter().any(|action| action.path == path
+            && action.scope == ManagedArtifactScope::WorkspaceLocal
+            && action.outcome == ManagedArtifactOutcome::Refreshed));
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# earlier release\n"),
+            "doctor and sync --check must not write"
+        );
+    }
+    let preserved: Vec<_> = [
+        "activities/agent_implement.yaml",
+        "activities/operator.yaml",
+        "activities/candidate_resume.yaml",
+        "activities/removed_default.yaml",
+        "jobs/task_pr_pipeline.yaml",
+        "jobs/operator.yaml",
+        "jobs/task_local_pipeline.yaml",
+        "jobs/removed_default.yaml",
+    ]
+    .into_iter()
+    .map(|relative| {
+        let path = workspace.join("resources").join(relative);
+        let bytes = std::fs::read(&path).unwrap();
+        (path, bytes)
+    })
+    .collect();
+    reconcile_workspace_managed_artifacts(&global, &workspace, None, "main", false)
+        .expect("explicit sync refreshes copies");
+    for (path, bytes) in preserved {
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "sync preserves {}",
+            path.display()
+        );
+    }
+    for (directory, name) in [
+        ("activities", "task_pilot"),
+        ("jobs", "task_pilot_pipeline"),
+    ] {
+        let relative = format!("resources/{directory}/{name}.yaml");
+        assert_eq!(
+            std::fs::read(workspace.join(&relative)).unwrap(),
+            std::fs::read(global.join(&relative)).unwrap()
+        );
+    }
+}
+
 // --- Definition-artifact health [ORB-10800] ---------------------------------
 
 mod artifacts {

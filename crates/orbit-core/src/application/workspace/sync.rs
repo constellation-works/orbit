@@ -160,6 +160,50 @@ pub fn seed_absent_workspace_managed_artifacts(
     )
 }
 
+/// Older workspace initialization seeded activities and jobs locally. Refresh
+/// only their existing managed copies, without materializing a second catalog
+/// or changing retirement/preservation policy. Also used on every runtime open
+/// independently of the host-global defaults stamp.
+pub(crate) fn reconcile_workspace_catalog_copies(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    check: bool,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    let mut report = WorkspaceManagedArtifactSyncReport {
+        check,
+        ..Default::default()
+    };
+    if global_root == workspace_orbit_root
+        || matches!(
+            (global_root.canonicalize(), workspace_orbit_root.canonicalize()),
+            (Ok(global), Ok(workspace)) if global == workspace
+        )
+    {
+        return Ok(report);
+    }
+    for (kind, directory, files) in [
+        ("activity", "activities", DEFAULT_ACTIVITY_FILES),
+        ("job", "jobs", DEFAULT_JOB_FILES),
+    ] {
+        let copies = reconcile_managed_assets_in_mode(
+            &workspace_orbit_root.join("resources").join(directory),
+            kind,
+            ManagedAssetLayout::YamlStem,
+            files,
+            false,
+            ManagedAssetReconcileMode::RefreshExisting { check },
+            |_, content| Ok(Cow::Borrowed(content)),
+        )?;
+        append_actions(
+            &mut report,
+            ManagedArtifactScope::WorkspaceLocal,
+            kind,
+            copies,
+        );
+    }
+    Ok(report)
+}
+
 fn reconcile_managed_artifacts(
     global_root: &Path,
     workspace_orbit_root: &Path,
@@ -225,6 +269,14 @@ fn reconcile_managed_artifacts(
             |_, content| Ok(Cow::Borrowed(content)),
         )?;
         append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
+
+        let copies = reconcile_workspace_catalog_copies(
+            global_root,
+            workspace_orbit_root,
+            mode == ManagedAssetReconcileMode::Check,
+        )?;
+        report.actions.extend(copies.actions);
+        report.warnings.extend(copies.warnings);
     }
 
     // A fork that differs from its bundled body only in operator settings is
