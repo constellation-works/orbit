@@ -9,8 +9,8 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, KnowledgeRunMetrics,
-    PipelineState, RunEvent, RunIdRole, RunStateUpdate,
+    ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, PipelineState, RunEvent,
+    RunIdRole, RunStateUpdate,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior};
 
@@ -754,17 +754,6 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.store
             .upsert_job_run_step_for_workspace(&self.workspace_id, run_id, &step)?;
         Ok(true)
-    }
-
-    fn record_job_run_knowledge_metrics(
-        &self,
-        run_id: &str,
-        metrics: KnowledgeRunMetrics,
-    ) -> Result<bool, OrbitError> {
-        self.update_run(run_id, |run| {
-            run.knowledge_metrics = Some(metrics);
-            Ok(())
-        })
     }
 
     fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError> {

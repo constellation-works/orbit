@@ -47,7 +47,7 @@ use orbit_store::Store;
 use orbit_store::contracts::*;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, KnowledgeRunMetrics, PipelineState, RunStateUpdate,
+    JobRun, JobRunStartOutcome, JobRunState, PipelineState, RunStateUpdate,
 };
 use orbit_types::workspace::WorkspacePaths;
 
@@ -158,14 +158,6 @@ impl JobRunStoreBackend for ReadFaultStore {
         params: &JobRunStepParams,
     ) -> Result<bool, OrbitError> {
         self.inner.complete_job_run_step(run_id, params)
-    }
-
-    fn record_job_run_knowledge_metrics(
-        &self,
-        run_id: &str,
-        metrics: KnowledgeRunMetrics,
-    ) -> Result<bool, OrbitError> {
-        self.inner.record_job_run_knowledge_metrics(run_id, metrics)
     }
 
     fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError> {

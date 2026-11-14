@@ -127,6 +127,6 @@ fn percentile(sorted: &[f64], pct: usize) -> f64 {
     sorted[index]
 }
 
-pub(crate) fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
+fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
     (denominator != 0).then_some(numerator as f64 / denominator as f64)
 }
