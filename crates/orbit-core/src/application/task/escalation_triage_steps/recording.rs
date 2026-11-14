@@ -2,7 +2,6 @@
 
 use chrono::{SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionRequest,
     Task, TaskComment, TaskHistoryEntry, TaskStatus, decision_option_answers,
@@ -230,32 +229,21 @@ impl OrbitRuntime {
             operation_id: None,
             decision: None,
         };
-        self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                &task.id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    append_comments: vec![TaskComment {
-                        at: now,
-                        by: SYSTEM_ACTOR_LABEL.to_string(),
-                        message: comment.to_string(),
-                        operation_id: None,
-                    }],
-                    append_history: vec![
-                        marker.clone(),
-                        decision.history_entry(SYSTEM_ACTOR_LABEL),
-                    ],
-                    expected_status: Some(vec![TaskStatus::Proposed]),
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task.id.clone(),
-                },
-            ))
-        })?;
+        self.stores().task_records().update(
+            &task.id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_comments: vec![TaskComment {
+                    at: now,
+                    by: SYSTEM_ACTOR_LABEL.to_string(),
+                    message: comment.to_string(),
+                    operation_id: None,
+                }],
+                append_history: vec![marker.clone(), decision.history_entry(SYSTEM_ACTOR_LABEL)],
+                expected_status: Some(vec![TaskStatus::Proposed]),
+                ..Default::default()
+            },
+        )?;
         Ok(())
     }
 }

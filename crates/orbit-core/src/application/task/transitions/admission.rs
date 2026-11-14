@@ -148,32 +148,22 @@ impl OrbitRuntime {
         // it under the store's per-task lock. Without the compare-and-set a
         // withdrawal landing in that gap would be overwritten by a `backlog`
         // snapshot taken before it — exactly how an archived task was restarted.
-        let updated = self.with_mutation(|| {
-            let task = self.stores().task_records().update(
-                id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    status_event: Some("started".to_string()),
-                    status_note: note.clone(),
-                    status_decision: Some(TaskDecision::WorkflowAdmission {
-                        workflow: workflow.to_string(),
-                    }),
-                    expected_status: Some(Self::workflow_admissible_statuses().to_vec()),
-                    ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                        status: Some(TaskStatus::InProgress),
-                        ..Default::default()
-                    })
-                },
-            )?;
-            Ok((
-                task.clone(),
-                OrbitEvent::TaskStarted {
-                    id: id.to_string(),
-                    started_by: SYSTEM_ACTOR_LABEL.to_string(),
-                    approved_from_proposed: false,
-                },
-            ))
-        })?;
+        let updated = self.stores().task_records().update(
+            id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                status_event: Some("started".to_string()),
+                status_note: note.clone(),
+                status_decision: Some(TaskDecision::WorkflowAdmission {
+                    workflow: workflow.to_string(),
+                }),
+                expected_status: Some(Self::workflow_admissible_statuses().to_vec()),
+                ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                })
+            },
+        )?;
 
         Ok(updated)
     }

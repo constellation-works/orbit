@@ -8,7 +8,6 @@ use orbit_common::{
 use orbit_store::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use orbit_types::{
     desktop::*,
-    record::OrbitEvent,
     task::{DesktopMutationReceipt, Task, TaskDecision, TaskHistoryEntry, TaskStatus},
     tool::ToolSessionContext,
 };
@@ -313,32 +312,20 @@ impl OrbitRuntime {
                 }
                 DesktopTaskOperation::Create { .. } => unreachable!(),
             }
-            outcome = Some(self.with_mutation(|| {
-                let result = self.stores().tasks().apply_desktop_task_mutation(
-                    &id,
-                    &DesktopTaskMutationParams {
-                        actor: actor.clone(),
-                        request_id: request.request_id.clone(),
-                        payload_digest: digest.clone(),
-                        expected_revision: expected_revision.clone(),
-                        fields,
-                        crew_source,
-                        comment,
-                        status,
-                        append_history,
-                    },
-                )?;
-                let event =
-                    if task.status == TaskStatus::Proposed && status == Some(TaskStatus::Backlog) {
-                        OrbitEvent::TaskProposalApproved {
-                            id: id.clone(),
-                            approved_by: actor.clone(),
-                        }
-                    } else {
-                        OrbitEvent::TaskUpdated { id: id.clone() }
-                    };
-                Ok((result, event))
-            })?);
+            outcome = Some(self.stores().tasks().apply_desktop_task_mutation(
+                &id,
+                &DesktopTaskMutationParams {
+                    actor: actor.clone(),
+                    request_id: request.request_id.clone(),
+                    payload_digest: digest.clone(),
+                    expected_revision: expected_revision.clone(),
+                    fields,
+                    crew_source,
+                    comment,
+                    status,
+                    append_history,
+                },
+            )?);
             Ok(())
         })?;
         if outcome == Some(AtomicTaskMutationOutcome::Stale) {
