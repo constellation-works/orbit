@@ -218,6 +218,22 @@ template:
         self.sources.write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n")
         self.run_generator("--check")
 
+    def test_malformed_bodies_raise_contextual_value_error(self):
+        shapes = [
+            "name: example\nschedule:\n  every_minutes: 60\n",
+            "name: example\ntemplate:\n  title: Body\n",
+            "name: example\nschedule: soon\ntemplate: not-a-mapping\n",
+            (
+                "name: example\nschedule:\n  every_minutes: 60\n"
+                "template:\n  title: Body\nskip_if_unchanged:\n  ref: main\n"
+            ),
+        ]
+        for raw in shapes:
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError) as caught:
+                    self.record_for(raw, "deadbeef")
+                self.assertIn("deadbeef", str(caught.exception))
+
     def test_corrupt_source_fixture_fails_without_writing(self):
         self.run_generator()
         sources = json.loads(self.sources.read_text())

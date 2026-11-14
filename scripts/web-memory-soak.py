@@ -729,14 +729,24 @@ def task_list_timing(fixture: Fixture, runs: int) -> dict:
     }
 
 
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer: {value!r}") from None
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin", required=True, type=Path, help="orbit binary to measure")
     parser.add_argument("--work-dir", type=Path, help="fixture directory (reused when it already holds one)")
     parser.add_argument("--report", type=Path, help="write the JSON report here")
-    parser.add_argument("--rounds", type=int, default=20)
+    parser.add_argument("--rounds", type=positive_int, default=20)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
-    parser.add_argument("--task-list-runs", type=int, default=9)
+    parser.add_argument("--task-list-runs", type=positive_int, default=9)
     parser.add_argument(
         "--server-env",
         action="append",

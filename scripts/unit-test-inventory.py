@@ -23,7 +23,11 @@ from pathlib import Path
 SCHEMA_VERSION = 2
 # Not anchored at the start of the line: `#[cfg(test)] #[test]` is still a test.
 TEST_ATTRIBUTE = re.compile(r"#\[(?:(?:r#)?[A-Za-z_][A-Za-z0-9_]*::)*(?:r#)?test\b")
-FUNCTION = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b")
+FUNCTION = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
+    r"(?:(?:const|async|unsafe)\s+|extern\s+\"[^\"]*\"\s+)*"
+    r"fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b"
+)
 RUST_TOKEN = re.compile(
     r'''(?P<comment>//[^\n]*|/\*)|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")|'''
     r'''(?P<literal>(?:b|c)?"(?:\\.|[^"\\])*"|'''
@@ -82,9 +86,10 @@ def test_function_paths(text, relative_path):
     pending = None
     for number, line in enumerate(rust_code_only(text).splitlines(), 1):
         if TEST_ATTRIBUTE.search(line):
-            if pending is not None:
-                raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
-            pending = number
+            # Duplicate test attributes on one function are accepted by
+            # rustc (warning only); they still name a single test.
+            if pending is None:
+                pending = number
         if pending is not None:
             # Also accept attributes and the function header on the same line.
             header = line

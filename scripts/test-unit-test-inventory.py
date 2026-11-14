@@ -82,6 +82,20 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(self.run_inventory("--write-baseline", str(self.baseline)).returncode, 0)
         self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 0)
 
+    def test_const_and_duplicate_test_attributes_are_inventoried(self):
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nconst fn const_test() {}\n"
+            "#[test]\n#[test]\nfn duplicated() {}\n"
+            "#[test] #[test] fn same_line_duplicate() {}\n"
+            "#[tokio::test]\npub unsafe fn qualified() {}\n"
+        ))
+        result = self.run_inventory()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["crates"]["alpha"]["test_function_paths"], [
+            "lib.rs::const_test", "lib.rs::duplicated", "lib.rs::qualified",
+            "lib.rs::same_line_duplicate",
+        ])
+
     def test_raw_test_attribute_survives_print_check_and_baseline(self):
         self.write("crates/alpha/src/lib.rs", "#[r#test]\nfn real_test() {}\n")
         source = self.root / "crates/alpha/src/lib.rs"

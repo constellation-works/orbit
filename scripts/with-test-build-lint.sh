@@ -20,4 +20,8 @@ set -euo pipefail
 
 export RUSTC_WORKSPACE_WRAPPER=clippy-driver
 export CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
+if [ "$#" -eq 0 ]; then
+  echo "with-test-build-lint: no command given" >&2
+  exit 2
+fi
 exec "$@"
