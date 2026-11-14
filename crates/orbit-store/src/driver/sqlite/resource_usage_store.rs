@@ -15,7 +15,7 @@ use crate::contracts::{
     AdmissionForecastPoint, AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS,
     CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunInterval, DeliveryRunResources,
     DeliveryRunsFreshness, DeliveryRunsLoad, HostResourceMinute, ResourceHistoryKeep,
-    ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
+    ResourceMinutesTable, ResourceRetentionRow, ResourceUsageStoreBackend, RunResourceMinute,
 };
 
 use super::codec::{RUN_MINUTE_COLUMNS, host_minutes, run_minute_from_row, stamp, unsigned};
@@ -328,37 +328,84 @@ impl ResourceUsageStoreBackend for Store {
         limit: usize,
     ) -> Result<usize, OrbitError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        // Keep an ineligible marker until its good siblings have been pruned.
-        // Otherwise the next batch can mistake a partial delivery for a profile.
-        let order = if matches!(table, ResourceMinutesTable::Run) {
-            format!(
-                " ORDER BY CASE WHEN resumed != 0 OR \
+        let rows = select_resource_retention_rows(self, table, cutoff, keep, limit)?;
+        delete_resource_retention_rows(self, table, &rows)
+    }
+}
+
+fn resource_retention_timestamp(table: ResourceMinutesTable) -> &'static str {
+    match table {
+        ResourceMinutesTable::Run => "minute_started_at",
+        ResourceMinutesTable::Host => "minute_at",
+        ResourceMinutesTable::AdmissionForecast => "forecast_at",
+    }
+}
+
+pub(super) fn select_resource_retention_rows(
+    store: &Store,
+    table: ResourceMinutesTable,
+    cutoff: DateTime<Utc>,
+    keep: ResourceHistoryKeep,
+    limit: i64,
+) -> Result<Vec<ResourceRetentionRow>, OrbitError> {
+    // Keep an ineligible marker until its good siblings have been pruned.
+    // Otherwise the next batch can mistake a partial delivery for a profile.
+    let order = if matches!(table, ResourceMinutesTable::Run) {
+        format!(
+            " ORDER BY CASE WHEN resumed != 0 OR \
                  (cpu_accounting IS NULL AND {}) OR \
                  (cpu_accounting IS NOT NULL AND cpu_accounting NOT IN ('{}', '{}', '{}')) OR \
                  NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.workspace_id = r.workspace_id \
                      AND j.run_id = r.run_id AND j.job_id IS NOT NULL AND j.finished_at IS NOT NULL) \
                  THEN 1 ELSE 0 END, CASE WHEN minute_index = 0 THEN 1 ELSE 0 END",
-                if cfg!(target_os = "linux") { 0 } else { 1 },
-                CPU_ACCOUNTING_LINUX,
-                CPU_ACCOUNTING_MACOS,
-                CPU_ACCOUNTING_MACOS_TREE_ONLY
-            )
-        } else {
-            String::new()
-        };
-        let sql = format!(
-            "DELETE FROM {table} WHERE rowid IN ( \
-                 SELECT r.rowid FROM {table} r WHERE {predicate}{order} LIMIT ?3)",
-            table = table.table_name(),
-            predicate = prunable(table)
-        );
-        let (cutoff, kept) = prune_bounds(table, cutoff, keep);
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(&sql, params![cutoff, kept, limit])
-                .map_err(sqlite_store_error)
+            if cfg!(target_os = "linux") { 0 } else { 1 },
+            CPU_ACCOUNTING_LINUX,
+            CPU_ACCOUNTING_MACOS,
+            CPU_ACCOUNTING_MACOS_TREE_ONLY
+        )
+    } else {
+        String::new()
+    };
+    let sql = format!(
+        "SELECT r.rowid, r.{timestamp} FROM {table} r WHERE {predicate}{order} LIMIT ?3",
+        table = table.table_name(),
+        timestamp = resource_retention_timestamp(table),
+        predicate = prunable(table)
+    );
+    let (cutoff, kept) = prune_bounds(table, cutoff, keep);
+    let conn = store.read()?;
+    let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
+    stmt.query_map(params![cutoff, kept, limit], |row| {
+        Ok(ResourceRetentionRow {
+            row_id: row.get(0)?,
+            timestamp: row.get(1)?,
         })
-    }
+    })
+    .map_err(sqlite_store_error)?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(sqlite_store_error)
+}
+
+pub(super) fn delete_resource_retention_rows(
+    store: &Store,
+    table: ResourceMinutesTable,
+    rows: &[ResourceRetentionRow],
+) -> Result<usize, OrbitError> {
+    let sql = format!(
+        "DELETE FROM {} WHERE rowid = ?1 AND {} = ?2",
+        table.table_name(),
+        resource_retention_timestamp(table)
+    );
+    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+        let mut statement = tx.connection().prepare(&sql).map_err(sqlite_store_error)?;
+        let mut removed = 0;
+        for row in rows {
+            removed += statement
+                .execute(params![row.row_id, row.timestamp])
+                .map_err(sqlite_store_error)?;
+        }
+        Ok(removed)
+    })
 }
 
 /// [`prunable`]'s `?1`, the cutoff, and `?2`, how many of the table's own
@@ -392,6 +439,9 @@ fn prunable(table: ResourceMinutesTable) -> String {
         ResourceMinutesTable::Run => {
             // One text key per delivery: SQLite builds a scalar `NOT IN`
             // list once, where a row-value one is rescanned per row.
+            // Materialize each run's newest known model, then each delivery's
+            // first modeled run. A correlated ORDER BY run_id chose the
+            // workspace-prefix index and reread its history per delivery.
             format!(
                 "minute_started_at < ?1 AND (delivery_admitted_at IS NULL \
                  OR workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
@@ -430,23 +480,31 @@ fn prunable(table: ResourceMinutesTable) -> String {
                      WHERE newest <= ?2) \
                  AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
                  NOT IN ( \
-                     WITH eligible AS ( \
+                     WITH minute_models AS MATERIALIZED ( \
+                         SELECT r.workspace_id, r.run_id, r.task_id, r.delivery_admitted_at, \
+                             COALESCE(r.crew_model, j.crew_model) AS model, \
+                             ROW_NUMBER() OVER (PARTITION BY r.workspace_id, r.run_id \
+                                 ORDER BY r.minute_index DESC) AS newest_minute \
+                         FROM run_resource_minutes r LEFT JOIN job_runs j \
+                           ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
+                         WHERE r.delivery_admitted_at IS NOT NULL \
+                           AND COALESCE(r.crew_model, j.crew_model) IS NOT NULL), \
+                     delivery_models AS MATERIALIZED ( \
+                         SELECT *, ROW_NUMBER() OVER ( \
+                             PARTITION BY workspace_id, task_id, delivery_admitted_at \
+                             ORDER BY run_id) AS first_run \
+                         FROM minute_models WHERE newest_minute = 1), \
+                     eligible AS ( \
                          SELECT r.workspace_id, r.task_id, r.delivery_admitted_at, \
                              MIN(r.work_class) AS work_class, \
                              CASE WHEN substr(MIN(r.work_class), 1, 10) = 'auto-task:' \
                                   THEN '' ELSE IFNULL(MIN(r.complexity), '') END AS complexity, \
-                             MAX(julianday(j.finished_at)) AS finished, \
-                             (SELECT (SELECT COALESCE(m.crew_model, jj.crew_model) FROM run_resource_minutes m \
-                                  WHERE m.workspace_id = rr.workspace_id AND m.run_id = rr.run_id \
-                                    AND (m.crew_model IS NOT NULL OR jj.crew_model IS NOT NULL) \
-                                  ORDER BY m.minute_index DESC LIMIT 1) AS model \
-                              FROM run_resource_minutes rr LEFT JOIN job_runs jj \
-                                ON jj.workspace_id = rr.workspace_id AND jj.run_id = rr.run_id \
-                              WHERE rr.workspace_id = r.workspace_id AND rr.task_id = r.task_id \
-                                AND rr.delivery_admitted_at = r.delivery_admitted_at \
-                              GROUP BY rr.run_id HAVING model IS NOT NULL ORDER BY rr.run_id LIMIT 1) AS model \
+                             MAX(julianday(j.finished_at)) AS finished, m.model \
                          FROM run_resource_minutes r LEFT JOIN job_runs j \
                            ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
+                         LEFT JOIN delivery_models m ON m.workspace_id = r.workspace_id \
+                           AND m.task_id = r.task_id AND m.delivery_admitted_at = r.delivery_admitted_at \
+                           AND m.first_run = 1 \
                          WHERE r.delivery_admitted_at IS NOT NULL \
                          GROUP BY r.workspace_id, r.task_id, r.delivery_admitted_at \
                          HAVING MAX(CASE WHEN r.resumed != 0 OR j.job_id IS NULL \

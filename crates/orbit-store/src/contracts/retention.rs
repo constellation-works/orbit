@@ -4,10 +4,21 @@
 //!
 //! Every mutation is one short statement or transaction over at most `limit`
 //! rows, so a caller sweeping a large history never holds the write lock for
-//! longer than one batch.
+//! longer than one batch. Resource-history and journal candidates are selected
+//! before opening their write transactions.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+
+use super::{ResourceHistoryKeep, ResourceMinutesTable};
+
+/// A resource-history row selected without a write lock. The timestamp
+/// protects against a rowid reused by another sweep and a concurrent sampler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRetentionRow {
+    pub row_id: i64,
+    pub timestamp: String,
+}
 
 /// Minimal lock-contention evidence retained independently of command audit.
 #[derive(Debug, Clone)]
@@ -97,6 +108,24 @@ pub struct StoreSpace {
 }
 
 pub trait StoreRetentionBackend: Send + Sync {
+    /// Freeze this pass's resource-history candidates in one read, in safe
+    /// deletion order (ineligible markers and minute zero last). Subsequent
+    /// batches never repeat the history-ranking query under a write lock.
+    fn resource_retention_candidates(
+        &self,
+        table: ResourceMinutesTable,
+        cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
+    ) -> Result<Vec<ResourceRetentionRow>, OrbitError>;
+
+    /// Delete only the selected rows whose timestamps still match, by rowid,
+    /// in one transaction. The caller bounds and yields between batches.
+    fn delete_resource_retention_rows(
+        &self,
+        table: ResourceMinutesTable,
+        rows: &[ResourceRetentionRow],
+    ) -> Result<usize, OrbitError>;
+
     /// All lock-conflict attempts in one workspace, independent of audit retention.
     fn list_task_lock_denials(
         &self,
@@ -164,7 +193,8 @@ pub trait StoreRetentionBackend: Send + Sync {
     /// audit payloads, step responses and errors, and pipeline state. Run-audit
     /// rows of `excluding` older than the cutoff are skipped, so a plan sees
     /// the references a prune would leave. Reads in short chunks, never one
-    /// long read transaction.
+    /// long read transaction. Each table stops at its initial maximum rowid;
+    /// concurrent blob publications must retain their pending/mtime protection.
     fn visit_blob_reference_text(
         &self,
         excluding: Option<(RetentionWorkspaceScope<'_>, DateTime<Utc>)>,

@@ -13,8 +13,9 @@ use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{
-    AuditRetentionTable, JournalRetentionCandidates, RetentionIdSource, RetentionSelection,
-    RetentionWorkspaceScope, StoreRetentionBackend, StoreSpace,
+    AuditRetentionTable, JournalRetentionCandidates, ResourceHistoryKeep, ResourceMinutesTable,
+    ResourceRetentionRow, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
+    StoreRetentionBackend, StoreSpace,
 };
 
 use super::codec::unsigned;
@@ -75,6 +76,29 @@ const JOURNAL_CANDIDATES_SQL: &str = "\
     ORDER BY settled_at, journal_id";
 
 impl StoreRetentionBackend for Store {
+    fn resource_retention_candidates(
+        &self,
+        table: ResourceMinutesTable,
+        cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
+    ) -> Result<Vec<ResourceRetentionRow>, OrbitError> {
+        super::resource_usage_store::select_resource_retention_rows(
+            self,
+            table,
+            cutoff,
+            keep,
+            i64::MAX,
+        )
+    }
+
+    fn delete_resource_retention_rows(
+        &self,
+        table: ResourceMinutesTable,
+        rows: &[ResourceRetentionRow],
+    ) -> Result<usize, OrbitError> {
+        super::resource_usage_store::delete_resource_retention_rows(self, table, rows)
+    }
+
     fn list_task_lock_denials(
         &self,
         workspace_id: &str,
@@ -289,20 +313,20 @@ impl StoreRetentionBackend for Store {
         let (run_audit_sql, extra) = match excluding {
             None => (
                 "SELECT id, payload_json FROM v2_audit_events \
-                 WHERE id > ?1 ORDER BY id LIMIT ?2"
+                 WHERE id > ?1 AND id <= ?3 ORDER BY id LIMIT ?2"
                     .to_string(),
                 Vec::new(),
             ),
             Some((scope, cutoff)) => {
                 let ids = scope_ids(scope);
                 let placeholders = (0..ids.len())
-                    .map(|index| format!("?{}", index + 4))
+                    .map(|index| format!("?{}", index + 5))
                     .collect::<Vec<_>>()
                     .join(", ");
                 (
                     format!(
                         "SELECT id, payload_json FROM v2_audit_events \
-                         WHERE id > ?1 AND NOT (ts < ?3 AND workspace_id IN ({placeholders})) \
+                         WHERE id > ?1 AND id <= ?3 AND NOT (ts < ?4 AND workspace_id IN ({placeholders})) \
                          ORDER BY id LIMIT ?2"
                     ),
                     std::iter::once(cutoff.to_rfc3339())
@@ -311,18 +335,20 @@ impl StoreRetentionBackend for Store {
                 )
             }
         };
-        scan_chunks(self, &run_audit_sql, &extra, visit)?;
+        scan_chunks(self, "v2_audit_events", &run_audit_sql, &extra, visit)?;
         scan_chunks(
             self,
+            "job_run_steps",
             "SELECT rowid, COALESCE(agent_response_json, '') || ' ' || COALESCE(error_message, '') \
-             FROM job_run_steps WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+             FROM job_run_steps WHERE rowid > ?1 AND rowid <= ?3 ORDER BY rowid LIMIT ?2",
             &[],
             visit,
         )?;
         scan_chunks(
             self,
+            "job_run_states",
             "SELECT rowid, pipeline_state_json FROM job_run_states \
-             WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+             WHERE rowid > ?1 AND rowid <= ?3 ORDER BY rowid LIMIT ?2",
             &[],
             visit,
         )
@@ -423,22 +449,33 @@ fn delete_scoped(
     Ok(removed)
 }
 
-/// Walk `sql` (`?1` the last key read, `?2` the chunk size, then `extra`)
-/// chunk by chunk, each chunk on a fresh read connection.
+/// Walk `sql` (`?1` the last key read, `?2` the chunk size, `?3` the initial
+/// maximum key, then `extra`) once, without chasing concurrent inserts.
+/// New blob writes are protected by the pending marker and mtime grace.
 fn scan_chunks(
     store: &Store,
+    table: &str,
     sql: &str,
     extra: &[String],
     visit: &mut dyn FnMut(&str),
 ) -> Result<(), OrbitError> {
+    let through = store
+        .read()?
+        .query_row(
+            &format!("SELECT COALESCE(MAX(rowid), ?) FROM {table}"),
+            [i64::MIN],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sqlite_store_error)?;
     let mut after = i64::MIN;
-    loop {
+    while after < through {
         let conn = store.read()?;
         let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
         let chunk = REFERENCE_SCAN_CHUNK;
-        let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(2 + extra.len());
+        let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(3 + extra.len());
         bound.push(&after);
         bound.push(&chunk);
+        bound.push(&through);
         for value in extra {
             bound.push(value);
         }
@@ -449,6 +486,8 @@ fn scan_chunks(
             .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)?;
+        drop(stmt);
+        drop(conn);
         let Some(last) = rows.last().map(|(key, _)| *key) else {
             return Ok(());
         };
@@ -457,4 +496,5 @@ fn scan_chunks(
         }
         after = last;
     }
+    Ok(())
 }

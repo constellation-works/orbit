@@ -81,6 +81,31 @@ fn insert_run_audit(store: &Store, workspace_id: &str, first: DateTime<Utc>, row
         .unwrap();
 }
 
+#[test]
+fn blob_reference_scan_stops_at_its_initial_high_water_mark() {
+    const TEST: &str = "blob_reference_scan_stops_at_its_initial_high_water_mark";
+    let Some(root) = store_retention_isolated(TEST, Duration::from_secs(60)) else {
+        return;
+    };
+    let store = Store::open(&root.join("references.db")).unwrap();
+    let at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    insert_run_audit(&store, "initial", at, 2_000);
+    let mut visited = 0;
+    store
+        .visit_blob_reference_text(None, &mut |_| {
+            if visited == 0 {
+                insert_run_audit(&store, "arriving", at, 1);
+            }
+            visited += 1;
+        })
+        .unwrap();
+    assert_eq!(
+        visited, 2_000,
+        "a GC scan must not chase new audit traffic past its initial end (ORB-24645)"
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM v2_audit_events"), 2_001);
+}
+
 /// The calling thread's CPU time. A saturated host stretches wall-clock time
 /// without changing the work a batch does, so a batch's cost is read here.
 #[cfg(unix)]
