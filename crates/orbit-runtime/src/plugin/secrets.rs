@@ -25,6 +25,7 @@ use orbit_common::fs::io::{
     FileLockGuard, FileLockOptions, acquire_exclusive_file_lock, create_private_dir_all,
     open_read_only_no_follow, write_new_private_text,
 };
+use orbit_common::security::token;
 use orbit_types::plugin::{is_valid_namespace, is_valid_secret_name};
 use serde::{Deserialize, Serialize};
 
@@ -397,8 +398,5 @@ fn restrict_dir(dir: &Path) -> Result<(), OrbitError> {
 
 /// 128 random bits as hex: opaque, and never repeated across writes.
 fn fresh_version() -> Result<String, OrbitError> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("draw a secret version: {error}")))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    token::random_hex(16)
 }

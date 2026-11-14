@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, GitCommandOutput, run_git, run_git_within};
+use orbit_common::security::token;
 
 use crate::OrbitRuntime;
 
@@ -735,21 +736,7 @@ fn is_lowercase_hex(value: &str, len: usize) -> bool {
 }
 
 fn random_nonce_hex() -> Result<String, OrbitError> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|error| {
-        OrbitError::Execution(format!("resident cycle worktree owner nonce: {error}"))
-    })?;
-    Ok(hex_encode(&bytes))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from(HEX[usize::from(byte >> 4)]));
-        out.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    out
+    token::random_hex(32)
 }
 
 fn read_exact_limited(path: &Path, max: usize) -> Option<Vec<u8>> {

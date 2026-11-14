@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 use orbit_store::contracts::{
     ExperimentArmRow, ExperimentEventRow, ExperimentRecord, ExperimentRow,
     ExperimentStoreBackend as _, ExperimentWrite, ExperimentWriteOutcome,
@@ -88,7 +89,7 @@ impl OrbitRuntime {
             guardrails_json: "{}".into(),
             min_sample_per_arm: None,
             max_days: None,
-            salt: random_hex(16)?,
+            salt: experiment_random_hex(16)?,
             mode: "shadow".into(),
             status: DRAFT.into(),
             segment: 0,
@@ -147,7 +148,7 @@ impl OrbitRuntime {
         let experiment = ExperimentRow {
             id: String::new(),
             name: name.to_string(),
-            salt: random_hex(16)?,
+            salt: experiment_random_hex(16)?,
             status: DRAFT.into(),
             segment: 0,
             concluded_arm: None,
@@ -417,7 +418,7 @@ impl OrbitRuntime {
     ) -> Result<ExperimentView, OrbitError> {
         // A fresh random id; a collision reads as stale and draws again.
         for _ in 0..3 {
-            experiment.id = format!("exp-{}", random_hex(8)?);
+            experiment.id = format!("exp-{}", experiment_random_hex(8)?);
             let event = event_row(&experiment, None, kind, detail.clone(), &by);
             let write = ExperimentWrite {
                 experiment: experiment.clone(),
@@ -805,14 +806,8 @@ fn event_row(
     }
 }
 
-fn random_hex(chars: usize) -> Result<String, OrbitError> {
-    let mut bytes = vec![0_u8; chars.div_ceil(2)];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("draw experiment randomness: {error}")))?;
-    let mut hex = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+fn experiment_random_hex(chars: usize) -> Result<String, OrbitError> {
+    let mut hex = token::random_hex(chars.div_ceil(2))?;
     hex.truncate(chars);
     Ok(hex)
 }
