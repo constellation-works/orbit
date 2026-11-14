@@ -2,12 +2,11 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_exec::{NoSandbox, run_process};
 use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
 use super::super::ci::AuthStatus;
-use super::super::github_host::{auth_status, run_gh};
+use super::super::github_host::{auth_status, run_gh, run_sweep_gh};
 
 #[derive(Debug)]
 pub(super) enum AlertQuery {
@@ -55,12 +54,13 @@ impl HostDependabotQueries {
 
     fn query_alert_family(
         &self,
-        mut request: orbit_exec::ExecRequest,
+        request: orbit_exec::ExecRequest,
         family: &str,
         project: fn(&Value) -> Value,
     ) -> Result<AlertQuery, OrbitError> {
-        request.current_dir = Some(self.repo_root.to_string_lossy().into_owned());
-        let result = run_process(&request, &NoSandbox)?;
+        // `run_gh` turns a failed read into an error. This family classifies
+        // that failure as capability evidence, so it shares only the launch.
+        let result = run_sweep_gh(&self.repo_root, request)?;
         if !result.success {
             return Ok(AlertQuery::CapabilityUnavailable(classify_alert_failure(
                 family,

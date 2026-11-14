@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_exec::EnvironmentMode;
 use orbit_tools::github_cli;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
@@ -606,6 +607,8 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
                 last_timeout.set(timeout);
                 request.timeout_ms = Some(timeout);
             }
+            request.environment_mode =
+                EnvironmentMode::ClearAndSet(super::super::super::git::gh_environment());
             Ok(request)
         },
     )

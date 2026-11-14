@@ -33,7 +33,11 @@ fn credential_shaped_marker() -> String {
 
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
-log=${ORBIT_FAKE_GH_LOG:?}
+# The sweep launches `gh` from the cleared allowlist, so this fixture reads
+# its log, mode and marker from `$HOME` (passed through) rather than `ORBIT_*`.
+home=${HOME:?}
+log="$home/calls"
+mode=$(cat "$home/gh-mode")
 printf '%s\n' "$*" >> "$log"
 case "$1" in
   auth)
@@ -48,12 +52,13 @@ case "$1" in
       echo "fake gh: unsupported call: $*" >&2
       exit 2
     fi
-    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_failure_degrades_without_losing_alert_families" ]; then
+    if [ "$mode" = "repo_view_failure_degrades_without_losing_alert_families" ]; then
       echo "transient repo view failure" >&2
       exit 1
     fi
-    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_credential_shaped_stderr_is_redacted" ]; then
-      echo "gh: authentication failed with token ${ORBIT_FAKE_GH_MARKER:?}" >&2
+    if [ "$mode" = "repo_view_credential_shaped_stderr_is_redacted" ]; then
+      marker=$(cat "$home/gh-marker")
+      echo "gh: authentication failed with token $marker" >&2
       exit 1
     fi
     for arg in "$@"; do
@@ -334,6 +339,8 @@ fn spawn_isolated(test: &str) {
     fs::write(&gh, FAKE_GH).expect("write fake gh");
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).expect("chmod fake gh");
     let log = sandbox.path().join("calls");
+    fs::write(sandbox.path().join("gh-mode"), test).expect("gh mode");
+    fs::write(sandbox.path().join("gh-marker"), credential_shaped_marker()).expect("gh marker");
     let mut path = vec![bin];
     path.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),

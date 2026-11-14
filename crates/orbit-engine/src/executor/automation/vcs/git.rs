@@ -306,6 +306,21 @@ pub(super) fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Child environment for private-automation `gh`: the baseline process context
+/// plus the GitHub CLI authentication names. Other provider credentials and the
+/// `ORBIT_*` envelope stay in the parent.
+pub(in crate::executor::automation) fn gh_environment() -> Vec<(String, String)> {
+    vcs_environment(&[
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_HOST",
+        "GH_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+    ])
+}
+
 fn git_environment() -> Vec<(String, String)> {
     let mut environment = vcs_environment(&["SSH_AUTH_SOCK"]);
     // Git stderr drives retry classification. LANGUAGE can override gettext's
