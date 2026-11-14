@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+use orbit_types::workflow::{CANDIDATE_HELD_EVENT, FailureHandoffDecision, HeldCandidate};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -205,7 +205,7 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": "blocked_by_agent",
+        "decision": FailureHandoffDecision::BlockedByAgent.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -281,7 +281,7 @@ pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_owner_signoff",
+        "decision": FailureHandoffDecision::HeldOwnerSignoff.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -367,7 +367,7 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
 
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "blocked_validation_environment",
+        "decision": FailureHandoffDecision::BlockedValidationEnvironment.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -443,7 +443,7 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_provider_failure",
+        "decision": FailureHandoffDecision::HeldProviderFailure.as_str(),
         "provider_failure": class,
         "task_id": task.id,
         "handoff_run_id": run_id,
@@ -516,7 +516,7 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_upgrade_pending",
+        "decision": FailureHandoffDecision::HeldUpgradePending.as_str(),
         "blocker_kind": kind,
         "task_id": task.id,
         "handoff_run_id": run_id,
@@ -592,7 +592,7 @@ pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_child_timeout",
+        "decision": FailureHandoffDecision::HeldChildTimeout.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -726,7 +726,7 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
 
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_baseline_red",
+        "decision": FailureHandoffDecision::HeldBaselineRed.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
