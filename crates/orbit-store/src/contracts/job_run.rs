@@ -23,8 +23,9 @@ pub trait JobRunStoreBackend: Send + Sync {
     fn observed_run_page(&self, _after: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
         Err(OrbitError::Store("run paging unavailable".into()))
     }
-    /// The workspace partition this store reads and writes runs under. Run
-    /// ids are only unique within it.
+    /// The workspace partition this store reads and writes runs under. Newly
+    /// minted run ids are unique across the host's shared store, but historical
+    /// run ids can collide across workspaces, so reads stay workspace-partitioned.
     fn workspace_id(&self) -> &str;
     /// Local permanent binding, independent of owner connectivity.
     fn local_pull_for_run(&self, _run_id: &str) -> Result<Option<LocalPullAdmission>, OrbitError> {
