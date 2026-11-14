@@ -1205,12 +1205,6 @@ export function incidentClassLabel(key, label) {
   return key === "expected" ? "Expected refusal" : label || key || "failure";
 }
 
-export function priorityCell(p) {
-  const node = el("span", { class: "priority mono", text: p });
-  node.style.color = `var(--priority-${p}, var(--fg-dim))`;
-  return node;
-}
-
 export function stateCell(state) {
   const node = el("span", { class: "state-label", text: state });
   node.dataset.state = state;

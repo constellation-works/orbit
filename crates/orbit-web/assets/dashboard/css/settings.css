@@ -70,20 +70,8 @@
 .config-row { border-bottom: 1px solid var(--hair); }
 .config-row:last-child { border-bottom: none; }
 
-/* The Keys reference rows carry no editor, so they lay out on their own grid. */
-.config-key-row {
-  display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(90px, 0.6fr) 110px minmax(240px, 2fr);
-  gap: 12px; align-items: baseline; padding: 10px 16px;
-}
-.config-key-row:hover { background: var(--bg-hover); }
-@media (max-width: 760px) {
-  .config-key-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .config-key-row .config-description { grid-column: 1 / -1; }
-}
 .config-key { font-size: 12px; overflow-wrap: anywhere; }
 .config-value { color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
-.config-description { color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
-.config-options { color: var(--fg-mute); }
 
 .config-source {
   justify-self: start; padding: 1px 7px; border-radius: 2px; border: 1px solid transparent;

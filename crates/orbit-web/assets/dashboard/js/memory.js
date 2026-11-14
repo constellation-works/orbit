@@ -76,11 +76,6 @@ const EVENT_LABELS = {
   proposal_expired: "Proposal expired",
 };
 
-/// The selection on screen, for the router.
-export function getMemorySelection() {
-  return selected;
-}
-
 /// Select a memory key, the proposals, or nothing.
 export function setMemorySelection(value) {
   const next = value ? String(value) : null;

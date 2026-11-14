@@ -232,10 +232,6 @@ export function hostLevelFailure(error) {
   return { code: error.code, message: error.message || error.code };
 }
 
-export function getHostFailure() {
-  return failure;
-}
-
 /// Replace every panel with one state naming the host, the code and the
 /// message. The picker stays in the rail and the state offers a way back.
 export function showHostFailure(next) {

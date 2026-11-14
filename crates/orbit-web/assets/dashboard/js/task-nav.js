@@ -37,7 +37,6 @@ let waitingFetchPending = false;
 // Advances whenever the cached ids stop being trustworthy (a workspace switch or
 // an answered decision), so a read that began before it is dropped and redone.
 let waitingGeneration = 0;
-export function waitingOnYouFilter() { return waitingOnly; }
 // Whether a filter only the browser applies (Not ready, My work, Waiting on
 // you) narrows the loaded rows. The server's section totals do not count it.
 export function browserTaskFilterActive() { return notReadyOnly || myWorkOnly || waitingOnly; }

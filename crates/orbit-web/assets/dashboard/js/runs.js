@@ -859,10 +859,6 @@ function applyRunQuery(raw) {
   if (runQueryTimer && typeof runQueryTimer.unref === "function") runQueryTimer.unref();
 }
 
-export function getRunFilter() {
-  return runFilter;
-}
-
 export function formatRunCount(shown, fetched, meta) {
   const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
   const limit = `${capped ? "server limit" : "limit"} ${meta?.limit || fetched}`;

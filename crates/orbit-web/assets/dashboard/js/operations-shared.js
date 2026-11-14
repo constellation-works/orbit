@@ -221,12 +221,6 @@ export function field(label, value) {
   ]);
 }
 
-function lastFireText(fire) {
-  if (!fire) return "Never";
-  const when = time(fire.finished_at || fire.started_at);
-  return fire.state ? `${fire.state} · ${when}` : when;
-}
-
 // "on task creation/edit · debounce 2m": what fires a state-triggered routine
 // and how long it settles first.
 function stateTriggerText(state) {
@@ -250,13 +244,6 @@ export function routineScheduleText(routine) {
 // describe.
 export function routineEventDriven(routine) {
   return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state || routine.trigger?.condition);
-}
-
-function operationIdentity(name, state) {
-  return el("div", { class: "operation-identity" }, [
-    el("strong", { text: name }),
-    el("span", { class: `operation-state ${state}`, text: state }),
-  ]);
 }
 
 export function operationFact(label, value, title) {
