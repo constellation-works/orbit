@@ -2,8 +2,8 @@
 //! envelope-derived fields a hydrated page carries.
 
 use super::*;
-use crate::contracts::{TaskListFilter, TaskListHydration};
-use crate::repository::task::v2_bundle::LISTING_BUNDLE_READS;
+use crate::contracts::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
+use crate::repository::task::v2_bundle::{LIGHTWEIGHT_BUNDLE_READS, LISTING_BUNDLE_READS};
 
 fn bundle_reads<T>(op: impl FnOnce() -> T) -> (T, u64) {
     let before = LISTING_BUNDLE_READS.with(std::cell::Cell::get);
@@ -12,6 +12,26 @@ fn bundle_reads<T>(op: impl FnOnce() -> T) -> (T, u64) {
         value,
         LISTING_BUNDLE_READS.with(std::cell::Cell::get) - before,
     )
+}
+
+fn lightweight_reads<T>(op: impl FnOnce() -> T) -> (T, u64) {
+    let before = LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get);
+    let value = op();
+    (
+        value,
+        LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get) - before,
+    )
+}
+
+fn full_page(store: &TaskV2Store) -> crate::contracts::TaskPage {
+    store
+        .query_task_rows(
+            &TaskListFilter::default(),
+            50,
+            None,
+            TaskListHydration::Full,
+        )
+        .expect("full page")
 }
 
 #[test]
@@ -88,4 +108,58 @@ fn envelope_only_page_reads_no_bundles_and_matches_hydrated_envelope_fields() {
         assert!(compact_row.history.is_empty());
         assert!(compact_row.artifacts.is_empty());
     }
+}
+
+#[test]
+fn hydrated_page_reuses_unchanged_rows_and_rereads_only_the_changed_one() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        let task = store
+            .create_task(create_params(&format!("Task {index}"), TaskStatus::Backlog))
+            .expect("create task");
+        ids.push(task.id.to_string());
+    }
+
+    let (first, first_reads) = lightweight_reads(|| full_page(&store));
+    assert_eq!(first.items.len(), 3);
+    assert_eq!(
+        first_reads, 3,
+        "first hydrated page reads each selected bundle once"
+    );
+
+    let (second, second_reads) = lightweight_reads(|| full_page(&store));
+    assert_eq!(
+        second_reads, 0,
+        "unchanged page must perform 0 lightweight bundle reads"
+    );
+    assert_eq!(second.total, first.total);
+    for (cached, fresh) in second.items.iter().zip(&first.items) {
+        assert_eq!(cached.task, fresh.task);
+        assert_eq!(cached.comments, fresh.comments);
+        assert_eq!(cached.history, fresh.history);
+        assert_eq!(cached.artifacts, fresh.artifacts);
+    }
+
+    store
+        .update_task_document(
+            &ids[0],
+            &TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                title: Some("Task 0 renamed".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("update one task");
+
+    let (third, third_reads) = lightweight_reads(|| full_page(&store));
+    assert_eq!(third_reads, 1, "only the updated task's bundle is re-read");
+    assert_eq!(third.items.len(), 3);
+    let renamed = third
+        .items
+        .iter()
+        .find(|row| row.task.id == ids[0])
+        .expect("renamed row");
+    assert_eq!(renamed.task.title, "Task 0 renamed");
 }

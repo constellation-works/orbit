@@ -319,7 +319,7 @@ pub struct TaskChangeStamp {
 }
 
 /// One fully validated bundle, retaining sidecars from that same read.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskRow {
     pub task: Task,
     pub comments: Vec<TaskComment>,
