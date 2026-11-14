@@ -31,17 +31,12 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// earlier results can contain unrecognized credential boundary fragments.
 pub(super) const CACHE_SCHEMA_VERSION: u32 = 10;
 
-/// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
-/// there trips the Linux Git protection scan until it is removed.
-const LEGACY_WORKTREES_DIR: &str = "worktrees";
-
 pub(in super::super) struct CachePaths {
     pub(super) result: PathBuf,
     pub(super) lock: PathBuf,
     pub(super) inconclusive_hold: PathBuf,
     pub(super) claim_inconclusive: PathBuf,
     pub(in super::super) worktree: PathBuf,
-    pub(super) legacy_worktrees: PathBuf,
 }
 
 pub(in super::super) fn cache_paths(
@@ -74,7 +69,6 @@ pub(in super::super) fn cache_paths(
         inconclusive_hold: dir.join(format!("{key}.hold-inconclusive.json")),
         claim_inconclusive: dir.join(format!("{key}.claim-inconclusive.json")),
         worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}"))?,
-        legacy_worktrees: dir.join(LEGACY_WORKTREES_DIR),
     })
 }
 
@@ -218,23 +212,6 @@ pub(in super::super) fn in_detached_worktree<T>(
     let result = f(worktree);
     remove_worktree(workspace_path, worktree);
     Ok(result)
-}
-
-/// Best-effort removal of every checkout an older Orbit left under the Git
-/// common directory, then of the directory itself.
-pub(super) fn remove_legacy_checkouts(workspace_path: &Path, legacy: &Path) {
-    let Ok(entries) = std::fs::read_dir(legacy) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        remove_worktree(workspace_path, &entry.path());
-    }
-    if let Err(error) = std::fs::remove_dir(legacy) {
-        tracing::warn!(
-            path = %legacy.display(),
-            "could not remove the legacy base checkout directory: {error}"
-        );
-    }
 }
 
 /// Best-effort removal of a base worktree and its registration.
