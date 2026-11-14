@@ -1,6 +1,8 @@
 use std::cell::LazyCell;
 use std::collections::BTreeMap;
 
+use orbit_store::contracts::TaskRow;
+
 use chrono::{DateTime, Utc};
 use orbit_types::identity::same_crew_family;
 use orbit_types::task::{
@@ -18,7 +20,8 @@ use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
     human_crew_exclusion, inherited_only_epic_root_exclusion, no_drain_exclusion,
-    pilot_finding_exclusion, pilot_preparation_exclusion, scheduled_exclusion,
+    pilot_finding_exclusion, pilot_hold_exclusion, pilot_preparation_exclusion,
+    scheduled_exclusion, scheduled_exclusion_from_history,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -30,6 +33,7 @@ use super::{
 use crate::OrbitRuntime;
 use crate::application::job::PublishedResume;
 use crate::application::job::crew_pools::CapturedCrewPools;
+use crate::application::task::{AdmissionProviderPass, standing_baseline_hold_from_history};
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
     active_task_lock_holders, lock_holder_index, task_lock_overlaps,
@@ -47,7 +51,12 @@ pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
 /// Observation keeps the live launcher's recorded missing-source names;
 /// without a live run, readiness judges the observing environment.
 pub(super) enum BacklogReadMode<'a> {
-    Admission,
+    /// `prepared_rows` are backlog rows the pass already loaded while
+    /// recording pilot handoffs. The snapshot does not read those bundles
+    /// again. Discovery that did not preload passes `None` and records here.
+    Admission {
+        prepared_rows: Option<BTreeMap<String, Option<TaskRow>>>,
+    },
     Observation {
         crew_env_unset: Option<&'a [orbit_types::workflow::CrewEnvUnset]>,
         /// The registry-global status index this read's caller already holds.
@@ -57,13 +66,16 @@ pub(super) enum BacklogReadMode<'a> {
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
 /// mode. `review` is the admitting run's captured review admission, when
-/// there is one.
+/// there is one. `prepared_rows` are backlog rows the pass already loaded
+/// while recording pilot handoffs; the snapshot does not read those bundles
+/// again.
 pub(crate) fn backlog_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
     review: Option<&ReviewAdmission>,
+    prepared_rows: Option<BTreeMap<String, Option<TaskRow>>>,
 ) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
@@ -72,7 +84,7 @@ pub(crate) fn backlog_snapshot(
         pools,
         workspace_ship_mode(runtime),
         review,
-        BacklogReadMode::Admission,
+        BacklogReadMode::Admission { prepared_rows },
     )
 }
 
@@ -117,8 +129,16 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
     review: Option<&ReviewAdmission>,
-    read_mode: BacklogReadMode<'_>,
+    mut read_mode: BacklogReadMode<'_>,
 ) -> Result<BacklogSnapshot, PassError> {
+    // One host outage query for every provider-hold check in this snapshot,
+    // including the crew redraw. One lightweight row per backlog task feeds
+    // the pilot, baseline and provider holds.
+    let _provider_pass = AdmissionProviderPass::enter(runtime);
+    let prepared_rows = match &mut read_mode {
+        BacklogReadMode::Admission { prepared_rows } => prepared_rows.take(),
+        BacklogReadMode::Observation { .. } => None,
+    };
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
@@ -127,9 +147,13 @@ pub(super) fn backlog_snapshot_in_mode(
         matches!(read_mode, BacklogReadMode::Observation { .. }),
     )
     .map_err(|error| PassError::store(action, "list tasks", error))?;
-    if matches!(read_mode, BacklogReadMode::Admission) {
-        super::super::recovery_context::reconcile_recovery_context(runtime, &mut task_lookup);
-    }
+    let pass_rows = super::pass_rows::prepare_pass_rows(
+        runtime,
+        action,
+        matches!(read_mode, BacklogReadMode::Admission { .. }),
+        &mut task_lookup,
+        prepared_rows,
+    )?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
     let backlog_tasks = task_lookup
@@ -165,7 +189,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // when it cannot establish the surfaces held by live claims.
     let claims = match read_mode {
         BacklogReadMode::Observation { .. } => ClaimHolders::read(runtime),
-        BacklogReadMode::Admission => ClaimHolders::read_for_admission(runtime)
+        BacklogReadMode::Admission { .. } => ClaimHolders::read_for_admission(runtime)
             .map_err(|error| PassError::store(action, "read execution claims", error))?,
     };
     claims.extend_lock_holders(&mut lock_holders, &task_lookup);
@@ -215,7 +239,12 @@ pub(super) fn backlog_snapshot_in_mode(
     // it reports `scheduled` first. Read every pass: the first pass after
     // the time admits it, and an edited `not_before` counts at the next.
     backlog.retain(|task| {
-        let Some(exclusion) = scheduled_exclusion(runtime, task) else {
+        let Some(exclusion) = pass_rows
+            .get(&task.id)
+            .and_then(Option::as_ref)
+            .map(|row| scheduled_exclusion_from_history(task, &row.history))
+            .unwrap_or_else(|| scheduled_exclusion(runtime, task))
+        else {
             return true;
         };
         excluded.push(exclusion);
@@ -248,7 +277,15 @@ pub(super) fn backlog_snapshot_in_mode(
     }
     let mut kept = Vec::with_capacity(backlog.len());
     for task in backlog {
-        if let Some(exclusion) = pilot_finding_exclusion(runtime, action, task)? {
+        let exclusion = if let Some(row) = pass_rows.get(&task.id).and_then(Option::as_ref) {
+            let hold = runtime
+                .pilot_admission_hold_from_row(row)
+                .map_err(|error| PassError::store(action, "read pilot findings", error))?;
+            pilot_hold_exclusion(runtime, task, hold)
+        } else {
+            pilot_finding_exclusion(runtime, action, task)?
+        };
+        if let Some(exclusion) = exclusion {
             excluded.push(exclusion);
         } else {
             kept.push(task);
@@ -336,21 +373,28 @@ pub(super) fn backlog_snapshot_in_mode(
     // again. Only the clock tick's recorded verdict is read here, never a
     // validation run [ORB-14739]. A hold that cannot be read is not one: the
     // delivery's own validation decides.
-    backlog.retain(|task| match runtime.standing_baseline_hold(task) {
-        Ok(None) => true,
-        Ok(Some(why)) => {
-            excluded.push(BacklogTaskExclusion {
-                id: task.id.clone(),
-                reason: BacklogTaskExclusionReason::BaselineRedHold,
-                conflicts: Vec::new(),
-                crew: None,
-                detail: Some(why),
-            });
-            false
-        }
-        Err(error) => {
-            tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
-            true
+    backlog.retain(|task| {
+        match pass_rows
+            .get(&task.id)
+            .and_then(Option::as_ref)
+            .map(|row| Ok(standing_baseline_hold_from_history(task, &row.history)))
+            .unwrap_or_else(|| runtime.standing_baseline_hold(task))
+        {
+            Ok(None) => true,
+            Ok(Some(why)) => {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::BaselineRedHold,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: Some(why),
+                });
+                false
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
+                true
+            }
         }
     });
     // [ORB-14266] A task whose provider failure hold excludes every crew it
@@ -470,7 +514,7 @@ pub(super) fn backlog_snapshot_in_mode(
             crew_env_unset: None,
             ..
         }
-        | BacklogReadMode::Admission => runtime.unset_crew_env(),
+        | BacklogReadMode::Admission { .. } => runtime.unset_crew_env(),
     };
     backlog.retain(|task| {
         if allowlist.is_none() && crew_unset.is_empty() {

@@ -87,8 +87,10 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     }
     let mode = super::super::mode::effective_mode(runtime, input)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-    runtime
-        .record_backlog_pilot_operator_handoffs()
+    // Before settlement and the snapshot, so a busy task-commit lock stops
+    // the pass here, and so the snapshot can reuse these rows.
+    let prepared_rows = runtime
+        .load_backlog_handoff_rows()
         .map_err(|error| PassError::store(action, "record pilot operator handoffs", error))?;
 
     let submitted_max_active_leaf_runs = templated_u64(
@@ -198,8 +200,14 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     if let Some(run_id) = drain_run_id(input) {
         runtime.record_owner_census(run_id);
     }
-    let mut snapshot =
-        backlog_snapshot(runtime, action, allowlist.as_ref(), &pools, review.as_ref())?;
+    let mut snapshot = backlog_snapshot(
+        runtime,
+        action,
+        allowlist.as_ref(),
+        &pools,
+        review.as_ref(),
+        Some(prepared_rows),
+    )?;
     // A live leaf may carry a task that has since closed; its claim and its
     // light slot still count.
     snapshot

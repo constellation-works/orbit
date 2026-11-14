@@ -1,6 +1,8 @@
 use orbit_common::OrbitError;
+use orbit_types::task::TaskStatus;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskListFilter;
 use crate::application::task::TaskWorkspaceAutoPort;
 
 use super::model::{ExternalMergeSettlement, SETTLEABLE_STATUSES};
@@ -18,14 +20,7 @@ impl OrbitRuntime {
         let mut candidates = Vec::new();
         let mut claims_cache = None;
         for status in SETTLEABLE_STATUSES {
-            for task in self.stores().tasks().list_tasks_filtered(
-                Some(status),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )? {
+            for task in self.settleable_tasks(status)? {
                 if let Ok(candidate) =
                     self.settlement_candidate_with_claims(task, &carried, &mut claims_cache)
                 {
@@ -155,5 +150,35 @@ impl OrbitRuntime {
             return Err(refusal::refused(id, &reason));
         };
         self.write_settlement_as(&candidate, &landing, actor)
+    }
+
+    /// Tasks in `status` that external-merge settlement may consider.
+    ///
+    /// Backlog is the whole drain population, and a backlog task settles only
+    /// when a failure handoff preserved its run. Listing it through the index
+    /// envelopes avoids a bundle read per backlog task on every admission
+    /// pass; the body is read later, and only when that receipt exists.
+    /// The other settleable statuses stay on the hydrated list: each is a
+    /// task a run is already touching, and settlement reads fields the
+    /// envelope does not carry.
+    fn settleable_tasks(
+        &self,
+        status: TaskStatus,
+    ) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+        if status != TaskStatus::Backlog {
+            return self.stores().tasks().list_tasks_filtered(
+                Some(status),
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+        }
+        let filter = TaskListFilter {
+            statuses: Some(vec![TaskStatus::Backlog]),
+            ..TaskListFilter::default()
+        };
+        super::super::listing::list_task_metadata_matching(self.stores().tasks(), &filter)
     }
 }

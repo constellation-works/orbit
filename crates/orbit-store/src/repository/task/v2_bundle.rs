@@ -13,9 +13,9 @@ use orbit_common::fs::io::{
     with_exclusive_file_lock, with_shared_file_lock, with_shared_file_lock_options,
 };
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
-    TASK_COMMENTS_FILE_NAME, TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
-    TaskEnvelopeV2, TaskEventRowV2,
+    ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME,
+    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TASK_ENVELOPE_FILE_NAME,
+    TASK_EVENTS_FILE_NAME, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2,
 };
 
 use crate::driver::file::task_bundle::bundle_lock_target;
@@ -33,6 +33,7 @@ use crate::fs::yaml::write_yaml_durable_with;
 /// ([`hold_step`]): opening, reading and decoding the bundle's files. A wait
 /// for the bundle's lock is a step of its own.
 const BUNDLE_READ_STEP: &str = "bundle read";
+const ARTIFACT_BLOB_READ_STEP: &str = "artifact blob read";
 const ENVELOPE_READ_STEP: &str = "envelope read";
 const SEARCH_DOCS_READ_STEP: &str = "search docs read";
 const SIDECAR_READ_STEP: &str = "sidecar read";
@@ -374,6 +375,57 @@ impl TaskBundleStoreV2 {
     ) -> Result<Option<ArtifactManifestV2>, OrbitError> {
         let bundle_dir = self.bundle_path(task_id)?;
         read_artifact_manifest_consistently(&bundle_dir)
+    }
+
+    /// Read one manifest blob under the shared bundle lock.
+    ///
+    /// This does not open or hash the rest of the bundle, so it is not a
+    /// canonical or lightweight bundle read. It checks this file's size and
+    /// manifest sha256, and refuses an interrupted commit the same way a
+    /// bundle read does.
+    pub(crate) fn read_manifest_blob(
+        &self,
+        task_id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<Vec<u8>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        if !bundle_dir.try_exists()? {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Task,
+                task_id.to_string(),
+            ));
+        }
+        hold_step(ARTIFACT_BLOB_READ_STEP, || {
+            with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+                refuse_interrupted_commit(&bundle_dir)?;
+                let artifact_dir = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
+                let blob_path = artifact_dir.join(&file.blob);
+                let bytes = crate::fs::path_safety::read_contained_artifact_blob(
+                    &artifact_dir,
+                    &file.blob,
+                )?
+                .ok_or_else(|| {
+                    OrbitError::not_found(
+                        orbit_common::NotFoundKind::Artifact,
+                        format!("{task_id}/{}", file.path),
+                    )
+                })?;
+                if bytes.len() as u64 != file.size_bytes {
+                    return Err(OrbitError::Store(format!(
+                        "artifact manifest size mismatch for {}",
+                        blob_path.display()
+                    )));
+                }
+                let actual = orbit_common::security::release::sha256_hex(&bytes);
+                if actual != file.sha256 {
+                    return Err(OrbitError::Store(format!(
+                        "artifact manifest sha256 mismatch for {}",
+                        blob_path.display()
+                    )));
+                }
+                Ok(bytes)
+            })
+        })
     }
 
     pub(crate) fn delete_bundle(&self, task_id: &str) -> Result<bool, OrbitError> {

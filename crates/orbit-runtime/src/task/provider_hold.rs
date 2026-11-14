@@ -100,7 +100,7 @@ impl RuntimeKernel {
             return Ok(None);
         }
         let history = self.get_task_history(&task.id)?;
-        Ok(latest_status_hold(&history).filter(|hold| hold.stands_at(now)))
+        Ok(standing_provider_hold_from_history(task, &history, now))
     }
 
     /// `Self::standing_provider_hold` as `machine` sees it, for admission:
@@ -400,6 +400,19 @@ pub(crate) fn provider_failure_hold_update(
         ))),
         ..TaskAutomationUpdate::default()
     }
+}
+
+/// The hold `task`'s latest status decision still imposes at `now`, from a
+/// history the caller already read. A task that is not `backlog` has none.
+pub fn standing_provider_hold_from_history(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+    now: DateTime<Utc>,
+) -> Option<ProviderFailureHold> {
+    if task.status != TaskStatus::Backlog {
+        return None;
+    }
+    latest_status_hold(history).filter(|hold| hold.stands_at(now))
 }
 
 /// The hold the task's latest status decision put it under, if it was one.
