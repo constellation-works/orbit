@@ -626,6 +626,16 @@ requirement names exactly leaves the record `not_run`, and the review blocks
 instead of holding
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 
+One exception: when the reviewer accepted with no open findings, settlement
+itself reads a `DEFERRED: bubblewrap unavailable:` notice in a required
+record and synthesizes the Linux `host_sandbox_test` requirement for the
+test it names (from the record's cargo scope, or a reviewer-named Linux
+requirement for that test in the same package and target), so the review
+holds for the host run instead of blocking as `validation_incomplete`
+[ORB-24656]. Reviewers should still name
+each deferred test as above; settlement's synthesis is the backstop, and a
+Bubblewrap notice it cannot name a command for still blocks.
+
 A test runner may instead exit nonzero because nested Seatbelt application
 or a required child-process spawn was refused by the review sandbox. Record
 that affected check as `required` and `denied`, with the exact command,
