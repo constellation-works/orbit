@@ -8,10 +8,10 @@ use std::time::SystemTime;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 
-use super::super::filter::{Filters, LevelFilter};
 use super::super::scan::{
     VALUE_PARSES, parse_matching_event, read_recent_matching_events_across_segments_with,
 };
+use orbit_cmd::log_format::{Filters, LevelFilter};
 
 const BLOCK: usize = 64 * 1024;
 
