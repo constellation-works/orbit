@@ -538,6 +538,129 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
     .success();
 }
 
+/// `orbit doctor --root <workspace>` from outside the checkout judges
+/// shipped auto-tasks against the registered base branch (`master` here),
+/// not the unbound `[workflow] base_branch` default `main`.
+fn doctor_with_explicit_root_outside_checkout_uses_registered_base_branch() {
+    use orbit_common::security::release::sha256_hex;
+
+    let home = tempdir().expect("home tempdir");
+    let repo = home.path().join("workspace");
+    git_repo::SeededRepo::new(&repo)
+        .branch("master")
+        .no_commit()
+        .build();
+    // The disposable root is both the host-global root and, through
+    // `workspace init --root`, this workspace's orbit dir — the QA layout.
+    let root = home.path().join("qa-root");
+    std::fs::create_dir_all(&root).expect("create disposable root");
+    let root_arg = root.to_string_lossy().into_owned();
+    run(
+        orbit(home.path(), home.path()).args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "qa",
+            "--task-prefix",
+            "QAZ",
+            "--root",
+            &root_arg,
+        ]),
+        "orbit init",
+    )
+    .success();
+    run(
+        orbit(&repo, home.path()).args([
+            "--root",
+            &root_arg,
+            "workspace",
+            "init",
+            "--name",
+            "doctor-root",
+        ]),
+        "orbit workspace init",
+    )
+    .success();
+    let seeded = std::fs::read_to_string(root.join("auto_tasks/qa-sweep.yaml"))
+        .expect("read seeded auto-task");
+    assert!(
+        seeded.contains("ref: master"),
+        "seed must render the registered branch: {seeded}"
+    );
+
+    let doctor_row = |cwd: &Path| -> Value {
+        let doctor = orbit(cwd, home.path())
+            .args(["--root", &root_arg, "doctor", "--json"])
+            .output()
+            .expect("run doctor");
+        let rows: Value = serde_json::from_slice(&doctor.stdout).unwrap_or_else(|_| {
+            panic!(
+                "parse doctor JSON (status {:?}): {}",
+                doctor.status,
+                String::from_utf8_lossy(&doctor.stderr)
+            )
+        });
+        rows.as_array()
+            .expect("doctor rows")
+            .iter()
+            .find(|row| row["check"] == "artifacts-auto-tasks")
+            .expect("auto-task artifact row")
+            .clone()
+    };
+
+    let outside = home.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("create outside directory");
+    assert_eq!(
+        doctor_row(&outside)["status"],
+        "ok",
+        "doctor outside the checkout must not report fresh auto-tasks stale"
+    );
+    assert_eq!(
+        doctor_row(&repo)["status"],
+        "ok",
+        "doctor inside the checkout stays ok"
+    );
+
+    run(
+        orbit(&repo, home.path()).args([
+            "--root",
+            &root_arg,
+            "workspace",
+            "sync",
+            "--check",
+            "--json",
+        ]),
+        "orbit workspace sync --check",
+    )
+    .success();
+
+    // A file Orbit wrote whose bytes differ for a reason other than the
+    // registered branch token is still stale.
+    let stale_path = root.join("auto_tasks/qa-sweep.yaml");
+    let stale_body = format!("{seeded}# older release\n");
+    std::fs::write(&stale_path, &stale_body).expect("plant older-release auto-task");
+    let manifest_path = root.join("auto_tasks/.orbit-managed-assets.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&read(&manifest_path)).expect("parse auto-task manifest");
+    manifest["assets"]["qa-sweep"] = Value::String(sha256_hex(stale_body.as_bytes()));
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest")
+        ),
+    )
+    .expect("record the planted digest");
+    let row = doctor_row(&outside);
+    assert_eq!(row["status"], "warning", "{row}");
+    assert!(
+        row["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("qa-sweep") && message.contains("stale")),
+        "doctor must still report a genuinely stale auto-task: {row}"
+    );
+}
+
 fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent() {
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
@@ -1222,6 +1345,10 @@ fn workspace_sync_contracts_0() {
         (
             "demoted_default_copy_is_kept_as_a_workspace_local_definition",
             demoted_default_copy_is_kept_as_a_workspace_local_definition as fn(),
+        ),
+        (
+            "doctor_with_explicit_root_outside_checkout_uses_registered_base_branch",
+            doctor_with_explicit_root_outside_checkout_uses_registered_base_branch as fn(),
         ),
         (
             "workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent",
