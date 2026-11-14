@@ -1,6 +1,6 @@
 //! Provider and record sources: `ci_red` from the provider read behind
 //! `github.run.list`, cached per workspace and bounded by the source timeout.
-use super::sources::{AttentionCandidates, attention_reason};
+use super::sources::{AttentionCandidates, SharedOpenTasks, attention_reason};
 use crate::OrbitRuntime;
 use crate::application::contracts::ToolInvocationPort;
 use chrono::{DateTime, Utc};
@@ -129,18 +129,23 @@ fn call_provider(
     }
 }
 
-fn find_repair_task(
+/// The repair-task lookup for one query: CI run id → the first open task
+/// (in listing order) whose creation identity names that run. Built once
+/// — one event-log read per open task — and reused for every red
+/// workflow, replacing the former per-workflow scan (R × M history reads).
+/// History reads settle a pending task commit, so the caller never builds
+/// this while one is pending; a shared-listing failure yields an empty
+/// lookup, as the former per-workflow read's failure yielded no repair.
+fn build_repair_lookup(
     runtime: &OrbitRuntime,
-    run_id: &str,
-) -> Option<(String, Option<AttentionTask>)> {
+    open_tasks: &SharedOpenTasks,
+) -> BTreeMap<String, (String, Option<AttentionTask>)> {
     use orbit_types::task::CiFailureIdentity;
-    // History reads settle a pending task commit; an observational
-    // attention read must never reach them while one is pending.
-    if super::sources::pending_commit_message(runtime).is_some() {
-        return None;
-    }
-    let tasks = runtime.observe_task_metadata().ok()?;
-    for task in &tasks {
+    let mut lookup = BTreeMap::new();
+    let Ok(tasks) = open_tasks.get(runtime) else {
+        return lookup;
+    };
+    for task in tasks {
         if task.status.is_terminal() {
             continue;
         }
@@ -150,26 +155,25 @@ fn find_repair_task(
         let Ok(Some(identity)) = CiFailureIdentity::from_history(&history) else {
             continue;
         };
-        if identity
-            .sources
-            .iter()
-            .any(|source| source.run_id == run_id)
-        {
-            return Some((
-                task.id.clone(),
-                Some(AttentionTask {
-                    status: task.status,
-                    tags: task.tags.clone(),
-                    crew: task.crew.clone(),
-                    orchestrator: task.orchestrator.clone(),
-                    title: task.title.clone(),
-                }),
-            ));
+        for source in &identity.sources {
+            lookup.entry(source.run_id.clone()).or_insert_with(|| {
+                (
+                    task.id.clone(),
+                    Some(AttentionTask {
+                        status: task.status,
+                        tags: task.tags.clone(),
+                        crew: task.crew.clone(),
+                        orchestrator: task.orchestrator.clone(),
+                        title: task.title.clone(),
+                    }),
+                )
+            });
         }
     }
-    None
+    lookup
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn read_ci_attention(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -178,6 +182,7 @@ pub(super) fn read_ci_attention(
     now: DateTime<Utc>,
     session: &ToolSessionContext,
     candidates: &mut AttentionCandidates,
+    open_tasks: &SharedOpenTasks,
 ) {
     if !filter.selected(AttentionKind::CiRed) {
         return;
@@ -322,6 +327,7 @@ pub(super) fn read_ci_attention(
     // is still safe to report, degraded explicitly below.
     let pending_commit = super::sources::pending_commit_message(runtime);
     let mut repair_lookup_degraded = false;
+    let mut repair_lookup: Option<BTreeMap<String, (String, Option<AttentionTask>)>> = None;
     for (workflow_key, run) in newest_by_workflow {
         let conclusion = value_string(&run["conclusion"]);
         if conclusion != "failure" && conclusion != "timed_out" {
@@ -356,7 +362,9 @@ pub(super) fn read_ci_attention(
         let repair = if run_id.is_empty() || pending_commit.is_some() {
             None
         } else {
-            find_repair_task(runtime, &run_id)
+            let lookup =
+                repair_lookup.get_or_insert_with(|| build_repair_lookup(runtime, open_tasks));
+            lookup.get(&run_id).cloned()
         };
         let (next, refs_task, task_meta) = if let Some((task_id, task_meta)) = &repair {
             (
