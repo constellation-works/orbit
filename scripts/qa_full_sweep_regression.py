@@ -412,6 +412,7 @@ def self_test():
     native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
     process_observation_denial_self_test(harness, scratch)
+    darwin_process_observation_self_test(harness, scratch)
     dashboard_builtin_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
     source_identity_self_test(harness, scratch)
@@ -1975,6 +1976,97 @@ def process_observation_denial_self_test(harness, scratch):
                         if state == "Z":
                             break
                         time.sleep(0.02)
+
+
+def darwin_process_observation_self_test(harness, scratch):
+    """An unrelated refused Darwin process does not poison a snapshot.
+
+    Full BSD info is refused for other users' and protected processes on
+    macOS, while the short BSD info that proves parent and owner stays
+    readable. A refused descendant, or a refused process of this user
+    (which may be a detached worker under an owned root), stays unknown.
+    Drives the public run() boundary plus the snapshot/settle boundaries.
+    """
+    if sys.platform != "darwin":
+        print("darwin process observation regression: NOT_RUN (not a Darwin host)", flush=True)
+        return
+    qa = runpy.run_path(str(harness))
+    darwin = qa["_DARWIN_PROC"]
+    if not darwin or darwin["_libproc_handle"]() is None:
+        print("darwin process observation regression: NOT_RUN (no libproc on this host)", flush=True)
+        return
+    print("darwin process observation regression", flush=True)
+    original_identity = darwin["darwin_identity"]
+
+    def deny_only(pid):
+        def fake_identity(candidate, with_cmdline=True):
+            if candidate == pid:
+                darwin["DARWIN_DENIED"].append(
+                    f"process info for process {pid} failed: Operation not permitted")
+                return None
+            return original_identity(candidate, with_cmdline)
+        darwin["darwin_identity"] = fake_identity
+
+    try:
+        # PID 1 is another user's process and not a descendant: its
+        # refusal is irrelevant and must not raise.
+        deny_only(1)
+        table = qa["_proc_snapshot"]()
+        assert os.getpid() in table, "snapshot lost this process"
+        darwin["darwin_identity"] = original_identity
+
+        # A live descendant that becomes unreadable is unknown, never gone.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            observed = qa["_proc_identity"](child.pid)
+            assert observed is not None, "descendant fixture was not observed"
+            deny_only(child.pid)
+            try:
+                qa["_proc_snapshot"]()
+            except qa["ProcessObservationUnavailable"]:
+                pass
+            else:
+                raise AssertionError("unreadable descendant did not leave the snapshot incomplete")
+            assert qa["_proc_state"](child.pid, observed["starttime"]) == "unknown", (
+                "unreadable descendant was reported gone")
+            assert child.poll() is None, "unreadable descendant was signalled or exited"
+        finally:
+            darwin["darwin_identity"] = original_identity
+            child.kill()
+            child.wait(timeout=5)
+
+        # A detached worker under an owned root, owned by this user and
+        # unreadable, leaves settlement incomplete and is not signalled.
+        with tempfile.TemporaryDirectory(prefix="qa-darwin-denial-", dir=scratch) as tmp:
+            root = Path(tmp).resolve()
+            ready = root / "worker.ready"
+            subprocess.run([sys.executable, "-c", DENIAL_WORKER, str(root), str(ready)],
+                           capture_output=True, text=True, timeout=30, check=True)
+            worker_pid = int(ready.read_text())
+            try:
+                deny_only(worker_pid)
+                settlement = qa["settle_detached_workers_under"](root, deadline_s=0.2, kill_grace_s=0.2)
+                assert settlement["observation_complete"] is False, settlement
+                assert all(worker.get("exited") is not True for worker in settlement["workers"]), settlement
+                assert not Path(str(ready) + ".terminated").exists(), settlement
+                os.kill(worker_pid, 0)
+            finally:
+                darwin["darwin_identity"] = original_identity
+                try:
+                    os.kill(worker_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+    finally:
+        darwin["darwin_identity"] = original_identity
+
+    # The public supervised-command boundary: this host's unrelated
+    # refused processes must not turn an exit-0 command into a failure.
+    with tempfile.TemporaryDirectory(prefix="qa-darwin-run-", dir=scratch) as tmp:
+        temp = Path(tmp)
+        evidence = qa["run"]([sys.executable, "-c", "print('done')"],
+                             cwd=temp, env=qa["isolated_environment"](temp))
+        assert evidence["exit_code"] == 0 and evidence["cleanup_verified"] is True, evidence
+        assert evidence["outcome"] == "PASS", evidence
 
 
 # A fixture `orbit web serve`. Its responses name the workspace and task the
