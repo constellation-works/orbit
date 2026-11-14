@@ -6,10 +6,12 @@ use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExecutionLocation,
-    Task, TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    REVIEW_SETTLED_EVENT, RecordedReviewSettlement, ReviewSettlementGate, Task, TaskDecision,
+    TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::JobRun;
+use orbit_types::workflow::ReviewVerdict;
 use tempfile::tempdir;
 
 use orbit_engine::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
@@ -70,6 +72,36 @@ impl CommitTestHost {
             &paths,
         )
         .unwrap();
+        self
+    }
+
+    /// Record a settled before-landing review whose final candidate is
+    /// `final_commit`, as the review gate publishes it.
+    pub fn with_settled_review(self, task_id: &str, final_commit: &str) -> Self {
+        let settlement = RecordedReviewSettlement {
+            gate: ReviewSettlementGate::BeforeLanding,
+            attempt_id: "review-1".to_string(),
+            verdict: ReviewVerdict::Reject,
+            reviewer_crew: Some("fixture-reviewer".to_string()),
+            reviewer_model: None,
+            reviewed_commit: None,
+            final_commit: Some(final_commit.to_string()),
+            runtime_seconds: None,
+            findings: Vec::new(),
+        };
+        self.history.lock().unwrap().push((
+            task_id.to_string(),
+            TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: REVIEW_SETTLED_EVENT.to_string(),
+                note: None,
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: Some(TaskDecision::ReviewSettlement(settlement)),
+            },
+        ));
         self
     }
 
