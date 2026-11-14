@@ -74,6 +74,7 @@ fn ssh_transports_reuse_private_bounded_sockets_and_respect_native_config() {
         for case in [
             "defaults",
             "user-no",
+            "user-timeout",
             "include-match",
             "long-home",
             "long-home-no",
@@ -144,6 +145,11 @@ fn exercise_child(case: &str) {
         "user-no" | "long-home-no" => fs::write(
             home.join(".ssh/config"),
             "Host orbit-fixture\n  ControlMaster no\n  ControlPath none\n",
+        )
+        .unwrap(),
+        "user-timeout" => fs::write(
+            home.join(".ssh/config"),
+            "Host orbit-fixture\n  ConnectTimeout 3\n",
         )
         .unwrap(),
         "include-match" => {
@@ -218,6 +224,11 @@ fn exercise_child(case: &str) {
         assert_eq!(
             config["serveraliveinterval"], "23",
             "system config is evaluated before defaults"
+        );
+        let expected_timeout = if case == "user-timeout" { "3" } else { "5" };
+        assert_eq!(
+            config["connecttimeout"], expected_timeout,
+            "a dropped TCP connect must fail fast on our bound unless the user set their own"
         );
         if case.ends_with("no") {
             assert!(
