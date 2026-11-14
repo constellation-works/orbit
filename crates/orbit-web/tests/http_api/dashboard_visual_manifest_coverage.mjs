@@ -1,10 +1,10 @@
 // Every top-level dashboard view has a view-manifest entry, so the UI rules
 // (scripts/ux-rules) render it, or a recorded exemption that says why not.
-// The Notices view shipped without an entry and its section-title inset was
-// never measured (ORB-21637). A top-level view is a `section.tab-pane` in the
-// shipped index.html; a manifest view covers the pane its route's first hash
-// segment names (`#analytics/metrics` covers `analytics`); `#runs/<id>` is the
-// run-detail pane's route.
+// Notices is a Tasks dock tab, not a top-level pane; its manifest route stays
+// `#notices`, which opens that tab (ORB-21637, ORB-24808). A top-level view is
+// a `section.tab-pane` in the shipped index.html; a manifest view covers the
+// pane its route's first hash segment names (`#analytics/metrics` covers
+// `analytics`); `#runs/<id>` is the run-detail pane's route.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { parseManifest } from '../../../../scripts/ux-rules/lib/manifest.mjs';
@@ -67,7 +67,7 @@ const panes = topLevelPanes(html);
 const manifest = parseManifest(manifestText, manifestPath.pathname);
 
 // The shipped dashboard must yield its views, or the guard below proves nothing.
-assert.ok(panes.size >= 5 && panes.has('tasks') && panes.has('notices'), `top-level views not found: ${[...panes]}`);
+assert.ok(panes.size >= 5 && panes.has('tasks') && panes.has('jobs'), `top-level views not found: ${[...panes]}`);
 
 const problems = coverageProblems(panes, manifest, EXEMPTIONS);
 assert.deepEqual(
@@ -77,16 +77,18 @@ assert.deepEqual(
 );
 
 // The guard reports a view that loses its entry, and an exemption with no reason.
-const withoutNotices = { ...manifest, views: manifest.views.filter((view) => !view.route.startsWith('#notices')) };
+// Jobs is the example pane: Notices is no longer a top-level pane, and dropping
+// its manifest route would not show up here.
+const withoutJobs = { ...manifest, views: manifest.views.filter((view) => !view.route.startsWith('#jobs')) };
 assert.deepEqual(
-  coverageProblems(panes, withoutNotices, EXEMPTIONS),
-  ['notices: no views.toml entry and no recorded exemption'],
+  coverageProblems(panes, withoutJobs, EXEMPTIONS),
+  ['jobs: no views.toml entry and no recorded exemption'],
 );
 assert.deepEqual(
-  coverageProblems(panes, withoutNotices, { ...EXEMPTIONS, notices: '' }),
-  ['notices: exemption needs a reason'],
+  coverageProblems(panes, withoutJobs, { ...EXEMPTIONS, jobs: '' }),
+  ['jobs: exemption needs a reason'],
 );
 assert.deepEqual(
-  coverageProblems(panes, manifest, { ...EXEMPTIONS, notices: 'A reason long enough to count as one.' }),
-  ['notices: exempted but has a manifest entry; drop the exemption'],
+  coverageProblems(panes, manifest, { ...EXEMPTIONS, jobs: 'A reason long enough to count as one.' }),
+  ['jobs: exempted but has a manifest entry; drop the exemption'],
 );

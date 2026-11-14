@@ -1,4 +1,4 @@
-//! Fleet notices for the dashboard: the banner read, the Notices view and
+//! Fleet notices for the dashboard: the banner read, the Notices dock tab and
 //! the operator post/close forms.
 //!
 //! Reads go through the same core effective-state read as `orbit.notice.list`

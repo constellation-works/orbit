@@ -47,7 +47,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 
 // Retired Drain and auto-drain links are
 // normalized in place so Back never gets trapped on a redirect.
-const TABS = ["tasks", "jobs", "leases", "notices", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+const TABS = ["tasks", "jobs", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
@@ -82,7 +82,6 @@ const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
   leases: "Leases",
-  notices: "Notices",
   diagnostics: "Health",
   analytics: "Analytics",
   operations: "Automation",
@@ -599,14 +598,22 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let head = segments[0] || "tasks";
   let legacyRoute = false;
   let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
-  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start"].includes(segments[1]))) {
-    dockView = ["log", "fleet", "start", "locks"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+  // `#notices` is the Notices dock tab on Tasks. The banner and older links
+  // still use it; the address is rewritten to `#tasks?dock=notices`.
+  if (head === "notices") {
+    dockView = "notices";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log"].includes(dockView)) {
+  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
+      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start", "notices"].includes(segments[1]))) {
+    dockView = ["log", "fleet", "start", "locks", "notices"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks");
+    legacyRoute = true;
+  }
+  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log", "notices"].includes(dockView)) {
     dockView = ["auto-drain", "locks"].includes(dockView) ? "drain" : dockView;
     query.set("dock", dockView);
     query.delete("dockMode");

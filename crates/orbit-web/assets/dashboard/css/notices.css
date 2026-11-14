@@ -1,4 +1,4 @@
-/* Fleet notices: the banner over every view and the Notices view. */
+/* Fleet notices: the banner over every view and the Notices dock tab. */
 .notice-banner {
   flex: 0 0 auto;
   border-bottom: 1px solid var(--hair);
@@ -28,12 +28,15 @@
 }
 .notice-kind-incident { color: var(--state-pending); }
 .notice-kind-maintenance { color: var(--accent); }
-.notices-layout { grid-template-columns: minmax(0, 1fr); }
-/* Heading row: title and the page hint on the left, the Post control on the
-   right. The hint bubble spans the header and may outgrow a short panel, so the
-   panel does not clip; the last row rounds its own hover to the panel's corner. */
-#notices-panel { overflow: visible; }
-#notices-panel > header { position: relative; border-bottom: 0; padding-bottom: 6px; }
+/* Heading row: the page hint on the left, the Post control on the right.
+   The hint is pinned to the viewport, so the panel can clip and scroll. */
+#notices-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+#notices-panel > header { flex: 0 0 auto; }
 .notice-row:last-child > .notice-row-main:last-child { border-radius: 0 0 var(--radius-panel) var(--radius-panel); }
 .notices-head-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .notices-head-actions { display: inline-flex; align-items: center; gap: 6px; }
@@ -56,20 +59,33 @@
   font-style: italic;
 }
 
-/* The list: flat rows split by a hairline, on the panel's own edges. */
-#notices-panel > .body { padding: 0; }
-.notice-row { border-bottom: 1px solid var(--hair); }
+/* The list: flat rows split by a hairline, on the panel's own edges.
+   The dock is 320–440px, so a row is two lines at every width: the facts,
+   then the title. Scope and time ellipsize; the title wraps. */
+#notices-panel > .body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.notice-row { border-bottom: 1px solid var(--hair); min-width: 0; }
 .notice-row:last-child { border-bottom: 0; }
 /* Opening a row or switching the list rebuilds rows; that is not new data. */
 .notice-row.data-changed, .notice-row.data-new { animation: none; }
 .notice-row-main {
   display: grid;
-  grid-template-columns: 104px minmax(0, 1fr) 72px 112px 52px 12px;
-  grid-template-areas: "severity title scope when close chevron";
+  grid-template-columns: auto minmax(0, 1fr) auto auto 12px;
+  grid-template-areas:
+    "severity scope when close chevron"
+    "title title title title title";
   align-items: center;
-  column-gap: 12px;
+  column-gap: 8px;
+  row-gap: 2px;
   min-height: 44px;
-  padding: 0 16px;
+  min-width: 0;
+  padding: 8px 12px;
   cursor: pointer;
 }
 .notice-row-main:hover { background: var(--bg-hover); }
@@ -97,17 +113,26 @@
 .notice-row-toggle { grid-area: title; display: block; width: 100%; min-width: 0; }
 .notice-title {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
 .notice-ended .notice-title { color: var(--fg-dim); font-weight: 400; }
-.notice-row.is-open .notice-title { white-space: normal; overflow-wrap: anywhere; padding: 4px 0; }
-.notice-scope { grid-area: scope; color: var(--fg-mute); font-size: 12px; }
+.notice-scope {
+  grid-area: scope;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-mute);
+  font-size: 12px;
+}
 .notice-when {
   grid-area: when;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--fg-mute);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -144,8 +169,8 @@
 }
 .notice-row.is-open .notice-chevron { transform: translateY(2px) rotate(225deg); }
 
-/* The open notice lines up under the title. */
-.notice-detail { padding: 2px 16px 14px calc(16px + 104px + 12px); }
+/* The open notice sits under the row, inside the dock's width. */
+.notice-detail { padding: 2px 12px 14px; min-width: 0; }
 .notice-body, .notice-ended-text { margin: 0 0 10px; max-width: 72ch; overflow-wrap: anywhere; }
 .notice-body { white-space: pre-wrap; line-height: 1.5; }
 .notice-ended-text { color: var(--fg-dim); }
@@ -213,19 +238,6 @@
 
 @media (max-width: 760px) {
   .notice-banner { padding: 6px 12px; }
-  /* A phone row is two lines: the facts, then the whole title. */
-  .notice-row-main {
-    grid-template-columns: auto minmax(0, 1fr) auto auto 12px;
-    grid-template-areas:
-      "severity scope when close chevron"
-      "title title title title title";
-    column-gap: 8px;
-    row-gap: 2px;
-    padding: 8px 12px;
-  }
-  .notice-title { white-space: normal; overflow-wrap: anywhere; }
-  .notice-row.is-open .notice-title { padding: 0; }
   .notice-close-open { min-width: 44px; min-height: 36px; }
   .notice-group-heading, .notice-open-empty { padding-inline: 12px; }
-  .notice-detail { padding: 2px 12px 14px; }
 }

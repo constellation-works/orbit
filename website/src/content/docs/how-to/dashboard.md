@@ -106,13 +106,12 @@ Confirm the selected workspace before you act.
 
 | Rail | Shows |
 |---|---|
-| **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, **Locks held**, and a live **Log**. |
+| **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, and **[Notices](#notices)**. |
 | **Drain** | Only in windows 1000px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
 | **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
-| **[Notices](#notices)** | Open and recently closed fleet notices. |
 | **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, Hosts, and Other. |
@@ -128,12 +127,14 @@ that holds crews back.
 
 ## Notices
 
-**Notices** lists the open fleet notices in the selected workspaces, then
-those closed or expired in the last 24 hours. A banner shows open incident
-and maintenance notices. With an [operator session](#authorization) and one
-workspace selected, **Post** opens a form for a new notice and **Close** on a
-row asks for a reason. For the rules, see
-[Post and retire fleet notices](/how-to/fleet-notices/).
+**Notices** is a tab on the Tasks dock, after **Log**. It lists the open
+fleet notices in the selected workspaces, then those closed or expired in
+the last 24 hours. The tab shows how many are open when that number is above
+zero. `#notices` opens Tasks with this tab selected. A banner shows open
+incident and maintenance notices, and its link lands on the same tab. With
+an [operator session](#authorization) and one workspace selected, **Post**
+opens a form for a new notice and **Close** on a row asks for a reason. For
+the rules, see [Post and retire fleet notices](/how-to/fleet-notices/).
 
 ## Tasks
 
@@ -174,9 +175,9 @@ The detail's [**Artifacts**](/concepts/tasks/#task-artifacts) tab lists and
 previews files already stored on the task; it does not attach files.
 
 In the right dock, **Drain** holds the [auto-drain](#auto-drain) card,
-**Locks held** lists the files tasks currently lock, and **Log** is a live
-`orbit.log` tail you can filter to **all**, **err**, **deny**, or **warn**.
-Opening a task replaces the dock with its detail.
+**Log** is a live `orbit.log` tail you can filter to **all**, **err**,
+**deny**, or **warn**, and **Notices** lists open and recently closed fleet
+notices. Opening a task replaces the dock with its detail.
 
 With one workspace selected, Tasks updates live; other views refresh every
 30 seconds. A hidden tab stops refreshing, but new failed runs add a

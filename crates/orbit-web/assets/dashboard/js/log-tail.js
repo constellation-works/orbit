@@ -6,7 +6,7 @@
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain, Fleet or Log view.
+// and `setDockMode` for the router to select the Drain, Fleet, Log or Notices view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
@@ -51,7 +51,7 @@ let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "fleet", "log"];
+const DOCK_MODES = ["drain", "fleet", "log", "notices"];
 
 function loadLogPanelPrefs() {
   try {
@@ -208,6 +208,12 @@ export function setDockMode(mode) {
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
   applyDockMode();
+  // The post dialog lives outside the pane, so leaving Notices has to close
+  // it here: a dock switch rewrites the hash without a hashchange.
+  if (mode !== "notices") {
+    const dialog = $("notices-post-dialog");
+    if (dialog?.open) dialog.close();
+  }
 }
 
 export function revealDockStart() {
@@ -330,7 +336,7 @@ function wrappedRows(widths, gap, room) {
 }
 
 // How far below #side-dock's top the active tab's first shown card starts:
-// Auto-drain on Drain, Locks held on Locks held, the log on Log. The pane's
+// Auto-drain on Drain, the log on Log, the list on Notices. The pane's
 // scroll is added back so a scrolled Drain pane measures the same.
 function firstDockCardOffset(side) {
   const pane = [...side.querySelectorAll(":scope > .dock-pane")].find((node) => node.getClientRects().length);
