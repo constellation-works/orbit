@@ -545,10 +545,15 @@ it — see [friction.md](friction.md). Then:
   succeed.
 - **Claimed mode** (`input.claimed` is true, a distributed-drain leaf):
   another machine owns the task. Work from the injected envelope; you are not
-  granted `orbit.task.update`. `orbit.task.show` and `orbit.task.artifact` action `get`
-  read any task in the claimed workspace through the run's coordinator, except
+  granted `orbit.task.update`. Read tasks only through the brokered owner
+  route — `orbit tool run orbit.task.show` or the MCP `orbit.task.show` tool —
+  which reads any task in the claimed workspace through the run's coordinator,
+  as does brokered `orbit.task.artifact` action `get`, except
   that a `review-*` artifact of another task is refused on the remote route
-  (the review gate keeps its stricter scope). Return the summary as the output's
+  (the review gate keeps its stricter scope). The plain `orbit task show` CLI
+  has no owner route in a claimed sandbox (the sandbox masks `~/.ssh` and the
+  coordinator carries only the claimed-owner tools), so it fails with
+  `owner_route_unavailable`: do not use it there. Return the summary as the output's
   `execution_summary` (with `context_files_added` and `comment` for anything
   you would have written to the task); the pipeline's handoff carries it to
   the owner. When the task asks you to record a `regression_from` relation,
@@ -562,7 +567,8 @@ it — see [friction.md](friction.md). Then:
   `no-diff-expected`, may also give each finding a `regression_from` relation
   to a culprit in the claimed workspace while the claim is active, classified
   with its `regression` nature, escape and severity ([task-fields.md](task-fields.md#behavior-affecting-optional-fields);
-  severity per its [rubric](task-fields.md#severity-rubric)). `orbit.search` and `orbit.task.list` reach the
+  severity per its [rubric](task-fields.md#severity-rubric)). Brokered `orbit.search` and `orbit.task.list`
+  (via `orbit tool run` or MCP) reach the
   owner's authoritative records in the claimed workspace through the coordinator;
   use them for duplicate checks. Federated search scopes are refused.
   Return a finding the owner still refuses in `unfiled_findings` as
