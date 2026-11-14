@@ -54,17 +54,6 @@ impl OrbitError {
         }
     }
 
-    /// The structured JSON-RPC code this error carries, when it is a
-    /// preserved JSON-RPC refusal.
-    pub fn json_rpc_code(&self) -> Option<i64> {
-        match self {
-            Self::RemoteTool { payload, .. } => {
-                payload.get("rpc_code").and_then(serde_json::Value::as_i64)
-            }
-            _ => None,
-        }
-    }
-
     /// Whether this error is a preserved JSON-RPC refusal.
     pub fn is_json_rpc_refusal(&self) -> bool {
         matches!(self, Self::RemoteTool { payload, .. } if payload.get("rpc_message").is_some())
@@ -544,11 +533,6 @@ impl OrbitError {
             Self::ForceOverridable(refusal) => Some(refusal),
             _ => None,
         }
-    }
-
-    /// Whether `--force` would override this refusal.
-    pub fn is_force_overridable(&self) -> bool {
-        self.force_overridable().is_some()
     }
 
     /// The kind of an owner claim or handoff refusal, if this is one.
