@@ -832,7 +832,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // would land on the first and push again. So is a task page route the list
   // replaced (a malformed id).
   const taskLink = top === "tasks" && (query.has("open") || segments.length > 1);
-  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute || taskLink) && typeof window.history?.replaceState === "function";
+  const runLink = top === "run-detail" && query.has("run_id");
+  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute || taskLink || runLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
     window.history.replaceState(null, "", hash);
   } else if (hashChanged && shouldUpdateHash) {

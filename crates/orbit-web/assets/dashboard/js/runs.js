@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns)
 // that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, fmtDuration, formatAge, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindTaskLink } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, fmtDuration, formatAge, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindRunLink, bindTaskLink } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1332,34 +1332,28 @@ function runRow(r, attributed, body, { child = false } = {}) {
   const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
   if (r.retry_source_run_id) {
     const sourceId = r.retry_source_run_id;
-    const lineage = el("button", {
+    const lineage = el("a", {
       class: "run-lineage",
       text: `from ${sourceId}`,
       title: `Open source run ${sourceId}`,
     });
-    lineage.addEventListener("click", (e) => {
-      e.stopPropagation();
-      doNavigateToRun(sourceId, r.workspace_id);
-    });
+    bindRunLink(lineage, sourceId, { workspace: r.workspace_id || getWorkspace() });
     runIdCell.appendChild(lineage);
   }
   const resumedAsId = resumedRunIdsBySource.get(runIdentity(r));
   if (resumedAsId) {
-    const lineage = el("button", {
+    const lineage = el("a", {
       class: "run-lineage resumed-as",
       text: `resumed as ${resumedAsId}`,
       title: `Open resumed run ${resumedAsId}`,
     });
-    lineage.addEventListener("click", (e) => {
-      e.stopPropagation();
-      doNavigateToRun(resumedAsId, r.workspace_id);
-    });
+    bindRunLink(lineage, resumedAsId, { workspace: r.workspace_id || getWorkspace() });
     runIdCell.appendChild(lineage);
   }
   // The job cell is the row's button: the row also holds the copy-id,
   // lineage and run actions, so it cannot be a button itself. Its text is
   // clipped in a narrow column, so its tooltip is the full job name.
-  const openButton = el("button", { class: "id", text: r.job_id, title: r.job_id });
+  const openButton = bindRunLink(el("a", { class: "id", text: r.job_id, title: r.job_id }), r.run_id, { workspace: r.workspace_id || getWorkspace() });
   const rowCells = [
     el("span", { class: "state" }, [stateCell(r.state)]),
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
@@ -1383,7 +1377,10 @@ function runRow(r, attributed, body, { child = false } = {}) {
   row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
   // A run row opens the run detail view rather than disclosing inline, so its
   // button has no expansion state.
-  makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
+  makeRowDisclosure(row, openButton, { onToggle: (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    openButton.click();
+  } });
   return row;
 }
 
