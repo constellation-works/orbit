@@ -1025,6 +1025,23 @@ fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
         .is_some_and(|message| message.contains("kind=conflict"));
     assert!(has_kind, "the kind is on the outcome: {outcome:?}");
 }
+/// A blocker whose evidence quotes another unrepairable marker still stops the retry loop after one attempt, as a plain blocker does.
+fn a_blocker_quoting_another_unrepairable_marker_is_not_retried() {
+    for quoted in [
+        orbit_types::workflow::VALIDATION_ENVIRONMENT_MARKER,
+        orbit_types::workflow::BASELINE_RED_MARKER,
+    ] {
+        let host = ScriptedHost::new(json!({
+            "blocker": {
+                "kind": "environment",
+                "evidence": format!("the resumed candidate's output said: {quoted} cargo not found"),
+            },
+        }));
+        let outcome = run_retry_step(&host, "work", "quoting-blocker", Some("agent_implement"));
+        assert!(!outcome.success, "{quoted}: {outcome:?}");
+        host.expect_actions(&["implement"], quoted);
+    }
+}
 /// Malformed `unfiled_findings` fail at `implement_one` before delivery [ORB-14927]; well-formed or absent findings still deliver.
 fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
     let malformed = [
@@ -1687,7 +1704,7 @@ macro_rules! runtime_contracts {
 runtime_contracts!(runtime_contracts_1: a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args, parallel_join_policy_decides_the_block_from_its_branches, fan_out_collects_outputs_in_item_order_within_the_worker_cap);
 runtime_contracts!(runtime_contracts_2: fan_in_join_policy_decides_the_block_from_its_workers, loop_iterates_until_break_failure_or_budget, items_expression_rejects_non_array_json, when_false_step_skips_log_below_warn_and_other_skips_keep_warn);
 runtime_contracts!(runtime_contracts_3: incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint, the_shipped_review_step_retries_then_recovers_a_failing_reviewer, provider_unavailable_dispatch_errors_do_not_attempt_recovery, an_implementer_blocker_ends_implement_one_without_recovery);
-runtime_contracts!(runtime_contracts_4: an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending, an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers, a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is, malformed_unfiled_findings_fail_implement_one_before_delivery, malformed_claimed_artifacts_fail_implement_one_before_delivery, malformed_regression_from_fails_implement_one_before_delivery);
+runtime_contracts!(runtime_contracts_4: an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending, an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers, a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is, a_blocker_quoting_another_unrepairable_marker_is_not_retried, malformed_unfiled_findings_fail_implement_one_before_delivery, malformed_claimed_artifacts_fail_implement_one_before_delivery, malformed_regression_from_fails_implement_one_before_delivery);
 runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation, fan_in_retains_position_aligned_errors_through_successful_join_and_resume, a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume, leaf_completion_records_file_and_store_waits_without_leaking_between_steps);
 
 #[test]

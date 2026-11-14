@@ -151,10 +151,17 @@ pub(super) fn run_step_with_retry(
                 // Another try would spend another provider invocation on a
                 // stop the agent already declared. Nor is an upgrade refusal:
                 // the next attempt meets the same installed `orbit`.
-                if matches!(
-                    unrepairable_failure(outcome.failure_code.as_ref(), outcome.message.as_deref()),
-                    Some(UnrepairableFailure::BlockedByAgent | UnrepairableFailure::UpgradePending)
-                ) {
+                // Test the two classes directly: `unrepairable_failure` returns
+                // the first matching class, so a blocker whose evidence quotes
+                // another unrepairable marker would otherwise be missed here.
+                let error_code = outcome
+                    .failure_code
+                    .as_ref()
+                    .map(orbit_types::workflow::StepFailureCode::as_str);
+                let message = outcome.message.as_deref();
+                if orbit_types::workflow::is_task_blocked_by_agent(error_code, message)
+                    || orbit_types::workflow::is_upgrade_pending(error_code, message)
+                {
                     return recover_or_return_original(
                         step,
                         ctx,
