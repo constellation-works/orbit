@@ -7,7 +7,9 @@ use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::manifest::{infer_tool_name, load_external_tool_manifest, resolve_manifest_path};
+use orbit_core::application::plugin::load_sidecar_manifest;
+
+use super::manifest::{infer_tool_name, resolve_manifest_path};
 
 #[derive(Args)]
 pub struct ToolAddArgs {
@@ -29,7 +31,7 @@ impl Execute for ToolAddArgs {
         let manifest_path = resolve_manifest_path(Path::new(&self.path), self.manifest.as_deref());
         let manifest = manifest_path
             .as_deref()
-            .map(load_external_tool_manifest)
+            .map(load_sidecar_manifest)
             .transpose()?;
 
         let name = self

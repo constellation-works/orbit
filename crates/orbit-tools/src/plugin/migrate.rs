@@ -11,12 +11,12 @@ use orbit_types::plugin::{
     is_valid_namespace, is_valid_verb,
 };
 use orbit_types::tool::ToolParam;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::schema::input_schema_from_params;
 
 /// The v1 sidecar contract, exactly as `orbit tool add` reads it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SidecarManifest {
     #[serde(rename = "schemaVersion", default = "default_schema_version")]
@@ -60,6 +60,16 @@ pub fn load_sidecar_manifest(path: &Path) -> Result<SidecarManifest, OrbitError>
     if manifest.name.trim().is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "'{}' must define a non-empty name",
+            path.display()
+        )));
+    }
+    if manifest
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name.trim().is_empty())
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "'{}' contains a parameter with an empty name",
             path.display()
         )));
     }
