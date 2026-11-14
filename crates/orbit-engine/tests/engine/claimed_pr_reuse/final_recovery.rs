@@ -538,8 +538,6 @@ fn scenario(sandbox: &Path, mode: &'static str) {
         Arc::new(orbit_store::Store::open_in_memory().unwrap()),
         "ws-test",
         RUN_ID,
-        "test-agent",
-        None,
         sandbox,
     ));
     let audit = Arc::new(

@@ -2,7 +2,7 @@
 //!
 //! Depends on `orbit_types::workflow::activity_job::activity_job` for the type surface (activity/spec/audit
 //! shapes, tool-allowlist helpers). This module wires those types to the
-//! engine's executor infrastructure and to the loop-engine audit pipeline.
+//! engine's executor infrastructure, audit envelopes and payload blob sinks.
 
 pub mod asset_loader;
 pub mod audit_writer;

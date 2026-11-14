@@ -303,8 +303,6 @@ fn audited_writer(
         Arc::clone(&store) as Arc<dyn orbit_store::contracts::V2AuditStoreBackend>,
         "ws_scripts",
         run_id,
-        "test-agent",
-        None,
         audit_root.path(),
     ));
     let writer = Arc::new(

@@ -3,7 +3,7 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-11-10
+last_updated: 2026-11-14
 last_validated: 2026-11-03
 status: Draft
 feature: auditability
@@ -13,7 +13,7 @@ tags: ["auditability"]
 
 # Auditability — Design
 
-This document describes Orbit's shipped auditability implementation across command audit rows, activity/job envelopes, loop-level provider/tool traces, blob storage, redaction, identity attribution, metrics-adjacent invocation records, and known limitations. See [1_overview.md](./1_overview.md) for the feature purpose and [3_vision.md](./3_vision.md) for future questions.
+This document describes Orbit's shipped auditability implementation across command audit rows, activity/job envelopes, provider invocation traces, blob storage, redaction, identity attribution, metrics-adjacent invocation records, and known limitations. See [1_overview.md](./1_overview.md) for the feature purpose and [3_vision.md](./3_vision.md) for future questions.
 
 ---
 
@@ -22,11 +22,11 @@ This document describes Orbit's shipped auditability implementation across comma
 Auditability is split across four channels:
 
 1. **Command audit records.** SQLite rows in the configured audit database; queried through `orbit audit`.
-2. **V2 activity/job and loop events.** SQLite rows in `v2_audit_events`, with loop rows created only when a run emits loop events; redacted content-addressed blobs remain under `.orbit/state/audit/blobs/`.
+2. **V2 activity/job events.** SQLite rows in `v2_audit_events`; historical `source: loop_event` rows remain in the same table as opaque payloads. Redacted content-addressed blobs remain under `.orbit/state/audit/blobs/`.
 3. **Global tracing events.** Operational JSONL under `~/.orbit/state/logs/orbit.jsonl` and agent relay in `orbit-agent.jsonl` beside it, both redacted.
 4. **Invocation metrics.** SQLite records keyed by job run, activity, task, agent, model, usage, and tool-call summaries.
 
-The split is deliberate: command rows stay compact and queryable; envelopes preserve workflow structure; loop audit preserves provider/tool detail; tracing gives operators a live feed before workspace context exists; metrics answer cost and scoreboard questions without scraping transcripts. [T20260426-0519] moved file-backed run traces under `.orbit/state/audit/` while command audit rows remained in SQLite.
+The split is deliberate: command rows stay compact and queryable; envelopes preserve workflow structure and CLI invocation detail; tracing gives operators a live feed before workspace context exists; metrics answer cost and scoreboard questions without scraping transcripts. [T20260426-0519] moved file-backed run traces under `.orbit/state/audit/` while command audit rows remained in SQLite.
 
 ---
 
@@ -120,9 +120,9 @@ When the supervisor ends a descendant of the child that stayed stopped (state `T
 
 ## 5. Retained Provider and Tool Event Contracts
 
-`LoopAuditEvent` in `crates/orbit-agent/src/loop_engine/audit/mod.rs` retains the serialized contract for session spawn/close, HTTP request/response, tool-call request/result, iteration boundary, and policy denial. These variants remain readable for historical rows even though provider execution now uses CLI subprocesses. `V2SqliteSink` persists loop events lazily into `v2_audit_events` and writes payload blobs to `{audit_root}/blobs/`; runtime callers pass `.orbit/state/audit` as `audit_root`. [T20260506-2] removed the old zero-byte loop JSONL placeholders for runs that only emit v2 envelope events or CLI-backend blobs.
+The retired HTTP agent loop wrote session, HTTP, tool, iteration and policy payloads as `source: loop_event` rows in `v2_audit_events`. Those historical payloads remain stored as opaque JSON; current runtime code has no typed loop-event contract or writer. Generic audit-row handling and retention continue to apply without rewriting the payloads.
 
-Loop events reference hashes for request bodies, response bodies, tool inputs, and tool outputs instead of embedding the bodies inline. This keeps event rows queryable while preserving replay material in redacted blob storage.
+Historical loop rows reference hashes for request bodies, response bodies, tool inputs and tool outputs. Current provider execution uses CLI subprocesses and v2 envelope events. `AuditSink` in `crates/orbit-agent/src/loop_engine/audit/mod.rs` only writes redacted blobs; `V2SqliteSink` persists v2 envelopes and writes payload blobs to `{audit_root}/blobs/`, with `.orbit/state/audit` as the runtime audit root.
 
 ---
 

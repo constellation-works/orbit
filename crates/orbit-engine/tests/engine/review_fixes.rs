@@ -388,8 +388,6 @@ pub(super) fn run_shipped_job(
         store,
         "ws_review_fixes",
         RUN_ID,
-        "review-fixes-agent",
-        None,
         audit_root.path(),
     ));
     let writer = Arc::new(

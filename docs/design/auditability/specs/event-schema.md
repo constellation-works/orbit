@@ -2,7 +2,7 @@
 type: design
 summary: Spec: Audit Event Schema
 last_validated: 2026-11-03
-last_updated: 2026-11-03
+last_updated: 2026-11-14
 ---
 
 # Spec: Audit Event Schema
@@ -75,22 +75,21 @@ Failure modes:
 - If a worker thread emits events, it must install the parent stack snapshot before emission.
 - If an activity/job run fails before writer construction, no v2 audit event is expected.
 
-### Loop Audit Event
+### Historical Loop Audit Rows
 
-Loop audit events are sink events represented by `LoopAuditEvent`; the durable runtime sink persists them as v2 audit rows.
+The retired HTTP agent loop wrote `source: loop_event` rows to `v2_audit_events`.
+Their payloads remain opaque JSON and are neither rewritten nor emitted by current
+runtime code. Generic audit-row handling and retention still apply.
 
-Required invariants:
+### Audit Blobs
 
-- Every event includes `run_id`.
-- Session-scoped events include `session_id`.
-- HTTP request/response bodies and tool input/output payloads are stored as blob hashes, not inline bodies.
-- Policy denials record the denied tool and reason.
-- Blob bytes are redacted before hashing and writing.
+`AuditSink::write_blob` stores payload bytes separately from envelope events.
+Blob bytes are redacted before hashing and writing.
 
 Failure modes:
 
-- If a blob write fails, the sink may return an `error:<message>` reference; readers must treat that as a failed payload capture.
-- If no durable sink is installed, `NullSink` intentionally drops events and blobs. Production activity/job callers should not use it.
+- If a blob write fails, the sink returns an `error:<message>` sentinel. `V2AuditWriter` counts and logs the audit failure and returns no blob reference, so the sentinel never reaches an envelope as a reference.
+- `NullSink` intentionally drops blobs and returns an empty reference. Production activity/job callers should use a durable sink.
 
 ### Invocation Trace
 

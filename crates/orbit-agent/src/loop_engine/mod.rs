@@ -1,8 +1,5 @@
-//! Audit contracts retained for runtime persistence and historical events.
+//! Audit blob sinks for runtime persistence.
 
 pub mod audit;
 
-pub use audit::{
-    AuditSink, BlobStore, InMemorySink, LoopAuditEvent, NullSink, RedactionMiddleware,
-    UsageSnapshot,
-};
+pub use audit::{AuditSink, BlobStore, InMemorySink, NullSink};

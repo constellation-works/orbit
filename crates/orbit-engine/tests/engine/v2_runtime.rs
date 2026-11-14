@@ -108,8 +108,6 @@ pub(crate) fn build_writer_and_sinks(
         Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink")),
         "ws_smoke",
         run_id,
-        "smoke-agent",
-        None,
         audit_root,
     ));
     let writer = Arc::new(
