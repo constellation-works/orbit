@@ -44,7 +44,7 @@ const TASK_CREATE_STATUS_VALUES: &[EnumValue] = &[
 ];
 
 /// The statuses `orbit task update --status` offers.
-const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
+pub(crate) const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
     EnumValue::plain("proposed"),
     EnumValue::plain("backlog"),
     EnumValue::plain("someday"),

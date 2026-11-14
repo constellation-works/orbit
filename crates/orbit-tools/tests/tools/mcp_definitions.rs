@@ -146,7 +146,7 @@ fn task_write_schemas_advertise_priority_and_complexity_values() {
             .iter()
             .find(|definition| definition.schema.name == tool_name)
             .unwrap_or_else(|| panic!("{tool_name} is advertised"));
-        let schema = orbit_common::protocol::tool_schema::tool_input_schema(&definition.schema);
+        let schema = orbit_common::governance::tool_schema::tool_input_schema(&definition.schema);
         for (field, values) in [
             ("priority", &["low", "medium", "high", "critical"][..]),
             ("complexity", &["low", "medium", "hard", "xhard"][..]),
@@ -166,7 +166,7 @@ fn task_write_schemas_advertise_priority_and_complexity_values() {
         .iter()
         .find(|definition| definition.schema.name == "orbit.task.show")
         .expect("orbit.task.show is advertised");
-    let schema = orbit_common::protocol::tool_schema::tool_input_schema(&show.schema);
+    let schema = orbit_common::governance::tool_schema::tool_input_schema(&show.schema);
     assert!(
         schema["properties"]["view"]["description"]
             .as_str()

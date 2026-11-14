@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use orbit_common::governance::friction::{DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS};
-use orbit_common::protocol::tool_schema::tool_input_schema_for;
+use orbit_common::governance::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
     McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope,
     TOOL_ACTION_FIELD, ToolParam, ToolSchema, tool_family,

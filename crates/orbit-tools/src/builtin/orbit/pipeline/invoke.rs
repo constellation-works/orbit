@@ -54,7 +54,7 @@ impl Tool for OrbitPipelineInvokeTool {
     }
 
     fn input_schema(&self) -> Option<Value> {
-        let mut schema = Value::Object(orbit_common::protocol::tool_schema::tool_input_schema(
+        let mut schema = Value::Object(orbit_common::governance::tool_schema::tool_input_schema(
             &self.schema(),
         ));
         schema["allOf"] = json!([{"if":{"required":["default_input"],"properties":{"default_input":{"const":true}}},"then":{"required":["workspace"],"propertyNames":{"enum":["workspace","job_name","default_input"]}},"else":{"required":["input"]}}]);

@@ -20,7 +20,7 @@ use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{
     Effect, NounSpec, OperationInput, OperationSpec, OperationVerb, ToolOnlyRegistration,
 };
-use orbit_common::protocol::tool_schema::tool_input_schema;
+use orbit_common::governance::tool_schema::tool_input_schema;
 use orbit_types::tool::{McpIdRouteDeclaration, ToolParam, ToolSchema};
 use serde_json::Value;
 

@@ -36,13 +36,13 @@ pub const AGENTS: NounSpec<AgentsVerb> = NounSpec {
     operations: AGENTS_OPERATIONS,
 };
 
-const ROLES: &[EnumValue] = &[
+pub(crate) const ROLES: &[EnumValue] = &[
     EnumValue::plain("implementers"),
     EnumValue::plain("reviewers"),
     EnumValue::plain("pilots"),
 ];
 
-const WINDOWS: &[EnumValue] = &[
+pub(crate) const WINDOWS: &[EnumValue] = &[
     EnumValue::plain("1h"),
     EnumValue::plain("24h"),
     EnumValue::plain("7d"),
@@ -63,7 +63,7 @@ const ROLE: &[ParamSpec] = &[required(both(
     "The agent role to score",
 ))];
 
-const EXECUTIONS: &[EnumValue] = &[
+pub(crate) const EXECUTIONS: &[EnumValue] = &[
     EnumValue::plain("managed"),
     EnumValue::plain("all"),
     EnumValue::plain("interactive"),
@@ -207,7 +207,7 @@ const SHOW: OperationSpec<AgentsVerb> = OperationSpec {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
-const CI_FAILURE_CLASSES: &[EnumValue] = &[
+pub(crate) const CI_FAILURE_CLASSES: &[EnumValue] = &[
     EnumValue::plain("code"),
     EnumValue::plain("flaky"),
     EnumValue::plain("infrastructure"),
