@@ -338,10 +338,6 @@ impl ToolRegistry {
             && name != "orbit.task.pull"
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
-            // Guarded writes own their input contract (ORB-24434): a field
-            // outside the guarded set must name the selector that chose the
-            // mode, so the handler's refusal runs instead of this generic one.
-            && !is_guarded_task_write(name, &input)
         {
             let aliases = declared_aliases(name);
             let retired_fields = declared_retired_fields(name);
@@ -351,6 +347,7 @@ impl ToolRegistry {
                 cli_fields(name, ctx),
                 &aliases,
                 &retired_fields,
+                is_guarded_task_write(name, &input),
             )?;
         }
         // A family action's required fields are checked after the
@@ -635,6 +632,7 @@ fn validate_task_arguments(
     cli_fields: &[&str],
     aliases: &[(&str, &str)],
     retired_fields: &[&str],
+    guarded: bool,
 ) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::{
         TOOL_INPUT_IDENTITY_KEYS, reject_unknown_tool_fields,
@@ -655,7 +653,11 @@ fn validate_task_arguments(
         .chain(retired_fields.iter().copied())
         .chain(TOOL_INPUT_IDENTITY_KEYS.iter().copied())
         .collect::<Vec<_>>();
-    reject_unknown_tool_fields(input, &allowed)?;
+    // The guarded handler names the selector and accepted fields in its
+    // refusal; known parameter shapes must still be checked here.
+    if !guarded {
+        reject_unknown_tool_fields(input, &allowed)?;
+    }
     for parameter in &schema.parameters {
         // A call that sets both spellings is refused by the handler; check
         // the canonical one here.

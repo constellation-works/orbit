@@ -1546,6 +1546,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "test",
                     "-p",
                     "orbit-core",
+                    "-p",
+                    "orbit-cli",
                     "--test",
                     "ci_failure_goldens",
                     "ci_failure_fixture_goldens",
@@ -1556,6 +1558,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "test",
                     "-p",
                     "orbit-tools",
+                    "-p",
+                    "orbit-cli",
                     "--test",
                     "tools",
                     "--",
@@ -1573,9 +1577,18 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "--",
                     "--exact",
                 ],
-                ["test", "-p", "orbit-exec", "--test", "sandbox_profile_goldens"],
-                ["test", "-p", "orbit-core", "--test", "sandbox_profile_goldens"],
-                ["test", "-p", "orbit-store", "--lib",
+                [
+                    "test",
+                    "-p",
+                    "orbit-exec",
+                    "-p",
+                    "orbit-core",
+                    "-p",
+                    "orbit-cli",
+                    "--test",
+                    "sandbox_profile_goldens",
+                ],
+                ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
                  "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
                  "--", "--exact",
                  "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens"],
@@ -1602,7 +1615,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(calls), 6)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")

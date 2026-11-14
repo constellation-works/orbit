@@ -15,9 +15,9 @@ use orbit_store::contracts::{
 use serde_json::{Value, json};
 
 use super::definition::{
-    ArmDefinition, EXPERIMENT_METRICS, ExperimentOverlay, experiment_metric_is_review_derived,
-    experiment_metric_is_step_local, parse_arms, parse_guardrails, parse_population,
-    require_lines_changed_guardrail, validate_handle, validate_metric,
+    ArmDefinition, ExperimentOverlay, experiment_metric_is_review_derived,
+    experiment_metric_is_step_local, experiment_metric_names, parse_arms, parse_guardrails,
+    parse_population, require_lines_changed_guardrail, validate_handle, validate_metric,
 };
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
@@ -610,9 +610,7 @@ fn position_u32(position: usize) -> u32 {
 /// alternatives. Definition writes and the start precondition share it so a
 /// legacy draft points at the same fix.
 fn step_local_primary_detail(metric: &str) -> String {
-    let alternatives = EXPERIMENT_METRICS
-        .iter()
-        .copied()
+    let alternatives = experiment_metric_names()
         .filter(|name| !experiment_metric_is_step_local(name))
         .collect::<Vec<_>>()
         .join(", ");
