@@ -20,10 +20,11 @@ use orbit_types::task::{
 
 use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::driver::file::task_bundle::{
-    PENDING_WRITE_FILE_NAME, append_jsonl_rows, cleanup_partial_bundle_best_effort,
-    is_unpublished_stub, publish_envelope, read_artifact_manifest_at, read_bundle_at,
-    read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
-    read_search_docs_at, recover_pending_write, write_bundle_at,
+    ManifestBlobReadFailure, PENDING_WRITE_FILE_NAME, append_jsonl_rows,
+    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
+    read_artifact_manifest_at, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
+    read_envelope_at, read_events_at, read_search_docs_at, read_verified_manifest_blob,
+    recover_pending_write, write_bundle_at,
 };
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
@@ -400,30 +401,26 @@ impl TaskBundleStoreV2 {
                 refuse_interrupted_commit(&bundle_dir)?;
                 let artifact_dir = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
                 let blob_path = artifact_dir.join(&file.blob);
-                let bytes = crate::fs::path_safety::read_contained_artifact_blob(
-                    &artifact_dir,
-                    &file.blob,
-                )?
-                .ok_or_else(|| {
-                    OrbitError::not_found(
-                        orbit_common::NotFoundKind::Artifact,
-                        format!("{task_id}/{}", file.path),
-                    )
-                })?;
-                if bytes.len() as u64 != file.size_bytes {
-                    return Err(OrbitError::Store(format!(
+                let corrupt = |reason: String| OrbitError::TaskBundleCorrupt {
+                    task_id: task_id.to_string(),
+                    path: bundle_dir.to_string_lossy().into_owned(),
+                    reason: OrbitError::Store(reason).to_string(),
+                };
+                read_verified_manifest_blob(&artifact_dir, file).map_err(|failure| match failure {
+                    ManifestBlobReadFailure::Missing => corrupt(format!(
+                        "artifact manifest references missing file {}",
+                        blob_path.display()
+                    )),
+                    ManifestBlobReadFailure::SizeMismatch => corrupt(format!(
                         "artifact manifest size mismatch for {}",
                         blob_path.display()
-                    )));
-                }
-                let actual = orbit_common::security::release::sha256_hex(&bytes);
-                if actual != file.sha256 {
-                    return Err(OrbitError::Store(format!(
+                    )),
+                    ManifestBlobReadFailure::DigestMismatch => corrupt(format!(
                         "artifact manifest sha256 mismatch for {}",
                         blob_path.display()
-                    )));
-                }
-                Ok(bytes)
+                    )),
+                    ManifestBlobReadFailure::Error(error) => error,
+                })
             })
         })
     }

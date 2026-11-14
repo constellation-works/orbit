@@ -48,13 +48,6 @@ pub trait TaskHistoryStoreBackend: Send + Sync {
 }
 
 pub trait TaskArtifactStoreBackend: Send + Sync {
-    /// Read one immutable payload named by an already-loaded manifest.
-    fn task_artifact_from_manifest(
-        &self,
-        id: &str,
-        file: &ArtifactManifestFileV2,
-    ) -> Result<Option<TaskArtifact>, OrbitError>;
-
     /// Artifact manifest for a task, if any.
     fn get_task_artifact_manifest(
         &self,
