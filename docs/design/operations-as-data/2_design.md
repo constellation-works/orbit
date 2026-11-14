@@ -21,8 +21,8 @@ This doc describes the friction implementation and the revisions accepted on
 is **Implemented** (true of the code today, on the migrated nouns) or
 **Planned** (accepted but not yet built). Kernel v2's structure, its richer
 parameter kinds and its input validation are implemented, the validation in
-warn mode for unknown fields except on the task writes, the operator review,
-requeue and retry tools and `orbit.workflow` action `auto`, which refuse them. Both follow the rules in
+warn mode for unknown fields except on every task operation and
+`orbit.workflow` action `auto`, which refuse them. Both follow the rules in
 [4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
 Planned to Implemented. The order in which nouns migrate is in §9;
 forward-looking questions are in
@@ -308,14 +308,13 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 ## 4. Input validation at the tool entry
 
 **Implemented (warn mode)** on friction, auto-task, drain, workspace claim,
-search, task artifacts and locks, the task read verbs, and the workflow-run
-tools other than `orbit.workflow` action `auto`: unknown fields are reported, not yet
-refused. The task writes, the operator review, triage, requeue and retry tools
-(`reconcile_review`, `review_reset`, `requeue`, `block_triage`, `retry_handoff`) and
-`orbit.workflow` action `auto` declare `unknown_fields: Refuse`; the inactive `reject`
-and `delete` warn. The task writes refuse because `orbit.task.add` and
-`orbit.task.update` refused unknown fields before they migrated; the refusal
-names the field and suggests a declared one.
+search and the workflow-run tools other than `orbit.workflow` action `auto`:
+unknown fields are reported, not yet refused. Every task operation, including
+inactive operations, and `orbit.workflow` action `auto` declare
+`unknown_fields: Refuse`. Task specs preserve the refusal previously enforced
+by a second validator in the generic tool registry; the refusal names the
+field and suggests a declared one. The registry carries no task-specific
+input validation.
 
 `OperationSpec::parse_input(&self, input: Value) -> Result<OperationInput,
 OrbitError>` in `orbit-common` checks a call against its spec, reusing the
@@ -341,12 +340,18 @@ whitespace-only required value or validating a status name, stay in the handler
 where the domain rules live; that preserves the trimming behaviour the friction
 migration was careful to keep.
 
-The generic operation tool (§6) calls `parse_input` before dispatch. After
+The generic operation tool (§6) applies the same parser in two phases before
+dispatch: `parse_input_fields` canonicalizes and checks shapes, then
+`require_input_fields` checks presence. The registry supplies the generic
+`Tool::execute_with_input_check` hook with its family required-field diagnostic
+between those phases. Unknown fields, with their structured suggestions, are
+therefore refused before missing family fields, without a second shape check.
+Other tool implementations use the hook's default check before execution. After
 host preparation and any guarded-mode preemption, the noun's `normalize_input`
 hook preserves accepted legacy shapes before strict spec parsing: task writes
 normalize selected boolean spellings and a single relation object, and search
 normalizes string booleans for `all` and its workspace aliases. The default hook
-changes nothing. Every surface reaches a tool through `Tool::execute`: MCP,
+changes nothing. Every surface reaches the tool registry: MCP,
 `orbit tool run`, the CLI's `run_tool`, the dashboard, and the deterministic
 dispatcher. So one call site
 gives every surface the same validation. Handlers read canonical names from
@@ -442,7 +447,7 @@ adapter. `OperationTool<V>(&'static OperationSpec<V>)` is the one `Tool` impl
 every registry operation is served by, for any `V: OperationVerb` with
 `From<V> for OrbitBuiltinAction`. Its schema projects the spec's MCP parameters
 into a `ToolSchema` in declaration order; its `execution_kind` comes from
-`effect` (§5); `execute` checks the input with `parse_input` (§4), reports any
+`effect` (§5); execution checks the input with the spec parser (§4), reports any
 unknown fields, and dispatches the verb's action with the canonical input. `register_noun(registry, &NOUN)` registers
 each operation of a noun at its `mcp_scope`, or keeps it off MCP when the value
 is `None`, using the noun's `tool_only_registration` to preserve active versus
@@ -476,7 +481,13 @@ whose input the spec's flat parameter list does not describe: guarded
 creation and guarded update (`add` and `update` carrying `request_id`,
 `expected_revision`, `verdict` or `complete`) keep their own field rules, and `update` refuses a managed
 implementation activity setting `blocked`, and an explicit `crew: null`,
-with their shipped messages.
+with their shipped messages. MCP sessions are also refused the hidden
+`cli_options` field here; the operator CLI retains it. Guarded writes use the
+spec's field-shape parser on their accepted fields, require string-list arrays
+without normalization, and retain their own envelope and unknown-field remedies.
+The authenticated preloaded artifact payload also keeps its own input contract
+before ordinary parsing; ordinary artifact calls use the spec and family
+required-field remedies.
 
 **Schema extensions** are the same table's `schema_extension(verb)`, an
 exhaustive match applied after the derived schema. Only `orbit.task.add` and
@@ -812,11 +823,10 @@ reserve have no target, and release names its reservation. Lock listing keeps
 write effect because it expires reservations and records expiry. The eight
 group/leaf help goldens were captured before the migration.
 MCP descriptions, parameters and placement and the authorization golden remain
-unchanged. Nested public inputs start in warn mode; authenticated private
-artifact payloads retain their strict allowlist. Incomplete attachments retain
-source-file remedies and field suggestions. The existing `tool run`/MCP schema
-admission still refuses fields absent from the advertised schema before the
-generic tool entry; warn mode does not weaken that earlier check.
+unchanged. Nested public inputs refuse unknown fields in the spec;
+authenticated private artifact payloads retain their strict allowlist.
+Incomplete attachments retain source-file remedies and field suggestions.
+The public task schemas still set `additionalProperties: false`.
 
 Artifact put now follows the tool's workspace containment, byte limit and
 attachment validation even from the local CLI, and its JSON write response
@@ -851,8 +861,8 @@ The surface table in
 [task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs)
 refuses a managed run before any field check with each review tool's shipped
 refusal, and keeps delete's `"true"`/`"false"` string spelling of `force`. The
-two review tools refuse unknown fields, as they did before; reject and delete
-start in warn mode. The behaviour baseline's two differences are in
+two review tools, reject and delete refuse unknown fields in the spec,
+preserving their existing dispatch behavior. The behaviour baseline's two differences are in
 [Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 
 The task subcommands with no tool were judged one by one. None migrates: each

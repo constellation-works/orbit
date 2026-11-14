@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use orbit_common::governance::task::TaskVerb;
 
-use crate::artifact_materialize::source_presence_error;
 use crate::{OrbitBuiltinAction, ToolContext};
 
 /// Authenticate the private path-free payload before ordinary spec parsing.
@@ -12,9 +11,7 @@ pub(super) fn preempt(ctx: &ToolContext, input: &Value) -> Option<Result<Value, 
     if let Err(error) = super::super::reject_agent_field(input, "orbit.task.artifact.put") {
         return Some(Err(error));
     }
-    if input.get("artifacts").is_none() {
-        return source_presence_error(input).map(Err);
-    }
+    input.get("artifacts")?;
     Some((|| {
         if (ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
             && ctx.session_context.worker_invocation.is_none())

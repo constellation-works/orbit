@@ -457,7 +457,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
     };
 
     // [ORB-24499] A mistyped known field on a guarded write gets the same
-    // field-and-type refusal as an ordinary write, before the desktop host.
+    // field-and-shape refusal as an ordinary write, before the desktop host.
     for (input, field, ty) in [
         (
             {
@@ -466,7 +466,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
                 input
             },
             "title",
-            "string",
+            "a string",
         ),
         (
             {
@@ -475,7 +475,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
                 input
             },
             "priority",
-            "string",
+            "a string",
         ),
         (
             {
@@ -484,12 +484,12 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
                 input
             },
             "acceptance_criteria",
-            "string_list",
+            "an array of strings",
         ),
     ] {
         let error = refuse("orbit.task.add", input);
         let message = error["error"].as_str().unwrap();
-        let expected = format!("`{field}` must have type {ty}");
+        let expected = format!("`{field}` must be {ty}");
         assert!(
             message.contains(&expected),
             "ORB-24499 guarded create mistyped {field}: expected {expected}: {message}"
@@ -513,7 +513,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
     );
     let message = error["error"].as_str().unwrap();
     assert!(
-        message.contains("`verdict` must have type object"),
+        message.contains("`verdict` must be an object"),
         "ORB-24499 guarded update mistyped verdict: {message}"
     );
     assert!(
@@ -522,7 +522,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
     );
 
     // [ORB-24499 F1] A mistyped field outside the mode's accepted set keeps the
-    // ORB-24434 selector refusal, not the registry type refusal.
+    // ORB-24434 selector refusal before checking fields outside the mode.
     let mut out_of_set = base_guarded_create();
     out_of_set["complexity"] = json!(7);
     let error = refuse("orbit.task.add", out_of_set);
@@ -550,7 +550,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
     let error = refuse("orbit.task.add", single_string);
     let message = error["error"].as_str().unwrap();
     assert!(
-        message.contains("`acceptance_criteria` must have type string_list"),
+        message.contains("`acceptance_criteria` must be an array of strings"),
         "ORB-24499 F2 single-string criteria must be refused strictly: {message}"
     );
     assert!(
@@ -568,7 +568,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
     );
     let message = error["error"].as_str().unwrap();
     assert!(
-        message.contains("`complete` must have type boolean"),
+        message.contains("`complete` must be a boolean"),
         "ORB-24499 F2 string complete must be refused strictly: {message}"
     );
     assert!(
@@ -586,7 +586,7 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
     );
     let message = error["error"].as_str().unwrap();
     assert!(
-        message.contains("`verdict` must have type object"),
+        message.contains("`verdict` must be an object"),
         "ORB-24499 F2 list verdict must be refused strictly: {message}"
     );
     assert!(

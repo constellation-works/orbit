@@ -40,6 +40,19 @@ pub trait Tool: Send + Sync {
     fn execution_kind(&self) -> ToolExecutionKind {
         ToolExecutionKind::Mutating
     }
+    /// Execute with an additional surface check before dispatch. Tools that
+    /// own input parsing run the check after field shapes are validated and
+    /// before requiring fields; other tools check the original input.
+    fn execute_with_input_check(
+        &self,
+        ctx: &ToolContext,
+        input: Value,
+        check: &dyn Fn(&Value) -> Result<(), OrbitError>,
+    ) -> Result<Value, OrbitError> {
+        check(&input)?;
+        self.execute(ctx, input)
+    }
+
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError>;
 }
 
