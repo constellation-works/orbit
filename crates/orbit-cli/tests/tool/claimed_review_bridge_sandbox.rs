@@ -793,17 +793,21 @@ fn sandbox_fixture() {
     let follower_machine = follower.machine_id();
 
     // The claim, over the same SSH route a follower drain uses.
-    let route = || {
-        FederatedMcpHost::new(
-            vec![Destination::ssh("isolated-owner", &owner_machine)],
-            Arc::new(SshDestinationProbe::new(
-                follower_machine.clone(),
-                Duration::from_secs(60),
-                Duration::from_secs(60),
-                None,
-                orbit_mcp::McpSessionAuthority::Agent,
-            )),
-        )
+    let route = {
+        let owner_machine = owner_machine.clone();
+        let follower_machine = follower_machine.clone();
+        move || {
+            FederatedMcpHost::new(
+                vec![Destination::ssh("isolated-owner", &owner_machine)],
+                Arc::new(SshDestinationProbe::new(
+                    follower_machine.clone(),
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    None,
+                    orbit_mcp::McpSessionAuthority::Agent,
+                )),
+            )
+        }
     };
     let drain = |name: &str, mut input: Value| {
         input["workspace"] = json!(selector);
@@ -839,11 +843,14 @@ fn sandbox_fixture() {
     .expect("worker binding");
 
     // The leaf's step runner: the follower runtime bound to the claim, with
-    // the owner route its composition installs.
+    // the owner route its composition installs. Production builds that route
+    // for each call (`FederatedWorkerRoute`), so no routed session stays
+    // parked between calls; one long-lived route here would keep the owner
+    // runtime alive for the pool's idle window after every brokered call.
     let runner = follower
         .runtime()
         .with_automation_machine_identity(Some(follower_machine.clone()))
-        .with_worker_invocation(binding, Arc::new(route()))
+        .with_worker_invocation(binding, Arc::new(PerCallOwnerRoute(route.clone())))
         .expect("bind the leaf");
     let workspace = runner.workspace_id().expect("follower workspace");
 
@@ -1553,6 +1560,26 @@ fn elapse_reservation(owner: &OrbitRuntime, claim_id: &str, base: &Path) -> Valu
     assert_eq!(elapsed["reservation"]["expires_at"], expired.as_str());
     assert_eq!(elapsed["reservation"]["expired"], true, "{elapsed}");
     elapsed
+}
+
+/// The leaf's owner route, built for each brokered call as the claimed
+/// worker's production route is. Dropping the route when the call returns
+/// closes its SSH session, so the owner runtime exits before the fixture
+/// opens the owner store.
+struct PerCallOwnerRoute<F>(F);
+
+impl<F> orbit_tools::OwnerCoordinator for PerCallOwnerRoute<F>
+where
+    F: Fn() -> FederatedMcpHost + Send + Sync,
+{
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, orbit_common::OrbitError> {
+        orbit_tools::OwnerCoordinator::call(&(self.0)(), name, input, session)
+    }
 }
 
 /// A refused MCP call: an error answer that names `cause`.
