@@ -163,7 +163,3 @@ pub fn spawn_with_inherited_fds(
         .spawn()
         .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
 }
-
-#[cfg(all(test, unix))]
-#[path = "tests/process.rs"]
-mod tests;

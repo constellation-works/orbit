@@ -63,6 +63,8 @@ mod result;
 mod runner;
 mod sandbox;
 mod supervision;
+#[cfg(test)]
+mod tests;
 mod validation_env;
 
 pub use build_sandbox::{
