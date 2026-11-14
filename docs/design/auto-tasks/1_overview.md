@@ -64,8 +64,8 @@ becomes just the first definition.
 - **Listing state** — whether a definition fires on this host is decided once,
   in `OrbitRuntime::auto_task_listing_state`, and `orbit auto-task list`, MCP
   `orbit.auto_task` action `list` (plain and bounded) and `GET /api/auto-tasks` render
-  that decision. It carries the effective enabled state (the toggle, or for
-  one release the deprecated `after-landing` policy), the skip reason when it
+  that decision. It carries the effective enabled state (the definition's own
+  `enabled` flag), the skip reason when it
   never fires here — its seeding plugin is off, or it is an enabled delivery
   definition another machine owns — and the schedule state with the next due
   slot. The CLI labels the row `inactive`, `skipped`, `enabled` or `disabled`
@@ -341,10 +341,10 @@ re-init does not overwrite a workspace-authored definition of the same name.
   deliveries. For behavior changes, its instructions locate documentation,
   website, and shipped-skill directories from tracked files and search them for
   stale claims. Its `enabled` flag is the after-landing review switch
-  [ORB-13992]; the deprecated `operation.review_policy = after-landing`
-  enables a copy no operator has configured, which `list` and `show` report
-  as `effective_enabled`. The dashboard groups and toggles by that effective
-  value and keeps the raw flag as the compare-and-set token. The former
+  [ORB-13992]; the deprecated `operation.review_policy = after-landing` no
+  longer enables it. `list` and `show` still report `effective_enabled`, which
+  now equals `enabled`. The dashboard groups and toggles by that value and keeps
+  the raw flag as the compare-and-set token. The former
   `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
@@ -563,8 +563,7 @@ is the `ws_orbit` `auto-task-yield.json` of ORB-20991 (30 days to
 2026-11-01): 2 runs, no no-op runs, 4 filed tasks that all landed, and no
 duplicate or invalid rejections.
 
-Existing workspaces follow the "no operator has configured it" rule that
-`operation.review_policy = "after-landing"` uses for `delivery-code-review`:
+Existing workspaces follow the "no operator has configured it" rule:
 
 - `orbit init`, which only creates absent defaults in registered workspaces,
   leaves an existing `host-health.yaml` alone.
