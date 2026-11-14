@@ -295,6 +295,31 @@ impl OrbitRuntime {
             .collect())
     }
 
+    /// [`Self::observe_task_metadata`] narrowed by the store to
+    /// non-terminal statuses: one observational freshness pass that reads
+    /// only the open envelopes, in the same newest-first order, instead of
+    /// reading every envelope and filtering terminal tasks in Rust.
+    pub fn observe_open_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        let open = TaskListFilter {
+            statuses: Some(
+                TaskStatus::ALL
+                    .into_iter()
+                    .filter(|status| !status.is_terminal())
+                    .collect(),
+            ),
+            ..TaskListFilter::default()
+        };
+        Ok(self
+            .observe_task_candidates(&open, usize::MAX)?
+            .items
+            .into_iter()
+            .map(metadata_task)
+            .collect())
+    }
+
     /// [`Self::task_candidates`] answered by the generated index alone, for a
     /// filter it fully covers: the selected ids and creation times, with no
     /// envelope read. `None` sends the caller to [`Self::task_candidates`].

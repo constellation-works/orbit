@@ -7,8 +7,8 @@ use crate::{
     },
 };
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::{
     task::{
         DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
@@ -22,6 +22,7 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 use std::{
+    cell::OnceCell,
     collections::BTreeMap,
     time::{Duration, Instant},
 };
@@ -30,6 +31,29 @@ pub(super) struct AttentionCandidates {
     pub items: Vec<AttentionItem>,
     pub degraded: Vec<AttentionDegraded>,
     pub timings: BTreeMap<String, u128>,
+}
+
+/// The one open-task metadata listing shared by every attention source in
+/// a single `attention_query` for one workspace. Loaded lazily on first
+/// use, so a query that selects no task-backed source pays no listing, and
+/// every later source reuses the first source's result (or its error,
+/// rendered by each source in its own degraded shape).
+#[derive(Default)]
+pub(super) struct SharedOpenTasks {
+    cell: OnceCell<Result<Vec<Task>, String>>,
+}
+
+impl SharedOpenTasks {
+    pub(super) fn get(&self, runtime: &OrbitRuntime) -> Result<&[Task], OrbitError> {
+        match self.cell.get_or_init(|| {
+            runtime
+                .observe_open_task_metadata()
+                .map_err(|e| e.to_string())
+        }) {
+            Ok(tasks) => Ok(tasks),
+            Err(message) => Err(OrbitError::Store(message.clone())),
+        }
+    }
 }
 pub(super) struct Subject<'a> {
     pub(super) runtime: &'a OrbitRuntime,
@@ -583,6 +607,7 @@ pub(super) fn read_attention_sources(
     host: &AttentionHost,
     filter: &AttentionFilter,
     now: DateTime<Utc>,
+    open_tasks: &SharedOpenTasks,
 ) -> Result<AttentionCandidates, OrbitError> {
     use AttentionKind as K;
     let mut result = AttentionCandidates {
@@ -675,7 +700,8 @@ pub(super) fn read_attention_sources(
     if filter.selected(K::ResidentStalled) {
         let started = Instant::now();
         let read = if runtime.coordination_task_reads_visible() {
-            resident_stalled_items(runtime, workspace, host, now).map_err(|error| error.to_string())
+            resident_stalled_items(runtime, workspace, host, now, open_tasks)
+                .map_err(|error| error.to_string())
         } else {
             Err("Task records on a replica are not authoritative; read the workspace owner".into())
         };
@@ -750,13 +776,13 @@ pub(super) fn read_attention_sources(
         return Ok(result);
     }
     let started = Instant::now();
-    let tasks = runtime.observe_task_metadata()?;
+    let tasks: &[Task] = open_tasks.get(runtime)?;
     result
         .timings
         .insert("task_index".into(), started.elapsed().as_micros());
     let wants_decisions = filter.selected(K::DecisionOpen);
     let mut elapsed = BTreeMap::<String, Duration>::new();
-    for metadata in &tasks {
+    for metadata in tasks {
         if metadata.status.is_terminal() {
             continue;
         }
@@ -779,20 +805,28 @@ pub(super) fn read_attention_sources(
         let hydrated = (|| {
             // Revision-bound decisions hash description and acceptance criteria;
             // bodyless index metadata cannot establish an effective request.
-            let task = if needs_decisions {
-                runtime.get_task(&metadata.id)?
-            } else {
-                metadata.clone()
-            };
-            let comments = runtime.get_task_pilot_comments(&metadata.id)?;
+            // One listed (settled, lightweight) bundle read per candidate task
+            // supplies the full task, its comments and its history together,
+            // replacing the former canonical `get_task` + pilot-comments +
+            // history reads. A missing settled row degrades exactly as the
+            // former `get_task` not-found did.
+            let row = runtime
+                .get_listed_task_row(&metadata.id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, metadata.id.clone()))?;
+            let crate::application::task::TaskRow {
+                task,
+                comments: raw_comments,
+                history: row_history,
+                ..
+            } = row;
+            let comments = runtime.resolve_task_pilot_comments(&metadata.id, &raw_comments)?;
             let (history, requests) = if needs_decisions {
-                let history = runtime.get_task_history(&metadata.id)?;
                 let requests = runtime
-                    .task_decision_requests_in(&task, &history, &comments, now)?
+                    .task_decision_requests_in(&task, &row_history, &comments, now)?
                     .into_iter()
                     .filter(|request| request.state == DecisionRequestState::Open)
                     .collect::<Vec<_>>();
-                (history, requests)
+                (row_history, requests)
             } else {
                 (Vec::new(), Vec::new())
             };
@@ -849,7 +883,7 @@ pub(super) fn read_attention_sources(
                 continue;
             }
             let started = Instant::now();
-            match derive_subject_kind(&subject, kind, &comments, &history, request, &tasks) {
+            match derive_subject_kind(&subject, kind, &comments, &history, request, tasks) {
                 Ok(Some(item)) => {
                     if let Some(request) = request {
                         folded.push(request.id.clone());
