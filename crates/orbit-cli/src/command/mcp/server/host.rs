@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSelection};
-use orbit_cmd::task_owner::{self, WorkspaceIdentity};
+use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::protocol::tool_input::required_string;
@@ -43,6 +43,9 @@ pub(super) struct ServerMcpHost {
     /// Owner-route SSH sessions parked between a claimed worker's calls. The
     /// probe is rebuilt per call, so the pool lives here to outlast it.
     owner_route_sessions: federated::RoutedSessionPool,
+    /// One task-registry handle for id-routed owner lookups, so a warm server
+    /// does not reopen the registry on every `orbit.task.show`.
+    task_owners: TaskOwnerLookup,
 }
 
 /// The combined tool surface and the plugin snapshot it was built from.
@@ -75,6 +78,7 @@ impl ServerMcpHost {
             plugin_surface: HostPluginMcpCache::default(),
             definitions: Mutex::new(None),
             owner_route_sessions: federated::RoutedSessionPool::default(),
+            task_owners: TaskOwnerLookup::default(),
         }
     }
 
@@ -500,7 +504,7 @@ impl ServerMcpHost {
             if ID_RESOLVED_WORKSPACE_TOOLS.contains(&operation)
                 || Self::workspace_selector(None, context).is_none()
             {
-                return task_owner::resolve_task_owner(&self.global_root, &task_id);
+                return self.task_owners.resolve(&self.global_root, &task_id);
             }
         }
         if let Some(selector) = Self::workspace_selector(explicit, context) {

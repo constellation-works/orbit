@@ -12,6 +12,7 @@
 //! by a globally unique ID can be routed from the ID alone.
 
 use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
@@ -72,7 +73,14 @@ pub fn initialize_for_task_show(
         );
     }
     let global_root = global_root_for(root_override)?;
-    let selected = resolve_task_owner(&global_root, task_id)?;
+    // `task show` only reads the registry, so look the owner up through a
+    // read-only handle. A registry that cannot be opened that way (missing, or
+    // needing a writable migration) takes the ordinary writable open, which
+    // creates or migrates it exactly as before and reports the real error.
+    let selected = match TaskRegistryStore::open_read_only(&task_registry_path(&global_root)) {
+        Ok(tasks) => resolve_task_owner_in(&global_root, &tasks, task_id)?,
+        Err(_) => resolve_task_owner(&global_root, task_id)?,
+    };
     RegisteredRuntimeFactory::open_registered_checkout_read_only(
         &global_root,
         &selected.workspace,
@@ -92,6 +100,19 @@ pub fn resolve_task_owner(
     task_id: &str,
 ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
     let tasks = TaskRegistryStore::open(&task_registry_path(global_root))?;
+    resolve_task_owner_in(global_root, &tasks, task_id)
+}
+
+/// [`resolve_task_owner`] against a registry handle the caller already holds.
+///
+/// The partition -> checkout join still reads `workspaces.json` and each
+/// checkout's `config.yaml` on every call, so a newly registered or removed
+/// checkout is seen on the next lookup.
+pub fn resolve_task_owner_in(
+    global_root: &Path,
+    tasks: &TaskRegistryStore,
+    task_id: &str,
+) -> Result<ResolvedWorkspaceSelection, OrbitError> {
     let binding = tasks
         .find_task_binding(task_id)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
@@ -129,6 +150,79 @@ pub fn resolve_task_owner(
         checkout: checkout.clone(),
         local_root: checkout.orbit_dir.clone(),
     })
+}
+
+/// Owner lookups for a long-lived host: one lazily opened registry handle,
+/// reused across calls and reopened when the database file is replaced.
+///
+/// The handle is read-only. Each lookup is one indexed read, and SQLite shows
+/// every commit another process makes to the registry on the next statement, so
+/// a task bound after the handle opened is still found. A registry that cannot
+/// be opened read-only (missing, or needing a writable migration) falls back to
+/// [`resolve_task_owner`] for that call and is retried on the next one.
+#[derive(Default)]
+pub struct TaskOwnerLookup {
+    cached: Mutex<Option<CachedRegistry>>,
+}
+
+struct CachedRegistry {
+    identity: RegistryFileIdentity,
+    store: TaskRegistryStore,
+}
+
+/// Detects registry replacement without reacting to ordinary writes.
+#[derive(Debug, PartialEq, Eq)]
+struct RegistryFileIdentity {
+    created: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    device_inode: (u64, u64),
+}
+
+impl RegistryFileIdentity {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            created: metadata.created().ok(),
+            #[cfg(unix)]
+            device_inode: {
+                use std::os::unix::fs::MetadataExt;
+                (metadata.dev(), metadata.ino())
+            },
+        })
+    }
+}
+
+impl TaskOwnerLookup {
+    /// Resolve the checkout that owns `task_id` with the same results and
+    /// errors as [`resolve_task_owner`].
+    pub fn resolve(
+        &self,
+        global_root: &Path,
+        task_id: &str,
+    ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
+        let path = task_registry_path(global_root);
+        let store = {
+            let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+            let identity = RegistryFileIdentity::read(&path);
+            if cached
+                .as_ref()
+                .is_some_and(|held| Some(&held.identity) != identity.as_ref())
+            {
+                *cached = None;
+            }
+            if cached.is_none()
+                && let Some(identity) = identity
+                && let Ok(store) = TaskRegistryStore::open_read_only(&path)
+            {
+                *cached = Some(CachedRegistry { identity, store });
+            }
+            cached.as_ref().map(|held| held.store.clone())
+        };
+        match store {
+            Some(store) => resolve_task_owner_in(global_root, &store, task_id),
+            None => resolve_task_owner(global_root, task_id),
+        }
+    }
 }
 
 /// Registry identity of the workspace `runtime` is bound to, when its checkout
