@@ -44,7 +44,7 @@ Each process builds one table:
 - each host-file entry's `task_prefix` maps to that host.
 
 Host-file validation keeps prefixes unique, so lookup is exact and never ambiguous. The
-table is read from the host file and never from a probe. The retired
+table is read from the host file and never from a probe. A readable regular retired
 `~/.orbit/mcp-destinations.toml` is never parsed and contributes no rows: its presence,
 alone or beside `hosts.toml`, fails every host-registry load with `host_file_conflict`.
 Move it aside, run `orbit host add <ssh-target>` for each `ssh` row, then delete the
