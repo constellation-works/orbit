@@ -622,9 +622,14 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   pending. A listing that arrives after expiry is never accepted as success,
   even when every awaited job succeeded. Failed, skipped or cancelled jobs
   still fail the wait at once. A named job missing from a complete
-  listing fails at once with `ci-await: <job> is absent from the run` (several
-  names use `are`) instead of waiting out the timeout. An incomplete listing
-  or an API error is not absence: it is retried within the remaining budget.
+  listing stays pending while any other listed job (apart from the Check job
+  itself) is unfinished. Once every other listed job has completed, it stays
+  pending for `--absent-grace-seconds` (default 120 s), because GitHub creates
+  a job shortly after its `needs` finish. A job listed within that time is
+  awaited normally. One still missing after the grace period fails the wait
+  with `ci-await: <job> is absent from the run` (several names use `are`).
+  An incomplete listing or an API error is not absence: it is retried within
+  the remaining budget.
   Transient API errors are retried within the remaining budget.
   For a single-page job-listing response with an ETag, the job wait issues
   authenticated conditional requests every three seconds. An unchanged
