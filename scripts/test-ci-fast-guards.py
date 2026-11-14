@@ -1539,6 +1539,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        # Every leg carries a single filter: libtest runs the union of its
+        # filters, so a second filter would mask a dead first one (ORB-24436).
         self.assertEqual(
             calls,
             [
@@ -1546,6 +1548,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "test",
                     "-p",
                     "orbit-core",
+                    "-p",
+                    "orbit-cli",
                     "--test",
                     "ci_failure_goldens",
                     "ci_failure_fixture_goldens",
@@ -1556,13 +1560,26 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "test",
                     "-p",
                     "orbit-tools",
+                    "-p",
+                    "orbit-cli",
                     "--test",
                     "tools",
                     "--",
                     "public_tool_surface::github_log_goldens::",
+                ],
+                [
+                    "test",
+                    "-p",
+                    "orbit-tools",
+                    "-p",
+                    "orbit-cli",
+                    "--test",
+                    "tools",
+                    "--",
                     "mcp_definitions::",
                 ],
-                ["test", "-p", "orbit-cli", "--test", "output", "--", "help_goldens::", "output_goldens::"],
+                ["test", "-p", "orbit-cli", "--test", "output", "--", "help_goldens::"],
+                ["test", "-p", "orbit-cli", "--test", "output", "--", "output_goldens::"],
                 [
                     "test",
                     "-p",
@@ -1573,12 +1590,14 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "--",
                     "--exact",
                 ],
-                ["test", "-p", "orbit-exec", "--test", "sandbox_profile_goldens"],
-                ["test", "-p", "orbit-core", "--test", "sandbox_profile_goldens"],
-                ["test", "-p", "orbit-store", "--lib",
+                ["test", "-p", "orbit-exec", "-p", "orbit-core", "-p", "orbit-cli",
+                 "--test", "sandbox_profile_goldens"],
+                ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
                  "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
-                 "--", "--exact",
-                 "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens"],
+                 "--", "--exact"],
+                ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
+                 "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens",
+                 "--", "--exact"],
             ],
         )
 
@@ -1602,7 +1621,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(calls), 9)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")
@@ -1615,6 +1634,68 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--fast")
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+    def test_goldens_dead_filter_beside_live_filter_fails(self):
+        """A dead filter must fail even when a sibling filter matches (ORB-24436).
+
+        libtest runs the union of its filters and prints one aggregate
+        summary per binary, so a leg passing two filters to one invocation
+        reports passes while one filter matches nothing. The fake cargo
+        below emulates that union: every golden filter matches a canned
+        test except ``mcp_definitions::``."""
+        self.write_executable(
+            self.bin / "cargo",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+LIVE = [
+    "ci_failure_fixture_goldens",
+    "public_tool_surface::github_log_goldens::case_one",
+    "help_goldens::case_help",
+    "output_goldens::case_output",
+    "mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot",
+    "sandbox_profile_goldens_case",
+    "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
+    "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens",
+]
+args = sys.argv[2:]
+split = args.index("--") if "--" in args else len(args)
+cargo_args, libtest_args = args[:split], args[split + 1:]
+exact = "--exact" in libtest_args
+filters = []
+index = 0
+while index < len(cargo_args):
+    token = cargo_args[index]
+    if token in ("-p", "--test", "--bin"):
+        index += 2
+        continue
+    if not token.startswith("-"):
+        filters.append(token)
+    index += 1
+filters += [token for token in libtest_args if not token.startswith("-")]
+if not filters:
+    matched = list(LIVE)
+elif exact:
+    matched = [test for test in LIVE if test in filters]
+else:
+    matched = [test for test in LIVE if any(f in test for f in filters)]
+for test in matched:
+    print(f"test {test} ... ok")
+print(f"test result: ok. {len(matched)} passed; 0 failed; 0 ignored; "
+      "0 measured; 0 filtered out; finished in 0.00s")
+''',
+        )
+        result = self.run_guard("check-goldens.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("matched zero tests", result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(
+            ["test", "-p", "orbit-tools", "-p", "orbit-cli",
+             "--test", "tools", "--", "mcp_definitions::"],
+            calls,
+            "the dead filter must run in its own invocation to be judged alone",
+        )
 
     def use_real_ripgrep(self):
         real_rg = shutil.which("rg")
