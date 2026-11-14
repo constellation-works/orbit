@@ -16,7 +16,7 @@ export { buildArtifacts } from './task-evidence.js';
 export { scrollToComment } from './task-comments.js';
 import { clearTaskDataCaches } from './task-data.js';
 import { browserTaskFilterActive, closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction } from './task-nav.js';
-export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, refreshPinnedTask, setPinnedExternalTask, clearPinnedExternalTask, cancelTaskSearchDebounce, clearTaskSearch, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, syncTaskControls, refreshChips, buildChips, wireSearch } from './task-nav.js';
+export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, refreshPinnedTask, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, syncTaskControls, refreshChips, buildChips } from './task-nav.js';
 import { buildQuickAction, buildQuickActionError, hasQuickAction, pruneQuickActionErrors, quickActionSignature, quickActionState } from './task-quick-actions.js';
 import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-controls.js';
 import { followRovingSelection, renderTaskPane } from './task-pane.js';

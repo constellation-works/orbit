@@ -387,12 +387,14 @@
 :root { --topbar-height: 56px; }
 
 /* ORB-10972: one bar replaces the old header + tabs + health strip stack
-   (~194px). It holds the brand, provider usage and the Tasks controls; the
+   (~194px). It holds the brand, provider usage, global search and task creation; the
    host readings and the windowed counts ride on the rail. */
 .topbar {
   flex: 0 0 auto;
   box-sizing: border-box;
   height: var(--topbar-height);
+  position: relative;
+  z-index: 30;
   border-bottom: 1px solid #1f242b;
   display: flex;
   align-items: center;
@@ -655,8 +657,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .topbar .notify-btn[hidden] { display: none; }
 
 /* On phones the brand and Notify stay on the first row, Notify at the
-   trailing edge, the same place it occupies on every other view. While Tasks
-   is open, Search and New task take the next row so every control fits at
+   trailing edge, the same place it occupies on every other view. Search takes
+   the next row, with New task while Tasks is open, so every control fits at
    375px without the bar scrolling sideways. Scope pickers and navigation
    keep their own rows below. */
 @media (max-width: 760px) {
@@ -764,8 +766,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .topbar :is(button, a):focus-visible { outline-offset: -2px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
-  /* Notify stays on the first row. The Tasks controls, shown only while
-     Tasks is open, wrap onto their own row at full width. */
+  /* Notify stays on the first row. Global search, with task creation on
+     Tasks, takes its own row on every destination. */
   .topbar .refresh-btn { order: 2; }
   .topbar .topbar-task-actions {
     order: 3;
@@ -1106,9 +1108,9 @@ footer {
    panel; the rail, the picker and the way back stay in place. */
 .main-col.host-unavailable > .tab-pane { display: none !important; }
 /* The top bar lives outside .main-col, so the rule above cannot withdraw its
-   task actions: hide them while the Tasks pane they feed cannot be shown.
-   The :has() argument outranks the .active rule that shows them. */
-.shell:has(.main-col.host-unavailable .tab-pane[data-tab="tasks"].active) .topbar-task-actions { display: none; }
+   task creation: hide it while the Tasks pane cannot be shown.
+   Global search remains available to show lookup failures in place. */
+.shell:has(.main-col.host-unavailable .tab-pane[data-tab="tasks"].active) #task-create-open { display: none; }
 .host-state {
   margin: 24px;
   max-width: 720px;

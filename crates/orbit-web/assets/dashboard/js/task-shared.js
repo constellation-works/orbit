@@ -109,20 +109,10 @@ export function taskList(context) {
   return context && typeof context.getTasks === "function" ? context.getTasks() : [];
 }
 
-export function searchQueryValue(context) {
-  return context && typeof context.getSearchQuery === "function"
-    ? context.getSearchQuery()
-    : "";
-}
-
 export function activeStatusSet(context) {
   return context && typeof context.getActiveStatuses === "function"
     ? context.getActiveStatuses()
     : new Set();
-}
-
-export function setSearchQuery(context, value) {
-  if (context && typeof context.setSearchQuery === "function") context.setSearchQuery(value);
 }
 
 export function setActiveStatuses(context, statuses) {

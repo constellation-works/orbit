@@ -12,8 +12,8 @@
   <body>
     <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
-      <!-- The bar spans the window: the brand, provider usage and the Tasks
-           controls, plus one host warning when a reading is elevated or worse.
+      <!-- The bar spans the window: the brand, provider usage, global search and task
+           creation, plus one host warning when a reading is elevated or worse.
            The host's readings, when the dashboard last refreshed, and the
            UTC/Local clock sit at the foot of the rail. The destination
            heading stays for assistive tech. -->
@@ -46,12 +46,16 @@
             </div>
           </div>
           <span class="topbar-spacer"></span>
-          <!-- The Tasks controls, shown only while Tasks is open. -->
-          <div class="topbar-task-actions" role="group" aria-label="Task actions">
+          <!-- Global search stays in the same place on every destination. -->
+          <div class="topbar-task-actions" role="group" aria-label="Dashboard search and task actions">
             <div class="task-search-wrap">
               <svg class="task-search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></svg>
-              <input type="search" id="task-search" placeholder="Search by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" aria-describedby="task-lookup-status" title="Press Enter on a task ID to open it, even outside this list or workspace" />
-              <button type="button" id="task-search-clear" aria-label="Clear task search and open result" title="Clear search and dismiss the open task">Clear</button>
+              <input type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="global-search-results" id="task-search" placeholder="Search tasks or run ID" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title, or open a run ID" />
+              <button type="button" id="task-search-clear" aria-label="Clear search">Clear</button>
+              <div id="global-search-popover" class="global-search-popover" hidden>
+                <div id="global-search-results" role="listbox" aria-label="Task results"></div>
+                <div id="global-search-status" class="global-search-status" role="status"></div>
+              </div>
             </div>
             <button type="button" id="task-create-open" class="action primary" aria-haspopup="dialog" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
           </div>
@@ -191,12 +195,11 @@
                block, with the tabs above it (log-tail.js sets
                --tasks-dock-lead). The room above the dock is a fixed message area for
                the list's passing notices, newest first, so they never move the
-               list or the dock: lookup progress and failures, action
+               list or the dock: action
                and folded status notices (tasks.js) and the list's failure notes
                (common.js). Loading text is never written here. -->
           <div class="tasks-messages" id="tasks-messages">
             <div id="tasks-notices"></div>
-            <span id="task-lookup-status" class="task-lookup-status" role="status"></span>
           </div>
           <div class="col-log" id="side-dock" data-home="tasks" data-mode="drain" data-card="drain">
             <div class="dock-head">

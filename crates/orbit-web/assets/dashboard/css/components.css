@@ -757,3 +757,59 @@ a.progress-strip-hint:hover .progress-strip-label { text-decoration: underline; 
 .progress-strip-step[data-state="awaiting"] { --strip-tone: var(--warn-fg); }
 .progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"]) .progress-strip-bar { background: var(--strip-tone); }
 .progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"]) .progress-strip-hint { color: var(--strip-tone); }
+
+/* Shared search stays in the top bar; only task creation follows the route. */
+.topbar-task-actions { display: flex; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; }
+.topbar-task-actions .task-search-wrap { flex: 1 1 260px; width: 260px; min-width: 120px; }
+.topbar-task-actions .action { flex: none; white-space: nowrap; }
+#task-create-open { display: none; }
+.shell:has(.tab-pane[data-tab="tasks"].active) #task-create-open { display: inline-flex; }
+.task-search-wrap { position: relative; }
+.task-search-wrap #task-search {
+  width: 100%;
+  height: 30px;
+  padding: 0 64px 0 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-control);
+  color: var(--fg);
+  font-size: 13.5px;
+}
+.task-search-wrap #task-search::-webkit-search-cancel-button { -webkit-appearance: none; }
+.task-search-wrap #task-search::placeholder { color: var(--fg-mute); }
+.task-search-icon { position: absolute; left: 11px; top: 7px; width: 16px; height: 16px; color: var(--fg-mute); pointer-events: none; }
+#task-search-clear {
+  position: absolute; right: 2px; top: -6px;
+  min-width: 56px; min-height: 42px;
+  border: 0; background: transparent; color: var(--accent); font-size: 13px; cursor: pointer;
+}
+.task-search-wrap.error #task-search { border-color: var(--state-failed); }
+/* The overlay covers content without moving it and keeps long titles and
+   errors inside the viewport. Status dots use the board's shared tokens. */
+.global-search-popover {
+  position: absolute; z-index: 40; top: calc(100% + 8px); right: 0;
+  width: min(480px, calc(100vw - 16px));
+  max-height: min(70svh, 640px); overflow: auto;
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-elev); box-shadow: 0 8px 24px #0008;
+  font-size: 13px;
+}
+.global-search-option {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer;
+}
+.global-search-option + .global-search-option { border-top: 1px solid var(--hair); }
+.global-search-option:is(:hover, [aria-selected="true"]) { background: var(--bg-hover); }
+.global-search-task { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.global-search-title { overflow-wrap: anywhere; }
+.global-search-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.global-search-task-status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; color: var(--fg-dim); }
+.global-search-task-status::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
+.global-search-status { padding: 10px 12px; color: var(--fg-dim); overflow-wrap: anywhere; }
+.global-search-status:empty { display: none; }
+.global-search-status[data-kind="error"] { color: var(--state-failed); }
+#global-search-results:not(:empty) + .global-search-status:not(:empty) { border-top: 1px solid var(--hair); }
+
+@media (max-width: 760px) {
+  .global-search-popover { left: 0; right: auto; }
+}
