@@ -143,10 +143,18 @@ pub(crate) fn prepare(
     // changed after their applied assessment (see `stale_repilot_candidate`).
     let mut stale_repilot_ids = BTreeSet::new();
     let (mode, task_ids, task_snapshots, mut excluded) = if explicit_mode {
-        let all_tasks = runtime.list_tasks().map_err(|error| {
-            DispatchError::action_failed(action, format!("list workspace tasks: {error}"))
-        })?;
-        let by_id = all_tasks
+        let requested_ids = explicit_task_ids
+            .iter()
+            .filter(|task_id| orbit_types::task::validate_orb_task_id(task_id).is_ok())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let task_metadata =
+            runtime
+                .list_task_metadata_for_ids(&requested_ids)
+                .map_err(|error| {
+                    DispatchError::action_failed(action, format!("list workspace tasks: {error}"))
+                })?;
+        let by_id = task_metadata
             .iter()
             .map(|task| (task.id.as_str(), task))
             .collect::<BTreeMap<_, _>>();
