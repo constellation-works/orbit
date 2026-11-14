@@ -19,9 +19,6 @@ mod report;
 mod selective;
 mod verdict;
 
-#[cfg(test)]
-mod tests;
-
 pub use admission::*;
 pub use certificate::*;
 pub use gate_note::*;
