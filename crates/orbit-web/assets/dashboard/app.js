@@ -1,9 +1,10 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
-import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
+import { taskPilotWarningsFilter, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, refreshChips, refreshPinnedTask, renderTasks, syncTaskControls, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
+import * as globalSearch from './js/global-search.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -114,8 +115,6 @@ const frictionAccordionMedia = window.matchMedia(FRICTION_ACCORDION_QUERY);
 
 const $ = (id) => document.getElementById(id);
 
-let searchQuery = "";
-let cancelTaskLookup = () => {};
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
 let elapsedTaskRefreshTimer = null;
@@ -216,9 +215,6 @@ function taskContext() {
         if (at >= 0) section.items[at] = updatedTask;
       }
     },
-    cancelTaskLookup: () => cancelTaskLookup(),
-    getSearchQuery: () => searchQuery,
-    setSearchQuery: (value) => { searchQuery = value; },
     getActiveStatuses: () => activeStatuses,
     setActiveStatuses: (statuses) => {
       activeStatuses = statuses;
@@ -387,7 +383,7 @@ function routerContext() {
     buildCodebaseHash,
 
     // ORB-10874: tasks pass-throughs (mirrors the audit ones above) so the
-    // status/search filters shown on the Tasks tab are represented in the
+    // status filters shown on the Tasks tab are represented in the
     // hash and survive reload/back-navigation the same way audit's do.
     applyTasksHashQuery: (query, page) => applyTasksHashQuery(query, taskContext(), page),
     buildTasksHash: () => buildTasksHash(taskContext()),
@@ -880,10 +876,7 @@ function buildKnowledgeValueList(values, opts = {}) {
   return wrap;
 }
 
-// Installed by wireTaskIdResolver. Friction "during task" links must use that
-// scoped lookup: widening activeStatuses and then routing to Tasks is undone
-// by applyTasksHashQuery, which restores the default filter and leaves
-// openVisibleTask able only to copy an off-filter or off-page id.
+// Shared with global search so knowledge links resolve tasks across workspaces.
 let resolveTaskById = null;
 
 function openTaskFromKnowledge(taskId) {
@@ -940,248 +933,6 @@ function wireFrictionPagination() {
   });
 }
 
-/* Task ID resolver (ORB-00211 / ORB-11560), on the Tasks search box.
-   Typing filters the list; Enter on a task ID opens that task even when the
-   filter, the page, or the selected workspace hides it.
-   GET /api/tasks/:id is workspace-scoped. A raw fetch without ?workspace=
-   hits the server default (often not the selected workspace) and reports an
-   existing task as not found — the Diagnostics jump failure on ws_orbit.
-   - Only fires on Enter, on a task id shaped like ^[A-Z]{2,5}-\d+$
-     (case-insens) after trim/upper.
-   - Lookup uses the selected workspace first when one is selected; aggregate
-     mode probes active workspaces and adopts the owner.
-   - Stale replies after a workspace change or a newer lookup are ignored.
-   - Not-found is reserved for a confirmed miss; loading / 403 / 5xx / network
-     have distinct copy.
-*/
-function wireTaskIdResolver() {
-  const input = $("task-search");
-  if (!input) return;
-  let lookupSeq = 0;
-  const ID_RE = /^[A-Z]{2,5}-\d+$/i;
-
-  function lookupWrap() {
-    return input.parentNode;
-  }
-
-  function clearLookupStatus() {
-    input.classList.remove("error");
-    const wrap = lookupWrap();
-    if (wrap && wrap.classList) {
-      wrap.classList.remove("error");
-      wrap.classList.remove("pending");
-    }
-    const err = $("task-lookup-status");
-    if (err) {
-      err.textContent = "";
-      delete err.dataset.kind;
-    }
-  }
-
-  function showLookupStatus(kind, msg) {
-    const wrap = lookupWrap();
-    input.classList.toggle("error", kind === "error");
-    if (wrap && wrap.classList) {
-      wrap.classList.toggle("error", kind === "error");
-      wrap.classList.toggle("pending", kind === "pending");
-    }
-    // The feedback sits in the Tasks message area, newest first.
-    const err = $("task-lookup-status");
-    if (err) {
-      if (err.textContent !== msg) raiseMessageSlot(err);
-      err.textContent = msg;
-      err.dataset.kind = kind;
-    }
-  }
-
-  function taskDetailPath(id, workspaceId) {
-    const base = `/api/tasks/${encodeURIComponent(id)}`;
-    if (workspaceId) {
-      return withHost(`${base}?workspace=${encodeURIComponent(workspaceId)}`);
-    }
-    return withWorkspace(base);
-  }
-
-  async function readJson(res) {
-    try {
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-
-  function classifyLookupFailure(res, body, id) {
-    const status = res && res.status;
-    const errorText = body && body.error ? String(body.error) : "";
-    if (status === 401 || status === 403) {
-      return { kind: "denied", message: `Lookup denied for ${id}` };
-    }
-    if (status >= 500) {
-      return { kind: "server", message: `Server error resolving ${id}` };
-    }
-    if (status === 404 && /unknown workspace/i.test(errorText)) {
-      return { kind: "server", message: `Workspace error resolving ${id}` };
-    }
-    if (status === 404) {
-      return { kind: "missing", message: `${id} not found` };
-    }
-    if (status === 400) {
-      return { kind: "server", message: errorText || `Error ${status} resolving ${id}` };
-    }
-    return { kind: "server", message: `Error ${status} resolving ${id}` };
-  }
-
-  async function fetchTaskInWorkspace(id, workspaceId) {
-    const res = await fetch(taskDetailPath(id, workspaceId), {
-      headers: { accept: "application/json" },
-    });
-    const body = await readJson(res);
-    return { res, body, workspaceId };
-  }
-
-  function adoptWorkspace(workspaceId) {
-    if (!workspaceId || workspaceId === getWorkspace()) return false;
-    setWorkspace(workspaceId);
-    rememberWorkspace();
-    persistScopeToUrl();
-    const selector = $("workspace-select");
-    if (selector) buildWorkspaceSelector();
-    return true;
-  }
-
-  async function openLookedUpTask(task, workspaceId) {
-    const workspaceChanged = adoptWorkspace(workspaceId);
-    sAT(buildTasksHash(taskContext()).slice(1), { refresh: false });
-    // Routing retires the prior lookup state; this result now owns that route.
-    const seq = lookupSeq;
-    if (workspaceChanged) {
-      await refreshDashboard();
-      if (seq !== lookupSeq || getWorkspace() !== workspaceId) return;
-    }
-    searchQuery = "";
-    const ts = $("task-search");
-    if (ts) ts.value = "";
-    const ctx = taskContext();
-    setPinnedExternalTask(task, ctx);
-    const listedAt = lastTasks.findIndex((t) => t && t.id === task.id);
-    if (listedAt >= 0) {
-      lastTasks[listedAt] = task;
-      openVisibleTask(task.id, ctx);
-    } else {
-      renderTaskList(lastTasks, ctx);
-    }
-    input.value = "";
-    clearLookupStatus();
-    refreshDashboard();
-  }
-
-  function otherActiveWorkspaces(exceptId) {
-    return dashboardWorkspaces.filter((ws) => (
-      ws
-      && ws.status === "active"
-      && ws.id
-      && ws.id !== exceptId
-    ));
-  }
-
-  async function lookupTask(id) {
-    cancelTaskSearchDebounce();
-    // Enter commits the text now, including a pending or unsuccessful lookup.
-    // A successful result removes q when it replaces the search with a detail.
-    if (window.location.hash.split("?")[0] === "#tasks") {
-      window.history.replaceState(null, "", buildTasksHash(taskContext()));
-    }
-    const seq = ++lookupSeq;
-    const workspaceAtStart = getWorkspace();
-    const visit = captureWorkspaceVisit();
-    const stillCurrent = () => seq === lookupSeq && visit.isCurrent();
-    const discardIfStale = () => {
-      if (stillCurrent()) return false;
-      if (seq === lookupSeq) clearLookupStatus();
-      return true;
-    };
-
-    showLookupStatus("pending", `Looking up ${id}\u2026`);
-    if (workspaceAtStart) {
-      let primary;
-      try {
-        primary = await fetchTaskInWorkspace(id, workspaceAtStart);
-      } catch {
-        if (discardIfStale()) return;
-        showLookupStatus("error", `Network error resolving ${id}`);
-        return;
-      }
-      if (discardIfStale()) return;
-      if (primary.res.ok && primary.body && primary.body.id) {
-        await openLookedUpTask(primary.body, primary.workspaceId);
-        return;
-      }
-
-      const classified = classifyLookupFailure(primary.res, primary.body, id);
-      if (classified.kind !== "missing") {
-        showLookupStatus("error", classified.message);
-        return;
-      }
-    }
-
-    const others = otherActiveWorkspaces(workspaceAtStart);
-    if (others.length === 0) {
-      showLookupStatus("error", `${id} not found`);
-      return;
-    }
-
-    const probed = await Promise.all(others.map(async (ws) => {
-      try {
-        return await fetchTaskInWorkspace(id, ws.id);
-      } catch (error) {
-        return { network: true, workspaceId: ws.id, error };
-      }
-    }));
-    if (discardIfStale()) return;
-
-    const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
-    if (hit) {
-      await openLookedUpTask(hit.body, hit.workspaceId);
-      return;
-    }
-    if (probed.some((result) => result && result.network)) {
-      showLookupStatus("error", `Network error resolving ${id}`);
-      return;
-    }
-    const probeFailure = probed
-      .map((result) => result && result.res ? classifyLookupFailure(result.res, result.body, id) : null)
-      .find((result) => result && result.kind !== "missing");
-    if (probeFailure) {
-      showLookupStatus("error", probeFailure.message);
-      return;
-    }
-    showLookupStatus("error", `${id} not found`);
-  }
-
-  resolveTaskById = lookupTask;
-  cancelTaskLookup = () => {
-    lookupSeq += 1;
-    clearLookupStatus();
-  };
-  $("task-search-clear")?.addEventListener("click", () => {
-    clearTaskSearch(taskContext());
-    input.focus();
-  });
-
-  // Editing the query abandons any lookup still in flight.
-  input.addEventListener("input", () => {
-    lookupSeq += 1;
-    clearLookupStatus();
-  });
-  input.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    const candidate = (input.value || "").trim().toUpperCase();
-    if (!ID_RE.test(candidate)) return;
-    if (event.preventDefault) event.preventDefault();
-    lookupTask(candidate);
-  });
-}
-
 // ORB-00039/00040: the aggregate ("All workspaces") view has no concrete
 // workspace to scope per-workspace endpoints to — the backend `Ws` extractor
 // finds no default and returns 400. The single `isAggregateView()` predicate
@@ -1233,7 +984,6 @@ function tasksFilterParams(base) {
   } else if (activeStatuses.size === 0) {
     sp.set("status", "none");
   }
-  if (searchQuery) sp.set("q", searchQuery);
   if (taskPilotWarningsFilter()) sp.set("pilot", "warnings");
   return sp;
 }
@@ -2398,14 +2148,16 @@ onTaskRuntimeChange(() => {
   if (activeTab === "tasks") renderTaskList(lastTasks, taskContext());
 });
 buildChips(tasksContext);
-wireSearch(tasksContext);
 wireTaskPane(tasksContext);
 initTaskCreate({ getWorkspaces: () => dashboardWorkspaces });
 wireFrictionSearch();
 wireFrictionStatusFilter();
 wireFrictionResponsiveDetail();
 wireFrictionPagination();
-wireTaskIdResolver();
+resolveTaskById = globalSearch.initGlobalSearch({
+  workspaces: () => dashboardWorkspaces,
+  workspaceChanged: () => buildWorkspaceSelector(),
+});
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 wireCodebaseControls(() => { window.location.hash = buildCodebaseHash(); });

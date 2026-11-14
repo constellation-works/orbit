@@ -42,6 +42,7 @@ mod runs;
 mod schedule_edits;
 mod scripts;
 mod search;
+mod task_search;
 mod tasks;
 mod workspaces;
 

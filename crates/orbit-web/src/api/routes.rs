@@ -52,6 +52,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .route("/tasks/create", post(tasks::create::create_proposal))
         .route("/tasks/all", get(workspaces::list_all_tasks))
+        .route("/tasks/search", get(task_search::search_dashboard_tasks))
         .route("/job-runs/all", get(workspaces::list_all_job_runs))
         .route("/workspaces", get(workspaces::list_workspaces))
         .route("/fleet/drains", get(workspaces::list_fleet_drains))

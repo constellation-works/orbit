@@ -822,7 +822,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     setConfigSubtabImpl(ctx, sub);
     hash = `#config/${sub}`;
   } else if (top === "tasks") {
-    // ORB-10874: the status chips and search box are represented in the hash
+    // The status chips are represented in the hash
     // (mirroring the audit tab) so they survive a reload or the browser's
     // back/forward navigation instead of resetting to the in-memory default.
     // `#tasks/<id>` is one task's full-page view; a malformed id falls back

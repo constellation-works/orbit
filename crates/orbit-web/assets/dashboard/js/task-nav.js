@@ -1,7 +1,7 @@
-// Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters and search.
+// Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters.
 
 import { captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
@@ -11,7 +11,6 @@ import { recordRoutedHref } from './router.js';
 // the hash no longer names is dropped.
 let openTaskGeneration = 0;
 let returningFromPage = false;
-let searchDebounce = null;
 
 export function stopRowInteraction(node) {
   for (const eventName of ["pointerdown", "mousedown", "click", "keydown"]) {
@@ -117,7 +116,6 @@ async function refreshWaitingCount(context) {
 }
 
 export function filterTasks(tasks, context) {
-  const q = searchQueryValue(context);
   const activeStatuses = activeStatusSet(context);
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
@@ -125,11 +123,7 @@ export function filterTasks(tasks, context) {
     if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
     if (myWorkOnly && !isMyWorkTask(t)) return false;
     if (waitingOnly && !taskWaitsOnYou(t)) return false;
-    if (!q) return true;
-    return (
-      (t.id && t.id.toLowerCase().includes(q)) ||
-      (t.title && t.title.toLowerCase().includes(q))
-    );
+    return true;
   });
 }
 
@@ -333,7 +327,7 @@ export function collapseTask(taskId) {
 
 // Show the task a hash names, once the list that may contain it has rendered.
 // A task the filter or page hides is fetched and pinned instead, so following
-// a link never rewrites the saved status or search filter.
+// a link never rewrites the saved status filters.
 export function resolvePendingOpenTask(tasks, context) {
   const filtered = filterTasks(tasks, context);
   // The page's route keeps owning its task after a status edit or a refreshed
@@ -433,60 +427,6 @@ export function refreshPinnedTask(context) {
   return promise;
 }
 
-/* Global ID resolver support (ORB-00211): allow rendering detail for a task that
-   is outside the filtered list (hidden status, search, or truncated fetch)
-   without mutating DASHBOARD_TASK_STATUSES. The pinned detail shows in the
-   side pane, marked as outside the list; auto-clears once the filtered list
-   actually contains the task. */
-export function setPinnedExternalTask(task, context) {
-  if (!task || !task.id) return;
-  cancelTaskSearchDebounce();
-  if (taskState.selectedTaskId && taskState.selectedTaskId !== task.id) taskState.selectedTaskId = null;
-  taskState.selectedTaskWorkspace = task.workspace_id || getWorkspace() || null;
-  taskState.pinnedExternalTask = { task, id: task.id };
-  if (isAggregateView()) {
-    void loadAggregateCrews([task]).then(() => {
-      if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === task.id) rerender(context);
-    });
-  }
-  taskState.pendingOpenTaskId = null;
-  setOpenTask(task.id);
-  // The resolver has cleared the text query; retire its URL and page too.
-  window.history?.replaceState?.(null, "", buildTasksHash(context));
-  if (context?.resetTaskPagination) context.resetTaskPagination();
-}
-
-export function clearPinnedExternalTask(context) {
-  if (taskState.pinnedExternalTask && taskState.openTaskId === taskState.pinnedExternalTask.id) setOpenTask(null);
-  taskState.pinnedExternalTask = null;
-  if (context) rerender(context);
-}
-
-// Clearing also retires hash-driven reads, so a delayed response cannot restore
-// a dismissed result, even after another lookup for the same task.
-export function cancelTaskSearchDebounce() {
-  if (searchDebounce) clearTimeout(searchDebounce);
-  searchDebounce = null;
-}
-
-export function clearTaskSearch(context) {
-  cancelTaskSearchDebounce();
-  if (context?.cancelTaskLookup) context.cancelTaskLookup();
-  taskState.selectedTaskId = null;
-  taskState.taskPageId = null;
-  taskState.taskPageReturn = null;
-  taskState.pendingOpenTaskId = null;
-  taskState.pinnedExternalTask = null;
-  taskState.taskActionNotice = null;
-  setSearchQuery(context, "");
-  setOpenTask(null);
-  window.history?.replaceState?.(null, "", buildTasksHash(context));
-  if (context?.resetTaskPagination) context.resetTaskPagination();
-  syncTaskControls(context);
-  rerender(context);
-  refreshTasks(context).catch((error) => console.error("Failed to clear task search", error));
-}
-
 // Per-status counts for the chips: each section's total under the server-side
 // filter, loaded or not. A status that is off was never read.
 function statusCounts(context) {
@@ -537,8 +477,8 @@ function renderChips(context) {
   paintWorkspaceFilter();
 }
 
-// ORB-10874: the status filter and search query are represented in the tasks
-// hash (`#tasks?status=a,b&q=...`), mirroring the audit tab's buildAuditHash/
+// The status filters are represented in the tasks
+// hash (`#tasks?status=a,b`), mirroring the audit tab's buildAuditHash/
 // applyAuditHashQuery pair, so a reload or the browser's back/forward button
 // restores the same filtered view instead of resetting to the default.
 export function buildTasksHash(context) {
@@ -572,8 +512,6 @@ function filterParams(context) {
   if (pilotWarningsOnly) sp.set("pilot", "warnings");
   if (myWorkOnly) sp.set("crew", "mine");
   if (waitingOnly) sp.set("waiting", "you");
-  const q = searchQueryValue(context);
-  if (q) sp.set("q", q);
   return sp;
 }
 
@@ -597,7 +535,6 @@ export function buildTasksFilterHash(context) {
 // `page` is the `#tasks/<id>` route segment: that task's full-page view. It
 // names only the task, so the list filter behind it is left as it was.
 export function applyTasksHashQuery(query, context, page = null) {
-  cancelTaskSearchDebounce();
   const pageId = parseOpenTaskId(page);
   // A router replay of the route we just wrote is still the same lookup.
   // Retire it only when navigation actually changes the represented state.
@@ -607,7 +544,6 @@ export function applyTasksHashQuery(query, context, page = null) {
   const replay = pageId
     ? current === `#tasks/${encodeURIComponent(pageId)}${commentNumber ? `?comment=${commentNumber}` : ""}`
     : query.toString() === (current.split("?")[1] || "");
-  if (!replay && context?.cancelTaskLookup) context.cancelTaskLookup();
   if (taskState.openTaskId !== open) {
     taskState.selectedTaskWorkspace = null;
     if (taskState.selectedTaskId && taskState.selectedTaskId !== open) taskState.selectedTaskId = null;
@@ -631,8 +567,8 @@ export function applyTasksHashQuery(query, context, page = null) {
   if (fromPage && query.toString() === (buildTasksListHash(context).split("?")[1] || "")) return;
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
   // filter the operator already has; reading it as "no filter" would reset
-  // the chips and search to their defaults.
-  if (open && !["status", "q", "ready", "pilot", "crew", "waiting"].some((key) => query.has(key))) return;
+  // the chips to their defaults.
+  if (open && !["status", "ready", "pilot", "crew", "waiting"].some((key) => query.has(key))) return;
   // A replay names the list already shown. Back fires popstate and then
   // hashchange for the address the router just normalized; the second must
   // not send the list to its first page and top.
@@ -655,24 +591,15 @@ export function applyTasksHashQuery(query, context, page = null) {
   pilotWarningsOnly = query.get("pilot") === "warnings";
   myWorkOnly = query.get("crew") === "mine";
   waitingOnly = query.get("waiting") === "you";
-  setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
-// Re-syncs the search box and chip states from context after the hash (not a
-// direct user interaction with these controls) changed them — e.g. on load,
-// or after a back/forward navigation.
+// Re-sync chip states after the hash changed them, including Back/Forward.
 export function syncTaskControls(context) {
-  const search = $("task-search");
-  if (search) {
-    const q = searchQueryValue(context);
-    if (search.value !== q) search.value = q;
-  }
   refreshChips(context);
 }
 
 // An empty hash is the default Tasks board, as on a bare dashboard load.
-// Explicit Tasks entries include the list and a full page; other destinations
-// keep their own entry when a search debounce outlives a tab switch.
+// Explicit Tasks entries include the list and a full page.
 function onTasksEntry() {
   const hash = window.location.hash || "";
   return hash === "" || /^#tasks([/?]|$)/.test(hash);
@@ -963,31 +890,8 @@ function buildWorkspaceFilter(context) {
 onWorkspaceChange(() => paintWorkspaceFilter());
 onWorkspaceNamesChange(() => paintWorkspaceFilter());
 
-export function wireSearch(context) {
-  const input = $("task-search");
-  input.addEventListener("input", (e) => {
-    setSearchQuery(context, e.target.value.trim().toLowerCase());
-    cancelTaskSearchDebounce();
-    searchDebounce = setTimeout(() => {
-      searchDebounce = null;
-      navigateTasksHash(context);
-    }, 250);
-  });
-  // ORB-14495: `/` jumps to the task search while the Tasks view shows it. A
-  // field that takes typing keeps the key as a character.
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "/" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    const target = event.target;
-    if (target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select, dialog[open]")))) return;
-    if (input.getClientRects().length === 0) return;
-    event.preventDefault();
-    input.focus();
-    input.select();
-  });
-}
-
 // ORB-10874: a compact, always-visible restatement of the filters currently
-// narrowing the list — the chips/search box already encode this, but not in a
+// narrowing the list — the chips already encode this, but not in a
 // form a screen reader announces or a glance confirms without reading each
 // control. Rendered next to the count so "why am I seeing this many" is
 // answered in the same place as "how many is this".
@@ -1013,7 +917,5 @@ export function renderFilterSummary(context) {
       parts.push(`workspaces: ${workspaceIds.map((id) => workspaceDisplayName(id)).join(", ")}`);
     }
   }
-  const q = searchQueryValue(context);
-  if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
 }

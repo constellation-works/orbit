@@ -387,8 +387,8 @@ function phoneSheet() {
   }
 }
 
-// At phone width the open pane is a full-screen sheet: a modal dialog whose
-// background is inert until Close or Esc dismisses it.
+// At phone width the pane covers the board inside the content area. Only
+// that covered board becomes inert; global search and navigation stay usable.
 function syncPaneChrome(open) {
   const pane = $("task-detail-pane");
   if (!pane) return;
@@ -396,8 +396,8 @@ function syncPaneChrome(open) {
   if (sheet === sheetOpen) return;
   sheetOpen = sheet;
   if (sheet) {
-    pane.setAttribute("role", "dialog");
-    pane.setAttribute("aria-modal", "true");
+    pane.setAttribute("role", "region");
+    pane.removeAttribute("aria-modal");
     pane.setAttribute("aria-labelledby", "task-pane-title");
   } else if (typeof pane.removeAttribute === "function") {
     pane.removeAttribute("role");
@@ -411,7 +411,7 @@ function syncPaneChrome(open) {
 function setSheetInert(pane) {
   for (const node of sheetInert) node.inert = false;
   sheetInert = [];
-  for (let node = pane; node && node.parentElement && node !== document.body; node = node.parentElement) {
+  for (let node = pane; node && node.parentElement && node !== $("tasks-main"); node = node.parentElement) {
     for (const sibling of node.parentElement.children) {
       if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT") continue;
       sibling.inert = true;
