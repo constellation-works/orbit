@@ -239,10 +239,10 @@ pagination for a projection.
     exercises the broken behavior.
 - `parent_id` is not an `orbit.task.add` input and is refused as an unknown
   field, like `plan`, `status` and `dependencies`; use a `child_of` relation
-  in `relations` when creating a subtask. `source_task_id` is also retired
-  from `orbit.task.add`; for bug tasks, set it after creation with
-  `orbit.task.update` (which accepts the field), and use an empty string there
-  to clear it. `tags` (reuse existing before inventing new).
+  in `relations` when creating a subtask. For bug tasks, set `source_task_id`
+  at creation on `orbit.task.add` (or `--source-task` on the CLI), or after
+  creation with `orbit.task.update` (which also accepts an empty string to
+  clear it). `tags` (reuse existing before inventing new).
 - `required_tools: ["<exact.canonical.tool>", ...]` — tools the task requires.
   Allowlist activities add them to their baseline; deny-list activities refuse
   a requirement covered by `tool_disallow_list`, which it never overrides.

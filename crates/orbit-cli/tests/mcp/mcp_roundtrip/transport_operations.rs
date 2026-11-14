@@ -1374,6 +1374,50 @@ fn stdio_task_relations_report_missing_tasks_with_a_next_step() {
     }
 }
 
+/// Filing a bug with its regression source takes one `orbit_task_add` call,
+/// as `orbit task add --source-task` does, and the `source_task` hint never
+/// names a field the same operation then refuses [ORB-24767].
+fn stdio_task_add_accepts_source_task_id_at_creation() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let source = client.add_task("Culprit", "Disposable origin of the defect.");
+    let bug = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title":"Regression",
+            "description":"Disposable defect in what the culprit shipped.",
+            "complexity":"low",
+            "model":"codex",
+            "source_task_id":source,
+        }),
+    );
+    let bug_id = bug["id"].as_str().expect("created bug id");
+    let shown = client.call_tool_ok("orbit_task_show", json!({"id":bug_id}));
+    assert_eq!(
+        shown["source_task_id"], source,
+        "one add call must persist the regression source: {shown}"
+    );
+    let refused = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title":"Hint proof",
+            "description":"Disposable hint boundary.",
+            "complexity":"low",
+            "model":"codex",
+            "source_task":source,
+        }),
+    );
+    let message = refused["message"].as_str().expect("MCP error message");
+    assert!(
+        message.contains("source_task_id"),
+        "the `source_task` hint must name the accepted field: {message}"
+    );
+    assert!(
+        !message.contains("does not accept"),
+        "the hinted field must not be refused by the same operation [ORB-24767]: {message}"
+    );
+}
+
 #[test]
 fn artifact_and_auto_task_stdio_contracts() {
     for (name, check) in [
@@ -1396,6 +1440,10 @@ fn artifact_and_auto_task_stdio_contracts() {
         (
             "stdio_task_relations_report_missing_tasks_with_a_next_step",
             stdio_task_relations_report_missing_tasks_with_a_next_step as fn(),
+        ),
+        (
+            "stdio_task_add_accepts_source_task_id_at_creation",
+            stdio_task_add_accepts_source_task_id_at_creation as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

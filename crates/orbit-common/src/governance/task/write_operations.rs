@@ -9,10 +9,12 @@
 //!   JSON Schema conditionals guarded writes need live in `orbit-tools`'
 //!   schema-extension table.
 //! - CLI-only flags with no tool field: `add`'s `--parent`, `--dependencies`,
-//!   `--plan`, `--ref`, `--status` and `--source-task`, and `update`'s
-//!   `--approve`, `--force`, `--discard-candidate` and `--artifact`. The CLI
-//!   surface table carries them in [`TASK_CLI_OPTIONS_PARAM`], which only a
-//!   process-local caller may send.
+//!   `--plan`, `--ref` and `--status`, and `update`'s `--approve`, `--force`,
+//!   `--discard-candidate` and `--artifact`. The CLI surface table carries
+//!   them in [`TASK_CLI_OPTIONS_PARAM`], which only a process-local caller
+//!   may send. `add`'s `--source-task` keeps its CLI-only binding but shares
+//!   its semantics with the `source_task_id` tool field, which the CLI sends
+//!   through the same options object.
 //!
 //! **Every string below is shipped contract.**
 
@@ -144,7 +146,6 @@ const ADD_RETIRED_FIELDS: &[RetiredField] = &[
     RetiredField::unknown_field("plan", "set it with orbit.task.update"),
     RetiredField::unknown_field("status", "set it with orbit.task.update"),
     RetiredField::unknown_field("parent_id", "set it with orbit.task.update"),
-    RetiredField::unknown_field("source_task_id", "set it with orbit.task.update"),
     RetiredField::unknown_field("external_refs", "set it with orbit.task.update"),
     RetiredField::unknown_field("context", "use `context_files`"),
     RetiredField::unknown_field("comment", "set it with orbit.task.update"),
@@ -302,6 +303,11 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 "Task type (defaults to chore)",
             ),
             mcp_only("relations", ParamType::Array, "Typed task relations."),
+            mcp_only(
+                "source_task_id",
+                ParamType::String,
+                "For bug tasks: the originating task whose implementation introduced the defect.",
+            ),
             both(
                 "crew",
                 ParamType::String,
