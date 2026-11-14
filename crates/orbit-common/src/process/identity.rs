@@ -231,12 +231,8 @@ fn linux_lstart_utc(pid: u32) -> io::Result<Option<String>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    // comm (field 2) can contain spaces and ')', so split at its last ')'.
-    // The tail starts at field 3; starttime is field 22 (index 19).
-    let start_ticks = stat
-        .rsplit_once(')')
-        .and_then(|(_, tail)| tail.split_whitespace().nth(19))
-        .and_then(|field| field.parse::<u64>().ok())
+    let start_ticks = parse_linux_process_stat(&stat)
+        .map(|parsed| parsed.start_ticks)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid process starttime"))?;
     // Safety: sysconf only queries the host's clock-tick rate.
     let ticks_per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) })
@@ -512,6 +508,10 @@ pub fn linux_process_state(pid: u32) -> Option<(char, libc::pid_t)> {
 }
 
 /// The `/proc/<pid>/stat` fields a process-tree walk needs.
+///
+/// Single owner for `/proc/<pid>/stat` field offsets: every Linux caller
+/// parses through [`parse_linux_process_stat`] so a miscounted field cannot
+/// be wrong in one copy only.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinuxProcessStat {
@@ -523,6 +523,14 @@ pub struct LinuxProcessStat {
     /// Start time in clock ticks after boot. With the pid it names one
     /// process: a reused pid starts later.
     pub start_ticks: u64,
+    /// Own user CPU time in clock ticks (`utime`, field 14).
+    pub utime_ticks: u64,
+    /// Own system CPU time in clock ticks (`stime`, field 15).
+    pub stime_ticks: u64,
+    /// Waited-for children's user CPU time in clock ticks (`cutime`, field 16).
+    pub cutime_ticks: u64,
+    /// Waited-for children's system CPU time in clock ticks (`cstime`, field 17).
+    pub cstime_ticks: u64,
 }
 
 /// Parse `/proc/<pid>/stat`. `None` when the process is gone or its record
@@ -533,15 +541,29 @@ pub fn linux_process_stat(pid: u32) -> Option<LinuxProcessStat> {
     parse_linux_process_stat(&stat)
 }
 
+/// Parse one `/proc/<pid>/stat` line into its kernel fields.
+///
+/// The single owner for stat field offsets. Callers that read through an
+/// injected proc root, or that must tell "gone" from "unreadable", keep doing
+/// their own read and pass the text in here.
 #[cfg(target_os = "linux")]
-fn parse_linux_process_stat(stat: &str) -> Option<LinuxProcessStat> {
+pub fn parse_linux_process_stat(stat: &str) -> Option<LinuxProcessStat> {
     // comm (field 2) can contain spaces and ')', so split at its last ')'.
+    // The tail starts at field 3: state (0), ppid (1), pgrp (2), session
+    // (3), tty_nr (4), tpgid (5), flags (6), minflt (7), cminflt (8), majflt
+    // (9), cmajflt (10), utime (11), stime (12), cutime (13), cstime (14),
+    // priority (15), nice (16), num_threads (17), itrealvalue (18),
+    // starttime (19).
     let (_, tail) = stat.rsplit_once(')')?;
     let fields = tail.split_whitespace().collect::<Vec<_>>();
     Some(LinuxProcessStat {
         state: fields.first()?.chars().next()?,
         parent_pid: fields.get(1)?.parse().ok()?,
         process_group: fields.get(2)?.parse().ok()?,
+        utime_ticks: fields.get(11)?.parse().ok()?,
+        stime_ticks: fields.get(12)?.parse().ok()?,
+        cutime_ticks: fields.get(13)?.parse().ok()?,
+        cstime_ticks: fields.get(14)?.parse().ok()?,
         start_ticks: fields.get(19)?.parse().ok()?,
     })
 }
