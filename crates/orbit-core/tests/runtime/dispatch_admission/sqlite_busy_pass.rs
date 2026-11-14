@@ -134,10 +134,9 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
             .create_scalar_function("julianday", 1, FunctionFlags::SQLITE_UTF8, move |_| {
                 if !called_on_connection.swap(true, Ordering::SeqCst) {
                     let attempt = attempted.fetch_add(1, Ordering::SeqCst) + 1;
-                    let update = writer.run_tool_with_context_and_role(
+                    let update = writer.run_tool_with_context(
                         "orbit.task.update",
                         json!({"id": task_id, "title": format!("updated during GC {attempt}")}),
-                        orbit_types::policy::Role::Admin,
                         ToolContext {
                             session_context: orbit_types::tool::ToolSessionContext {
                                 effective_capabilities: std::collections::BTreeSet::from([
