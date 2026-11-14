@@ -1,6 +1,7 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Machine identity and workspace registry domain for Orbit.
 //!
 //! This crate owns machine identity, the logical workspace catalog, local

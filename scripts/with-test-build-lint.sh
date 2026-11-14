@@ -5,8 +5,10 @@
 # workspace members through clippy-driver with the all-targets lint flags of
 # `cargo clippy --workspace --all-targets -- -D warnings -A
 # clippy::disallowed_methods` (Makefile `ci-lint`). `-A
-# clippy::disallowed_methods` keeps test-only channels exempt; production
-# clippy still denies them.
+# clippy::disallowed_methods` keeps test-only channels exempt; the
+# crate-root `deny(clippy::disallowed_methods)` attributes still reject
+# them in production code, overriding this `-A`. This is the one lint
+# environment: every Clippy pass and `cargo doc` runs under it.
 #
 # Cargo fingerprints RUSTC_WORKSPACE_WRAPPER and the CLIPPY_ARGS value that
 # clippy-driver tracks. A later nextest run or nextest listing

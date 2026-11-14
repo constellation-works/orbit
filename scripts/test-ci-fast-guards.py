@@ -1118,13 +1118,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(len(doctests), 1, observed)
         for row in (*listing, *doctests):
             self.assertEqual({key: row[key] for key in lint}, lint, row)
-        # Documentation runs under production Clippy's lint environment, so it
+        # Documentation runs under the one lint environment, so it
         # reuses that pass's check of the workspace instead of repeating it.
+        # Production code denies clippy::disallowed_methods through the
+        # crate-root attributes, which override this `-A`.
         production_lint = {
             "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
             "CLIPPY_ARGS": (
                 "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-                "-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
+                "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
             ),
         }
         production = [row for row in observed if row["argv"][:1] in (["check"], ["doc"])]

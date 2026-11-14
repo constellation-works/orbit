@@ -4,6 +4,7 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 //! CLI entry point for Orbit: command parsing, dispatch, and output formatting.
 //!

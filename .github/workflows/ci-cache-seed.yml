@@ -123,7 +123,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       # Produce the same dependency units the Check job compiles: the host
-      # check and doc under the production lint wrapper, then the Apple-target
+      # check and doc under the one lint wrapper, then the Apple-target
       # type-check (libraries, binaries and tests, plain rustc). No guards and
       # no test execution. The Apple check is last so a failure of an earlier
       # command still stops the producer. Failed producers do not save a
@@ -132,7 +132,7 @@ jobs:
         if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
         env:
           RUSTC_WORKSPACE_WRAPPER: clippy-driver
-          CLIPPY_ARGS: '-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
+          CLIPPY_ARGS: '-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
         run: |
           set -euo pipefail
           cargo check --locked --workspace --lib --bins

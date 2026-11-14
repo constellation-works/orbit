@@ -181,22 +181,29 @@ ci-fast:
 ci-test-affected:
 	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" ORBIT_VALIDATION_GATE="make ci-test-affected" python3 ./scripts/ci-test-affected.py
 
-# Compile-time pre-handoff gate for agents. Production clippy denies
-# clippy::disallowed_methods (unbounded channels). The all-targets pass keeps
-# the other workspace lints and allows that lint, so test-only channels stay
-# legal. These two clippy commands are unchanged: this gate does not build
-# test binaries, so it cannot fold the all-targets lint into a test build.
-# The CI job does that fold inside scripts/check-ci-macos.sh --workspace-build
-# and no longer runs a second clippy-all-targets phase
-# (scripts/ci-guardrails.sh). Rustdoc then denies warnings (private intra-doc
-# links turned agent-main red twice on 2026-10-07 because no agent gate built
-# docs).
+# Compile-time pre-handoff gate for agents. Every pass runs under the one
+# folded-build lint environment (`-D warnings -A
+# clippy::disallowed_methods`), so all three reuse the same checked units
+# instead of invalidating each other through CLIPPY_ARGS. Production code
+# still denies clippy::disallowed_methods (unbounded channels) through the
+# crate-root `deny` attributes, which override the command-line `-A`;
+# test and test-feature code stays exempt, and item-level `allow`s still
+# apply. Both clippy passes stay: the lib/bins pass covers the
+# `not(feature = "test-support")` sites the all-targets build cfg's out.
+# This gate does not build test binaries, so it cannot fold the
+# all-targets lint into a test build. The CI job does that fold inside
+# scripts/check-ci-macos.sh --workspace-build and no longer runs a second
+# clippy-all-targets phase (scripts/ci-guardrails.sh). Rustdoc then denies
+# warnings (private intra-doc links turned agent-main red twice on
+# 2026-10-07 because no agent gate built docs), under the same lint
+# environment so it reuses Clippy's check instead of re-checking with
+# plain rustc.
 ci-lint:
 	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -A clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
-	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
+	RUSTDOCFLAGS="-D warnings" ./scripts/with-test-build-lint.sh $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
 # MCP tools/list snapshot, CI/GitHub log fixtures, sandbox profiles, and store and

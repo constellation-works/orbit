@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Orbit's Model Context Protocol framing, tool surface, and transports.
 //!
 //! This crate owns protocol framing, advertised-name translation, structured

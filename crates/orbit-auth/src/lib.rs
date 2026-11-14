@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Orbit's credential code: lease tokens for the lease listener user.
 //!
 //! One crate owns every credential mechanism so one place carries the

@@ -196,7 +196,7 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
                                          ["clippy-driver", "clippy-driver", None])
                         self.assertEqual(commands[1]["doc"], "-D warnings")
                         self.assertIsNone(commands[2]["lint"])
-                        self.assertTrue(all("-D__CLIPPY_HACKERY__clippy::disallowed_methods" in c["lint"]
+                        self.assertTrue(all("-A__CLIPPY_HACKERY__clippy::disallowed_methods" in c["lint"]
                                             for c in commands[:2]))
                     else:
                         self.assertTrue(all(c["wrapper"] == "clippy-driver" for c in commands))

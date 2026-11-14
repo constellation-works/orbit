@@ -1,6 +1,7 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 //! Orbit's `config.toml` owner: schema admission, layered resolution, source
 //! provenance, resolved views, comment-preserving mutation, validation,

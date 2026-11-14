@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Process spawning, sandboxing, and timeout handling for Orbit tool execution.
 //!
 //! Provides the low-level primitives for launching child processes with
