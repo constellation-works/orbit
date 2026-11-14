@@ -5,11 +5,11 @@ pub const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
 
 /// The authoritative failure text, excluding a generic CLI stderr tail.
 ///
-/// Wrappers may prefix a step or run name. Only the generic exit format can
-/// introduce this suffix — either the bare exit or the exit followed by a
-/// provider terminal diagnostic [ORB-24697]; provider-specific diagnostics
-/// retain their existing classification. Stderr can quote denial words,
-/// typed failure markers or the check-repair handoff without acquiring
+/// Wrappers may prefix a step or run name. Only generic CLI failures can
+/// introduce this suffix: a bare exit or signal termination, or either form
+/// followed by a provider terminal diagnostic [ORB-24697]. Provider-specific
+/// diagnostics retain their existing classification. Stderr can quote denial
+/// words, typed failure markers or the check-repair handoff without acquiring
 /// control-plane meaning.
 #[must_use]
 pub fn failure_classification_text(message: &str) -> &str {
@@ -23,9 +23,10 @@ pub fn failure_classification_text(message: &str) -> &str {
                 .next()
                 .is_some_and(|code| code.parse::<i32>().is_ok())
         });
-    if generic_exit
-        || failure.ends_with("cli subprocess was terminated by a signal and reported no exit code")
-    {
+    let generic_signal = failure
+        .rsplit_once("cli subprocess was terminated by a signal and reported no exit code")
+        .is_some_and(|(_, diagnostic)| diagnostic.is_empty() || diagnostic.starts_with(' '));
+    if generic_exit || generic_signal {
         failure
     } else {
         message
