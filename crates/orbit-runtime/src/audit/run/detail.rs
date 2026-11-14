@@ -2,20 +2,21 @@
 //! invocation logs read from a fixed metadata budget, however long the run's
 //! audit trail has grown.
 //!
-//! [`RuntimeKernel::collect_run_execution_progress`] and the CLI-invocation
-//! collectors replay the complete trail, so their cost grows with every
-//! provider event a run has written. This reader selects metadata by kind
-//! store-side instead: a prefix of step lifecycle rows, the newest provider
-//! spawn and completion rows, the newest provider samples since those, the
-//! ancestors that place them in a step, and exactly the requested log page.
-//! Counts and presence come from the store. When a class of rows exceeds its
-//! budget the projection says so in [`BoundedRunDetail::complete`] rather
-//! than presenting a partial view as the whole history.
+//! [`RuntimeKernel::collect_run_execution_progress`] is served from this
+//! reader; the full CLI-invocation collectors still replay the complete
+//! trail, so their cost grows with every provider event a run has written.
+//! This reader selects metadata by kind store-side instead: a prefix of
+//! step lifecycle rows, the newest provider spawn and completion rows, the
+//! newest provider samples since those, the ancestors that place them in a
+//! step, and exactly the requested log page. Counts and presence come from
+//! the store. When a class of rows exceeds its budget the projection says
+//! so in [`BoundedRunDetail::complete`] rather than presenting a partial
+//! view as the whole history.
 
 use std::collections::{HashMap, HashSet};
 
 use orbit_common::OrbitError;
-use orbit_common::process::identity::probe_process_liveness;
+use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_store::V2AuditEventRow;
 use orbit_store::contracts::V2AuditStoreBackend;
@@ -59,6 +60,47 @@ const ANCESTOR_ROW_BUDGET: usize = 256;
 const MAX_ANCESTRY_DEPTH: usize = 16;
 /// Event ids per lookup, under SQLite's bound-parameter cap.
 const ANCESTOR_LOOKUP_CHUNK: usize = 500;
+/// Most audit rows a bounded progress read can load: every window budget,
+/// one probe row per windowed class, and the ancestor budget.
+pub(crate) const BOUNDED_PROGRESS_ROW_BUDGET: usize = STEP_LIFECYCLE_ROW_BUDGET
+    + PROVIDER_STRUCTURAL_ROW_BUDGET
+    + PROVIDER_SAMPLE_ROW_BUDGET
+    + 3
+    + ANCESTOR_ROW_BUDGET;
+
+/// The progress half of a bounded run-detail read.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BoundedRunProgress {
+    pub progress: RunExecutionProgress,
+    /// Steps reconstructed from the bounded lifecycle prefix.
+    pub steps: Vec<RunAuditStep>,
+    /// Whether the lifecycle prefix includes every lifecycle row.
+    pub steps_complete: bool,
+    /// False when some class of progress metadata exceeded its budget.
+    pub complete: bool,
+    /// Audit rows this read loaded, never more than
+    /// [`BOUNDED_PROGRESS_ROW_BUDGET`].
+    pub rows_read: usize,
+}
+
+/// Kind-filtered windows that decide bounded progress.
+struct ProgressWindows {
+    lifecycle: Vec<ParsedRow>,
+    provider: Vec<ParsedRow>,
+    steps_complete: bool,
+    structural_complete: bool,
+    samples_complete: bool,
+}
+
+/// Progress projected from [`ProgressWindows`], plus the lookup tables a
+/// caller needs to place extra rows (such as a log page) in their steps.
+struct ProgressProjection {
+    progress: RunExecutionProgress,
+    steps: Vec<RunAuditStep>,
+    step_indices: HashMap<String, u32>,
+    known: HashMap<String, Value>,
+    ancestry_complete: bool,
+}
 
 /// What a bounded run-detail read observed.
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +130,155 @@ pub struct BoundedRunDetail {
 }
 
 impl RuntimeKernel {
+    /// Bounded progress for a run: the progress half of
+    /// [`Self::collect_bounded_run_detail`], with the liveness probe injected
+    /// so pairing and projection can be asserted without real live PIDs.
+    ///
+    /// Loads at most [`BOUNDED_PROGRESS_ROW_BUDGET`] audit rows
+    /// (512 lifecycle + 256 structural + 256 samples + 256 ancestors + 3
+    /// probe rows), however long the trail has grown.
+    pub(crate) fn collect_bounded_run_progress_with<P>(
+        &self,
+        run_id: &str,
+        probe: P,
+    ) -> Result<BoundedRunProgress, OrbitError>
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        let workspace_id = self.workspace_id()?;
+        let store = self.v2_audit_store()?;
+        let present = store
+            .list_v2_audit_run_ids_with_events(&workspace_id, &[run_id.to_string()], Some(SOURCE))?
+            .contains(run_id);
+        if !present {
+            return Ok(BoundedRunProgress {
+                progress: RunExecutionProgress::unavailable(),
+                steps: Vec::new(),
+                steps_complete: true,
+                complete: true,
+                rows_read: 0,
+            });
+        }
+        let mut reader = TrailReader {
+            store: store.as_ref(),
+            workspace_id,
+            run_id,
+            rows_read: 0,
+        };
+        let windows = Self::read_progress_windows(&mut reader)?;
+        let projection = Self::project_bounded_progress(&mut reader, &windows, &[], run_id, probe)?;
+        Ok(BoundedRunProgress {
+            complete: windows.steps_complete
+                && windows.structural_complete
+                && windows.samples_complete
+                && projection.ancestry_complete,
+            steps_complete: windows.steps_complete,
+            progress: projection.progress,
+            steps: projection.steps,
+            rows_read: reader.rows_read,
+        })
+    }
+
+    /// Read the lifecycle, structural and sample windows for bounded
+    /// progress. Each window reads one probe row past its budget to tell
+    /// whether it is complete.
+    fn read_progress_windows(reader: &mut TrailReader) -> Result<ProgressWindows, OrbitError> {
+        let (lifecycle, steps_complete) =
+            reader.window(&STEP_LIFECYCLE_KINDS, true, None, STEP_LIFECYCLE_ROW_BUDGET)?;
+        let (mut structural, structural_complete) = reader.window(
+            &PROVIDER_STRUCTURAL_KINDS,
+            false,
+            None,
+            PROVIDER_STRUCTURAL_ROW_BUDGET,
+        )?;
+        structural.reverse();
+        // A sample older than every structural row read can only belong to a
+        // child spawned outside the window.
+        let (samples, samples_complete) = match structural.first() {
+            Some(anchor) => reader.window(
+                &PROVIDER_SAMPLE_KINDS,
+                false,
+                Some(anchor.ts),
+                PROVIDER_SAMPLE_ROW_BUDGET,
+            )?,
+            None => (Vec::new(), true),
+        };
+        let lifecycle = parse_rows(lifecycle);
+        let mut provider = parse_rows(structural);
+        provider.extend(parse_rows(samples));
+        // Trail order, as the full replay sees it.
+        provider.sort_by_key(|row| (row.ts, row.id));
+        Ok(ProgressWindows {
+            lifecycle,
+            provider,
+            steps_complete,
+            structural_complete,
+            samples_complete,
+        })
+    }
+
+    /// Resolve ancestors for the windowed provider rows (and any `extra`
+    /// rows the caller needs placed, such as a log page) and project them
+    /// into progress. `truncated` is set when children were dropped by the
+    /// provider bound or when the structural window overflowed; the active
+    /// step is reported only when the lifecycle prefix is complete.
+    fn project_bounded_progress<P>(
+        reader: &mut TrailReader,
+        windows: &ProgressWindows,
+        extra: &[ParsedRow],
+        run_id: &str,
+        probe: P,
+    ) -> Result<ProgressProjection, OrbitError>
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        let mut known = HashMap::new();
+        for row in windows
+            .lifecycle
+            .iter()
+            .chain(&windows.provider)
+            .chain(extra)
+        {
+            known.insert(row.event_id.clone(), row.raw.clone());
+        }
+        let ancestry_complete =
+            reader.resolve_ancestors(windows.provider.iter().chain(extra), &mut known)?;
+        let events = |rows: &[ParsedRow]| -> Vec<RunAuditEvent> {
+            rows.iter()
+                .map(|row| run_audit_event(row.event_id.clone(), row.raw.clone(), &known))
+                .collect()
+        };
+        let steps = audit_steps_from_events(&events(&windows.lifecycle));
+        let step_indices = step_index_by_id(&steps);
+        // Indices from the prefix are exact, but a step whose finish lies
+        // past it would look open, so a truncated prefix names no active
+        // step.
+        let active_step = steps
+            .iter()
+            .rev()
+            .find(|step| windows.steps_complete && step.finished_at.is_none())
+            .cloned();
+        let records =
+            provider_processes_from_events(run_id, events(&windows.provider), &step_indices, probe);
+        let (provider_processes, dropped) =
+            bound_provider_processes(records, MAX_PROVIDER_PROCESSES);
+        let progress = RunExecutionProgress {
+            state: "observed",
+            active_step,
+            provider_processes,
+            limit: MAX_PROVIDER_PROCESSES,
+            // Children spawned before the window may exist unseen.
+            truncated: dropped || !windows.structural_complete,
+        };
+        Ok(ProgressProjection {
+            progress,
+            steps,
+            step_indices,
+            known,
+            ancestry_complete,
+        })
+    }
+
     /// Progress and one page of CLI invocation logs for a run, reading at most
     /// `BoundedRunDetail::row_budget` audit rows.
     ///
@@ -102,12 +293,7 @@ impl RuntimeKernel {
         log_limit: usize,
         blob_preview_max_bytes: usize,
     ) -> Result<BoundedRunDetail, OrbitError> {
-        let row_budget = STEP_LIFECYCLE_ROW_BUDGET
-            + PROVIDER_STRUCTURAL_ROW_BUDGET
-            + PROVIDER_SAMPLE_ROW_BUDGET
-            + 3
-            + ANCESTOR_ROW_BUDGET
-            + log_limit;
+        let row_budget = BOUNDED_PROGRESS_ROW_BUDGET + log_limit;
         let workspace_id = self.workspace_id()?;
         let store = self.v2_audit_store()?;
         let present = store
@@ -133,26 +319,7 @@ impl RuntimeKernel {
             run_id,
             rows_read: 0,
         };
-        let (lifecycle, steps_complete) =
-            reader.window(&STEP_LIFECYCLE_KINDS, true, None, STEP_LIFECYCLE_ROW_BUDGET)?;
-        let (mut structural, structural_complete) = reader.window(
-            &PROVIDER_STRUCTURAL_KINDS,
-            false,
-            None,
-            PROVIDER_STRUCTURAL_ROW_BUDGET,
-        )?;
-        structural.reverse();
-        // A sample older than every structural row read can only belong to a
-        // child spawned outside the window.
-        let (samples, samples_complete) = match structural.first() {
-            Some(anchor) => reader.window(
-                &PROVIDER_SAMPLE_KINDS,
-                false,
-                Some(anchor.ts),
-                PROVIDER_SAMPLE_ROW_BUDGET,
-            )?,
-            None => (Vec::new(), true),
-        };
+        let windows = Self::read_progress_windows(&mut reader)?;
         let logs_total = usize::try_from(reader.store.count_v2_audit_events(&reader.filter(
             &[LOG_KIND],
             true,
@@ -168,76 +335,41 @@ impl RuntimeKernel {
                 ..reader.filter(&[LOG_KIND], true, None, Some(log_limit))
             })?
         };
-
-        let lifecycle = parse_rows(lifecycle);
-        let mut provider = parse_rows(structural);
-        provider.extend(parse_rows(samples));
-        // Trail order, as the full replay sees it.
-        provider.sort_by_key(|row| (row.ts, row.id));
         let log_rows = parse_rows(log_rows);
-
-        let mut known = HashMap::new();
-        for row in lifecycle.iter().chain(&provider).chain(&log_rows) {
-            known.insert(row.event_id.clone(), row.raw.clone());
-        }
-        let ancestry_complete =
-            reader.resolve_ancestors(provider.iter().chain(&log_rows), &mut known)?;
-
-        let events = |rows: Vec<ParsedRow>| -> Vec<RunAuditEvent> {
-            rows.into_iter()
-                .map(|row| run_audit_event(row.event_id, row.raw, &known))
-                .collect()
-        };
-        let steps = audit_steps_from_events(&events(lifecycle));
-        let step_indices = step_index_by_id(&steps);
-        // Indices from the prefix are exact, but a step whose finish lies past
-        // it would look open, so a truncated prefix names no active step.
-        let active_step = steps
-            .iter()
-            .rev()
-            .find(|step| steps_complete && step.finished_at.is_none())
-            .cloned();
-        let records = provider_processes_from_events(
+        let projection = Self::project_bounded_progress(
+            &mut reader,
+            &windows,
+            &log_rows,
             run_id,
-            events(provider),
-            &step_indices,
             probe_process_liveness,
-        );
-        let (provider_processes, dropped) =
-            bound_provider_processes(records, MAX_PROVIDER_PROCESSES);
+        )?;
 
         let blob_store = BlobStore::new(self.v2_audit_blob_root());
-        let logs = events(log_rows)
+        let logs = log_rows
             .into_iter()
+            .map(|row| run_audit_event(row.event_id, row.raw, &projection.known))
             .map(|event| {
                 cli_invocation_record(
                     run_id,
                     event,
                     &blob_store,
                     Some(blob_preview_max_bytes),
-                    &step_indices,
+                    &projection.step_indices,
                 )
             })
             .collect();
 
         Ok(BoundedRunDetail {
             state: "observed",
-            steps,
-            steps_complete,
-            progress: RunExecutionProgress {
-                state: "observed",
-                active_step,
-                provider_processes,
-                limit: MAX_PROVIDER_PROCESSES,
-                // Children spawned before the window may exist unseen.
-                truncated: dropped || !structural_complete,
-            },
+            steps: projection.steps,
+            steps_complete: windows.steps_complete,
+            progress: projection.progress,
             logs_total,
             logs,
-            complete: steps_complete
-                && structural_complete
-                && samples_complete
-                && ancestry_complete,
+            complete: windows.steps_complete
+                && windows.structural_complete
+                && windows.samples_complete
+                && projection.ancestry_complete,
             rows_read: reader.rows_read,
             row_budget,
         })

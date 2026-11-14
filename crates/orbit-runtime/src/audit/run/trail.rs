@@ -11,8 +11,8 @@ use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
 use super::projection::{
-    audit_step_attempts_from_events, audit_steps_from_events, bound_provider_processes,
-    cli_invocation_record, latest_timestamp_from_envelope_rows, provider_processes_from_events,
+    audit_step_attempts_from_events, audit_steps_from_events, cli_invocation_record,
+    latest_timestamp_from_envelope_rows, provider_processes_from_events,
     recovery_attempts_from_partitioned_rows, run_audit_event, step_index_by_id,
 };
 
@@ -459,7 +459,11 @@ impl RuntimeKernel {
     }
 
     /// Inner, testable form of [`Self::collect_run_execution_progress`] with the
-    /// liveness probe injected.
+    /// liveness probe injected. Served from the bounded audit windows in
+    /// [`super::detail`]: at most `512 + 256 + 256 + 256 + 3` rows are loaded
+    /// however long the trail has grown, `truncated` is also set when the
+    /// structural window overflowed, and the active step is reported only
+    /// when the lifecycle prefix is complete.
     pub(crate) fn collect_run_execution_progress_with<P>(
         &self,
         run_id: &str,
@@ -468,31 +472,9 @@ impl RuntimeKernel {
     where
         P: Fn(u32, Option<&str>) -> ProcessLiveness,
     {
-        let events = self.collect_run_audit_events(run_id)?;
-        if events.is_empty() {
-            return Ok(RunExecutionProgress::unavailable());
-        }
-
-        let steps = audit_steps_from_events(&events);
-        // Parallel activities can leave several steps open at once; the newest
-        // one is what "what is it doing now" means to an operator.
-        let active_step = steps
-            .iter()
-            .rev()
-            .find(|step| step.finished_at.is_none())
-            .cloned();
-        let records =
-            provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
-        let (provider_processes, truncated) =
-            bound_provider_processes(records, MAX_PROVIDER_PROCESSES);
-
-        Ok(RunExecutionProgress {
-            state: "observed",
-            active_step,
-            provider_processes,
-            limit: MAX_PROVIDER_PROCESSES,
-            truncated,
-        })
+        Ok(self
+            .collect_bounded_run_progress_with(run_id, probe)?
+            .progress)
     }
 
     pub fn collect_run_audit_events(&self, run_id: &str) -> Result<Vec<RunAuditEvent>, OrbitError> {
