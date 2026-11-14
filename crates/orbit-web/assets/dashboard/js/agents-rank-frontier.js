@@ -154,6 +154,7 @@ function plotWrap(chart, label) {
       if (wrap.clientWidth > 0) draw();
     });
     observer.observe(wrap);
+    wrap.teardown = () => observer.disconnect();
   }
   // First paint happens before the node is attached and measurable.
   requestAnimationFrame(() => { if (wrap.isConnected && wrap.clientWidth > 0) draw(); });

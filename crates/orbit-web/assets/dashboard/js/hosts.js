@@ -703,14 +703,9 @@ async function mutate(session, request, onSuccess) {
   session.pending = true;
   session.error = null;
   render();
+  let response;
   try {
-    const response = await request();
-    if (editing !== session) return;
-    editing = null;
-    notice = onSuccess(response);
-    if (response?.host) remember([response.host]);
-    await fetchAndRenderHosts({ probe: false });
-    returnFocus(session);
+    response = await request();
   } catch (error) {
     if (editing !== session) return;
     session.pending = false;
@@ -719,7 +714,22 @@ async function mutate(session, request, onSuccess) {
     session.dependents = error.body?.dependents || null;
     render();
     focusEditor();
+    return;
   }
+  if (editing !== session) return;
+  editing = null;
+  notice = onSuccess(response);
+  if (response?.host) remember([response.host]);
+  try {
+    await fetchAndRenderHosts({ probe: false });
+  } catch (error) {
+    // The mutation already succeeded; a refresh failure must not be
+    // swallowed as if the edit were still open or had failed.
+    console.error("Failed to refresh hosts after mutation", error);
+    notice = `${notice} Refresh failed: ${error.message}. Use Reload to try again.`;
+    render();
+  }
+  returnFocus(session);
 }
 
 function submitAdd(ssh, name) {

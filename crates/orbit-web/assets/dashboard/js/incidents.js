@@ -70,7 +70,17 @@ let lastPayload = null;
 let lastCtx = {};
 let layout = null;
 // Full messages loaded for the detail panel, by host, workspace and audit row.
+// Bounded so a long session cannot accumulate message bodies indefinitely.
+const FULL_MESSAGE_CACHE_LIMIT = 50;
 const fullMessageLoads = new Map();
+
+function cacheFullMessage(key, value) {
+  fullMessageLoads.delete(key);
+  fullMessageLoads.set(key, value);
+  while (fullMessageLoads.size > FULL_MESSAGE_CACHE_LIMIT) {
+    fullMessageLoads.delete(fullMessageLoads.keys().next().value);
+  }
+}
 
 onWorkspaceChange(() => {
   fullMessageLoads.clear();
@@ -1078,14 +1088,14 @@ function loadFullMessage(eventId) {
   const current = fullMessageLoads.get(key);
   if (current && current.state !== "error") return;
   const revision = getWorkspaceRevision();
-  fullMessageLoads.set(key, { state: "loading" });
+  cacheFullMessage(key, { state: "loading" });
   rerender();
   fetchJson(`/api/audit/events/${encodeURIComponent(eventId)}/message`).then(body => {
     if (revision !== getWorkspaceRevision()) return;
-    fullMessageLoads.set(key, { state: "done", text: body && typeof body.message === "string" ? body.message : "" });
+    cacheFullMessage(key, { state: "done", text: body && typeof body.message === "string" ? body.message : "" });
   }, error => {
     if (revision !== getWorkspaceRevision()) return;
-    fullMessageLoads.set(key, { state: "error", error: (error && error.message) || String(error) });
+    cacheFullMessage(key, { state: "error", error: (error && error.message) || String(error) });
   }).finally(() => {
     if (revision !== getWorkspaceRevision()) return;
     // Another Health tab may own the panel by now; only repaint this one.

@@ -76,13 +76,17 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
       const response = await fetch(withHost(path), {
         headers: { accept: 'application/json' }, signal: request.signal,
       });
-      const body = await response.json();
       if (!response.ok) {
-        const error = new Error(body?.error || `Lookup failed (${response.status})`);
+        let detail = `Lookup failed (${response.status})`;
+        try {
+          const body = await response.json();
+          if (body?.error) detail = body.error;
+        } catch (_) { /* a non-JSON failure keeps the HTTP status */ }
+        const error = new Error(detail);
         error.status = response.status;
         throw error;
       }
-      return body;
+      return await response.json();
     } finally {
       clearTimeout(timeout);
     }
