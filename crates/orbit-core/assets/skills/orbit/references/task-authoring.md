@@ -20,9 +20,17 @@ pickup. Do not confuse a task description with a design document or a transcript
   slice to demonstrate behavior that needs its downstream consumer: use the
   agreed interface and isolated fixtures, and assign end-to-end proof to integration.
 - **Decisions and constraints:** separate settled product choices from choices the
-  implementer can make. Include compatibility, authority, rollout or resource
-  constraints only where they affect this task. Ask for a consequential missing
-  decision; do not ask for permission to make ordinary implementation choices.
+  implementer can make. Before filing, resolve every consequential policy or
+  contract choice named by the task, including either/or policy, ownership or
+  sign-off, and contract-scope choices. Record the selected option and its
+  authority or basis in the description; acceptance criteria must describe that
+  outcome instead of asking the implementer to choose. If only an operator can
+  decide, make the handoff the task's explicit outcome: name the decision owner,
+  the choice or action they own, and what work waits for their answer. File a
+  finite-choice handoff as a human-crew decision task with `orbit.decision` (see
+  [Work only a human can do](#work-only-a-human-can-do)), and add a
+  dependency from the implementation task. Keep ordinary implementation choices
+  delegated.
 - **Data and contract semantics:** for analytics or listing tasks, state in the
   acceptance criteria the denominator (or eligible record set), how absent, null
   and empty values differ for relevant fields, and how legacy records are
