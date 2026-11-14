@@ -207,6 +207,8 @@ pub(super) fn run_costs(
         since: Some(horizon),
         until: Some(until),
         limit: LIMIT,
+        // Costs read only the invocation rows and their task links.
+        skip_tool_calls: true,
         ..Default::default()
     }) {
         Ok(records) if records.len() < LIMIT => records,

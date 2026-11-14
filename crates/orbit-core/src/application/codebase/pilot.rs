@@ -86,6 +86,8 @@ impl RunRecord {
         match runtime.workspace_invocation_records(InvocationQuery {
             job_run_id: Some(self.run.run_id.clone()),
             limit: LIMIT,
+            // Pilot identity reads activity, task links, model and token totals only.
+            skip_tool_calls: true,
             ..Default::default()
         }) {
             Ok(records) if records.len() < LIMIT => records,
