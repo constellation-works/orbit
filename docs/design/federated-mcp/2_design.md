@@ -1,7 +1,7 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-11-08
+last_updated: 2026-11-14
 last_validated: 2026-11-08
 status: Draft
 feature: federated-mcp
@@ -136,7 +136,7 @@ The precedence above covers everything decidable **before** the destination sees
 
 **Two budgets, not one.** SSH setup, the MCP handshake, discovery, and `tools/list` share one probe budget, because a caller cannot tell those phases apart. The routed `tools/call` gets its own, larger budget, stamped when its request is written. A single session-wide deadline would spend the tool's execution time on the round trips that merely chose the destination, and would cap every routed tool — including `orbit.command.exec` and `orbit.workflow` action `ship` — at whatever classification left over.
 
-Destination sessions reuse the direct proxy's [SSH connection defaults](../mcp-bridge/2_design.md#direct-ssh-stdio): private hashed control sockets and a 60-second idle master, with native user SSH settings taking precedence. MCP processes, discovery, handshakes, and request budgets remain per session; this shares the transport without caching destination health or replaying a call.
+Destination sessions reuse the direct proxy's [SSH connection defaults](../mcp-bridge/2_design.md#direct-ssh-stdio): private hashed control sockets and a 60-second idle master, with native user SSH settings taking precedence. A routed call also reuses the MCP session itself: after an intact answer, the `ssh` child and the remote `orbit mcp serve` it started are parked — at most one per destination, whatever its SSH argv and handshake binding — for the same 60 seconds, and the next matching call checks it out exclusively after a bounded `ping` health check instead of spawning and initializing a new one [ORB-24377]. Discovery, identity confirmation, `tools/list` and both request budgets still run per call, so this shares the transport without caching destination health or replaying a call. A session whose last answer was lost (`outcome_unknown`), that was refused before dispatch, or that still has anything unread is closed, never parked; a parked session that fails its health check or this call's discovery is discarded and replaced by a fresh one before anything is dispatched. Opening any fresh session to a destination — a differently-shaped routed call or a listing — first closes the session parked for it, so an idle parked runtime never holds the destination's runtime lock against the fresh one. Listing (`orbit.workspace.list`, `orbit host list`) always opens fresh sessions. See [the decision](./4_decisions.md#routed-calls-reuse-the-transport-never-what-a-destination-said).
 
 **A lost answer after dispatch is `outcome_unknown`, not `unreachable_destination`.** Once the request is on the wire the destination may have run and committed it, and killing the SSH child does not undo remote work. `unreachable_destination` means a delivery miss, which invites a retry; retrying a possibly-committed `orbit.task.add` or `orbit.workflow` action `ship` duplicates it. A loss *before* the request is written — including a failed write — is still `unreachable_destination`, because nothing was delivered. `outcome_unknown` is a post-dispatch outcome and does not enter the precedence ladder.
 
