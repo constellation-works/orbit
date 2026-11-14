@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
-last_validated: 2026-10-27
+last_validated: 2026-11-14
 ---
 
 # Operate the Review Gate
@@ -365,16 +365,24 @@ unrecorded HEAD change still fails with `worktree_head_changed`.
 
 There is a second, independent route that needs no final-recovery repair
 receipt. A before-landing reviewer may commit its own repair in the same
-worktree and settle with that commit as its final candidate. When the
-settlement the gate published for this task — the typed record in the task's
-history, or a legacy comment settlement in the gate's own format that the
-decoder recognizes — records that exact HEAD and the HEAD descends from
-the pinned base, the commit step admits it as the candidate instead of
-failing with `worktree_head_changed`. A clean tree is accepted as already
-committed; a
-resumed implementation that edits on top of that HEAD has its changes
-committed as one workflow-authored commit on top of it. The match is exact:
-an extra commit above the recorded final commit, a HEAD no settlement
+worktree and settle with that commit as its final candidate. The commit
+step admits that HEAD, when it descends from the pinned base, only from
+trusted settlement evidence:
+
+- the typed settlement in the task's history, which the gate writes with
+  the verdict and which an ordinary task comment cannot create
+- a legacy comment settlement from before that typed record, and only when
+  the comment's stored author is `system` (the host stamp on a system
+  write)
+
+The comment's sentences are display text. An implementer, reviewer, or
+other caller can post the same format through the public task update, and
+that comment does not admit HEAD: the step still fails with
+`worktree_head_changed` before it stages anything. A clean tree whose HEAD
+matches trusted evidence is accepted as already committed. A resumed
+implementation that edits on top of that HEAD has its changes committed as
+one workflow-authored commit on top of it. The match is exact: an extra
+commit above the recorded final commit, a HEAD no trusted settlement
 recorded, or a recorded HEAD that does not descend from the pin still fails
 closed. Legacy settlements that abbreviate the commit id only authorize the
 commit their hexadecimal prefix resolves to; a symbolic revision such as
