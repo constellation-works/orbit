@@ -151,6 +151,12 @@ from the host's own commit and merge step records. Missing or inconsistent
 evidence is reported as unavailable, never inferred. Full run details remain
 on the operator-only `orbit.run` action `show`.
 
+A paginated claimed read of `orbit.task.show` (any of `limit`,
+`comments_offset`, `history_offset` or `artifacts_offset`) accepts only `id`,
+`model`, `limit` and the three offsets, and cannot be combined with `fields`,
+`field` or `run_id`. Drop the projection to page the full task, or drop
+pagination for a projection.
+
 ## Behavior-affecting optional fields
 
 - `context_files: ["file:<path>", "dir:<path>", "symbol:<path>#<name>:<kind>"]`

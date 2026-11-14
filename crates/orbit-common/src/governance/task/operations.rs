@@ -549,7 +549,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Fields to return, keyed (even one); `delivery` alone.",
+                    "No pagination with a projection on a claimed read. Fields to return, keyed (even one); `delivery` alone selects delivery evidence. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
@@ -562,14 +562,14 @@ const SHOW: TaskOperation = TaskOperation {
                         multiple: true,
                     },
                     help: Description::Static(
-                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`.",
+                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
                     ),
                 }),
             },
             mcp_only(
                 "field",
                 ParamType::String,
-                "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
+                "No pagination with a projection on a claimed read. Compatibility alias for a single field projection, for example `field: \"artifacts\"`. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
             ),
             ParamSpec {
                 mcp_description: Some(Description::Computed(show_run_id_description)),
@@ -581,13 +581,25 @@ const SHOW: TaskOperation = TaskOperation {
                 "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
             ),
             BOUNDED_VIEW_PARAM,
-            mcp_only("limit", ParamType::Integer, "Bounded detail page size"),
-            mcp_only("comments_offset", ParamType::Integer, "Comment offset"),
-            mcp_only("history_offset", ParamType::Integer, "History offset"),
+            mcp_only(
+                "limit",
+                ParamType::Integer,
+                "No projection with pagination on a claimed read. Bounded detail page size for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+            ),
+            mcp_only(
+                "comments_offset",
+                ParamType::Integer,
+                "No projection with pagination on a claimed read. Comment offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+            ),
+            mcp_only(
+                "history_offset",
+                ParamType::Integer,
+                "No projection with pagination on a claimed read. History offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+            ),
             mcp_only(
                 "artifacts_offset",
                 ParamType::Integer,
-                "Artifact metadata offset",
+                "No projection with pagination on a claimed read. Artifact metadata offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
             ),
         ],
     ],
@@ -666,6 +678,6 @@ const TASK_ID_PARAM: ParamSpec = ParamSpec {
 
 fn show_run_id_description() -> String {
     format!(
-        "With `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used."
+        "No pagination with a delivery selector on a claimed read. With `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection."
     )
 }

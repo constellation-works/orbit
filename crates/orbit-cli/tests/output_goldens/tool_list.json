@@ -3132,19 +3132,19 @@
       },
       {
         "name": "fields",
-        "description": "Fields to return, keyed (even one); `delivery` alone.",
+        "description": "No pagination with a projection on a claimed read. Fields to return, keyed (even one); `delivery` alone selects delivery evidence. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
+        "description": "No pagination with a projection on a claimed read. Compatibility alias for a single field projection, for example `field: \"artifacts\"`. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "run_id",
-        "description": "With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used.",
+        "description": "No pagination with a delivery selector on a claimed read. With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection.",
         "param_type": "string",
         "required": false
       },
@@ -3162,25 +3162,25 @@
       },
       {
         "name": "limit",
-        "description": "Bounded detail page size",
+        "description": "No projection with pagination on a claimed read. Bounded detail page size for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "comments_offset",
-        "description": "Comment offset",
+        "description": "No projection with pagination on a claimed read. Comment offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "history_offset",
-        "description": "History offset",
+        "description": "No projection with pagination on a claimed read. History offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "artifacts_offset",
-        "description": "Artifact metadata offset",
+        "description": "No projection with pagination on a claimed read. Artifact metadata offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       }
