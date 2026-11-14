@@ -1,5 +1,6 @@
 use orbit_types::workflow::{
-    FaultAttribution, FinalRecoveryDecision, FinalRecoveryResume, RecoveryFault,
+    FaultAttribution, FinalRecoveryDecision, FinalRecoveryResume, RecoveryFault, SYNC_BASE_STEP_ID,
+    WORKTREE_SETUP_STEP_ID,
 };
 
 use crate::context::{
@@ -44,7 +45,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     // A normal base race is owned by the deterministic preparation boundary.
     // Its refusal/exhaustion preserves the candidate; an agent cannot renew
     // its host authority or replenish its bounded attempts and deadline.
-    if step.id == "sync_base" && error_message.contains("prepared_base_refresh_refused:") {
+    if step.id == SYNC_BASE_STEP_ID && error_message.contains("prepared_base_refresh_refused:") {
         return skip(
             "host-owned preparation recovery refused or exhausted; preserve the candidate without source repair",
         );
@@ -563,7 +564,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
 /// counts, and only when it carries the remote `not_found` / `task not
 /// found` text the owner lookup produces.
 fn is_worktree_setup_dependency_not_found(step_id: &str, error: &DispatchError) -> bool {
-    if step_id != "worktree_setup" {
+    if step_id != WORKTREE_SETUP_STEP_ID {
         return false;
     }
     let message = error.to_string();

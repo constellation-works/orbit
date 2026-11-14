@@ -5,6 +5,7 @@ use super::input::bind_recovery_context;
 use super::*;
 use crate::executor::automation::vcs::RecoveryCommitRefusal;
 use orbit_types::workflow::AgentBlocker;
+use orbit_types::workflow::{PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY};
 
 /// Most `pr_conflict_recovery` rounds one failing step gets [ORB-14332].
 ///

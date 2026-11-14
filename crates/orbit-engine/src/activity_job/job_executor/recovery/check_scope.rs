@@ -6,6 +6,7 @@ use std::path::Path;
 
 use orbit_types::identity::lower_hex;
 use orbit_types::task::ContextWideningStep;
+use orbit_types::workflow::STEP_FAILURE_RECOVERY_ACTIVITY;
 use orbit_types::workflow::{
     PR_AUTO_FIX_NO_EDIT_RERUN_EVENT, PrAutoFixBlocker, PrAutoFixNoEditRerun, pr_auto_fix_attempts,
 };
