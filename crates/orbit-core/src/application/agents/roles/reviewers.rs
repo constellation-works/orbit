@@ -31,9 +31,10 @@ use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
 use crate::application::agents::score::{
-    self, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
+    Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem, WindowBounds};
+use crate::application::statistics;
 use crate::application::task::FindingVerdict;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -696,7 +697,7 @@ fn stats(row: &Row<'_>, peers: Option<PeerComparison>) -> Vec<Stat> {
     stats.push(stat("median_review_minutes", "Median review minutes", {
         // Fresh buffer: median sorts in place, and this row keeps its seconds.
         let mut seconds: Vec<f64> = row.seconds.iter().map(|seconds| *seconds as f64).collect();
-        score::median(&mut seconds).map_or(Value::Null, |seconds| number(seconds / 60.0))
+        statistics::median(&mut seconds).map_or(Value::Null, |seconds| number(seconds / 60.0))
     }));
     stats
 }
