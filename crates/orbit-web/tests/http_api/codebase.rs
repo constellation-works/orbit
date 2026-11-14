@@ -1553,6 +1553,29 @@ analytics_test!(
 analytics_test!(
     codebase_regressions_break_down_and_filter_by_link_dimensions,
     |fixture| {
+        // The layers this scenario reads, in the order the breakdowns list
+        // them: the workspace's `workflow.regression_layers` owns them.
+        let fixture = fixture.with_workspace_config(
+            r#"
+[[workflow.regression_layers]]
+name = "ci_tests"
+prefixes = [".github/"]
+dirs = ["tests", "testdata", "fixtures"]
+
+[[workflow.regression_layers]]
+name = "docs_skills"
+prefixes = ["docs/"]
+suffixes = [".md"]
+
+[[workflow.regression_layers]]
+name = "dashboard"
+prefixes = ["crates/orbit-web/"]
+
+[[workflow.regression_layers]]
+name = "store_migration"
+prefixes = ["crates/orbit-store/"]
+"#,
+        );
         let repo = init_repo(&fixture);
         let now = Utc::now();
         let area = "src/area.rs";

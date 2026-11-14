@@ -1,7 +1,7 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-11-14
+last_updated: 2026-11-02
 last_validated: 2026-11-05
 status: Draft
 feature: federated-mcp
@@ -11,7 +11,7 @@ summary: Standing rules for the federated MCP mux: destinations are configured, 
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
-related_artifacts: [ORB-24377, ORB-21263, ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-21263, ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Decisions
@@ -242,24 +242,6 @@ Rejected alternative: **a `resident` add-on toolset for the resident orchestrato
 - `--mode remote` forwards `--role` to the destination; a destination older than roles refuses a role argv, so roles over remote mode need both hosts on a release that has them (hosts deploy in lockstep). Without a role the remote argv is unchanged.
 - Cost: moving a tool between toolsets changes every role that serves either, which the role budgets and the role roundtrip tests surface in review.
 
-## Routed calls reuse the transport, never what a destination said
-
-**Recorded:** 2026-11 · [ORB-24377]
-
-### Context
-
-Every routed call spawned `ssh`, started a cold remote `orbit mcp serve` (CLI startup, then a runtime build for the target workspace) and paid an `initialize` round trip before its discovery, `tools/list` and `tools/call`. Only the SSH connection was amortised (`ControlPersist 60`), so cost grew linearly with routed calls from a mux, a follower worker to its owner, or id-routed task calls. The standing rule was "no caching between calls", read as one session per call.
-
-### Decision
-
-The rule forbids carrying anything a destination *said* from one call to the next: snapshots, tool surfaces and health verdicts. It does not forbid reusing the transport. A routed call may check out an idle session (the `ssh` child and its remote `orbit mcp serve`) whose argv and handshake binding match exactly — destination, SSH target, caller machine id, orchestrator, authority, internal-drain and worker-host flags, worker invocation — and must still run live discovery, identity confirmation and `tools/list` on it. Listing keeps its own fresh sessions. A session is parked only after a dispatched call got an answer whose outcome is known, and closes after 60 idle seconds. Apply this whenever a change wants to keep anything else between calls.
-
-### Consequences
-
-- N sequential routed calls to one destination inside the idle window spawn one `ssh` child and send one `initialize`; discovery still runs N times.
-- ORB-11023 semantics hold: a lost answer is `outcome_unknown` and its session is discarded; a parked session found dead before the `tools/call` is written is replaced by a fresh one, whose failure stays a delivery miss.
-- Cost: an idle remote `orbit mcp serve` per destination and binding lives up to 60 seconds after its last call, and a parked session that hangs (alive but silent) costs that call its probe budget rather than being retried.
-
 ## Task References
 
 - [ORB-11009] — recorded these standing rules as the contract home (PR #1139)
@@ -279,6 +261,5 @@ The rule forbids carrying anything a destination *said* from one call to the nex
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
 - [ORB-21263] — MCP roles and the toolset split
-- [ORB-24377] — routed calls reuse an idle SSH MCP session per destination
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -66,14 +66,21 @@ struct FilteredSurface {
 
 impl ToolsetFilteredHost {
     fn surface(&self) -> Result<Arc<FilteredSurface>, OrbitError> {
+        Ok(self.resolved_surface()?.0)
+    }
+
+    /// The filtered surface plus whether the inner host supplied a dynamic
+    /// (live) surface, from a single inner resolution.
+    fn resolved_surface(&self) -> Result<(Arc<FilteredSurface>, bool), OrbitError> {
         let dynamic = self.inner.dynamic_mcp_tool_definitions()?;
+        let is_dynamic = dynamic.is_some();
         let mut cached = self.surface.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(surface) = cached.as_ref()
             && dynamic
                 .as_ref()
                 .is_none_or(|source| Arc::ptr_eq(source, &surface.source))
         {
-            return Ok(Arc::clone(surface));
+            return Ok((Arc::clone(surface), is_dynamic));
         }
         let source = match dynamic {
             Some(source) => source,
@@ -111,7 +118,7 @@ impl ToolsetFilteredHost {
             per_action,
         });
         *cached = Some(Arc::clone(&surface));
-        Ok(surface)
+        Ok((surface, is_dynamic))
     }
 }
 
@@ -175,11 +182,11 @@ impl McpHost for ToolsetFilteredHost {
     fn dynamic_mcp_tool_definitions(
         &self,
     ) -> Result<Option<Arc<Vec<McpToolDefinition>>>, OrbitError> {
-        if self.inner.dynamic_mcp_tool_definitions()?.is_none() {
+        let (surface, is_dynamic) = self.resolved_surface()?;
+        if !is_dynamic {
             return Ok(None);
         }
-        self.surface()
-            .map(|surface| Some(Arc::clone(&surface.advertised)))
+        Ok(Some(Arc::clone(&surface.advertised)))
     }
 
     fn friction_tag_taxonomy(

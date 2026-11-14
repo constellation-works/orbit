@@ -1027,7 +1027,8 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     };
 
     // An undecodable claim row makes claim resolution fail, so whether this
-    // run is a claimed execution cannot be known.
+    // run is a claimed execution cannot be known. The payload is JSON that is
+    // not a claim: the claim expression indexes (ORB-24411) refuse non-JSON.
     let coordination_row = |sql: &str| {
         ctx.runtime
             .sqlite_store()
@@ -1040,7 +1041,7 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     };
     coordination_row(
         "INSERT INTO task_coordination_rows (workspace_id, kind, row_id, payload_json, journal_id, created_at)
-         VALUES (?1, 'distributed-execution-claim-v1', 'corrupt-claim', 'not-json', 'sql-only', '2026-10-08T00:00:00Z')",
+         VALUES (?1, 'distributed-execution-claim-v1', 'corrupt-claim', '[]', 'sql-only', '2026-10-08T00:00:00Z')",
     );
 
     tick();
