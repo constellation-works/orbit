@@ -41,6 +41,124 @@ pub struct CiRerunPlan {
     pub authentication: Value,
 }
 
+/// A durable hold before another infrastructure retry is admitted.
+pub const CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT: &str = "ci_infrastructure_retry_backoff";
+
+/// A backoff field observed in a legacy note. Unreadable values include
+/// explicit `null`; neither they nor missing fields acquire invented defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum CiInfrastructureRetryBackoffField<T> {
+    Missing,
+    Known(T),
+    Unreadable(Value),
+}
+
+impl<T> CiInfrastructureRetryBackoffField<T> {
+    /// The typed observation, if the field was present and readable.
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Self::Known(value) => Some(value),
+            Self::Missing | Self::Unreadable(_) => None,
+        }
+    }
+
+    fn is_missing(&self) -> bool {
+        match self {
+            Self::Missing => true,
+            Self::Known(_) | Self::Unreadable(_) => false,
+        }
+    }
+}
+
+/// The only classification written for an infrastructure backoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CiInfrastructureRetryBackoffClass {
+    #[serde(rename = "transient")]
+    Transient,
+}
+
+/// The `ci_infrastructure_retry_backoff` history note. Fields serialize in
+/// the producer's historical insertion order, preserving exact-note deduplication.
+///
+/// [`Self::from_history_note`] parses JSON once without requiring today's
+/// complete producer shape. Missing and unreadable fields remain explicit:
+/// readers check head/PR identity before requiring a readable deadline, and
+/// ignore run/attempt, classification and reason when deciding the hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CiInfrastructureRetryBackoffRecord {
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub head: CiInfrastructureRetryBackoffField<String>,
+    /// The PR identity is stored as text, not as a JSON number.
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub pr_number: CiInfrastructureRetryBackoffField<String>,
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub run_id: CiInfrastructureRetryBackoffField<u64>,
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub run_attempt: CiInfrastructureRetryBackoffField<u64>,
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub classification: CiInfrastructureRetryBackoffField<CiInfrastructureRetryBackoffClass>,
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub not_before_ms: CiInfrastructureRetryBackoffField<u64>,
+    #[serde(skip_serializing_if = "CiInfrastructureRetryBackoffField::is_missing")]
+    pub reason: CiInfrastructureRetryBackoffField<String>,
+}
+
+impl CiInfrastructureRetryBackoffRecord {
+    /// Construct the complete producer shape with its fixed classification.
+    pub fn from_plan(plan: &CiRerunPlan, not_before_ms: u64, reason: String) -> Self {
+        use CiInfrastructureRetryBackoffField::Known;
+        Self {
+            head: Known(plan.head_sha.clone()),
+            pr_number: Known(plan.pr_number.clone()),
+            run_id: Known(plan.run_id),
+            run_attempt: Known(plan.run_attempt),
+            classification: Known(CiInfrastructureRetryBackoffClass::Transient),
+            not_before_ms: Known(not_before_ms),
+            reason: Known(reason),
+        }
+    }
+
+    /// Decode one history note, retaining the original JSON syntax error
+    /// even when the note could not have matched the requested head or PR.
+    /// A missing note has the same parse error as empty text.
+    pub fn from_history_note(note: Option<&str>) -> Result<Self, serde_json::Error> {
+        let note = serde_json::from_str::<Value>(note.unwrap_or_default())?;
+        Ok(Self {
+            head: ci_retry_backoff_field(&note, "head", json_text),
+            pr_number: ci_retry_backoff_field(&note, "pr_number", json_text),
+            run_id: ci_retry_backoff_field(&note, "run_id", Value::as_u64),
+            run_attempt: ci_retry_backoff_field(&note, "run_attempt", Value::as_u64),
+            classification: ci_retry_backoff_field(&note, "classification", |value| {
+                (value.as_str() == Some("transient"))
+                    .then_some(CiInfrastructureRetryBackoffClass::Transient)
+            }),
+            not_before_ms: ci_retry_backoff_field(&note, "not_before_ms", Value::as_u64),
+            reason: ci_retry_backoff_field(&note, "reason", json_text),
+        })
+    }
+
+    /// Encode the history note in the unchanged seven-field producer order.
+    /// Legacy missing fields stay absent; unreadable fields retain their value.
+    pub fn to_history_note(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
+fn ci_retry_backoff_field<T>(
+    note: &Value,
+    key: &str,
+    parse: fn(&Value) -> Option<T>,
+) -> CiInfrastructureRetryBackoffField<T> {
+    match note.as_object().and_then(|object| object.get(key)) {
+        None => CiInfrastructureRetryBackoffField::Missing,
+        Some(value) => match parse(value) {
+            Some(parsed) => CiInfrastructureRetryBackoffField::Known(parsed),
+            None => CiInfrastructureRetryBackoffField::Unreadable(value.clone()),
+        },
+    }
+}
+
 /// A failed-jobs retry that was sent: the durable `ci_check_rerun` receipt.
 pub const CI_CHECK_RERUN_EVENT: &str = "ci_check_rerun";
 

@@ -18,7 +18,8 @@ use super::{CiRerunStep, SHARED_RETRY_BUDGET_SPENT};
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    CiBaseSuspectLegacy, CiBaseSuspectRecord, CiRerunAdmission, CiRerunPlan, CiRerunRoot,
+    CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
+    CiInfrastructureRetryBackoffRecord, CiRerunAdmission, CiRerunPlan, CiRerunRoot,
 };
 use serde_json::json;
 use std::{
@@ -390,17 +391,16 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     )? {
         CiRerunAdmission::Backoff { not_before_ms } => {
             let reason = format!("infrastructure CI retry backs off until {not_before_ms} ms");
+            let note =
+                CiInfrastructureRetryBackoffRecord::from_plan(&plan, not_before_ms, reason.clone())
+                    .to_history_note()
+                    .map_err(|error| OrbitError::Execution(error.to_string()))?;
             record_retry_history(
                 host,
                 tasks,
                 handoff,
-                "ci_infrastructure_retry_backoff",
-                &json!({
-                    "head":plan.head_sha,"pr_number":plan.pr_number,"run_id":plan.run_id,
-                    "run_attempt":plan.run_attempt,"classification":"transient",
-                    "not_before_ms":not_before_ms,"reason":reason,
-                })
-                .to_string(),
+                CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT,
+                &note,
             )?;
             Ok(CiRerunStep::Backoff(reason))
         }
