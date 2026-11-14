@@ -166,17 +166,19 @@
 
     <section class="tab-pane" data-tab="tasks">
       <main class="tasks-layout" id="tasks-main">
+        <!-- The filter bar spans the full width of the Tasks view, above the
+             list and the dock, and wraps only when the chips exceed it. -->
+        <div class="controls">
+          <div id="task-filter" role="group" aria-label="Filter tasks"></div>
+          <nav class="task-pagination" aria-label="Task pages" hidden>
+            <button id="tasks-previous" type="button" disabled>Previous</button>
+            <button id="tasks-next" type="button" disabled>Next</button>
+          </nav>
+        </div>
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
             <h2 class="visually-hidden">Tasks</h2>
             <span class="visually-hidden" id="tasks-count">-</span>
-            <div class="controls">
-              <div id="task-filter" role="group" aria-label="Filter tasks"></div>
-              <nav class="task-pagination" aria-label="Task pages" hidden>
-                <button id="tasks-previous" type="button" disabled>Previous</button>
-                <button id="tasks-next" type="button" disabled>Next</button>
-              </nav>
-            </div>
             <div class="filter-summary visually-hidden" id="task-filter-summary" role="status" aria-live="polite"></div>
             <div class="body" id="tasks-body" tabindex="0" role="region" aria-label="Task list" data-messages="tasks-messages">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>

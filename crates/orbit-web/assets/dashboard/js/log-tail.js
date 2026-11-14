@@ -230,14 +230,15 @@ export function setDockRouteShown(shown) {
 }
 
 /// Level the active tab's first card with the first task block.
-/// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that takes,
-/// and tasks.css gives it to the fixed message area; the tab bar sits inside
-/// that room, above the line. It is measured from the dock's own top and the
-/// card's place inside #side-dock, neither of which the lead moves, so a
-/// repeat run settles on the same value. When the tab bar is taller than the
-/// list's controls (one row of status pills on a wide screen), the dock has
-/// no room to give, so `--tasks-list-lead` on #tasks-panel lowers the list
-/// instead; the list's own lead is taken back out of the measurement.
+/// The filter bar spans the full Tasks width above the list and the dock, so
+/// both start below it. `--tasks-dock-lead` on #tasks-dock is the room above
+/// #side-dock that takes, and tasks.css gives it to the fixed message area;
+/// the tab bar sits inside that room, above the line. It is measured from the
+/// dock's own top and the card's place inside #side-dock, neither of which
+/// the lead moves, so a repeat run settles on the same value. When the tab
+/// bar is taller than the bar's own room, the dock has no room to give, so
+/// `--tasks-list-lead` on #tasks-panel lowers the list instead; the list's
+/// own lead is taken back out of the measurement.
 export function alignTasksDock() {
   const dock = $("tasks-dock");
   const body = $("tasks-body");
@@ -272,11 +273,13 @@ function firstDockCardOffset(side) {
   return card.getBoundingClientRect().top + pane.scrollTop - side.getBoundingClientRect().top;
 }
 
-// Re-level whenever something above the first task block, or the dock itself,
-// changes size: the toolbar or status pills wrapping, the pager coming and
-// going, the dock coming back after a task closes, the tab bar changing height.
-// The create dialog is in the top layer and moves nothing. A tab switch re-levels from applyDockMode. Passing notices
-// sit in the message area and move nothing.
+// Re-level whenever the dock itself changes size: the dock coming back after
+// a task closes, or the tab bar changing height. The filter bar spans the
+// full width above both, so its wrapping and the pager coming and going move
+// the list and the dock together and need no re-level; the bar is still
+// watched so a future asymmetric change re-levels. The create dialog is in
+// the top layer and moves nothing. A tab switch re-levels from applyDockMode.
+// Passing notices sit in the message area and move nothing.
 function wireDockAlignment() {
   const dock = $("tasks-dock");
   const panel = $("tasks-panel");
@@ -291,6 +294,8 @@ function wireDockAlignment() {
   resize.observe(dock);
   const head = dock.querySelector("#side-dock > .dock-head");
   if (head) resize.observe(head);
+  const bar = document.querySelector("main.tasks-layout > .controls");
+  if (bar) for (const node of bar.children) resize.observe(node);
   for (const node of panel.children) resize.observe(node);
   for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
   queue();

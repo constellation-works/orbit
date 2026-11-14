@@ -84,12 +84,21 @@
 /* The full page has no list for the task to be outside of. Its crew lives
    in the shared detail lever row, so the entire dock-only note can go. */
 main.tasks-layout.task-page-mode .pinned-external { display: none; }
-/* The status pills, then the pager at their right once the list has pages
-   (on its own line when the pills fill theirs); the first status card follows
-   12px below. */
+/* The filter bar (status pills, then the pager at their right once the list
+   has pages — on its own line when the pills fill theirs) spans the full
+   width of the Tasks view, above the list and the dock, and wraps only when
+   the chips exceed that width. The list and the dock start 12px below it. */
 /* --tasks-list-lead (log-tail.js) lowers the list when the dock's tab bar is
-   taller than these controls, so both start level. */
-#tasks-panel > .controls { border-bottom: 0; padding: 0 0 calc(12px + var(--tasks-list-lead, 0px)); align-items: flex-start; }
+   taller than the bar's own room, so the first card and the first task block
+   start level. */
+main.tasks-layout > .controls {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  border-bottom: 0;
+  padding: 0 0 12px;
+  align-items: flex-start;
+}
+#tasks-panel { padding-top: var(--tasks-list-lead, 0px); }
 
 #tasks-panel > .body {
   max-height: none;
@@ -844,19 +853,27 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   #tasks-body > .row.no-quick .task-quick-cell { display: none; }
 }
 
-/* The list, then the Drain dock (the Auto-drain status card, Start a window,
-   Locks held, Log) beside the list. An open
-   task takes the dock's place, and below 1000px, where shell.css stacks every
-   main grid, the task list takes the full width. */
-main.tasks-layout { grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px); }
+/* Below the full-width filter bar: the list, then the Drain dock (the
+   Auto-drain status card, Start a window, Locks held, Log) beside the list.
+   An open task takes the dock's place, and below 1000px, where shell.css
+   stacks every main grid, the task list takes the full width. */
+main.tasks-layout {
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px);
+  grid-template-rows: auto minmax(0, 1fr);
+  row-gap: 0;
+}
 main.tasks-layout:not(:has(> .tasks-dock > #side-dock)) { grid-template-columns: minmax(0, 1fr); }
+main.tasks-layout > .col-tasks { grid-column: 1; grid-row: 2; }
+main.tasks-layout > .tasks-dock { grid-column: 2; grid-row: 2; }
 .tasks-dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 /* Without room for the dock (an open task, or below 1000px) only its message
    area stays, floating at the foot of the view (see below). */
 main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
 main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 @media (max-width: 1000px) {
-  main.tasks-layout { grid-template-columns: minmax(0, 1fr); }
+  /* Stacked: the bar, then the list (or the dock on the dock route), each
+     content-sized as before; the bar's own padding keeps the 12px gap. */
+  main.tasks-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
   .tasks-dock { display: contents; }
   .tasks-dock > #side-dock { display: none; }
   /* An explicit Drain, Locks held or Log route (`dock=` in the hash) shows the
@@ -866,7 +883,10 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
      the list, and desktop keeps the dock beside it. The list's column has an
      inline display, hence !important. The log scrolls inside a bounded height
      rather than running down the page. */
+  /* The dock route shows the dock in place of the list, so the list's
+     filter bar above it goes too. */
   main.tasks-layout.dock-route > .col-tasks { display: none !important; }
+  main.tasks-layout.dock-route > .controls { display: none; }
   main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
   /* The dock route is what a phone drives a drain with: 44px targets, Stop and
@@ -895,7 +915,8 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
    the list and dock end together: log-tail.js sets `--tasks-dock-lead` to the
    room above the dock, which the message area fills (with up to a 12px gap
    above the tabs, which sit above that line), or `--tasks-list-lead` on
-   #tasks-panel when the dock has no room and the list must drop instead. Its height is that room, never its
+   #tasks-panel (taken as its top padding) when the dock has no room and the
+   list must drop instead. Its height is that room, never its
    content, so a notice moves neither the dock nor the list; more notices than
    fit scroll inside it. */
 .tasks-dock { --tasks-dock-lead: 0px; }
@@ -1012,8 +1033,12 @@ main.tasks-layout.task-pane-open {
   grid-template-columns:
     minmax(0, 1fr) 12px
     clamp(320px, var(--task-pane-width, 42%), max(320px, calc(100% - 380px))) !important;
+  grid-template-rows: auto minmax(0, 1fr);
   column-gap: 0;
 }
+main.tasks-layout.task-pane-open > .col-tasks { grid-column: 1; grid-row: 2; }
+main.tasks-layout.task-pane-open > .task-pane-resizer { grid-column: 2; grid-row: 2; }
+main.tasks-layout.task-pane-open > .task-detail-pane { grid-column: 3; grid-row: 2; }
 .task-pane-resizer { display: none; }
 main.tasks-layout.task-pane-open > .task-pane-resizer {
   display: block;
@@ -1118,7 +1143,8 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
 
 /* `#tasks/<id>`: the pane takes the content width and the list waits hidden
    behind it (the column's inline display needs the override). */
-main.tasks-layout.task-page-mode { grid-template-columns: minmax(0, 1fr) !important; }
+main.tasks-layout.task-page-mode { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none; }
+main.tasks-layout.task-page-mode > .controls,
 main.tasks-layout.task-page-mode > .col-tasks,
 main.tasks-layout.task-page-mode > .task-pane-resizer { display: none !important; }
 main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; width: 100%; max-width: 1280px; }
