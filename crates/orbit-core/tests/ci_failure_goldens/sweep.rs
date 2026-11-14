@@ -127,11 +127,23 @@ impl Workspace {
     }
 
     pub(crate) fn with_config(config: &str) -> Self {
+        Self::open(config, false)
+    }
+
+    /// Golden collection copies one migrated store instead of migrating again.
+    pub(crate) fn seeded() -> Self {
+        Self::open("", true)
+    }
+
+    fn open(config: &str, seeded: bool) -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         let origin = root.path().join("origin.git");
         std::fs::create_dir_all(&global).unwrap();
+        if seeded {
+            super::seed_migrated_store(&global);
+        }
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
         std::fs::create_dir_all(&origin).unwrap();
         std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();

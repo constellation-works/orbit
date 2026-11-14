@@ -49,6 +49,7 @@ pub mod test_support {
     pub use crate::executor::automation::vcs::with_host_target_removal_hook;
     pub use crate::executor::automation::vcs::{
         with_prerequisite_clock, with_remote_probe_backoff, with_vcs_retry_wait,
+        with_worktree_setup_fetch_limits,
     };
 }
 mod condition;

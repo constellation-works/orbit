@@ -129,6 +129,26 @@ impl Store {
         tx.commit().map_err(sqlite_store_error)
     }
 
+    /// Insert or replace every run, and its pipeline state, in one transaction.
+    pub fn upsert_job_runs_for_workspace(
+        &self,
+        workspace_id: &str,
+        runs: &[(&JobRun, Option<&PipelineState>)],
+    ) -> Result<(), OrbitError> {
+        if runs.is_empty() {
+            return Ok(());
+        }
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(sqlite_store_error)?;
+        for (run, pipeline_state) in runs {
+            upsert_job_run_for_workspace_conn(&tx, workspace_id, run, *pipeline_state)?;
+        }
+        tx.commit().map_err(sqlite_store_error)
+    }
+
     pub fn upsert_job_run_step_for_workspace(
         &self,
         workspace_id: &str,

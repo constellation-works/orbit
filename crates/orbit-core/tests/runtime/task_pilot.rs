@@ -981,10 +981,18 @@ fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
     let now = Utc::now();
     let empty = pending_fingerprint(&workspace, &routine, &task.id, now);
 
-    let bulk = workspace.repo.join("bulk").join("d".repeat(100));
+    // Three 250-byte names make each listed path about 770 bytes, so 1,500
+    // files still exceed the 1 MiB source-output cap.
+    let name = "d".repeat(250);
+    let bulk = workspace
+        .repo
+        .join("bulk")
+        .join(&name)
+        .join(&name)
+        .join(name);
     std::fs::create_dir_all(&bulk).unwrap();
-    for index in 0..10_000 {
-        std::fs::write(bulk.join(format!("file_{index:05}.txt")), "x\n").unwrap();
+    for index in 0..1_500 {
+        std::fs::write(bulk.join(format!("file_{index:04}.txt")), "x\n").unwrap();
     }
     workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
     workspace.commit_file("bulk/nested/CLAUDE.md", "nested claude\n", "nested claude");

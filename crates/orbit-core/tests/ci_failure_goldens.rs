@@ -43,6 +43,47 @@ fn bare_runtime() -> (TempDir, OrbitRuntime) {
     (root, OrbitRuntime::from_roots(&global, &workspace).unwrap())
 }
 
+/// One migrated `orbit.db`, captured after its connection closed. Golden
+/// runtimes copy it instead of migrating a fresh store per case.
+fn migrated_store_template() -> &'static (Vec<u8>, std::fs::Permissions) {
+    use std::sync::OnceLock;
+    static TEMPLATE: OnceLock<(Vec<u8>, std::fs::Permissions)> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("migrated store template");
+        let database = dir.path().join("orbit.db");
+        drop(orbit_store::Store::open(&database).expect("migrate the template store"));
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("template dir")
+            .map(|entry| entry.expect("template entry").file_name())
+            .collect();
+        assert!(
+            names.len() == 1 && names[0] == "orbit.db",
+            "a closed template store must leave only its database file to copy: {names:?}"
+        );
+        let permissions = std::fs::metadata(&database)
+            .expect("template database metadata")
+            .permissions();
+        let bytes = std::fs::read(&database).expect("template database");
+        (bytes, permissions)
+    })
+}
+
+fn seed_migrated_store(global: &std::path::Path) {
+    let database = global.join("orbit.db");
+    if database.exists() {
+        return;
+    }
+    let (bytes, permissions) = migrated_store_template();
+    std::fs::write(&database, bytes).expect("seed migrated store");
+    std::fs::set_permissions(&database, permissions.clone()).expect("seed store permissions");
+}
+
+fn seeded_golden_runtime() -> (TempDir, OrbitRuntime) {
+    let (root, global, workspace) = orbit_dirs();
+    seed_migrated_store(&global);
+    (root, OrbitRuntime::from_roots(&global, &workspace).unwrap())
+}
+
 fn operator_commits(config: &str, count: usize) -> (TempDir, OrbitRuntime, Vec<String>) {
     let root = TempDir::new().unwrap();
     let global = root.path().join("home/.orbit");
@@ -1604,7 +1645,7 @@ fn ci_main_thread_panic_does_not_match_agent_main_task() {
 }
 /// Hand-built collection rows: the log is the snapshot's excerpt.
 fn filed_golden(case: &Value) -> Value {
-    let (_root, runtime) = bare_runtime();
+    let (_root, runtime) = seeded_golden_runtime();
     let mut results = Vec::new();
     let logs = case["logs"].as_array().unwrap();
     let first_batch = case["first_batch"].as_u64().unwrap_or(1) as usize;
@@ -1639,7 +1680,7 @@ fn filed_golden(case: &Value) -> Value {
 /// records the diagnostic collection bound as well as what was filed.
 #[cfg(unix)]
 fn collected_golden(case: &Value) -> Value {
-    let mut workspace = sweep::Workspace::new();
+    let mut workspace = sweep::Workspace::seeded();
     let mut results = Vec::new();
     for (index, parts) in case["logs"].as_array().unwrap().iter().enumerate() {
         let log = expand_parts(parts);

@@ -61,6 +61,8 @@ pub(super) use failure::pr_failure_handoff;
 pub(crate) use freshness::refreshed_input;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
+#[cfg(feature = "test-support")]
+pub use git::with_worktree_setup_fetch_limits;
 pub use landing::landing_wait_gate_cleared;
 pub(super) use landing::{handoff_land, pr_checks_watch};
 pub use light_delivery::{

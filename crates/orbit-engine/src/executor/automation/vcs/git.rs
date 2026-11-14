@@ -10,7 +10,7 @@ use orbit_common::fs::git::{
     git_fetch_cas_retry_delay, git_fetch_lock_target, should_retry_git_ref_cas,
     with_git_fetch_lock,
 };
-use orbit_common::fs::io::{FileLockTimeout, with_exclusive_file_lock};
+use orbit_common::fs::io::{FileLockOptions, FileLockTimeout, with_exclusive_file_lock_options};
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
@@ -833,13 +833,70 @@ pub(in crate::executor::automation) fn resolve_worktree_start_point_for_admissio
     }
 }
 
+/// Shorten the pre-admission fetch hold and the wait to acquire its lock.
+///
+/// Production callers keep [`GIT_FETCH_LOCK_HOLD_LIMIT`] and the default
+/// file-lock timeout. A fixture installs both on the thread that runs
+/// worktree setup, the same limits [`fetch_remote_base_within`] already takes
+/// for the hold.
+#[cfg(feature = "test-support")]
+pub fn with_worktree_setup_fetch_limits<T>(
+    hold_limit: Duration,
+    lock_wait: Duration,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<WorktreeSetupFetchLimits>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            WORKTREE_SETUP_FETCH_LIMITS.with(|slot| slot.set(self.0.take()));
+        }
+    }
+    let _restore = Restore(WORKTREE_SETUP_FETCH_LIMITS.with(|slot| {
+        slot.replace(Some(WorktreeSetupFetchLimits {
+            hold_limit,
+            lock_wait,
+        }))
+    }));
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy)]
+struct WorktreeSetupFetchLimits {
+    hold_limit: Duration,
+    lock_wait: Duration,
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static WORKTREE_SETUP_FETCH_LIMITS: Cell<Option<WorktreeSetupFetchLimits>> =
+        const { Cell::new(None) };
+}
+
+fn worktree_setup_fetch_limits() -> (Duration, Duration) {
+    #[cfg(feature = "test-support")]
+    if let Some(limits) = WORKTREE_SETUP_FETCH_LIMITS.with(Cell::get) {
+        return (limits.hold_limit, limits.lock_wait);
+    }
+    (
+        GIT_FETCH_LOCK_HOLD_LIMIT,
+        orbit_common::fs::file_lock::DEFAULT_FILE_LOCK_TIMEOUT,
+    )
+}
+
 /// Fetch origin for pre-admission setup while retaining enough lock-timeout
 /// detail to tell an origin outage from ordinary lock contention.
 fn fetch_remote_base_for_worktree_setup(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
     let common_dir = git_common_dir(repo_root)?;
     let lock_target = git_fetch_lock_target(&common_dir);
-    let result = with_exclusive_file_lock(&lock_target, "git fetch", || {
-        fetch_remote_base_locked(repo_root, branch, GIT_FETCH_LOCK_HOLD_LIMIT)
+    let (hold_limit, lock_wait) = worktree_setup_fetch_limits();
+    let mut options = FileLockOptions::default();
+    options.timeout = lock_wait;
+    // A short fixture wait must not leave the contention warning past the
+    // deadline. The production pair (30 s timeout, 3 s warning) is unchanged.
+    options.warn_after = options.warn_after.min(lock_wait);
+    let result = with_exclusive_file_lock_options(&lock_target, "git fetch", options, || {
+        fetch_remote_base_locked(repo_root, branch, hold_limit)
             .map_err(WorktreeFetchLockError::Fetch)
     });
 
