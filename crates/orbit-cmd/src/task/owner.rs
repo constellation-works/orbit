@@ -139,6 +139,15 @@ pub fn resolve_task_owner(
 /// An unregistered checkout (a bare `orbit init` directory) simply has no
 /// registry identity to report.
 pub fn bound_workspace_identity(runtime: &OrbitRuntime) -> Option<WorkspaceIdentity> {
+    // The open already loaded this registry. Use that snapshot, including a
+    // miss: re-reading the file would race the open and repeat the load.
+    if let Some(opened) = crate::registry_runtime::opened_selector_inputs(runtime) {
+        return workspace_registry::find_workspace_by_path(
+            &opened.registry,
+            &runtime.paths().repo_root,
+        )
+        .map(WorkspaceIdentity::of);
+    }
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         &runtime.global_root(),
     ))

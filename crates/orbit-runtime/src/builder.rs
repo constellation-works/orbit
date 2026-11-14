@@ -64,6 +64,7 @@ pub(crate) enum StateAccess {
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
 /// state. Local root is carried for per-worktree artifact phases.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_context_from_roots(
     global_root: &Path,
     workspace_root: &Path,
@@ -72,6 +73,7 @@ pub(crate) fn build_context_from_roots(
     runtime_config: &ResolvedConfig,
     _host_lifetime: HostLifetime,
     access: StateAccess,
+    task_prefix: Option<&str>,
 ) -> Result<OrbitContext, OrbitError> {
     let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
@@ -100,7 +102,14 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let coordinated = build_v2_task_backends(global_root, &paths, binding, store.clone(), access)?;
+    let coordinated = build_v2_task_backends(
+        global_root,
+        &paths,
+        binding,
+        store.clone(),
+        access,
+        task_prefix,
+    )?;
     let task_backends = coordinated.task;
     let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
@@ -409,6 +418,7 @@ fn build_v2_task_backends(
     runtime_binding: Option<&WorkspaceRuntimeBinding>,
     store: Store,
     access: StateAccess,
+    task_prefix: Option<&str>,
 ) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
     let write_free = access == StateAccess::WriteFree;
     let registry = if write_free {
@@ -416,6 +426,15 @@ fn build_v2_task_backends(
     } else {
         TaskRegistryStore::open(&task_registry_path(global_root))?
     };
+    // Composition hands in the machine's task prefix. Apply it on this handle
+    // instead of opening the registry only to project the prefix. Read-only
+    // and write-free opens do not project one: a read must not adopt a prefix,
+    // and a foreign-generation join has no writable registry handle.
+    if access == StateAccess::Write
+        && let Some(task_prefix) = task_prefix
+    {
+        registry.set_task_prefix(task_prefix)?;
+    }
     let config = read_workspace_config_optional(&paths.orbit_dir)?;
     // Several registered repositories may intentionally share one explicit
     // Orbit root. That root has only one compatibility config.yaml and cannot

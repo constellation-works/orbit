@@ -10,6 +10,7 @@ mod identity;
 mod persistence;
 mod validation_warning;
 
+use std::any::Any;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -90,6 +91,10 @@ pub struct RuntimeKernel {
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
     workspace_catalog: Option<Arc<dyn catalog::WorkspaceCatalog>>,
+    /// Data the registry-owning composition layer already loaded while opening
+    /// this runtime. Opaque here: the kernel does not inspect it and does not
+    /// load config to refill it. Composition downcasts its own snapshot.
+    composition_snapshot: Option<Arc<dyn Any + Send + Sync>>,
     /// Host lifecycle signals unattended admission consults before starting
     /// new work [ORB-12968]. The platform probe by default; tests inject one.
     host_signals: Arc<dyn HostSignalProbe>,

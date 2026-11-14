@@ -1,5 +1,6 @@
 //! Actor, machine, workspace catalog, and coordination ownership.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
@@ -69,6 +70,20 @@ impl RuntimeKernel {
 
     pub fn workspace_catalog(&self) -> Option<&Arc<dyn catalog::WorkspaceCatalog>> {
         self.workspace_catalog.as_ref()
+    }
+
+    /// Attach data composition already loaded for this open.
+    ///
+    /// The kernel stores the snapshot and never reads it. Callers downcast to
+    /// the concrete type they put in.
+    pub fn with_composition_snapshot(mut self, snapshot: Arc<dyn Any + Send + Sync>) -> Self {
+        self.composition_snapshot = Some(snapshot);
+        self
+    }
+
+    /// The snapshot [`Self::with_composition_snapshot`] stored, if any.
+    pub fn composition_snapshot(&self) -> Option<&(dyn Any + Send + Sync)> {
+        self.composition_snapshot.as_deref()
     }
 
     /// Why coordination writes are unavailable from this runtime, if they are.
