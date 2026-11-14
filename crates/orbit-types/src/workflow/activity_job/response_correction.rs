@@ -2,11 +2,13 @@
 //!
 //! A correction is one more invocation of the whole activity. Only the prompt
 //! asks it to change nothing but its reply. Admission therefore requires the
-//! read-only filesystem profile and denies the built-in Orbit mutation tools
-//! below, including coordination writes outside the worktree. That denial
-//! also covers a task's `required_tools` at run time: the runtime grant path
-//! drops a mutating requirement with an omitted-requirement note instead of
-//! adding it to the effective grant of a correction activity.
+//! read-only filesystem profile and refuses an allowlist grant of the built-in
+//! Orbit mutation tools below, including coordination writes outside the
+//! worktree. Dispatch denies every one of them to each invocation, whatever a
+//! disallow list names. That denial also covers a task's `required_tools` at
+//! run time: the runtime grant path drops a mutating requirement with an
+//! omitted-requirement note instead of adding it to the effective grant of a
+//! correction activity.
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 use super::tool_allowlist::tool_allowed;
@@ -106,10 +108,11 @@ pub enum ResponseCorrectionActivityError {
     },
 }
 
-/// Refuse `response_correction` unless workspace writes and the built-in
-/// Orbit mutations above are denied. Called from asset load in either grant
-/// mode. A disallow-list activity is admitted whatever the list names: the
-/// dispatch path denies every [`MUTATING_TOOLS`] entry on top of it.
+/// Refuse `response_correction` unless the activity is read-only and no
+/// built-in Orbit mutation in [`MUTATING_TOOLS`] is granted by an allowlist.
+/// Called from asset load in either grant mode. A disallow-list activity is
+/// admitted whatever the list names: the dispatch path denies every
+/// [`MUTATING_TOOLS`] entry on top of it.
 pub fn validate_response_correction_activity(
     activity: &ActivityV2,
 ) -> Result<(), ResponseCorrectionActivityError> {
