@@ -111,9 +111,10 @@ impl OrbitRuntime {
             task.status,
             TaskStatus::Proposed | TaskStatus::Backlog | TaskStatus::Someday
         ) || task.job_run_id.is_some()
-            || self.inspect_execution_claims()?.iter().any(|inspection| {
-                inspection.claim.task_id == task.id && inspection.claim.phase.protects_footprint()
-            })
+            || self
+                .inspect_task_execution_claims(&task.id)?
+                .iter()
+                .any(|inspection| inspection.claim.phase.protects_footprint())
         {
             return Ok(true);
         }
@@ -604,10 +605,14 @@ impl OrbitRuntime {
             {
                 return Ok(());
             }
-            match self.inspect_execution_claims() {
-                Ok(claims) if claims.iter().any(|inspection| {
-                    inspection.claim.task_id == task_id && inspection.claim.phase.is_unsettled()
-                }) => return Ok(()),
+            match self.inspect_task_execution_claims(task_id) {
+                Ok(claims)
+                    if claims
+                        .iter()
+                        .any(|inspection| inspection.claim.phase.is_unsettled()) =>
+                {
+                    return Ok(());
+                }
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(task_id = %task_id, "could not read execution claims for provider-limit reassignment: {error}");

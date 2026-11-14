@@ -432,7 +432,11 @@ impl OrbitRuntime {
     /// Every PR Orbit recorded for `task`, whether or not it may settle: those
     /// on the task and those its accepted handoffs and kept claims delivered.
     pub(super) fn recorded_pull_requests(&self, task: &Task) -> BTreeSet<u64> {
-        let claims = self.stores().tasks().inspect_execution_claims().ok();
+        let claims = self
+            .stores()
+            .tasks()
+            .inspect_task_execution_claims(&task.id)
+            .ok();
         let claims = claims.as_deref();
         task.external_refs
             .iter()

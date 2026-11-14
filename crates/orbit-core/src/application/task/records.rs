@@ -373,12 +373,42 @@ impl crate::OrbitRuntime {
         self.stores().tasks().inspect_execution_claims()
     }
 
+    pub fn inspect_live_execution_claims(
+        &self,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().inspect_live_execution_claims()
+    }
+
+    pub fn inspect_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().inspect_task_execution_claims(task_id)
+    }
+
     /// Repairing counterpart of [`Self::inspect_execution_claims`] for live
     /// commands: an interrupted coordination commit is recovered first.
     pub fn resolve_execution_claims(
         &self,
     ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
         self.stores().tasks().resolve_execution_claims()
+    }
+
+    /// Repairing counterpart of [`Self::inspect_live_execution_claims`] for
+    /// live commands: an interrupted coordination commit is recovered first.
+    pub fn resolve_live_execution_claims(
+        &self,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().resolve_live_execution_claims()
+    }
+
+    /// Repairing counterpart of [`Self::inspect_task_execution_claims`] for
+    /// live commands: an interrupted coordination commit is recovered first.
+    pub fn resolve_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().resolve_task_execution_claims(task_id)
     }
 
     /// Retain a CI receipt or defer it under a protecting claim.

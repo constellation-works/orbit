@@ -163,6 +163,18 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_execution_claims()
     }
+    fn inspect_live_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.inspect_live_execution_claims()
+    }
+    fn inspect_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?
+            .inspect_task_execution_claims(task_id)
+    }
     fn inspect_admission_receipt_storage(
         &self,
     ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
@@ -172,6 +184,18 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.resolve_execution_claims()
+    }
+    fn resolve_live_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.resolve_live_execution_claims()
+    }
+    fn resolve_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?
+            .resolve_task_execution_claims(task_id)
     }
     fn execution_claim_state(
         &self,

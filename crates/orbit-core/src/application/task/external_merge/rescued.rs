@@ -102,9 +102,9 @@ impl OrbitRuntime {
         }
         let tasks = self.stores().tasks();
         let state = tasks
-            .inspect_execution_claims()?
+            .inspect_task_execution_claims(id)?
             .into_iter()
-            .find(|state| state.claim.claim_id == rescue.claim_id && state.claim.task_id == id)
+            .find(|state| state.claim.claim_id == rescue.claim_id)
             .ok_or_else(|| refused(id, "the recovered claim does not belong to this task"))?;
         if state.claim.phase != ExecutionClaimPhase::Revoked || state.last_event != "claim_revoked"
         {

@@ -621,7 +621,7 @@ pub(super) fn pending_commit_message(runtime: &OrbitRuntime) -> Option<String> {
     if !runtime.coordination_task_reads_visible() {
         return None;
     }
-    match runtime.inspect_execution_claims() {
+    match runtime.inspect_live_execution_claims() {
         Err(error) if error.to_string().contains("pending commit") => Some(error.to_string()),
         _ => None,
     }

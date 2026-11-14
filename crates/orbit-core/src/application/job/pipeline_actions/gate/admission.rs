@@ -94,14 +94,12 @@ pub(crate) fn gate_admission_stop(
     // still accepts, so status alone cannot stop a gate that was queued before
     // the claim landed.
     let claimed: BTreeSet<String> = runtime
-        .inspect_execution_claims()
+        .inspect_live_execution_claims()
         .map_err(|err| {
             DispatchError::action_failed(action, format!("read execution claims: {err}"))
         })?
         .into_iter()
-        .map(|inspection| inspection.claim)
-        .filter(|claim| claim.phase.protects_footprint())
-        .map(|claim| claim.task_id)
+        .map(|inspection| inspection.claim.task_id)
         .collect();
 
     let mut task_statuses = Vec::with_capacity(task_ids.len());

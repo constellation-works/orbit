@@ -1,6 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 
+use super::super::admission::decode_claim;
 use super::super::{Section, TaskCommitBoundary};
 use super::codec::{
     CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_CREW, LATE_LEAF_EFFORT, LATE_LEAF_MODEL,
@@ -14,17 +15,24 @@ impl TaskCommitBoundary {
     /// Strictly read-only: an interrupted commit requires explicit journal recovery
     /// or an ordinary operational read first. Inspection never performs that repair.
     pub fn inspect_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
-        let section = Section::here("inspection");
-        self.shared(&self.host_lock_target(), section, || {
-            self.shared(&self.lock_target(), section, || {
-                if self.interrupted_commit()? {
-                    return Err(invalid(
-                        "claim inspection unavailable until pending commit is recovered",
-                    ));
-                }
-                self.claim_states_locked()
-            })
-        })
+        self.inspect_locked(|| self.claim_states_locked())
+    }
+
+    /// Strictly read-only counterpart of [`Self::resolve_live_execution_claims`]:
+    /// reads only claims whose phase protects a footprint, refusing if an
+    /// interrupted commit is pending recovery.
+    pub fn inspect_live_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.inspect_locked(|| self.live_claim_states_locked())
+    }
+
+    /// Strictly read-only counterpart of [`Self::resolve_task_execution_claims`]:
+    /// reads only one task's claims, refusing if an interrupted commit is
+    /// pending recovery.
+    pub fn inspect_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.inspect_locked(|| self.task_claim_states_locked(task_id))
     }
 
     /// [ORB-12575] The ordinary-participant counterpart of
@@ -34,6 +42,38 @@ impl TaskCommitBoundary {
     /// resume) take this route; `orbit doctor` keeps the non-repairing read.
     pub fn resolve_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
         self.enter_ordinary(|| self.claim_states_locked())
+    }
+
+    /// Ordinary-participant read of claims whose phase protects a footprint,
+    /// settling any pending commit before reading the protecting-phase index.
+    pub fn resolve_live_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.enter_ordinary(|| self.live_claim_states_locked())
+    }
+
+    /// Ordinary-participant read of one task's claims, settling any pending
+    /// commit before reading the per-task claim index.
+    pub fn resolve_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.enter_ordinary(|| self.task_claim_states_locked(task_id))
+    }
+
+    fn inspect_locked<T>(
+        &self,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let section = Section::here("inspection");
+        self.shared(&self.host_lock_target(), section, || {
+            self.shared(&self.lock_target(), section, || {
+                if self.interrupted_commit()? {
+                    return Err(invalid(
+                        "claim inspection unavailable until pending commit is recovered",
+                    ));
+                }
+                op()
+            })
+        })
     }
 
     /// [ORB-15962] One claim's state, read inside the boundary like
@@ -46,45 +86,83 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| {
             self.store
                 .task_coordination_row(&self.workspace_id, CLAIM, claim_id)?
-                .map(|row| {
-                    let mut state = self.claim_state(decode(&row.payload_json)?)?;
-                    if let Some(attribution) = self.store.task_coordination_row(
-                        &self.workspace_id,
-                        HANDOFF_SETTLEMENT,
-                        claim_id,
-                    )? {
-                        attach_handoff_settlement(&mut state, &attribution.payload_json)?;
-                    }
-                    if let Some(report) = self.store.task_coordination_row(
-                        &self.workspace_id,
-                        LATE_LEAF_EFFORT,
-                        claim_id,
-                    )? {
-                        attach_late_leaf_effort(&mut state, &report.payload_json)?;
-                    }
-                    if let Some(report) = self.store.task_coordination_row(
-                        &self.workspace_id,
-                        LATE_LEAF_CREW,
-                        claim_id,
-                    )? {
-                        attach_late_leaf_crew(&mut state, &report.payload_json)?;
-                    }
-                    if let Some(report) = self.store.task_coordination_row(
-                        &self.workspace_id,
-                        LATE_LEAF_MODEL,
-                        claim_id,
-                    )? {
-                        attach_late_leaf_model(&mut state, &report.payload_json)?;
-                    }
-                    state.leaf_run_evidence = self
-                        .store
-                        .task_coordination_row(&self.workspace_id, LEAF_RUN_EVIDENCE, claim_id)?
-                        .map(|row| decode(&row.payload_json))
-                        .transpose()?;
-                    Ok(state)
-                })
+                .map(|row| self.hydrated_claim_state(decode(&row.payload_json)?))
                 .transpose()
         })
+    }
+
+    /// Caller holds the boundary and has already settled or excluded a
+    /// pending commit. Reads only footprint-protecting claims via the v90
+    /// partial index and hydrates each claim's sidecar rows by `claim_id`.
+    pub(in super::super) fn live_claim_states_locked(
+        &self,
+    ) -> Result<Vec<ClaimInspection>, OrbitError> {
+        let mut states = Vec::new();
+        for row in self
+            .store
+            .execution_claim_rows_protecting_footprint(&self.workspace_id)?
+        {
+            let claim = decode_claim(&row.payload_json)?;
+            if claim.phase.protects_footprint() {
+                states.push(self.hydrated_claim_state(claim)?);
+            }
+        }
+        Ok(states)
+    }
+
+    /// Caller holds the boundary and has already settled or excluded a
+    /// pending commit. Reads only one task's claims via the v90 expression
+    /// index and hydrates each claim's sidecar rows by `claim_id`.
+    pub(in super::super) fn task_claim_states_locked(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<ClaimInspection>, OrbitError> {
+        let mut states = Vec::new();
+        for row in self
+            .store
+            .execution_claim_rows_for_task(&self.workspace_id, task_id)?
+        {
+            let claim = decode_claim(&row.payload_json)?;
+            if claim.task_id == task_id {
+                states.push(self.hydrated_claim_state(claim)?);
+            }
+        }
+        Ok(states)
+    }
+
+    fn hydrated_claim_state(&self, claim: ExecutionClaim) -> Result<ClaimInspection, OrbitError> {
+        let claim_id = claim.claim_id.clone();
+        let mut state = self.claim_state(claim)?;
+        if let Some(attribution) =
+            self.store
+                .task_coordination_row(&self.workspace_id, HANDOFF_SETTLEMENT, &claim_id)?
+        {
+            attach_handoff_settlement(&mut state, &attribution.payload_json)?;
+        }
+        if let Some(report) =
+            self.store
+                .task_coordination_row(&self.workspace_id, LATE_LEAF_EFFORT, &claim_id)?
+        {
+            attach_late_leaf_effort(&mut state, &report.payload_json)?;
+        }
+        if let Some(report) =
+            self.store
+                .task_coordination_row(&self.workspace_id, LATE_LEAF_CREW, &claim_id)?
+        {
+            attach_late_leaf_crew(&mut state, &report.payload_json)?;
+        }
+        if let Some(report) =
+            self.store
+                .task_coordination_row(&self.workspace_id, LATE_LEAF_MODEL, &claim_id)?
+        {
+            attach_late_leaf_model(&mut state, &report.payload_json)?;
+        }
+        state.leaf_run_evidence = self
+            .store
+            .task_coordination_row(&self.workspace_id, LEAF_RUN_EVIDENCE, &claim_id)?
+            .map(|row| decode(&row.payload_json))
+            .transpose()?;
+        Ok(state)
     }
 
     /// Caller holds the boundary and has already settled or excluded a

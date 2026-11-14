@@ -102,7 +102,7 @@ impl TaskCommitBoundary {
     ) -> Result<Vec<PendingRepair>, OrbitError> {
         self.enter_ordinary(|| {
             Ok(self
-                .claim_states_locked()?
+                .live_claim_states_locked()?
                 .into_iter()
                 .filter(|state| state.claim.phase == ExecutionClaimPhase::RepairPending)
                 .map(|state| PendingRepair {
@@ -124,7 +124,7 @@ impl TaskCommitBoundary {
         executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
     ) -> Result<Vec<RepairCandidate<'a>>, OrbitError> {
         let mut candidates = Vec::new();
-        for state in self.claim_states_locked()? {
+        for state in self.live_claim_states_locked()? {
             if state.claim.phase != ExecutionClaimPhase::RepairPending {
                 continue;
             }

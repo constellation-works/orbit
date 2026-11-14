@@ -267,10 +267,7 @@ impl OrbitRuntime {
             || !self.repairable_published_source(&source, &task.id)?
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
             || self.stores().jobs().local_pull_for_run(run_id)?.is_some()
-            || self
-                .resolve_execution_claims()?
-                .iter()
-                .any(|claim| claim.claim.task_id == task.id)
+            || !self.resolve_task_execution_claims(&task.id)?.is_empty()
             || !history(self, &task.id)?
                 .iter()
                 .any(|r| digest(r).ok() == digest(&record).ok())
@@ -717,10 +714,7 @@ impl OrbitRuntime {
                 .jobs()
                 .local_pull_for_run(source_id)?
                 .is_some()
-            || self
-                .resolve_execution_claims()?
-                .iter()
-                .any(|claim| claim.claim.task_id == task_id)
+            || !self.resolve_task_execution_claims(task_id)?.is_empty()
             || source.input.as_ref().is_none_or(|input| {
                 input.get("claimed").and_then(Value::as_bool) == Some(true)
                     || carried_task_ids(input) != BTreeSet::from([task_id.to_string()])

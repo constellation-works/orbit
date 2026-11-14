@@ -571,11 +571,9 @@ pub(crate) fn live_execution_claim_tasks(
     runtime: &OrbitRuntime,
 ) -> Result<std::collections::BTreeSet<String>, OrbitError> {
     Ok(runtime
-        .inspect_execution_claims()?
+        .inspect_live_execution_claims()?
         .into_iter()
-        .map(|inspection| inspection.claim)
-        .filter(|claim| claim.phase.protects_footprint())
-        .map(|claim| claim.task_id)
+        .map(|inspection| inspection.claim.task_id)
         .collect())
 }
 

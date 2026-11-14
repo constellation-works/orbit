@@ -104,7 +104,7 @@ impl TaskCommitBoundary {
 
 /// Decode one execution-claim payload. The indexed claim reads go through
 /// here, so a test can count what one task write or footprint guard decodes.
-fn decode_claim(payload: &str) -> Result<ExecutionClaim, OrbitError> {
+pub(in super::super) fn decode_claim(payload: &str) -> Result<ExecutionClaim, OrbitError> {
     #[cfg(test)]
     CLAIM_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
     decode(payload)

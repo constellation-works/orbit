@@ -493,11 +493,7 @@ impl OrbitRuntime {
             .is_some()
         {
             OwnerSourceIdentityRefusal::LocalPull
-        } else if self
-            .resolve_execution_claims()?
-            .iter()
-            .any(|c| c.claim.task_id == task.id)
-        {
+        } else if !self.resolve_task_execution_claims(&task.id)?.is_empty() {
             OwnerSourceIdentityRefusal::ExecutionClaim
         } else {
             return Ok(None);

@@ -62,10 +62,10 @@ impl OrbitRuntime {
             )));
         }
         if let Some(claim) = self
-            .inspect_execution_claims()?
+            .inspect_task_execution_claims(&task.id)?
             .into_iter()
             .map(|inspection| inspection.claim)
-            .find(|claim| claim.task_id == task.id && claim.phase.protects_footprint())
+            .find(|claim| claim.phase.protects_footprint())
         {
             return Err(refuse(format!(
                 "execution claim '{}' holds it",
