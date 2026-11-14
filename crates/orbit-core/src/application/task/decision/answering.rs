@@ -4,8 +4,9 @@ use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
     DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
-    DecisionRequest, DecisionRequestState, DecisionResolution, PilotAdmissionVerdict, ReadinessGap,
-    ReadinessStage, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus, readiness_gaps,
+    DecisionRequest, DecisionRequestState, DecisionResolution, PilotAdmissionOperatorRecord,
+    PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskHistoryEntry, TaskRelation,
+    TaskRelationType, TaskStatus, readiness_gaps,
 };
 
 use super::super::TaskRecordUpdateParams;
@@ -253,15 +254,15 @@ impl OrbitRuntime {
                 Ok(None)
             }
             DecisionGate::PilotAdmission => {
-                let (verdict, header) = match answer_id {
+                let verdict = match answer_id {
                     value if value == PilotAdmissionVerdict::ApproveAnyway.as_str() => {
-                        (PilotAdmissionVerdict::ApproveAnyway, "approve-anyway")
+                        PilotAdmissionVerdict::ApproveAnyway
                     }
                     value if value == PilotAdmissionVerdict::Clear.as_str() => {
-                        (PilotAdmissionVerdict::Clear, "clear")
+                        PilotAdmissionVerdict::Clear
                     }
                     value if value == PilotAdmissionVerdict::Evaluated.as_str() => {
-                        (PilotAdmissionVerdict::Evaluated, "evaluated")
+                        PilotAdmissionVerdict::Evaluated
                     }
                     other => {
                         return Err(OrbitError::decision_refused(
@@ -290,8 +291,15 @@ impl OrbitRuntime {
                 // this comment's header; the lines after it are its evidence.
                 let evidence =
                     note.unwrap_or("The operator answered the decision request for this hold.");
+                let record = PilotAdmissionOperatorRecord::from_verdict(verdict, evidence)
+                    .map_err(|_| {
+                        OrbitError::Execution(format!(
+                            "pilot-admission verdict `{answer_id}` could not be recorded"
+                        ))
+                    })?;
                 let comment = format!(
-                    "task-pilot-admission: {header}\n{evidence}\nAnswered decision request {} via {via}.",
+                    "{}\nAnswered decision request {} via {via}.",
+                    record.comment(),
                     request.id
                 );
                 self.update_task_as_human(
