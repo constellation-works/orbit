@@ -117,20 +117,15 @@ The **file view** gives the path with **Copy path**, then one tile per shown sig
 Every `regression_from` link is read from the regressed task's side and given four dimensions. Each is derived from records, never guessed:
 
 - **Nature** and **escape** come from the link's typed `regression` classification. `unclassified` is the filer's explicit non-answer; `absent` is a link stored without a classification. The two are never merged.
-- **Layer** is where the fix sits: the regression task's landed paths (the landed diff the related-files query reads), else its declared footprint, else `unknown`. Each path maps through the layer table below, where the first matching row wins. The fix's layer is the one most of its paths map to, with ties going to the earlier row. Tests and docs (`ci_tests`, `docs_skills`) count only when the fix touched nothing else. `layer_source` says what was read: `landed`, `footprint` or `none`.
+- **Layer** is where the fix sits: the regression task's landed paths (the landed diff the related-files query reads), else its declared footprint, else `unknown`. Each path maps through the workspace's layer table, `workflow.regression_layers` (an ordered list of `{ name, prefixes, dirs, suffixes }` rows), where the first matching row wins and a path no row matches is `other`. The fix's layer is the one most of its paths map to, with ties going to the earlier row. Tests and docs (`ci_tests`, `docs_skills`) count only when the fix touched nothing else. `layer_source` says what was read: `landed`, `footprint` or `none`. The scan resolves layers under the table the runtime loaded and keeps that table with its facts, so breakdowns list its layers in table order, then `other` and `unknown`, and a `layer` filter is checked against the configured names.
 - **Detected by** comes from the regression task's tags through the detector table below, where the first matching row wins. Without a matching tag, a task filed by an operator (origin `operator_request`, or a filer that is not an agent, `system` or `unknown`) is `operator`, and anything else is `other`.
 
-| Layer | Paths |
+Unset, `workflow.regression_layers` holds only repository-neutral rows; a repository describes its own layout in its workspace config. Orbit's own rows (`dashboard`, `sandbox_policy`, `store_migration`, `vcs_delivery`, `config`, `cli_mcp`, `runtime_lifecycle`, with Orbit's paths added to the two defaults) live in `config/orbit-workspace.toml`.
+
+| Default layer | Paths |
 |---|---|
-| `ci_tests` | `.github/`, `scripts/ci-*`, `scripts/test-*`, anything under a `tests/`, `testdata/` or `fixtures/` directory |
-| `docs_skills` | `docs/`, `crates/orbit-core/assets/skills/`, `plugin/`, any `*.md` |
-| `dashboard` | `crates/orbit-web/`, `desktop/` |
-| `sandbox_policy` | `orbit-policy`, `orbit-exec`, `orbit-types/src/policy/`, the core sandbox actions |
-| `store_migration` | `orbit-store`, `orbit-search`, `orbit-common/src/migration/` |
-| `vcs_delivery` | the engine's VCS, CI and review automation; core landing and review; `orbit-automation` delivery and review |
-| `config` | `orbit-config`, `orbit-registry`, core config |
-| `cli_mcp` | `orbit-cli`, `orbit-mcp`, `orbit-cmd`, `orbit-tools`, the governance registry, the core tool host |
-| `runtime_lifecycle` | the rest of `orbit-core`, `orbit-engine`, `orbit-automation`, `orbit-agent`, and the task and workflow types |
+| `ci_tests` | `.github/`, anything under a `tests/`, `testdata/` or `fixtures/` directory |
+| `docs_skills` | `docs/`, any `*.md` |
 | `other` / `unknown` | a path no row matches / a fix with no path |
 
 | Detected by | Tags |

@@ -416,7 +416,7 @@
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe creation identity."
+          "description": "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'."
         }
       },
       "required": [
@@ -914,7 +914,7 @@
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe write identity."
+          "description": "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update."
         },
         "expected_revision": {
           "type": "string",

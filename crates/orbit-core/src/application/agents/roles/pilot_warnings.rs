@@ -43,9 +43,10 @@ use crate::application::agents::effort::{
     MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::records::spec_documents;
-use crate::application::agents::score::{self, Denominator, Occurrence, Stat, Tally, number};
+use crate::application::agents::score::{Denominator, Occurrence, Stat, Tally, number};
 use crate::application::agents::{AgentFacts, WindowBounds};
 use crate::application::codebase::PilotRun;
+use crate::application::statistics;
 use crate::application::task::blocked_recovery::{self, LegacyBlockedTriageDisposition};
 use crate::application::task::{BLOCKED_TASK_TRIAGED_EVENT, warning_hold_findings};
 
@@ -281,7 +282,7 @@ impl ModeTally {
         let mut seconds: Vec<f64> = self.runs.values().filter_map(|(s, _)| *s).collect();
         let tokens: Vec<u64> = self.runs.values().filter_map(|(_, t)| *t).collect();
         let total_seconds = (!seconds.is_empty()).then(|| seconds.iter().sum::<f64>());
-        let median_seconds = score::median(&mut seconds);
+        let median_seconds = statistics::median(&mut seconds);
         json!({
             "assessments": self.assessments,
             "runs": self.runs.len(),
