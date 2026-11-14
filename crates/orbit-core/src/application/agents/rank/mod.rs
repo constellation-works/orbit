@@ -25,6 +25,8 @@ mod render;
 pub(super) mod sample;
 mod season;
 
-pub use self::compute::{agent_rank, agent_rank_calibration};
+pub use self::compute::agent_rank;
+#[cfg(test)]
+pub(crate) use self::compute::agent_rank_calibration;
 pub use self::query::RankQuery;
 pub use self::season::RankSeasons;

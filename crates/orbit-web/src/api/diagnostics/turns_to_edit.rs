@@ -158,17 +158,21 @@ pub(in crate::api) async fn diagnostics_turns_to_edit(
         .as_ref()
         .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
         .unwrap_or_default();
-    let key = (
-        "turns_to_edit".to_string(),
-        format!(
-            "range={}|outcome={}|complexity={}|tags={}|provider={}",
-            range.key,
-            if filters.done_only { "done" } else { "all" },
-            complexities,
-            filters.tags.join(","),
-            filters.provider.as_deref().unwrap_or_default(),
-        ),
-    );
+    let key_payload = match serde_json::to_string(&(
+        &range.key,
+        if filters.done_only { "done" } else { "all" },
+        &complexities,
+        &filters.tags,
+        &filters.provider,
+    )) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return map_runtime_error(orbit_core::OrbitError::Execution(format!(
+                "failed to serialize turns_to_edit memo key: {error}"
+            )));
+        }
+    };
+    let key = ("turns_to_edit".to_string(), key_payload);
     let compute_runtime = Arc::clone(&runtime);
     match state
         .metrics_trends_memo()

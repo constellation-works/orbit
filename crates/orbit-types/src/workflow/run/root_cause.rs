@@ -15,8 +15,10 @@
 //! [ORB-15517] Nor is a claimed leaf its provider's usage limit stopped: the
 //! claim goes back to its owner, and the leaf holds on the provider and the
 //! reset it reported ([`HeldFailure::of_claimed_leaf`]).
-//! Owner-local runs also hold on capacity and usage limits: admission can
-//! choose another crew while the task keeps its provider failure hold.
+//! Owner-local runs also hold on capacity, usage limits and an unusable
+//! provider (an expired login, say): admission can choose another crew while
+//! the task keeps its provider failure hold, so the expired-login attempt is
+//! not counted as a failed run.
 
 use super::super::JobRunState;
 use super::DeliveryRefusal;
@@ -28,7 +30,7 @@ use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
 use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
 use super::state::{
     OWNER_SIGNOFF_REQUIRED_ERROR_CODE, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE,
-    is_owner_signoff_required, is_provider_limit,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, is_owner_signoff_required, is_provider_limit,
 };
 use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 
@@ -97,6 +99,10 @@ pub enum HeldFailure {
     /// An owner-local run's selected model had no capacity; the task waits
     /// for another crew or the capacity backoff to end.
     ProviderCapacity,
+    /// An owner-local run's provider was unusable on this host, such as an
+    /// expired login; the task waits for another crew or for the login to be
+    /// renewed, and no step is counted as a work failure.
+    ProviderUnavailable,
     /// An implementer declared a blocker; the task awaits an operator.
     AgentBlocker,
     /// Recorded owner approval is still missing
@@ -133,14 +139,16 @@ impl HeldFailure {
         is_owner_signoff_required(error_code, message).then_some(Self::OwnerSignoffRequired)
     }
 
-    /// [`Self::of`] for an owner-local run, where capacity and usage limits
-    /// return the task to admission under its provider failure hold.
+    /// [`Self::of`] for an owner-local run, where capacity, usage limits and
+    /// an unusable provider return the task to admission under its provider
+    /// failure hold.
     #[must_use]
     pub fn of_local(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
         Self::of(error_code, message).or_else(|| {
             match ProviderFailureClass::of(error_code, message) {
                 Some(ProviderFailureClass::Capacity) => Some(Self::ProviderCapacity),
                 Some(ProviderFailureClass::Limit) => Some(Self::ProviderLimit),
+                Some(ProviderFailureClass::Unavailable) => Some(Self::ProviderUnavailable),
                 _ => None,
             }
         })
@@ -165,6 +173,7 @@ impl HeldFailure {
             Self::DecisionPending => REVIEW_DECISION_PENDING_ERROR_CODE,
             Self::ProviderLimit => PROVIDER_LIMIT_ERROR_CODE,
             Self::ProviderCapacity => PROVIDER_CAPACITY_ERROR_CODE,
+            Self::ProviderUnavailable => PROVIDER_UNAVAILABLE_ERROR_CODE,
             Self::DeliveryRefused(refusal) => refusal.error_code(),
         }
     }

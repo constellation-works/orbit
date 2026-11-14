@@ -5,7 +5,7 @@ use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    REVIEW_EVIDENCE_FINDINGS_ARTIFACT, REVIEW_EVIDENCE_FINDINGS_EVENT,
+    FailureHandoffDecision, REVIEW_EVIDENCE_FINDINGS_ARTIFACT, REVIEW_EVIDENCE_FINDINGS_EVENT,
     REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceFindings,
     ReviewEvidenceHold, ReviewGateHistoryNote,
 };
@@ -20,8 +20,8 @@ use super::super::operations::valid_candidate_ref;
 use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, outcome_name, output, record, resume, tail};
 use super::{
-    Candidate, ClaimSource, ForeignRun, Fresh, MAX_REPAIR_OUTPUT_BYTES, Outcome,
-    PRESERVING_DECISIONS, Preserved, REVIEW_VERDICT_STEP,
+    Candidate, ClaimSource, ForeignRun, Fresh, MAX_REPAIR_OUTPUT_BYTES, Outcome, Preserved,
+    REVIEW_VERDICT_STEP,
 };
 
 /// Apply the task's preserved candidate onto this run's base, if it may be
@@ -281,11 +281,8 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         .and_then(|state| state.failure_activity_checkpoint);
     let Some(checkpoint) = checkpoint.filter(|checkpoint| {
         checkpoint.activity_name == "pr_failure_handoff"
-            && checkpoint
-                .output
-                .get("decision")
-                .and_then(Value::as_str)
-                .is_some_and(|decision| PRESERVING_DECISIONS.contains(&decision))
+            && FailureHandoffDecision::from_output(&checkpoint.output)
+                .is_some_and(|decision| decision.preserves_candidate())
             && checkpoint.output.get("task_id").and_then(Value::as_str) == Some(task.id.as_str())
     }) else {
         return match held_candidate(host, task, &prior_run_id)? {
@@ -313,7 +310,8 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         durable_ref: input_string_field(evidence, "durable_ref")
             .filter(|reference| valid_candidate_ref(reference)),
         failed_step_id: checkpoint.failed_step_id,
-        needs_review_repair: evidence["decision"] == "blocked_review_gate",
+        needs_review_repair: FailureHandoffDecision::from_output(evidence)
+            == Some(FailureHandoffDecision::BlockedReviewGate),
         held: false,
         claim: None,
         published: false,

@@ -375,3 +375,50 @@ fn completion_trend_rereads_only_tasks_written_since_the_last_request() {
         },
     );
 }
+
+/// ORB-24473: memo keys must separate free-form tag/model and tag/provider filters
+/// even when filter values contain the field delimiter text.
+#[test]
+fn metrics_trends_memo_keys_separate_filters_with_separator_text() {
+    isolated(
+        "metrics_terminal_dates::metrics_trends_memo_keys_separate_filters_with_separator_text",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(false);
+
+            // task_tokens: tags=a with model=b|model=c vs tags=a|model=b with model=c
+            let res_a = json_ok(server.get(&format!(
+                "/api/diagnostics/task_tokens?since=24h&tags=a&model=b%7Cmodel=c&{WS}"
+            )));
+            let res_b = json_ok(server.get(&format!(
+                "/api/diagnostics/task_tokens?since=24h&tags=a%7Cmodel=b&model=c&{WS}"
+            )));
+
+            assert_eq!(res_a["tags"], serde_json::json!(["a"]));
+            assert_eq!(res_a["model"], serde_json::json!("b|model=c"));
+            assert_eq!(
+                res_b["tags"],
+                serde_json::json!(["a|model=b"]),
+                "task_tokens must not serve cached payload from collided memo key"
+            );
+            assert_eq!(res_b["model"], serde_json::json!("c"));
+
+            // turns_to_edit: tags=a with provider=b|provider=c vs tags=a|provider=b with provider=c
+            let res_a = json_ok(server.get(&format!(
+                "/api/diagnostics/turns_to_edit?since=24h&tags=a&provider=b%7Cprovider=c&{WS}"
+            )));
+            let res_b = json_ok(server.get(&format!(
+                "/api/diagnostics/turns_to_edit?since=24h&tags=a%7Cprovider=b&provider=c&{WS}"
+            )));
+
+            assert_eq!(res_a["tags"], serde_json::json!(["a"]));
+            assert_eq!(res_a["provider"], serde_json::json!("b|provider=c"));
+            assert_eq!(
+                res_b["tags"],
+                serde_json::json!(["a|provider=b"]),
+                "turns_to_edit must not serve cached payload from collided memo key"
+            );
+            assert_eq!(res_b["provider"], serde_json::json!("c"));
+        },
+    );
+}

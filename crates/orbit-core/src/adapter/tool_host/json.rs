@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskLintReport, task_fields_response_json_projected, task_record_json,
+    TaskLintReport, TaskRow, task_fields_response_json_projected, task_record_json,
     task_reference_status_index, task_show_json,
 };
 
@@ -21,11 +21,10 @@ pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Valu
 /// only when they apply.
 pub(super) fn serialize_task_show(
     runtime: &OrbitRuntime,
-    task: &Task,
+    row: &TaskRow,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = task_reference_status_index(runtime, task)?;
-    let row = runtime.task_row_with_sidecars(task.clone())?;
-    task_show_json(runtime, &row, &status_by_id).map(Value::Object)
+    let status_by_id = task_reference_status_index(runtime, &row.task)?;
+    task_show_json(runtime, row, &status_by_id).map(Value::Object)
 }
 
 pub(super) fn serialize_task_lint_report(report: &TaskLintReport) -> Result<Value, OrbitError> {

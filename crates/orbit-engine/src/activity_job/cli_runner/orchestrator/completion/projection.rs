@@ -124,6 +124,66 @@ fn retained_claude_terminal_result(provider: &str, answer_text: &str) -> bool {
         .is_some_and(|value| value.get("type").and_then(Value::as_str) == Some("result"))
 }
 
+/// Names this projection writes into step output.
+///
+/// An agent `result` cannot set one of these or have it listed in
+/// `response_result_fields`. The drop below and every write share this slice,
+/// so a new Orbit key cannot be offered as the agent's answer.
+const ORBIT_OWNED_STEP_OUTPUT_KEYS: &[&str] = &[
+    "build_budget_waits",
+    "timed_out",
+    "stalled",
+    super::super::continuation::REQUEST_OUTPUT_KEY,
+    super::super::response_correction::REQUEST_OUTPUT_KEY,
+    "print_timeout_ms",
+    "effective_deadline_ms",
+    "response_result_fields",
+    "final_message",
+    "final_message_truncated",
+    "final_message_bytes",
+    "provider",
+    "argv_redacted",
+    "stdin_blob_ref",
+    "stdout_blob_ref",
+    "stderr_blob_ref",
+    "exit_code",
+    "duration_ms",
+    "response_envelope_required",
+    "response_envelope_valid",
+    "response_envelope_status",
+    "response_envelope_error",
+    "completion_envelope_required",
+    "completion_envelope_satisfied",
+    "completion_envelope_error",
+    "sandbox_write_diagnostic",
+    "stdout_text",
+    "stdout_text_truncated",
+    "stdout_text_original_bytes",
+    "stdout_text_preview_bytes",
+    "stdout_text_preview_limit_bytes",
+    "stdout_text_captured_bytes",
+    "stdout_capture_truncated",
+    "stdout_capture_limit_bytes",
+    "stderr_original_bytes",
+    "stderr_captured_bytes",
+    "stderr_capture_truncated",
+    "stderr_capture_limit_bytes",
+];
+
+/// Record one Orbit-owned step-output field, replacing any agent value.
+#[track_caller]
+fn insert_orbit_owned_output(
+    output: &mut serde_json::Map<String, Value>,
+    key: &'static str,
+    value: Value,
+) {
+    debug_assert!(
+        ORBIT_OWNED_STEP_OUTPUT_KEYS.contains(&key),
+        "step-output key `{key}` is written without being reserved"
+    );
+    output.insert(key.to_string(), value);
+}
+
 /// Decide the step outcome from the provider's exit and its stdout envelope,
 /// run the post-provider worktree check, and project the step output.
 pub(in super::super) fn project_completion(
@@ -572,27 +632,34 @@ pub(in super::super) fn project_completion(
         FINAL_MESSAGE_LIMIT_BYTES,
     );
     let mut output = parsed_result.and_then(Result::ok).unwrap_or_default();
-    // The envelope `result` keys, recorded before Orbit's own fields join
-    // them, so a reader can tell the agent's answer from invocation metadata.
+    // Drop reserved names before listing the agent's keys. A name this
+    // invocation does not write (no continuation or correction request) is
+    // still not the agent's answer.
+    output.retain(|key, _| !ORBIT_OWNED_STEP_OUTPUT_KEYS.contains(&key.as_str()));
+    // The envelope `result` keys that are not invocation metadata, so a
+    // reader can tell the agent's answer from Orbit's record of the run.
     let response_result_fields = if response_envelope_valid {
         serde_json::json!(output.keys().collect::<Vec<_>>())
     } else {
         Value::Null
     };
-    output.insert(
-        "build_budget_waits".to_string(),
-        serde_json::json!(build_budget_waits),
-    );
     // These are supervisor observations, so an agent result cannot override
     // them or make a spent provider budget appear complete.
-    output.insert(
-        "timed_out".into(),
+    insert_orbit_owned_output(
+        &mut output,
+        "build_budget_waits",
+        serde_json::json!(build_budget_waits),
+    );
+    insert_orbit_owned_output(
+        &mut output,
+        "timed_out",
         Value::Bool(timed_out || print_timeout_reached),
     );
-    output.insert("stalled".into(), Value::Bool(stalled));
+    insert_orbit_owned_output(&mut output, "stalled", Value::Bool(stalled));
     if spec.incomplete_continuation.is_some() {
-        output.insert(
-            super::super::continuation::REQUEST_OUTPUT_KEY.into(),
+        insert_orbit_owned_output(
+            &mut output,
+            super::super::continuation::REQUEST_OUTPUT_KEY,
             continuation_request.map_or(
                 Value::Null,
                 |request| serde_json::json!({ "remaining_work": request.remaining_work }),
@@ -600,19 +667,22 @@ pub(in super::super) fn project_completion(
         );
     }
     if spec.response_correction.is_some() {
-        output.insert(
-            super::super::response_correction::REQUEST_OUTPUT_KEY.into(),
+        insert_orbit_owned_output(
+            &mut output,
+            super::super::response_correction::REQUEST_OUTPUT_KEY,
             response_correction_request.unwrap_or(Value::Null),
         );
     }
-    output.insert(
-        "print_timeout_ms".into(),
+    insert_orbit_owned_output(
+        &mut output,
+        "print_timeout_ms",
         print_timeout.map_or(Value::Null, |budget| {
             serde_json::json!(budget.as_millis() as u64)
         }),
     );
-    output.insert(
-        "effective_deadline_ms".into(),
+    insert_orbit_owned_output(
+        &mut output,
+        "effective_deadline_ms",
         serde_json::json!(
             timeout_seconds
                 .saturating_mul(1000)
@@ -721,7 +791,7 @@ pub(in super::super) fn project_completion(
             serde_json::json!(stderr.capture_limit_bytes()),
         ),
     ] {
-        output.entry(key.to_string()).or_insert(value);
+        insert_orbit_owned_output(&mut output, key, value);
     }
 
     Ok(DispatchOutcome {

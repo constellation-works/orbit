@@ -25,8 +25,9 @@ use super::TaskCommitBoundary;
 // artifact and optionally a comment does not need them:
 // - lexical search refresh at this layer: the core seam that retains a
 //   receipt refreshes the index (artifact paths and comments are indexed
-//   fields); a receipt deferred to claim settlement is covered by the
-//   next ordinary task write or reindex, like other claim-commit text;
+//   fields); a receipt deferred to claim settlement lands inside that
+//   settlement's claim commit, and the core claim seam re-indexes the
+//   task from its settled row before the settlement returns;
 // - history entries and status-transition effects: `update_task` adds none
 //   without a status or field change;
 // - `resume_evidence_hold`: only System or Operator writers satisfy review

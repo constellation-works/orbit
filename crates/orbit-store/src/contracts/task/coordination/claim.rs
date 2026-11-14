@@ -180,6 +180,13 @@ where
 }
 
 impl ClaimInvocation {
+    /// The task this invocation is authorized for. The embedding runtime
+    /// reads it to refresh derived state (the lexical index) after a
+    /// committed claim mutation names its task.
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
     /// Only trusted runtime code may call this constructor; payload labels confer no rights.
     pub fn trusted_worker(
         task_id: String,

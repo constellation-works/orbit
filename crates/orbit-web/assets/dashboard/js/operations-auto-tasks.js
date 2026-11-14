@@ -158,8 +158,7 @@ function lastOutcomeText(definition) {
 }
 
 // Grouping, counts, row state and the switch follow the effective switch.
-// The raw `enabled` flag stays the compare-and-set token the toggle posts:
-// a legacy after-landing consumer can be on while that flag is still false.
+// The raw `enabled` flag stays the compare-and-set token the toggle posts.
 function autoTaskOn(definition) {
   return definition.effective_enabled ?? Boolean(definition.enabled);
 }

@@ -14,9 +14,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use crate::application::statistics::{SplitMix64, percentile};
+
 use super::AgentRole;
 use super::facts::TaskFacts;
-use super::rank::sample::{Rng, percentile};
 
 /// Units of fleet-average evidence a row's score is blended with:
 /// `score = min(raw, (units × raw + K × fleet_average) ÷ (units + K))`.
@@ -385,7 +386,7 @@ fn resampled_interval(
     let pool: Vec<_> = input.sample_units.iter().map(draw_unit).collect();
     let exposure_pool: Vec<_> = input.exposure_units.iter().map(draw_unit).collect();
     let units = input.units as f64;
-    let mut rng = Rng::seeded(INTERVAL_SEED);
+    let mut rng = SplitMix64::seeded(INTERVAL_SEED);
     let mut sums = vec![0.0; terms.len()];
     let mut expected_sums = vec![0.0; terms.len()];
     let mut sampled_denominators = vec![0usize; terms.len()];
@@ -396,9 +397,9 @@ fn resampled_interval(
         sampled_denominators.iter_mut().for_each(|count| *count = 0);
         for step in 0..input.units + exposure_pool.len() {
             let unit = if step < input.units {
-                &pool[rng.below(pool.len())]
+                &pool[rng.index(pool.len())]
             } else {
-                &exposure_pool[rng.below(exposure_pool.len())]
+                &exposure_pool[rng.index(exposure_pool.len())]
             };
             for index in 0..terms.len() {
                 sums[index] += unit.counts[index];
@@ -626,19 +627,6 @@ pub(super) fn terms_json(terms: &[Term], units: &[(&str, &str)]) -> Vec<Value> {
             payload
         })
         .collect()
-}
-
-/// Median of `values`, or `None` when `values` is empty.
-///
-/// Sorts `values` in place with `f64::total_cmp`. The result is the mean of
-/// the two central samples, which is the middle sample when the count is odd.
-pub(super) fn median(values: &mut [f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f64::total_cmp);
-    let len = values.len();
-    Some((values[len / 2] + values[(len - 1) / 2]) / 2.0)
 }
 
 /// A whole number as an integer, anything else rounded to two places.

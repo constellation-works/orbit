@@ -187,7 +187,7 @@ project security reporting.
   [state-and-backup](./runbooks/state-and-backup.md) runbook covers WAL-safe
   backups and what is regenerable.
 - **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
-  audit history in `orbit.db` can be removed by `orbit gc audit --apply` or the
+  audit history in `orbit.db` can be removed by `orbit gc audit --confirm` or the
   opt-in `store-gc` routine according to `retention.audit_days` (60 days by
   default). Nothing ages out to a remote.
 - **Air-gapped use works** apart from explicit update downloads,

@@ -34,12 +34,7 @@ impl OrbitRuntime {
         &self,
         handoff_id: &str,
     ) -> Result<Option<LandingAttempt>, OrbitError> {
-        Ok(self
-            .stores()
-            .tasks()
-            .landing_attempts()?
-            .into_iter()
-            .find(|attempt| attempt.handoff_id == handoff_id))
+        self.stores().tasks().landing_attempt(handoff_id)
     }
 
     /// Open the next attempt for this handoff, before any job exists to carry
@@ -75,7 +70,7 @@ impl OrbitRuntime {
         job_run_id: Option<String>,
     ) -> Result<(), OrbitError> {
         let (claim, _) = self.landing_claim(handoff_id)?;
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&self.landing_invocation(&claim)),
             mutation_id,
             &ClaimMutation::DispatchLanding {

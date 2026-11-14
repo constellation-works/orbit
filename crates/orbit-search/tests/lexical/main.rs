@@ -106,6 +106,43 @@ fn any_term_pages_rank_coverage_then_bm25_with_fts_token_counts() {
 }
 
 #[test]
+fn substring_supplement_preserves_unicode_and_raw_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = LexicalIndex::open(&dir.path().join("search.db")).unwrap();
+    let store = index.store().unwrap();
+    store.index_task(&task("unicode", "CAFÉNOIR")).unwrap();
+    let mut raw = task("raw", "unrelated");
+    raw.description = "prefixalpha\tbetasuffix".into();
+    store.index_task(&raw).unwrap();
+
+    for phase in ["indexed", "reindexed"] {
+        if phase == "reindexed" {
+            store
+                .reindex_tasks(&[task("unicode", "CAFÉNOIR"), raw.clone()])
+                .unwrap();
+        }
+        assert!(
+            store.substring_task_ids("ÉN").unwrap().contains("unicode"),
+            "{phase}: short Unicode needle must match with Unicode case folding"
+        );
+        assert!(
+            store
+                .substring_task_ids("alpha\tbeta")
+                .unwrap()
+                .contains("raw"),
+            "{phase}: raw tab substring must match the raw field text"
+        );
+        assert!(
+            !store
+                .substring_task_ids("alpha beta")
+                .unwrap()
+                .contains("raw"),
+            "{phase}: a space must not be conflated with a raw tab"
+        );
+    }
+}
+
+#[test]
 fn writes_updates_deletes_and_rebuilds_fts_synchronously() {
     let dir = tempfile::tempdir().expect("fixture directory");
     let index = LexicalIndex::open(&dir.path().join("search.db")).expect("open");
