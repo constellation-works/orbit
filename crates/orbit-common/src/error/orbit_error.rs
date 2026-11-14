@@ -6,7 +6,8 @@ use super::{
     DependencyNotDelivered, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
     HostRegistryCode, NotFoundKind, NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict,
     RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
-    StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    StorageLayer, TaskPilotRefusalCode, UpgradeAdmissionRefusal, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -191,6 +192,15 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// Executable-generation admission refused an operation. Displays and
+    /// serializes exactly as [`Self::Execution`]; callers select clock handling
+    /// by the refusal kind, never from its message.
+    #[error("execution failed: {}", .0.message)]
+    #[serde(
+        rename = "Execution",
+        serialize_with = "serialize_upgrade_admission_refusal"
+    )]
+    UpgradeAdmissionRefused(Box<UpgradeAdmissionRefusal>),
     /// A typed fail-closed completion or landing decision. Its message remains
     /// diagnostic; the refusal value alone authorizes a held run outcome.
     #[error("execution failed: {message}")]
@@ -468,6 +478,13 @@ fn serialize_absorbed_candidate<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&candidate.to_string())
+}
+
+fn serialize_upgrade_admission_refusal<S: serde::Serializer>(
+    refusal: &UpgradeAdmissionRefusal,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&refusal.message)
 }
 
 fn serialize_workflow_evidence_unavailable<S: serde::Serializer>(

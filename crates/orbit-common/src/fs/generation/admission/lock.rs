@@ -9,14 +9,12 @@ use fs2::FileExt;
 use super::super::identity::CompatibilityIdentity;
 use super::super::paths::{ADMISSION_LOCK, GENERATION_LOCK};
 use super::super::records::{Record, open};
-use super::super::refusal::{
-    SWITCH_PENDING, contended, refusal, switch_pending, upgrade_holds_admission, upgrade_pending,
-};
+use super::super::refusal::{self, SWITCH_PENDING, switch_pending, upgrade_holds_admission};
 use super::super::registry::pending_switch;
 use super::super::{DEFAULT_QUIESCE_TIMEOUT, MAX_QUIESCE_TIMEOUT, QUIESCE_TIMEOUT_ENV};
 use super::guard::Participant;
 use super::waiters::{self as admission_waiters, ExclusiveWaiter};
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 pub(super) const QUIESCE_POLL: Duration = Duration::from_millis(200);
 const ADMISSION_POLL: Duration = Duration::from_millis(10);
@@ -91,7 +89,9 @@ pub(in super::super) fn admission(
         // first intent check and this shared lock acquisition.
         let attempt = match attempt {
             Ok(()) if mode == Admission::Shared && admission_waiters::pending(root, false)? => {
-                FileExt::unlock(&file.file).map_err(refusal)?;
+                FileExt::unlock(&file.file).map_err(|error| {
+                    refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+                })?;
                 Err(std::io::ErrorKind::WouldBlock.into())
             }
             other => other,
@@ -102,7 +102,12 @@ pub(in super::super) fn admission(
                 let now = Instant::now();
                 if now >= deadline {
                     // Even the switch this joiner waits behind is the cause.
-                    return Err(upgrade_holding(root, None).unwrap_or_else(|| contended(wait)));
+                    return Err(upgrade_holding(root, None).unwrap_or_else(|| {
+                        refusal::upgrade_admission_contended(
+                            UpgradeAdmissionRefusalKind::Other,
+                            wait,
+                        )
+                    }));
                 }
                 if now >= probe_at {
                     if let Some(upgrade) = upgrade_holding(root, joining) {
@@ -112,7 +117,12 @@ pub(in super::super) fn admission(
                 }
                 std::thread::sleep(ADMISSION_POLL);
             }
-            Err(e) => return Err(refusal(e)),
+            Err(e) => {
+                return Err(refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::Other,
+                    e,
+                ));
+            }
         }
     }
 }
@@ -172,9 +182,15 @@ pub(super) fn admitted_past_pending(
             // activity is refused typed rather than as contention.
             Err(error) if participant.in_activity => {
                 return Err(match pending_switch(root) {
-                    Some(switch) => upgrade_pending(switch_pending(&switch)),
+                    Some(switch) => refusal::upgrade_admission_pending(
+                        UpgradeAdmissionRefusalKind::SwitchPending,
+                        switch_pending(&switch),
+                    ),
                     None if upgrade_holding(root, None).is_some() => {
-                        upgrade_pending("an Orbit update or generation takeover holds admission")
+                        refusal::upgrade_admission_pending(
+                            UpgradeAdmissionRefusalKind::Other,
+                            "an Orbit update or generation takeover holds admission",
+                        )
                     }
                     None => error,
                 });
@@ -185,10 +201,16 @@ pub(super) fn admitted_past_pending(
             return Ok(held);
         };
         if participant.in_activity {
-            return Err(upgrade_pending(switch_pending(&switch)));
+            return Err(refusal::upgrade_admission_pending(
+                UpgradeAdmissionRefusalKind::SwitchPending,
+                switch_pending(&switch),
+            ));
         }
         if switch.target != *participant.identity {
-            return Err(refusal(switch_pending(&switch)));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::SwitchPending,
+                switch_pending(&switch),
+            ));
         }
         drop(held);
         // A waiter that outlives its own deadline (stopped, not exiting)
@@ -198,10 +220,13 @@ pub(super) fn admitted_past_pending(
             .checked_add_signed(chrono::Duration::seconds(5))
             .is_some_and(|expired| Utc::now() > expired)
         {
-            return Err(refusal(format!(
-                "{SWITCH_PENDING}, and its waiter (pid {}) has outlived its deadline",
-                switch.pid
-            )));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::SwitchPending,
+                format!(
+                    "{SWITCH_PENDING}, and its waiter (pid {}) has outlived its deadline",
+                    switch.pid
+                ),
+            ));
         }
         std::thread::sleep(QUIESCE_POLL);
     }

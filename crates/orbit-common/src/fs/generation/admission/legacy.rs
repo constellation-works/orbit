@@ -7,11 +7,11 @@ use fs2::FileExt;
 use super::super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::super::paths::{GENERATION_LOCK, validated_generation_root};
 use super::super::records::{Record, open, read_generation, write_compat};
-use super::super::refusal::{WRITES_WHILE_FOREIGN, refusal, unwritable};
+use super::super::refusal::{self, WRITES_WHILE_FOREIGN};
 use super::super::update::GenerationUpdate;
 use super::guard::{GenerationGuard, Participant};
 use super::lock::{Admission, admission, lock_generation_exclusive, quiesce_bound};
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 impl GenerationGuard {
     /// Pin an exact digest under `executable-generation-v1` rules. Exclusive
@@ -20,13 +20,20 @@ impl GenerationGuard {
     pub fn acquire(root: &Path, digest: &str) -> Result<Self, OrbitError> {
         let admission = admission(root, Admission::Exclusive, quiesce_bound(), None)?;
         let mut generation = open(root, GENERATION_LOCK)?;
-        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        FileExt::try_lock_shared(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         if read_generation(&mut generation.file)? == digest {
             return Ok(Self::holding(generation, false));
         }
-        FileExt::unlock(&generation.file).map_err(refusal)?;
+        FileExt::unlock(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         if !lock_generation_exclusive(&generation) {
-            return Err(refusal(WRITES_WHILE_FOREIGN));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::WritesWhileForeign,
+                WRITES_WHILE_FOREIGN,
+            ));
         }
         GenerationUpdate {
             root: validated_generation_root(root)?,
@@ -44,10 +51,13 @@ pub(super) fn legacy_schema_check(
 ) -> Result<(), OrbitError> {
     let compiled = identity.store_schema.version;
     if compiled != live {
-        return Err(refusal(format!(
-            "another executable generation is still running \
-             (store schema {live} differs from compiled schema {compiled})"
-        )));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            format!(
+                "another executable generation is still running \
+                 (store schema {live} differs from compiled schema {compiled})"
+            ),
+        ));
     }
     Ok(())
 }
@@ -67,9 +77,13 @@ pub(super) fn reseed_if_unheld(
     participant: &Participant<'_>,
     envelope: Envelope,
 ) -> Result<Envelope, OrbitError> {
-    FileExt::unlock(&generation.file).map_err(refusal)?;
+    FileExt::unlock(&generation.file).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
     if FileExt::try_lock_exclusive(&generation.file).is_err() {
-        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        FileExt::try_lock_shared(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         return Ok(envelope);
     }
     let fresh = Envelope::of(participant.identity, participant.access);
@@ -77,7 +91,8 @@ pub(super) fn reseed_if_unheld(
         let written = if generation.writable {
             write_compat(root, recorded, &fresh)
         } else {
-            Err(unwritable(
+            Err(refusal::upgrade_admission_unwritable(
+                UpgradeAdmissionRefusalKind::Other,
                 "joining an empty authority would replace the recorded generation, which \
                  cannot be written from here",
             ))
@@ -90,6 +105,8 @@ pub(super) fn reseed_if_unheld(
             return Err(error);
         }
     }
-    FileExt::lock_shared(&generation.file).map_err(refusal)?;
+    FileExt::lock_shared(&generation.file).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
     Ok(fresh)
 }

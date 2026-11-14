@@ -10,12 +10,12 @@ use super::super::identity::{Access, CompatibilityIdentity};
 use super::super::image::{process_digest, remember_process_digest};
 use super::super::paths::validated_generation_root;
 use super::super::records::{Record, read_generation};
-use super::super::refusal::{refusal, switch_pending, upgrade_pending};
+use super::super::refusal::{self, switch_pending};
 use super::super::registry::{
     self, ParticipantRecord, ParticipantRole, PendingSwitch, Registration, pending_switch,
 };
 use super::lock::quiesce_bound;
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 /// A shared generation pin. Retain until all operations and replies finish.
 ///
@@ -325,9 +325,15 @@ impl GenerationGuard {
             && switch.target != *participant.identity
         {
             return Err(if participant.in_activity {
-                upgrade_pending(switch_pending(&switch))
+                refusal::upgrade_admission_pending(
+                    UpgradeAdmissionRefusalKind::SwitchPending,
+                    switch_pending(&switch),
+                )
             } else {
-                refusal(switch_pending(&switch))
+                refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::SwitchPending,
+                    switch_pending(&switch),
+                )
             });
         }
         // As a fresh join computes it: a reader of a record naming another

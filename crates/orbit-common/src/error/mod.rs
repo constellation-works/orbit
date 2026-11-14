@@ -12,6 +12,7 @@ pub use kinds::{
     ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind, NoticeRefusalCode,
     PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict,
     RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
-    StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    StorageLayer, TaskPilotRefusalCode, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

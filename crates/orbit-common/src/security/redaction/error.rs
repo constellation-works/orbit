@@ -211,6 +211,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message: redact(&message),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::UpgradeAdmissionRefused(mut refusal) => {
+            refusal.message = redact(&refusal.message);
+            OrbitError::UpgradeAdmissionRefused(refusal)
+        }
         OrbitError::WorkflowEvidenceUnavailable(mut evidence) => {
             evidence.reason = redact(&evidence.reason);
             OrbitError::WorkflowEvidenceUnavailable(evidence)
