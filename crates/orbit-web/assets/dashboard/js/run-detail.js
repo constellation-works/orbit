@@ -22,7 +22,7 @@ const $ = (id) => document.getElementById(id);
 const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app orchestrators
 const RUN_RETRIES_LIMIT = 100;
 const LIVE_RUN_STATES = new Set(["pending", "running", "retrying"]);
-const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held", "skipped"]);
+const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
 
 // Run detail module-scoped state (was in app.js)
 let activeRunId = null;
@@ -122,9 +122,6 @@ function buildReplayRunButton(run, host) {
 // to the same run (A → B → A) and a workspace change that keeps the run id
 // both miss that check.
 const runDetailFetchGeneration = { detail: 0, events: 0, retries: 0, logs: 0 };
-// Supplementary reads started before the parent and its provider processes
-// finish may precede final audit writes. Each channel needs one settled read.
-const terminalRunReads = new Set();
 
 function bumpRunDetailFetches() {
   runDetailFetchGeneration.detail += 1;
@@ -134,19 +131,12 @@ function bumpRunDetailFetches() {
 }
 
 export function beginRunDetailFetch(channel) {
-  terminalRunReads.delete(channel);
   return {
     runId: activeRunId,
     workspace: getWorkspace(),
     revision: getWorkspaceRevision(),
     generation: ++runDetailFetchGeneration[channel],
-    terminalAudit: loadedRunDetailIsTerminal(activeRunId)
-      && !(activeRunDetail.provider_processes || []).some(process => !process.finished),
   };
-}
-
-export function completeRunDetailFetch(channel, token) {
-  if (runDetailFetchCurrent(channel, token) && token.terminalAudit && !activeRunDetailError) terminalRunReads.add(channel);
 }
 
 export function runDetailFetchCurrent(channel, token) {
@@ -162,7 +152,6 @@ export function runDetailFetchCurrent(channel, token) {
 // mounted under the new run or workspace.
 function retireRunDetailView() {
   bumpRunDetailFetches();
-  terminalRunReads.clear();
   activeRunDetail = null;
   activeRunDetailError = null;
   activeRunEvents = [];
@@ -197,31 +186,16 @@ onWorkspaceChange(retireRunDetailView);
 export function getActiveRunDetail() { return activeRunDetail; }
 
 /// Whether the loaded detail is the terminal record of the given run.
-/// Joined child state and provider liveness can still change after this.
+/// A terminal run cannot change, so its detail, events and logs need no
+/// periodic re-read; callers outside the poll tick still fetch directly.
 export function loadedRunDetailIsTerminal(runId) {
   const run = activeRunDetail?.run;
   return Boolean(runId) && run?.run_id === runId && TERMINAL_RUN_STATES.has(run.state);
 }
 
-// Audit channels settle independently of the parent detail's live joins.
-// Unknown child state remains retryable rather than freezing an unreadable run.
-export function runDetailPollNeeded(channel, runId) {
-  if (!loadedRunDetailIsTerminal(runId)) return true;
-  const unfinishedProviders = (activeRunDetail.provider_processes || []).some(process => !process.finished);
-  if (channel !== "detail") return unfinishedProviders || !terminalRunReads.has(channel);
-  return Boolean(activeRunDetailError)
-    || (activeRunDetail.run.child_dispatches || []).some(child => !TERMINAL_RUN_STATES.has(child.state))
-    || unfinishedProviders;
-}
-
-export function setActiveRunDetail(v) {
-  activeRunDetail = v;
-  activeRunDetailError = null;
-  if (!loadedRunDetailIsTerminal(activeRunId)) terminalRunReads.clear();
-}
+export function setActiveRunDetail(v) { activeRunDetail = v; activeRunDetailError = null; }
 export function setActiveRunDetailError(v) {
   activeRunDetailError = v;
-  if (v) terminalRunReads.clear();
 }
 
 export function getActiveRunEvents() { return activeRunEvents; }
