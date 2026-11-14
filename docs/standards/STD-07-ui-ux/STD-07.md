@@ -4,10 +4,10 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 3
+version: 4
 created: 2026-11-09
-updated: 2026-11-11
-last_validated: 2026-11-11
+updated: 2026-11-14
+last_validated: 2026-11-14
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
 
@@ -174,6 +174,9 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   (such as a `<select>`) is not replaced by a custom widget with different chrome, and its
   options gain no new colours or decoration, unless the owner approved the new look as a
   mock (R25).
+- **R38.** A row of controls MUST use the full width available to it before it wraps. Chips,
+  filters and buttons do not break onto a second row while there is unused space beside
+  them, and a bar that belongs to the whole view spans the view, not one of its columns.
 
 ### Process
 
