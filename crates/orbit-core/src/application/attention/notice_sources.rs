@@ -169,8 +169,10 @@ pub(super) fn friction_attention_items(
         let ws = workspace.id.replace('\'', "'\\''");
         let next = AttentionNext {
             summary: "Triage the friction record".into(),
-            tool: Some("orbit.friction.update".into()),
-            input: Some(json!({"id": record.id, "workspace": workspace.id, "status": "triaged"})),
+            tool: Some("orbit.friction".into()),
+            input: Some(
+                json!({"action": "update", "id": record.id, "workspace": workspace.id, "status": "triaged"}),
+            ),
             command: format!(
                 "orbit --workspace '{ws}' friction update {} --status triaged",
                 record.id
