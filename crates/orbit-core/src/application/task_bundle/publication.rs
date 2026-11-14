@@ -153,7 +153,7 @@ impl OrbitRuntime {
         policy: &AttachmentPolicy,
     ) -> Result<PublicationPublishOutcome, OrbitError> {
         let registry = self.open_publication_task_registry()?;
-        publish_task_snapshot(&registry, request, policy, None)
+        publish_task_snapshot(&registry, request, policy)
     }
 
     /// Fetch, validate, and render a publication without mutating task state.

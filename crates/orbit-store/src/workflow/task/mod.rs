@@ -119,11 +119,9 @@ pub use inspect::{
 };
 pub use manifest::{MIGRATION_FORMAT_VERSION, TaskMigrationManifest};
 pub use publication::{
-    AttachmentPolicy, AttachmentPolicyKind, AttachmentScanFailure, AttachmentScanInput,
-    AttachmentScanOutcome, AttachmentSensitivityScanner, OmittedAttachment,
-    PUBLICATION_ENVELOPE_FILE_NAME, PUBLICATION_TASKS_DIR_NAME, PublicationEnvelope,
-    PublicationSnapshotMetadata, PublicationSnapshotOutcome, ScannerFailureBehavior,
-    TASK_PUBLICATION_FORMAT_VERSION,
+    AttachmentPolicy, AttachmentPolicyKind, OmittedAttachment, PUBLICATION_ENVELOPE_FILE_NAME,
+    PUBLICATION_TASKS_DIR_NAME, PublicationEnvelope, PublicationSnapshotMetadata,
+    PublicationSnapshotOutcome, ScannerFailureBehavior, TASK_PUBLICATION_FORMAT_VERSION,
 };
 pub use publish::{
     PublicationCallerRole, PublicationLastSuccess, PublicationPublishOutcome,

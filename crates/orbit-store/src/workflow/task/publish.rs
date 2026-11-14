@@ -37,9 +37,9 @@ use super::git::{
     GitRunner, field_mismatch, path_str, remote_has_password, remotes_match, short_branch,
 };
 use super::publication::{
-    AttachmentPolicy, AttachmentSensitivityScanner, PUBLICATION_ENVELOPE_FILE_NAME,
-    PUBLICATION_TASKS_DIR_NAME, PublicationEnvelope, PublicationSnapshotMetadata,
-    assert_envelope_parent_lineage, build_publication_snapshot_from_task_workspace,
+    AttachmentPolicy, PUBLICATION_ENVELOPE_FILE_NAME, PUBLICATION_TASKS_DIR_NAME,
+    PublicationEnvelope, PublicationSnapshotMetadata, assert_envelope_parent_lineage,
+    build_publication_snapshot_from_task_workspace,
 };
 
 /// Error prefix and command label for every transport failure.
@@ -132,13 +132,11 @@ pub fn publish_task_snapshot(
     registry: &TaskRegistryStore,
     request: PublicationPublishRequest,
     policy: &AttachmentPolicy,
-    scanner: Option<&dyn AttachmentSensitivityScanner>,
 ) -> Result<PublicationPublishOutcome, OrbitError> {
     publish_task_snapshot_inner(
         registry,
         request,
         policy,
-        scanner,
         #[cfg(test)]
         None,
     )
@@ -159,7 +157,6 @@ pub(super) fn publish_task_snapshot_inner(
     registry: &TaskRegistryStore,
     request: PublicationPublishRequest,
     policy: &AttachmentPolicy,
-    scanner: Option<&dyn AttachmentSensitivityScanner>,
     #[cfg(test)] pending_hook: Option<&PendingHook<'_>>,
 ) -> Result<PublicationPublishOutcome, OrbitError> {
     let request = validate_request(request)?;
@@ -176,14 +173,7 @@ pub(super) fn publish_task_snapshot_inner(
         } => (generation, Some(previous)),
     };
 
-    let staged = cache.stage_snapshot(
-        registry,
-        &request,
-        generation,
-        previous.clone(),
-        policy,
-        scanner,
-    )?;
+    let staged = cache.stage_snapshot(registry, &request, generation, previous.clone(), policy)?;
     let observed_tip = observed.tip.as_ref().map(|tip| tip.commit.clone());
     if let Some(tip) = &observed.tip
         && tip.tasks_tree == staged.tasks_tree
@@ -493,7 +483,6 @@ impl PublicationCache {
         generation: u64,
         previous_publication: Option<String>,
         policy: &AttachmentPolicy,
-        scanner: Option<&dyn AttachmentSensitivityScanner>,
     ) -> Result<StagedSnapshot, OrbitError> {
         let mut temp_builder = tempfile::Builder::new();
         temp_builder.prefix(".orbit-publish-");
@@ -520,7 +509,6 @@ impl PublicationCache {
             },
             &request.task_workspace_id,
             policy,
-            scanner,
         )?;
 
         let index = temp.path().join("index");
