@@ -320,6 +320,15 @@ impl RunProviderProcess {
 /// and `unavailable` when it has none — a legacy run, or one whose trail was
 /// never written. An `observed` progress with no active step and no open child
 /// is a run between steps, which is a different fact from having no evidence.
+///
+/// The projection is served from bounded audit windows, so a long trail can
+/// outgrow them: `steps_complete` is false when the step-lifecycle prefix
+/// does not include every lifecycle row (the active step may then be missing,
+/// so a null `active_step` must not be read as "no open step"), and
+/// `complete` is false when any window overflowed (a provider child spawned
+/// before the structural window may then be absent even though it is still
+/// open). Both are true for `unavailable`, whose `state` already says there
+/// is no evidence.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunExecutionProgress {
     pub state: &'static str,
@@ -327,6 +336,13 @@ pub struct RunExecutionProgress {
     pub provider_processes: Vec<RunProviderProcess>,
     pub limit: usize,
     pub truncated: bool,
+    /// Whether the bounded lifecycle prefix includes every step-lifecycle
+    /// row; false means `active_step` may be missing rather than absent.
+    pub steps_complete: bool,
+    /// Whether every bounded window was complete; false means older
+    /// provider children, their samples, step positions or the active step
+    /// may be missing.
+    pub complete: bool,
 }
 
 impl RunExecutionProgress {
@@ -339,6 +355,8 @@ impl RunExecutionProgress {
             provider_processes: Vec::new(),
             limit: MAX_PROVIDER_PROCESSES,
             truncated: false,
+            steps_complete: true,
+            complete: true,
         }
     }
 }
@@ -463,7 +481,10 @@ impl RuntimeKernel {
     /// [`super::detail`]: at most `512 + 256 + 256 + 256 + 3` rows are loaded
     /// however long the trail has grown, `truncated` is also set when the
     /// structural window overflowed, and the active step is reported only
-    /// when the lifecycle prefix is complete.
+    /// when the lifecycle prefix is complete. The returned progress carries
+    /// that completeness (`complete`/`steps_complete` from the bounded read)
+    /// so a caller never reads a missing active step or provider child as
+    /// proof that none exists.
     pub(crate) fn collect_run_execution_progress_with<P>(
         &self,
         run_id: &str,
