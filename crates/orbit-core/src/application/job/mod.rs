@@ -80,6 +80,7 @@ pub use pilot_submit::{
     TaskPilotRefusal, TaskPilotSubmission, TaskPilotSubmissionDashboardView, TaskPilotSubmitError,
 };
 pub use pipeline::{
+    AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt, AutoDrainSubmissionSource,
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
     PipelineWorkerLogSnapshot, SubmissionKind, SubmissionNotices,
 };

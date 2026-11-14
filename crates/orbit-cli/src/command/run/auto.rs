@@ -4,7 +4,9 @@ use clap::Args;
 use orbit_core::application::distributed::{
     PULL_START_CONFLICT_ARG_IDS, PULL_START_HOST_REQUIRES_ARG_ID, pull_start_review_refusal,
 };
-use orbit_core::application::job::{DrainAdmissionsStopOutcome, SubmissionKind};
+use orbit_core::application::job::{
+    AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopOutcome,
+};
 use orbit_core::{
     CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
 };
@@ -12,9 +14,7 @@ use orbit_core::{
 use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
-
-pub(super) const AUTO_WORKFLOW: &str = "auto";
+use super::support::auto_drain_submission_payload;
 
 #[derive(Args)]
 #[command(
@@ -112,29 +112,12 @@ impl Execute for AutoCommand {
                 },
                 orbit_types::workflow::JobRunTrigger::cli(),
             )?;
-            let notices = runtime.submission_notices(SubmissionKind::PullDrain);
-            let mut warnings = notices.warnings();
-            // [ORB-15622] A replica whose gates drifted from the owner's.
-            warnings.extend(runtime.pull_gate_drift(&invoke.run_id)?);
-            return workflow_dispatch_payload_with_notices(
-                AUTO_WORKFLOW,
-                &[WorkflowDispatchResult {
-                    workflow_alias: AUTO_WORKFLOW,
-                    job_id: invoke.job_name,
-                    run_id: invoke.run_id,
-                    state: if invoke.queued {
-                        "queued".to_string()
-                    } else {
-                        "submitted".to_string()
-                    },
-                    attempt: 1,
-                    wait_timeout: false,
-                    error_code: None,
-                    error_message: None,
-                }],
-                warnings,
-                notices.notes(),
-            );
+            let receipt = runtime.auto_drain_submission_receipt(
+                &invoke,
+                AutoDrainSubmissionSource::Pull { selector },
+                AutoDrainSubmissionProfile::Cli,
+            )?;
+            return auto_drain_submission_payload(&receipt);
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
             low: self.low_complexity_crews,
@@ -171,29 +154,12 @@ impl Execute for AutoCommand {
                 .map_err(|message: &str| orbit_core::OrbitError::InvalidInput(message.into()))?,
             self.review,
         )?;
-        let run = WorkflowDispatchResult {
-            workflow_alias: AUTO_WORKFLOW,
-            job_id: invoke.job_name,
-            run_id: invoke.run_id,
-            state: if invoke.queued {
-                "queued".to_string()
-            } else {
-                "submitted".to_string()
-            },
-            attempt: 1,
-            wait_timeout: false,
-            error_code: None,
-            error_message: None,
-        };
-        let mode = runtime.run_auto_concurrency(&run.run_id)?;
-        let notices = runtime.submission_notices(SubmissionKind::Drain);
-        super::support::workflow_dispatch_payload_with_auto_concurrency(
-            AUTO_WORKFLOW,
-            &[run],
-            notices.warnings(),
-            notices.notes(),
-            mode,
-        )
+        let receipt = runtime.auto_drain_submission_receipt(
+            &invoke,
+            AutoDrainSubmissionSource::Local,
+            AutoDrainSubmissionProfile::Cli,
+        )?;
+        auto_drain_submission_payload(&receipt)
     }
 }
 

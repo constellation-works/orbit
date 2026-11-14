@@ -10,7 +10,10 @@ use orbit_common::governance::authorization::{
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::distributed::PullStartOptionsSupplied;
-use orbit_core::application::job::{DrainAdmissionsStopRequest, SubmissionKind};
+use orbit_core::application::job::{
+    AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopRequest,
+    SubmissionKind,
+};
 use orbit_core::{DrainEntryPoint, WorkspacePullRequest};
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
 use serde_json::{Value, json};
@@ -388,25 +391,13 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             body.auto_concurrency,
             body.review,
         )?;
-        let mut started = json!({
-            "workflow": "auto",
-            "source": "local",
-            "job_id": invoke.job_name,
-            "run_id": invoke.run_id,
-            "state": if invoke.queued { "queued" } else { "submitted" },
-            "submitted_at": invoke.submitted_at,
-            "completion": completion.as_input_value(),
-            "approve_proposed": approve_proposed,
-            "auto_fix": auto_fix,
-        });
-        started["max_active_leaf_runs"] = recorded_drain_limit(&runtime, &invoke.run_id)?;
-        started["allowed_crews"] = recorded_allowed_crews(&runtime, &invoke.run_id)?;
-        started["auto_concurrency"] = runtime.run_auto_concurrency(&invoke.run_id)?;
-        started["review"] = runtime.run_review_layer(&invoke.run_id)?;
-        runtime
-            .submission_notices(SubmissionKind::Drain)
-            .insert_into(&mut started);
-        Ok(started)
+        Ok(runtime
+            .auto_drain_submission_receipt(
+                &invoke,
+                AutoDrainSubmissionSource::Local,
+                AutoDrainSubmissionProfile::Http,
+            )?
+            .to_json())
     })
     .await
 }
@@ -448,62 +439,15 @@ fn pull_drain_start(
         },
         JobRunTrigger::dashboard(),
     )?;
-    let mut started = json!({
-        "workflow": "auto",
-        "source": "pull",
-        "selector": selector,
-        "job_id": invoke.job_name,
-        "run_id": invoke.run_id,
-        "state": if invoke.queued { "queued" } else { "submitted" },
-        "submitted_at": invoke.submitted_at,
-    });
-    started["max_active_leaf_runs"] = recorded_drain_limit(runtime, &invoke.run_id)?;
-    started["allowed_crews"] = recorded_allowed_crews(runtime, &invoke.run_id)?;
-    let notices = runtime.submission_notices(SubmissionKind::PullDrain);
-    notices.insert_into(&mut started);
-    if let Some(drift) = runtime.pull_gate_drift(&invoke.run_id)? {
-        let warning = match started.get("warning").and_then(Value::as_str) {
-            Some(existing) => format!("{existing}\n{drift}"),
-            None => drift,
-        };
-        started["warning"] = json!(warning);
-    }
-    Ok(started)
-}
-
-/// The submitted run's configured ceiling, including its job default.
-fn recorded_drain_limit(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-) -> Result<Value, orbit_core::OrbitError> {
-    let run = runtime.show_job_run(run_id)?;
-    let default = runtime.job_default_input(&run.job_id)?;
-    Ok(run
-        .input
-        .as_ref()
-        .and_then(|input| input.get("max_active_leaf_runs"))
-        .or_else(|| {
-            default
-                .as_ref()
-                .and_then(|input| input.get("max_active_leaf_runs"))
-        })
-        .cloned()
-        .unwrap_or_else(|| json!(5)))
-}
-
-/// The canonical crew names the submitted run recorded, `[]` when it admits
-/// every crew.
-fn recorded_allowed_crews(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-) -> Result<Value, orbit_core::OrbitError> {
     Ok(runtime
-        .show_job_run(run_id)?
-        .input
-        .as_ref()
-        .and_then(|input| input.get("allowed_crews"))
-        .cloned()
-        .unwrap_or_else(|| json!([])))
+        .auto_drain_submission_receipt(
+            &invoke,
+            AutoDrainSubmissionSource::Pull {
+                selector: &selector,
+            },
+            AutoDrainSubmissionProfile::Http,
+        )?
+        .to_json())
 }
 
 #[derive(serde::Deserialize, Default)]

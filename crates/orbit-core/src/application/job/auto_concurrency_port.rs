@@ -22,4 +22,8 @@ pub(in crate::application) trait JobAutoConcurrencyPort {
         input: &mut Value,
         retain_snapshot: bool,
     ) -> Result<(), OrbitError>;
+
+    /// Read the effective concurrency-controller policy for `run_id` without
+    /// reconciling stale runs.
+    fn captured_auto_concurrency(&self, run_id: &str) -> Result<Value, OrbitError>;
 }

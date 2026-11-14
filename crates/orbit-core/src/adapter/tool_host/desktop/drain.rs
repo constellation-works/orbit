@@ -1,7 +1,8 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
 use crate::application::job::{
-    DrainWorkerLimitChangeProfile, DrainWorkerLimitRequest, SubmissionKind,
+    AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainWorkerLimitChangeProfile,
+    DrainWorkerLimitRequest,
 };
 use crate::application::workflow::drain_window_input_error;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
@@ -127,14 +128,13 @@ pub(in crate::adapter::tool_host) fn control(
                     .transpose()?,
                 review,
             )?;
-            let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
-                "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
-            started["review"] = runtime.run_review_layer(&run.run_id)?;
-            started["auto_concurrency"] = runtime.run_auto_concurrency(&run.run_id)?;
             runtime
-                .submission_notices(SubmissionKind::Drain)
-                .insert_into(&mut started);
-            started
+                .auto_drain_submission_receipt(
+                    &run,
+                    AutoDrainSubmissionSource::Local,
+                    AutoDrainSubmissionProfile::Tool,
+                )?
+                .to_json()
         }
         "stop" => {
             if ["for_seconds", "concurrency", "complete", "approve_proposed"]
