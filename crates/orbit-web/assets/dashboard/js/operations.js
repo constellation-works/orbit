@@ -16,7 +16,6 @@ import {
 import { configureOperationsRoutines, renderClock, renderRoutineRows, scopedRoutines, updateRoutineFailureBadge } from './operations-routines.js';
 import { fetchAndRenderAutoTasks, syncAutoTaskSchedulerNote } from './operations-auto-tasks.js';
 import { fetchAndRenderScripts } from './operations-scripts.js';
-import { fetchAndRenderResidents } from './operations-residents.js';
 import { lastJobs, renderJobs } from './operations-jobs.js';
 import { startFleetIndicatorRefresh } from './operations-fleet.js';
 
@@ -69,10 +68,6 @@ export async function fetchAndRenderOperations(subtab = operationsState.context.
   }
   if (subtab === "scripts") {
     await fetchAndRenderScripts();
-    return;
-  }
-  if (subtab === "residents") {
-    await fetchAndRenderResidents();
     return;
   }
   const routines = fetchJson(withInactivePlugins("/api/routines"));

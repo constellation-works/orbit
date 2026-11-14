@@ -114,7 +114,6 @@
               <button class="subtab active" data-subtab="routines" type="button"><span class="rail-label" title="Routines">Routines</span><span class="rail-count" id="rail-count-ops-routines"></span></button>
               <button class="subtab" data-subtab="auto-tasks" type="button"><span class="rail-label" title="Auto-tasks">Auto-tasks</span><span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
               <button class="subtab" data-subtab="scripts" type="button"><span class="rail-label" title="Scripts">Scripts</span><span class="rail-count" id="rail-count-ops-scripts"></span></button>
-              <button class="subtab" data-subtab="residents" type="button"><span class="rail-label" title="Residents">Residents</span><span class="rail-count" id="rail-count-ops-residents"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
@@ -200,6 +199,7 @@
                (common.js). Loading text is never written here. -->
           <div class="tasks-messages" id="tasks-messages">
             <div id="tasks-notices"></div>
+            <div class="operation-feedback" id="resident-operation-feedback" role="status" aria-live="polite"></div>
           </div>
           <div class="col-log" id="side-dock" data-home="tasks" data-mode="drain">
             <div class="dock-head">
@@ -207,6 +207,7 @@
                 <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Drain</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
                 <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-seg-count dock-log-state"></span></button>
                 <button type="button" role="tab" class="dock-seg" id="dock-tab-notices" data-mode="notices" aria-selected="false" aria-controls="dock-pane-notices" tabindex="-1">Notices <span id="dock-notices-state" class="dock-seg-count"></span></button>
+                <button type="button" role="tab" class="dock-seg" id="dock-tab-residents" data-mode="residents" aria-selected="false" aria-controls="dock-pane-residents" tabindex="-1">Residents <span id="dock-residents-state" class="dock-seg-count"></span></button>
               </div>
             </div>
             <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
@@ -260,6 +261,14 @@
                 </div>
                 <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
                   <div class="inner" id="logInner"></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="dock-pane" id="dock-pane-residents" role="tabpanel" aria-labelledby="dock-tab-residents" data-pane="residents">
+              <section class="panel" id="residents-panel" aria-label="Residents">
+                <div class="body" id="residents-body">
+                  <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
                 </div>
               </section>
             </div>
@@ -776,18 +785,6 @@
           </div>
         </section>
       </main>
-      <main class="operations-layout operations-residents-layout" id="operations-residents-main" hidden>
-        <section class="panel" id="residents-panel">
-          <header>
-            <span>Residents</span>
-            <span class="count" id="residents-count">-</span>
-          </header>
-          <div class="operation-feedback" id="resident-operation-feedback" role="status" aria-live="polite"></div>
-          <div class="body" id="residents-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
-      </main>
     </section>
     <section class="tab-pane" data-tab="knowledge" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
@@ -957,6 +954,7 @@
       <button type="button" class="sb-open" id="log-statusbar-open">Open log</button>
     </div>
     <div id="gantt-tooltip" role="tooltip" aria-hidden="true"></div>
+    <dialog id="resident-start-dialog" class="resident-start-dialog" aria-labelledby="resident-start-heading"></dialog>
     <!-- Posting is a modal dialog in the top layer, outside the dock pane so a
          hidden tab cannot keep it from opening. Severity defaults to the one
          kind that raises no banner, and the options keep the server's defaults. -->

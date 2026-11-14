@@ -1,12 +1,12 @@
-// Automation › Residents: start, supervise, steer and stop resident mandates.
-// The page is a list of mandates, one row each, with the selected mandate's
+// Tasks dock › Residents: start, supervise, steer and stop resident mandates.
+// The pane is a list of mandates, one row each, with the selected mandate's
 // detail opening under its row; one start flow creates a mandate, grants its
 // rights and turns the workspace's cycle routine on. Every read and write goes
 // through the `orbit.resident.*` tools behind /api/residents; the server keeps
 // the mandate rules, so a refused write shows the server's own message.
 
-import { captureWorkspaceVisit, detailsPanel, el, fetchJson, infoHint, makeToggleRow, requestJson, requestPanel } from './common.js';
-import { actionReason, explainUnavailable, feedback, selectedWorkspaceName, setRailSubtabCount } from './operations-shared.js';
+import { captureWorkspaceVisit, detailsPanel, el, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { actionReason, explainUnavailable, feedback, selectedWorkspaceName } from './operations-shared.js';
 
 const FEEDBACK = "resident-operation-feedback";
 const RIGHTS = ["dispatch", "promote", "merge", "plugin_upgrade"];
@@ -19,15 +19,32 @@ const csv = (text) => String(text || "").split(",").map(part => part.trim()).fil
 const when = (value) => (value ? String(value).replace("T", " ").replace(/\.\d+Z$/, "Z") : "none");
 const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : "");
 
-// Page state that is the operator's, not the payload's: the selected mandate,
+// Pane state that is the operator's, not the payload's: the selected mandate,
 // the open start flow and a chosen action awaiting its reason. A background
-// refresh rebuilds the page from it; a workspace switch clears it.
+// refresh rebuilds the pane from it; a workspace switch clears it.
 const ui = { revision: null, payload: null, selected: null, startForm: null, pending: null };
 
 function resetUiFor(visit) {
   if (ui.revision === visit.revision) return;
+  closeResidentStart();
   Object.assign(ui, { revision: visit.revision, payload: null, selected: null, startForm: null, pending: null });
 }
+
+
+function closeResidentStart() {
+  const dialog = document.getElementById("resident-start-dialog");
+  if (dialog?.open) dialog.close();
+  ui.startForm = null;
+}
+
+onWorkspaceChange(() => {
+  resetUiFor(captureWorkspaceVisit());
+  const count = document.getElementById("dock-residents-state");
+  if (count) count.textContent = "";
+});
+window.addEventListener("hashchange", () => {
+  if (!document.querySelector('.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"]')) closeResidentStart();
+});
 
 
 function fact(label, value) {
@@ -166,11 +183,26 @@ function routineStatus(payload) {
 // --- start flow ----------------------------------------------------------------
 
 function startButton(payload) {
-  const start = button("Start a resident", "Start a resident", "primary");
+  const start = button("Start", "Start a resident", "primary");
+  start.setAttribute("aria-haspopup", "dialog");
   start.addEventListener("click", () => {
     ui.startForm = startForm(payload);
-    rerender();
-    ui.startForm?.querySelector('[name="goal"]')?.focus();
+    const dialog = document.getElementById("resident-start-dialog");
+    if (!dialog) return;
+    dialog.replaceChildren(ui.startForm);
+    dialog.onclose = () => {
+      if (dialog.open) return;
+      ui.startForm = null;
+      // A refresh may have replaced the button that opened the dialog.
+      // Restore focus to its current instance instead of a hidden input.
+      document.querySelector('.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"] #residents-body button[aria-haspopup="dialog"]')?.focus();
+    };
+    dialog.oncancel = event => {
+      // Match the disabled Cancel button while a start write is pending.
+      if (ui.startForm?.querySelector('[type="submit"]')?.disabled) event.preventDefault();
+    };
+    dialog.showModal();
+    ui.startForm.querySelector('[name="goal"]')?.focus();
   });
   return gated(payload, "resident_write", start);
 }
@@ -201,7 +233,7 @@ function startForm(payload) {
   const cancel = button("Cancel", "Cancel starting a resident");
   const status = el("p", { class: "resident-start-status", role: "status", "aria-live": "polite" });
   const form = el("form", { class: "resident-form resident-start", "aria-label": "Start a resident" }, [
-    el("h3", { class: "resident-start-title", text: "Start a resident" }),
+    el("h3", { id: "resident-start-heading", class: "resident-start-title", text: "Start a resident" }),
     el("fieldset", { class: "resident-step" }, [
       el("legend", { text: "1 · What it should do" }),
       field("Goal", input("goal", { maxlength: "240", required: "", placeholder: "One line: what the resident keeps true" })),
@@ -229,8 +261,7 @@ function startForm(payload) {
     el("div", { class: "resident-form-actions" }, [status, cancel, gated(payload, "resident_write", submit)]),
   ]);
   cancel.addEventListener("click", () => {
-    ui.startForm = null;
-    rerender();
+    closeResidentStart();
   });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -290,13 +321,12 @@ async function startResident(form, controls, status) {
   if (created.stale) return;
   if (!created.ok) {
     for (const control of controls) control.disabled = false;
-    status.textContent = "";
-    feedback(FEEDBACK, "error", refused(0, created.message, "Nothing was created."));
+    status.textContent = refused(0, created.message, "Nothing was created.");
     return;
   }
   const id = created.result.task_id;
   const finish = async (kind, message) => {
-    ui.startForm = null;
+    closeResidentStart();
     ui.selected = id;
     ui.pending = null;
     feedback(FEEDBACK, kind, message);
@@ -409,16 +439,6 @@ function mandateRow(payload, mandate) {
       document.querySelector(`.resident-row[data-task="${CSS.escape(mandate.task_id)}"]`)?.focus();
     },
   });
-}
-
-function listHead() {
-  return el("div", { class: "resident-row resident-list-head", "aria-hidden": "true" }, [
-    el("span", { text: "Goal" }),
-    el("span", { text: "State" }),
-    el("span", { text: "Last activity" }),
-    el("span", { text: "Next wake" }),
-    el("span", { text: "Needs you" }),
-  ]);
 }
 
 // --- one mandate: detail -----------------------------------------------------------
@@ -714,33 +734,24 @@ function mandateList(payload, mandates) {
 
 function renderResidents(payload, deliberate = false) {
   const body = document.getElementById("residents-body");
-  const count = document.getElementById("residents-count");
+  const count = document.getElementById("dock-residents-state");
   if (!body) return;
   resetUiFor(captureWorkspaceVisit());
   ui.payload = payload;
   const mandates = payload?.mandates || [];
   const live = sortedLive(mandates.filter(mandate => mandate.state !== "ended"));
   const ended = mandates.filter(mandate => mandate.state === "ended");
-  const attention = live.filter(needsOperator).length;
-  if (count) count.textContent = String(live.length);
-  setRailSubtabCount("rail-count-ops-residents", attention ? String(attention) : "");
+  if (count) count.textContent = live.length ? String(live.length) : "";
   // A form the operator is typing in survives a background refresh; the
-  // start flow also keeps its own node, so its values survive every render.
+  // start dialog keeps its own node, so its values survive every render.
   // A deliberate render (Cancel, a submitted write) must not be dropped.
   if (!deliberate && body.querySelector("form :focus")) return;
   if (ui.selected && !mandates.some(mandate => mandate.task_id === ui.selected)) ui.selected = null;
-  const empty = !mandates.length && !ui.startForm;
-  const toolbar = el("div", { class: "resident-toolbar" }, [
-    routineStatus(payload),
-    !empty && !ui.startForm ? startButton(payload) : null,
-  ]);
+  const toolbar = el("div", { class: "resident-toolbar" }, [routineStatus(payload), startButton(payload)]);
   const parts = [toolbar];
-  if (ui.startForm) parts.push(ui.startForm);
-  if (empty) {
-    parts.push(el("div", { class: "empty-state resident-empty" }, [startButton(payload)]));
-  } else if (live.length) {
-    parts.push(el("div", { class: "resident-list" }, [listHead(), ...mandateList(payload, live)]));
-  } else if (mandates.length) {
+  if (live.length) {
+    parts.push(el("div", { class: "resident-list" }, mandateList(payload, live)));
+  } else {
     parts.push(el("p", { class: "resident-muted resident-none", text: "No running residents." }));
   }
   if (ended.length) {
@@ -753,5 +764,9 @@ function renderResidents(payload, deliberate = false) {
 }
 
 export async function fetchAndRenderResidents({ deliberate = false } = {}) {
-  await requestPanel("residents-body", "residents", () => fetchJson("/api/residents?all=true"), payload => renderResidents(payload, deliberate), "residents-count");
+  if (isAggregateView()) {
+    renderPanelPlaceholder("residents-body");
+    return;
+  }
+  await requestPanel("residents-body", "residents", () => fetchJson("/api/residents?all=true"), payload => renderResidents(payload, deliberate));
 }
