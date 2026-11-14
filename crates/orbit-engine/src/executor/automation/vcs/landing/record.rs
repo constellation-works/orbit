@@ -178,10 +178,10 @@ fn record_refusal<H: RuntimeHost + ?Sized>(
     })?;
     record(host, context, step, None, &evidence)?;
     let message = format!("handoff_land: {}", refusal.reason.value);
-    // A spent repair already ended the claim and returned the task to the
-    // backlog (or blocked it). Hold the run so that designed return is not
-    // counted as a landing failure. The one automatic repair still fails
-    // the run, which is every non-requeue stop recorded here.
+    // A candidate requeue already ended the claim and returned the task to
+    // the backlog (or blocked it). Hold the run so that designed return is not
+    // counted as a landing failure. Every non-requeue stop recorded here still
+    // fails the run, including the one automatic repair's.
     if requeue {
         Ok(OrbitError::DeliveryRefused {
             refusal: DeliveryRefusal::LandingRepairRequeue,

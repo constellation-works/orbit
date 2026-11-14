@@ -47,83 +47,11 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
         dry_run: bool,
         now: DateTime<Utc>,
     ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
-        self.runtime.evaluate_condition(definition, dry_run, now)
-    }
-
-    fn evaluate_guard(&self, definition: &AutoTaskDefinition, now: DateTime<Utc>) -> GuardVerdict {
-        self.runtime.evaluate_guard(definition, now)
-    }
-
-    fn definition_root(&self) -> PathBuf {
-        self.runtime.definition_root()
-    }
-
-    fn state_dir(&self) -> PathBuf {
-        self.runtime.state_dir()
-    }
-
-    fn has_open_instance(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<Option<String>, OrbitError> {
-        self.runtime.has_open_instance(definition)
-    }
-
-    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
-        self.runtime.mint_task(definition)
-    }
-
-    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
-        self.runtime.skip_reason(definition)
-    }
-
-    fn probe_change_since_last_sweep(
-        &self,
-        definition: &AutoTaskDefinition,
-        precondition: &SkipIfUnchanged,
-    ) -> Result<ChangeProbe, OrbitError> {
-        self.runtime
-            .probe_change_since_last_sweep(definition, precondition)
-    }
-
-    fn probe_blocked_candidates(
-        &self,
-        definition: &AutoTaskDefinition,
-        now: DateTime<Utc>,
-    ) -> Result<BlockedCandidateProbe, OrbitError> {
-        self.runtime.probe_blocked_candidates(definition, now)
-    }
-}
-
-/// One definition as a list surface shows it.
-#[derive(Debug, Clone)]
-pub struct ListedAutoTask {
-    pub definition: AutoTaskDefinition,
-    /// The plugin that parks this definition here; `None` when it is live or
-    /// user-authored.
-    pub inactive_plugin: Option<InactivePlugin>,
-    /// The operator-facing reason, set exactly when `inactive_plugin` is.
-    pub skipped_reason: Option<String>,
-}
-
-impl AutoTaskDispatch for OrbitRuntime {
-    fn evaluate_delivery(
-        &self,
-        definition: &AutoTaskDefinition,
-        dry_run: bool,
-        now: DateTime<Utc>,
-    ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
-        crate::application::automation::evaluate_auto_task(self, definition, dry_run, now)
-    }
-
-    fn evaluate_condition(
-        &self,
-        definition: &AutoTaskDefinition,
-        dry_run: bool,
-        now: DateTime<Utc>,
-    ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
         crate::application::automation::condition::evaluate_auto_task_condition(
-            self, definition, dry_run, now,
+            self.runtime,
+            definition,
+            dry_run,
+            now,
         )
     }
 
@@ -136,7 +64,7 @@ impl AutoTaskDispatch for OrbitRuntime {
             return GuardVerdict::Open;
         };
         crate::application::automation::condition::evaluate_guard(
-            self,
+            self.runtime,
             when,
             "schedule.when",
             orbit_automation::condition::ConditionCarrier::AutoTask,
@@ -145,33 +73,36 @@ impl AutoTaskDispatch for OrbitRuntime {
     }
 
     fn definition_root(&self) -> PathBuf {
-        self.paths().local_dir.clone()
+        self.runtime.paths().local_dir.clone()
     }
 
     fn state_dir(&self) -> PathBuf {
-        self.paths().state_dir.clone()
+        self.runtime.paths().state_dir.clone()
     }
 
     fn has_open_instance(
         &self,
         definition: &AutoTaskDefinition,
     ) -> Result<Option<String>, OrbitError> {
-        open_auto_task_instance(self, definition)
+        open_auto_task_instance(self.runtime, definition)
     }
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
-        mint_task(self, definition).map(|task| task.id)
+        mint_task(self.runtime, definition).map(|task| task.id)
     }
 
     fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
-        self.auto_task_inactive_plugin(definition).map(|inactive| {
-            let reason = inactive.reason(&self.auto_task_definition_path(definition), None);
-            InactivePluginSkip {
-                plugin: inactive.namespace,
-                version: inactive.version,
-                reason,
-            }
-        })
+        self.runtime
+            .auto_task_inactive_plugin(definition)
+            .map(|inactive| {
+                let reason =
+                    inactive.reason(&self.runtime.auto_task_definition_path(definition), None);
+                InactivePluginSkip {
+                    plugin: inactive.namespace,
+                    version: inactive.version,
+                    reason,
+                }
+            })
     }
 
     fn probe_change_since_last_sweep(
@@ -179,7 +110,7 @@ impl AutoTaskDispatch for OrbitRuntime {
         _definition: &AutoTaskDefinition,
         precondition: &SkipIfUnchanged,
     ) -> Result<ChangeProbe, OrbitError> {
-        super::change_probe::probe_change_since_last_sweep(self, precondition)
+        super::change_probe::probe_change_since_last_sweep(self.runtime, precondition)
     }
 
     fn probe_blocked_candidates(
@@ -187,7 +118,7 @@ impl AutoTaskDispatch for OrbitRuntime {
         _definition: &AutoTaskDefinition,
         now: DateTime<Utc>,
     ) -> Result<BlockedCandidateProbe, OrbitError> {
-        let views = self.blocked_triage_view(now)?;
+        let views = self.runtime.blocked_triage_view(now)?;
         let task_ids = views
             .iter()
             .filter(|view| {
@@ -206,6 +137,17 @@ impl AutoTaskDispatch for OrbitRuntime {
             BlockedCandidateProbe::Qualifying { task_ids }
         })
     }
+}
+
+/// One definition as a list surface shows it.
+#[derive(Debug, Clone)]
+pub struct ListedAutoTask {
+    pub definition: AutoTaskDefinition,
+    /// The plugin that parks this definition here; `None` when it is live or
+    /// user-authored.
+    pub inactive_plugin: Option<InactivePlugin>,
+    /// The operator-facing reason, set exactly when `inactive_plugin` is.
+    pub skipped_reason: Option<String>,
 }
 
 impl OrbitRuntime {

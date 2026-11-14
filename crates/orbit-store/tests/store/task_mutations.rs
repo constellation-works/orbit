@@ -57,3 +57,5 @@ fn snapshot(id: &str) -> Snapshot {
 
 #[path = "task_mutations/repair_gate.rs"]
 mod repair_gate;
+#[path = "task_mutations/row_cache.rs"]
+mod row_cache;

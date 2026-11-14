@@ -60,8 +60,9 @@ silently become a zero-test pass.
 
 The macOS and CodeQL workflows do not run on pull requests: GitHub's
 hosted-runner concurrency was the merge bottleneck, and none of their checks is
-required. They run on `agent-main` and `main` pushes (CodeQL also weekly), and a
-failure there becomes a repair task, as a CodeQL alert does. Website checks run
+required. The macOS workflow runs on `agent-main` and `main` pushes; CodeQL runs
+on `main` pushes and daily on `agent-main`. A failure there becomes a repair
+task, as a CodeQL alert does. Website checks run
 on pull requests only when they change `website/**`, `CHANGELOG.md` or the
 website workflow, and on `main` pushes with the same paths. Their check names stay stable:
 `macOS Clippy (informational)`,

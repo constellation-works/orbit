@@ -80,14 +80,15 @@ pub enum HandoffLandingStep {
     /// marks a candidate that conflicts with, or is stale against, the base
     /// it lands on [ORB-14261], or whose pull request fails a hosted check
     /// the candidate caused [ORB-15956]: the owner hands it to one automatic
-    /// repair rather than leaving it in review.
+    /// repair rather than leaving it in review. A check the candidate caused
+    /// no longer takes this route; it requeues.
     Stop { repairable: bool },
     /// [ORB-16890] Durable evidence for a landing whose pull request fails a
-    /// required check the candidate itself caused, once its one automatic
-    /// repair is spent. The owner ends the claim and returns the task to the
-    /// backlog with the candidate and this evidence, so the task's next run
-    /// repairs that candidate, until its landing repair budget is spent and
-    /// the task blocks.
+    /// required check the candidate itself caused, whether or not an
+    /// automatic repair was spent. The owner ends the claim and returns the
+    /// task to the backlog with the candidate and this evidence, so the
+    /// task's next run repairs that candidate, until its landing repair budget
+    /// is spent and the task blocks.
     StopForRequeue,
 }
 
