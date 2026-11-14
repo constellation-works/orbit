@@ -360,6 +360,16 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
 
     def test_bubblewrap_apt_failure_reports_elapsed_package_seconds(self):
         self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        # apt_phase recovers dpkg between its two attempts. Without this
+        # fixture the step runs the host's real dpkg through the sudo
+        # fixture (no elevation), which fails at once, and recover_dpkg
+        # retries it until its 60s deadline -- twice in this test, for
+        # about 120s that measures nothing. The retry test below covers
+        # recovery semantics with its own stateful dpkg fixture.
+        self.write("bin/dpkg", """#!/bin/sh
+[ "$*" = '--configure -a' ] || exit 2
+exit 0
+""", executable=True)
         # A fetch failure is transient, so apt_phase retries once: two
         # attempts sleeping 2s each consume about 4s of package time.
         self.write("bin/apt-get",
