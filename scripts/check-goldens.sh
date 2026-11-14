@@ -54,7 +54,10 @@ cargo="${CARGO:-cargo}"
 
 # A filtered cargo test exits 0 when its filter matches zero tests, so a
 # renamed or deleted golden target would pass vacuously. Capture each run,
-# relay it, and fail when the harness reports zero executed tests.
+# relay it, and fail when the harness reports zero executed tests. Every
+# invocation below carries at most one filter: libtest runs the union of its
+# filters and prints one aggregate summary per binary, so a multi-filter run
+# cannot tell a dead filter from a live one (ORB-24436).
 run_golden_test() {
   local output status count
   set +e
@@ -65,8 +68,11 @@ run_golden_test() {
   if [[ "$status" -ne 0 ]]; then
     return "$status"
   fi
-  # Sum every "N passed" harness summary; a filter matching nothing reports
-  # a summary with 0 passed. No summary means no harness evidence to judge.
+  # Sum every "N passed" harness summary: one cargo invocation can run the
+  # test binaries of several selected packages, each printing its own. With
+  # a single filter per invocation the sum is that filter's matched count;
+  # a filter matching nothing reports a summary with 0 passed. No summary
+  # means no harness evidence to judge.
   count="$(printf '%s\n' "$output" | awk '/test result:/ { for (i=1; i<=NF; i++) if ($i == "passed;" && i>1) total += $(i-1); summaries++ } END { print (summaries ? total+0 : -1) }')"
   if [[ "$count" -eq 0 ]]; then
     echo "check-goldens: cargo test matched zero tests: $*" >&2
@@ -83,13 +89,19 @@ run_golden_test() {
 # golden target: Cargo only errors when no selected package has it.
 run_golden_test "$cargo" test -p orbit-core -p orbit-cli --test ci_failure_goldens \
   ci_failure_fixture_goldens -- --exact
+# One filter per invocation: libtest runs the union of its filters, so a
+# second filter would mask a dead first one in the aggregate summary.
 run_golden_test "$cargo" test -p orbit-tools -p orbit-cli --test tools -- \
-  public_tool_surface::github_log_goldens:: mcp_definitions::
-run_golden_test "$cargo" test -p orbit-cli --test output -- help_goldens:: output_goldens::
+  public_tool_surface::github_log_goldens::
+run_golden_test "$cargo" test -p orbit-tools -p orbit-cli --test tools -- \
+  mcp_definitions::
+run_golden_test "$cargo" test -p orbit-cli --test output -- help_goldens::
+run_golden_test "$cargo" test -p orbit-cli --test output -- output_goldens::
 run_golden_test "$cargo" test -p orbit-cli --test mcp \
   mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot -- --exact
 run_golden_test "$cargo" test -p orbit-exec -p orbit-core -p orbit-cli --test sandbox_profile_goldens
 
 run_golden_test "$cargo" test -p orbit-store -p orbit-cli --lib \
-  driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact \
-  driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens
+  driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact
+run_golden_test "$cargo" test -p orbit-store -p orbit-cli --lib \
+  driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens -- --exact
