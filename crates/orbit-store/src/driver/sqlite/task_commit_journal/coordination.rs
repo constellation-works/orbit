@@ -69,6 +69,36 @@ impl Store {
         })
     }
 
+    /// Distinct claim ids carried by receipts of `receipt_kind` written
+    /// before `created_before`. A receipt's `input` is the encoded invocation
+    /// tuple whose second element is its claim id. This is the candidate set
+    /// for settled-receipt pruning: receipts past retention are bounded,
+    /// claim rows are not, so pruning starts here instead of walking claims.
+    pub(crate) fn claim_ids_with_receipts_before(
+        &self,
+        workspace: &str,
+        receipt_kind: &str,
+        created_before: &str,
+    ) -> Result<Vec<String>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT DISTINCT json_extract(json_extract(payload_json, '$.input'), '$[1]')
+                     FROM task_coordination_rows
+                     WHERE workspace_id = ?1 AND kind = ?2 AND created_at < ?3
+                       AND json_extract(json_extract(payload_json, '$.input'), '$[1]') IS NOT NULL",
+                )
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map(params![workspace, receipt_kind, created_before], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(sqlite_store_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)
+        })
+    }
+
     /// Delete the claim-mutation receipts of `claim_ids` written before
     /// `created_before`, with the `sidecar_kind` rows keyed by the same
     /// receipt ids, in one transaction. A receipt's `input` is the encoded
