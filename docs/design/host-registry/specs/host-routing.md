@@ -41,11 +41,14 @@ The rule is the decision
 Each process builds one table:
 
 - the local `machine.task_prefix` maps to the local host;
-- each host-file entry's `task_prefix` maps to that host;
-- legacy destination rows, which have no prefix, contribute nothing.
+- each host-file entry's `task_prefix` maps to that host.
 
 Host-file validation keeps prefixes unique, so lookup is exact and never ambiguous. The
-table is read from the host file and never from a probe.
+table is read from the host file and never from a probe. A readable regular retired
+`~/.orbit/mcp-destinations.toml` is never parsed and contributes no rows: its presence,
+alone or beside `hosts.toml`, fails every host-registry load with `host_file_conflict`.
+Move it aside, run `orbit host add <ssh-target>` for each `ssh` row, then delete the
+moved file.
 
 ## Routed calls
 
