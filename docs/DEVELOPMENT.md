@@ -121,9 +121,9 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   passes and warnings-denied rustdoc for each changed crate, sequentially:
 
   ```bash
-  scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods
+  scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -A clippy::disallowed_methods
   scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods
-  RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>
+  RUSTDOCFLAGS="-D warnings" scripts/with-test-build-lint.sh scripts/build-budget.py -- cargo doc --no-deps -p <crate>
   ```
 
   Replace `<crate>` with the package name. For a crate with no library
@@ -131,6 +131,12 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   production Clippy command. Keep the whole final-validation
   commands with the pipeline. These scoped checks cover production channel
   restrictions, test targets, and private/broken documentation links.
+  All three run under the one lint environment (`-D warnings -A
+  clippy::disallowed_methods`, matching `Makefile` `ci-lint`): the
+  crate-root `deny(clippy::disallowed_methods)` attributes reject
+  disallowed methods in production code over the command-line `-A`,
+  test and test-feature code stays exempt, and the doc build reuses
+  Clippy's check instead of re-checking with plain rustc.
 - `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool admits a new guard whenever any running member finishes, so a slow early guard does not keep the slots of guards that have already exited; at most that many guards run at once. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`, `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run one at a time, at normal priority, in a separate exclusive lane: `test-build-budget.sh`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. The lane starts after formatting, beside the pool. Each pool guard and, in full mode, the workflow test build starts in Linux's idle scheduling class, with a direct `nice -n 19` launch where idle scheduling is unavailable. Priority changes apply to the launching command itself, so macOS workers need no permission to renice a parent process. Nice scheduling lowers competition for CPU; Linux's idle class uses only CPU time the exclusive suites leave idle. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Pooled workflow and fixture self-tests that used a short subprocess wall-clock cap share one hang ceiling in `scripts/self_test_hang.py` (`HANG_CEILING_SECONDS`, 120 s, the fixture-step deadline). A step that exits is not failed for wall time. A step still running at the ceiling is killed, and the failure names the step or command. The removed 10 s and 20 s caps failed correct release and PR-state steps when idle scheduling stretched wall time. Timeouts that are the subject of a test, including the exclusive-lane suites and the QA sweep's supervision cases, stay as they are. Every other guard and self-test shares the pool. In full mode the pool and the exclusive lane overlap the workflow test build. Both join before the workspace tests start, the pool first, so no guard shares the host with their elapsed-time and timeout assertions and a pool failure stays the job's exit status. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
 - The pooled hang guard and verified-download fixture reserve each command's process group with a separate owned child blocked on an stdin pipe. Polling or communicating with an exited command may reap it; the anchor stays unreaped through the final group signal, then both owned children are reaped and their pipes closed. Cleanup also runs after successful commands and startup failures. This uses Python 3.11's `process_group`, without `preexec_fn`, so threaded fixtures can use it. Descendants that intentionally leave the group need their own identity-bound guard. The public runner regressions in `test-pr-state-workflows.py` and `test-ci-download-verified.py` share an intercepted process model in `scripts/self_test_hang_regression.py`: reaping immediately permits a replacement group, and every signal must still have an owned reservation. They cover exited leaders and escaped pipe holders without PID churn or synthetic load; the real descendant-cleanup fixtures remain enabled.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
@@ -689,8 +695,13 @@ The idle class uses only CPU time the tests leave idle; nice scheduling
 lowers competition for CPU without changing a parent process's priority.
 Production Clippy checks lib and bin targets and writes no test binary nextest executes. It runs as `cargo check`
 under the environment `cargo clippy` sets (`RUSTC_WORKSPACE_WRAPPER=clippy-driver`
-and `CLIPPY_ARGS` denying warnings and `clippy::disallowed_methods`), and
-documentation runs under the same environment. Cargo fingerprints it, so
+and `CLIPPY_ARGS` denying warnings while allowing `clippy::disallowed_methods`:
+`-D warnings -A clippy::disallowed_methods`, the one lint environment in
+`scripts/with-test-build-lint.sh` and `scripts/ci-guardrails.sh`), and
+documentation runs under the same environment. Production code still denies
+`clippy::disallowed_methods` through the crate-root `deny` attributes, which
+override the command-line `-A`; test and test-feature code stays exempt.
+Cargo fingerprints it, so
 `cargo doc` reuses that check of every workspace library and only runs rustdoc. Their records time each
 command from its own start and overlap `workspace-tests`; the chain joins
 before the supply-chain gate, and a failure in it still reports the later
