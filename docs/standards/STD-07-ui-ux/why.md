@@ -205,6 +205,13 @@ A rule is here only when its correction recurred.
   collapse down to 2 rows when there is enough space left stretching to the right, we should
   allow the status pills to extend over to the next columns" (ORB-24777, F2026-11-294).
   Version 5 limits the rule to that range.
+- **R39 (header and summary rows hold one line).** "these part must stay under 1 line. if not
+  enough space, try making some of its members smaller, if not enough, delete in the order
+  of least importance" (f09993e5, ORB-24812, F2026-11-296). At a narrow dock width the drain
+  card's header (title, host select, state pill, time left) and its counts row each broke
+  onto two lines. R14 covered a status line of text, R27 a lone orphan, R38 a row of controls
+  with space beside it, and R23 said narrow widths drop secondary content without giving an
+  order.
 
 ## Process
 

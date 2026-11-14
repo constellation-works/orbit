@@ -23,3 +23,6 @@ removed or changed in meaning.
   extends into the empty space beside it only where it would otherwise wrap inside its
   column; where it fits its column it stays there. From the owner's correction of the
   ORB-24686 fix (ORB-24777, F2026-11-294).
+- **v6 (2026-11-14):** adds R39 (a panel's header row and a row of summary figures stay on
+  one line: members shrink first, then the least important are removed). From the owner's
+  drain-card correction in session f09993e5 (ORB-24812, F2026-11-296).

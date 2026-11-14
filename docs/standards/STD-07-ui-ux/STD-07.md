@@ -4,7 +4,7 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 5
+version: 6
 created: 2026-11-09
 updated: 2026-11-14
 last_validated: 2026-11-14
@@ -179,6 +179,12 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   them: where the row would wrap inside its own column, it extends into that space instead.
   Where the row fits its column it stays there, and takes no row of its own above the
   neighbouring column.
+- **R39.** A panel's header row and a row of summary figures MUST stay on one line at every
+  supported width. When the row does not fit, its members shrink first: a shorter label, a
+  smaller figure, a pill reduced to its dot. If it still does not fit, members are removed,
+  least important first, and a removed value stays in the row's tooltip and accessible name.
+  The row never wraps and never scrolls sideways. A row of controls (chips, filters,
+  buttons) follows R38 instead.
 
 ### Process
 
