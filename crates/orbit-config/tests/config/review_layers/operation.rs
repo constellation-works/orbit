@@ -82,7 +82,6 @@ fn review_table_sets_timing_and_minutes_with_their_layer() {
     );
     assert_eq!(review.review_minutes.value, 45);
     assert_eq!(review.review_budget().minutes, 45);
-    assert_eq!(review.legacy_after_landing, None);
     assert!(
         logs.contains("review.timing")
             && logs.contains("deprecated")
@@ -105,7 +104,6 @@ fn legacy_before_pr_policy_turns_before_pr_on_with_a_deprecation_warning() {
         config.snapshot.review_timing(),
         orbit_config::ReviewTimingSetting::BeforePr
     );
-    assert_eq!(config.operation.legacy_after_landing, None);
     assert!(
         warned_deprecated(&logs, "operation.review_policy"),
         "legacy policy is warned as deprecated: {logs}"
@@ -113,14 +111,10 @@ fn legacy_before_pr_policy_turns_before_pr_on_with_a_deprecation_warning() {
 }
 
 #[test]
-fn legacy_after_landing_policy_asks_for_the_auto_task_not_before_pr() {
+fn deprecated_after_landing_policy_turns_before_pr_off_with_a_warning() {
     let (config, logs) = load_workspace("[operation]\nreview_policy = \"after-landing\"\n");
 
     assert!(!config.operation.review_before_pr.value);
-    assert_eq!(
-        config.operation.legacy_after_landing,
-        Some(OperationLayerSource::Workspace)
-    );
     assert!(
         warned_deprecated(&logs, "operation.review_policy"),
         "{logs}"
@@ -141,10 +135,6 @@ fn legacy_none_policy_turns_neither_on() {
         ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).expect("loads");
 
     assert!(!config.operation.review_before_pr.value);
-    assert_eq!(
-        config.operation.legacy_after_landing, None,
-        "the workspace's legacy `none` overrides the global after-landing, as the enum did"
-    );
 }
 
 #[test]
@@ -180,7 +170,6 @@ review_minutes = 120
         OperationLayerSource::Workspace
     );
     assert_eq!(review.review_crew.value, vec!["grok".to_string()]);
-    assert_eq!(review.legacy_after_landing, None);
     assert_eq!(config.snapshot.review_minutes, 120);
     for key in [
         "operation.review_policy",
@@ -449,7 +438,6 @@ fn historical_review_timing_spellings_resolve_identically() {
                 ),
                 switches
             );
-            assert_eq!(config.operation.legacy_after_landing, None);
         }
     }
 }

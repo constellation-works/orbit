@@ -8,18 +8,11 @@
 //! whether that consumer can actually do it on this host and when its next
 //! batch is due; `orbit doctor` fails on anything less than healthy and the
 //! review read views print the same line.
-//!
-//! The retired `operation.review_policy = "after-landing"` still enables the
-//! consumer for one release while its definition was never configured by an
-//! operator — still the shipped seed, last written by `system` — so a
-//! workspace that relied on the policy keeps its reviews until the operator
-//! toggles the auto-task themselves.
 
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_config::OperationLayerSource;
 use orbit_types::workflow::automation::{
     AutomationState, BatchAttempt, CoverageClass, Delivery, DeliveryTrigger,
 };
@@ -40,33 +33,12 @@ use orbit_types::workflow::automation::recovery::{CrewOsHold, OsExcludedCrew};
 /// The auto-task definition after-landing review runs through.
 pub(crate) const AFTER_LANDING_CONSUMER: &str = "delivery-code-review";
 
-/// The actor the shipped seed records; any other writer configured the
-/// definition explicitly.
-const SEED_ACTOR: &str = "system";
-
 impl OrbitRuntime {
-    /// Whether `definition` is enabled here: its own toggle or, for one
-    /// release, the retired `after-landing` policy value on a consumer no
-    /// operator has configured. Every delivery evaluation, inspection and
-    /// listing reads this rather than the raw field, so they cannot disagree.
+    /// Whether `definition` is enabled here: its own `enabled` flag. Every
+    /// delivery evaluation, inspection and listing reads this rather than
+    /// the raw field, so they cannot disagree.
     pub fn auto_task_enabled(&self, definition: &AutoTaskDefinition) -> bool {
-        definition.enabled || self.legacy_after_landing_enables(definition).is_some()
-    }
-
-    /// The layer whose retired `operation.review_policy = "after-landing"`
-    /// keeps `definition` enabled, when it does.
-    fn legacy_after_landing_enables(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Option<OperationLayerSource> {
-        let layer = self.operation_policy().legacy_after_landing?;
-        let consumer = definition.name == AFTER_LANDING_CONSUMER
-            && matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. });
-        let configured = definition
-            .updated_by
-            .as_deref()
-            .is_some_and(|actor| actor != SEED_ACTOR);
-        (consumer && !configured).then_some(layer)
+        definition.enabled
     }
 }
 
@@ -208,9 +180,6 @@ fn delivery_implementers(runtime: &OrbitRuntime, deliveries: &[Delivery]) -> BTr
 pub enum AfterLandingSource {
     /// The auto-task's own `enabled` flag.
     AutoTask,
-    /// The retired `operation.review_policy = "after-landing"` in the named
-    /// layer, on a consumer no operator has configured.
-    LegacyReviewPolicy(OperationLayerSource),
     /// No `delivery-code-review` definition loads here.
     Missing,
 }
@@ -220,11 +189,6 @@ impl AfterLandingSource {
     pub fn label(self) -> String {
         match self {
             AfterLandingSource::AutoTask => format!("auto-task {AFTER_LANDING_CONSUMER}"),
-            AfterLandingSource::LegacyReviewPolicy(layer) => format!(
-                "deprecated operation.review_policy = \"after-landing\" ({}); run `orbit \
-                 auto-task toggle {AFTER_LANDING_CONSUMER} on` and delete the key",
-                layer.label()
-            ),
             AfterLandingSource::Missing => format!("auto-task {AFTER_LANDING_CONSUMER} missing"),
         }
     }
@@ -237,13 +201,7 @@ pub(crate) fn after_landing_switch(
     let Some(definition) = after_landing_definition(runtime)? else {
         return Ok((false, AfterLandingSource::Missing));
     };
-    if definition.enabled {
-        return Ok((true, AfterLandingSource::AutoTask));
-    }
-    Ok(match runtime.legacy_after_landing_enables(&definition) {
-        Some(layer) => (true, AfterLandingSource::LegacyReviewPolicy(layer)),
-        None => (false, AfterLandingSource::AutoTask),
-    })
+    Ok((definition.enabled, AfterLandingSource::AutoTask))
 }
 
 fn after_landing_definition(
@@ -442,9 +400,7 @@ pub(crate) fn after_landing_health(
     let definition = after_landing_definition(runtime)?;
     let requested = match &definition {
         Some(definition) => runtime.auto_task_enabled(definition),
-        // A missing consumer is a problem only for a workspace that asked
-        // for after-landing review through the retired policy value.
-        None => runtime.operation_policy().legacy_after_landing.is_some(),
+        None => false,
     };
     if !requested {
         return Ok(None);

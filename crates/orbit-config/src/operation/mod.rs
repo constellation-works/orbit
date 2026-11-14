@@ -38,8 +38,7 @@
 //! `review.before_landing` booleans and the retired `operation.review_policy`
 //! enum become `review.timing`, `operation.review_minutes` becomes
 //! `review.minutes`, and `operation.review_crew` becomes
-//! `workflow.purpose_crews.review`. A legacy `after-landing` policy also
-//! enables the auto-task until its flag is set explicitly. The resolved
+//! `workflow.purpose_crews.review`. The resolved
 //! [`OperationPolicy`] keeps its two timing booleans, which run records and
 //! claim contracts capture. The retired budget keys
 //! (`operation.review_reviewer_starts`, `operation.review_repair_cycles`) are
