@@ -214,14 +214,10 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
     }
 }
 
-/// Validate the effective (workspace-over-global) `config.toml` without
-/// exposing the internal [`ResolvedConfig`] shape. Used by the workspace
-/// doctor in `orbit-cmd` [ORB-10016].
-/// Store-database path resolved from the layered config. Used by the
-/// runtime-less `orbit migrate --dry-run` inspection in `orbit-cmd`
-/// [ORB-10016].
+/// Derive the audit database path from the configuration roots without loading
+/// the configuration documents.
 pub fn resolved_audit_db_path(roots: &ConfigRoots) -> Result<PathBuf, OrbitError> {
-    Ok(ResolvedConfig::load(roots)?.persistence.audit_db)
+    Ok(PersistenceConfig::default_for_roots(roots.global(), roots.workspace()).audit_db)
 }
 
 #[cfg(test)]
