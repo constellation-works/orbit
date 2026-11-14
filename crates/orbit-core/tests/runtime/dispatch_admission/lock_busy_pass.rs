@@ -122,7 +122,11 @@ fn hold_lock(target: &Path) {
         ..FileLockOptions::default()
     };
     let hold = || -> Result<(), std::io::Error> {
-        std::fs::write(&ready, std::process::id().to_string())?;
+        // The parent takes the file's existence as the signal to read the pid,
+        // so publish it whole: a bare write could be read while still empty.
+        let staged = ready.with_extension("staged");
+        std::fs::write(&staged, std::process::id().to_string())?;
+        std::fs::rename(&staged, &ready)?;
         let started = Instant::now();
         while !release.exists() && started.elapsed() < HOLD_CEILING {
             std::thread::sleep(Duration::from_millis(20));
@@ -199,8 +203,8 @@ fn wait_for(path: &Path) {
 }
 
 /// The deferral limit, with which an exclusive holder (as an admission
-/// section holds the lock) stops a pass, in a workspace of its own so it runs
-/// beside the shared-holder passes. The first pass stops at its first step,
+/// section holds the lock) stops a pass, in a workspace of its own so its lock
+/// and holder are not the shared-holder passes'. The first pass stops at its first step,
 /// recording pilot operator handoffs, the site the incident hit, and is
 /// deferred; a drain already one deferred pass short of the limit fails there
 /// with the lock error.
@@ -258,7 +262,7 @@ fn deferral_limit_on_an_admission_section() {
 /// reservations fails too: the reservation it could not release stays until
 /// its TTL. A pass whose release succeeds leaves the host's reservations as
 /// they were before it. Once the holder lets go, the deferred drain admits
-/// the task with one reservation. The deferral limit runs beside these in a
+/// the task with one reservation. The deferral limit runs after these, in a
 /// second workspace. A non-lock failure still fails the pass at once and
 /// records no deferral.
 #[test]
@@ -270,15 +274,11 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
         hold_lock(Path::new(&target));
         return;
     }
-    let limit_case =
-        std::thread::spawn(a_drain_at_the_deferral_limit_fails_on_an_admission_section);
     orbit_core::test_support::with_task_commit_lock_timeout(
         LOCK_DEADLINE,
         passes_held_out_by_a_shared_holder,
     );
-    if let Err(panic) = limit_case.join() {
-        std::panic::resume_unwind(panic);
-    }
+    a_drain_at_the_deferral_limit_fails_on_an_admission_section();
 }
 
 fn passes_held_out_by_a_shared_holder() {
