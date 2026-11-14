@@ -21,7 +21,7 @@ use ci::log_answer as ci_log_answer;
 use ci::rerun as ci_rerun;
 pub(super) use ci::{
     CiCommitJobEvidence, CiCommitJobIdentity, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent,
-    CiJobPullRequests, CiJobStatus,
+    CiJobObservation, CiJobStatus,
 };
 pub(super) use ci::{CiJobLogAnswer, CiLogReadThrottle, CiLogSource};
 pub(crate) use dispatch::run;

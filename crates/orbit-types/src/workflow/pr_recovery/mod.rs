@@ -33,7 +33,8 @@ pub use ci_failure::{
     CiFailureRecord, ci_failure_ledger,
 };
 pub use ci_rerun::{
-    CI_CHECK_RERUN_EVENT, CI_HANDOFF_STEP_SIGNATURE_PREFIX, CI_RERUN_RESERVED_EVENT,
+    CI_BASE_SUSPECT_EVENT, CI_CHECK_RERUN_EVENT, CI_HANDOFF_STEP_SIGNATURE_PREFIX,
+    CI_RERUN_RESERVED_EVENT, CiBaseSuspectIdentity, CiBaseSuspectLegacy, CiBaseSuspectRecord,
     CiCheckRerunEvent, CiCheckRerunJob, CiCheckRerunRecord, CiInfrastructureRetryPolicy,
     CiRerunAdmission, CiRerunPlan, CiRerunRoot, ci_handoff_step_matches, ci_handoff_step_signature,
     ci_rerun_is_infrastructure, decide_ci_rerun, decide_ci_rerun_with_policy,

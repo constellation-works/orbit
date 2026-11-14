@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 
 use orbit_common::OrbitError;
 use orbit_types::task::TaskHistoryEntry;
-use serde_json::json;
+use orbit_types::workflow::{CiBaseSuspectLegacy, CiBaseSuspectRecord};
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
@@ -276,11 +276,25 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
             super::super::suspect::record_base_suspect(
                 host,
                 std::slice::from_ref(&context.task_id),
-                &json!({
-                    "base":landing_tip.unwrap_or(base), "head":head, "check":label, "signature":signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job.run_attempt, "pr_number":pr, "event":job.event,
-                    "started_at":job.started_at, "completed_at":job.completed_at, "reason":why,
-                }),
+                &CiBaseSuspectRecord {
+                    base: Some(landing_tip.unwrap_or(base).to_string()),
+                    head: Some(head.to_string()),
+                    check: Some(label.clone()),
+                    signature: Some(signature.clone()),
+                    run_id: CiBaseSuspectLegacy::Known(run_id),
+                    job_id: CiBaseSuspectLegacy::Known(job_id),
+                    run_attempt: super::super::suspect::base_suspect_legacy_number(
+                        &job.run_attempt,
+                    ),
+                    pr_number: Some(pr),
+                    event: super::super::suspect::base_suspect_legacy_event(&job.event),
+                    started_at: super::super::suspect::base_suspect_legacy_text(&job.started_at),
+                    completed_at: super::super::suspect::base_suspect_legacy_text(
+                        &job.completed_at,
+                    ),
+                    reason: Some(why.clone()),
+                    legacy_pull_requests: Vec::new(),
+                },
                 Some(&context.handoff_id),
             )?;
         }

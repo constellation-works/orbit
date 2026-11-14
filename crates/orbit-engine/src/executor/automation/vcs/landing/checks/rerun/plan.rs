@@ -17,7 +17,9 @@ use super::send::{
 use super::{CiRerunStep, SHARED_RETRY_BUDGET_SPENT};
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
-use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRoot};
+use orbit_types::workflow::{
+    CiBaseSuspectLegacy, CiBaseSuspectRecord, CiRerunAdmission, CiRerunPlan, CiRerunRoot,
+};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -332,7 +334,27 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                     super::super::suspect::record_base_suspect(
                         host,
                         tasks,
-                        &json!({"base":tip,"head":head,"check":root.check,"signature":root.signature,"run_id":run_id,"job_id":root.job_id,"run_attempt":job.run_attempt,"pr_number":pr,"event":job.event,"started_at":job.started_at,"completed_at":job.completed_at,"reason":"qualifying base pass; waiting for complete eligible-set authorization or a manual unchanged-head repeat"}),
+                        &CiBaseSuspectRecord {
+                            base: Some(tip.to_string()),
+                            head: Some(head.to_string()),
+                            check: Some(root.check.clone()),
+                            signature: Some(root.signature.clone()),
+                            run_id: CiBaseSuspectLegacy::Known(run_id),
+                            job_id: CiBaseSuspectLegacy::Known(root.job_id),
+                            run_attempt: super::super::suspect::base_suspect_legacy_number(
+                                &job.run_attempt,
+                            ),
+                            pr_number: Some(pr),
+                            event: super::super::suspect::base_suspect_legacy_event(&job.event),
+                            started_at: super::super::suspect::base_suspect_legacy_text(
+                                &job.started_at,
+                            ),
+                            completed_at: super::super::suspect::base_suspect_legacy_text(
+                                &job.completed_at,
+                            ),
+                            reason: Some("qualifying base pass; waiting for complete eligible-set authorization or a manual unchanged-head repeat".to_string()),
+                            legacy_pull_requests: Vec::new(),
+                        },
                         handoff,
                     )?;
                 }
