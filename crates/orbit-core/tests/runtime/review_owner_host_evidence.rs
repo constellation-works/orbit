@@ -182,7 +182,8 @@ fn owner_landing_host_replay_preserves_refusals() {
             HostEvidenceReason::CommandNotAllowed,
         ),
         (
-            "cargo test -p orbit-exec --lib",
+            // `--lib` alone is admitted. A neighbouring target selector stays refused.
+            "cargo test -p orbit-exec --bins",
             "linux",
             HostEvidenceReason::ArgumentNotAllowed,
         ),

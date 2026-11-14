@@ -111,13 +111,19 @@ pub(super) fn with_external_checks_passed(
 
 /// [ORB-17043] Whether `required`, a `host_sandbox_test`, runs exactly the
 /// test that the deferral `notice` of `record` names, so a passing host run
-/// of it executed that deferred path. `record` must be a required `cargo
-/// test` run naming one package (`-p`) and one target (`--test`) that passed
-/// only by deferring; `notice` must be a Bubblewrap, Seatbelt or ps-denied
-/// deferral, `<prefix> <test>: <detail>`; and `required` must be admitted as
-/// `cargo test` of that package and target, filtered to exactly `<test>`.
+/// of it executed that deferred path. `notice` must be a Bubblewrap, Seatbelt
+/// or ps-denied deferral, `<prefix> <test>: <detail>`. Two record shapes match:
+///
+/// - a required `cargo test` naming one package (`-p`) and one integration
+///   target (`--test`), covered by `cargo test -p <package> --test <target> <test>`;
+/// - a required `cargo test -p <package>` with no target selector, covered by
+///   `cargo test -p <package> --lib <test>` [ORB-24325].
+///
 /// Anything else covers nothing: a requirement without a filter, a filter
-/// naming only the test's module, an unadmitted command, a failed record.
+/// naming only the test's module, an unadmitted command, a failed record, a
+/// `--test` requirement against a package-wide record, a `--lib` requirement
+/// against a `--test` record, a different package, or a record that itself
+/// carries `--lib` or another target selector.
 pub(super) fn covers_deferral(
     required: &ReviewEvidenceRequirement,
     record: &ReviewValidation,
@@ -129,19 +135,30 @@ pub(super) fn covers_deferral(
     {
         return false;
     }
-    let (Some(test), Some((package, target))) =
-        (deferred_test(notice), cargo_test_scope(&record.command))
-    else {
+    let Some(test) = deferred_test(notice) else {
         return false;
     };
-    matches!(
+    match (
+        recorded_cargo_scope(&record.command),
         HostSandboxCommand::admit(&required.command, &[]),
-        Ok(HostSandboxCommand::CargoTest {
-            package: covered_package,
-            target: covered_target,
-            filter: Some(filter),
-        }) if covered_package == package && covered_target == target && filter == test
-    )
+    ) {
+        (
+            Some(RecordedCargoScope::Integration { package, target }),
+            Ok(HostSandboxCommand::CargoTest {
+                package: covered_package,
+                target: covered_target,
+                filter: Some(filter),
+            }),
+        ) if covered_package == package && covered_target == target && filter == test => true,
+        (
+            Some(RecordedCargoScope::Package { package }),
+            Ok(HostSandboxCommand::CargoLibTest {
+                package: covered_package,
+                filter: Some(filter),
+            }),
+        ) if covered_package == package && filter == test => true,
+        _ => false,
+    }
 }
 
 /// The test a sandbox deferral notice names: `<prefix> <test>: <detail>`.
@@ -159,14 +176,24 @@ fn deferred_test(notice: &str) -> Option<&str> {
     (!test.is_empty() && !test.contains(char::is_whitespace)).then_some(test)
 }
 
-/// The one package and one integration test target a `cargo test` command
-/// names before `--`, or `None` when it names either none or several. Flags
-/// that neither select a target nor change the build (`--locked`,
+/// A required `cargo test` record whose deferrals a host requirement can cover.
+enum RecordedCargoScope<'a> {
+    /// One package and one `--test` target, with at most one positional filter.
+    Integration { package: &'a str, target: &'a str },
+    /// One package and no target selector, with at most one positional filter.
+    Package { package: &'a str },
+}
+
+/// The package, and the integration target when the record names one, of a
+/// `cargo test` command before `--`. `None` when it names none or several of
+/// either, or a target selector other than one `--test`. Flags that neither
+/// select a target nor change the build (`--locked`, `--frozen`, `--offline`,
 /// `--no-fail-fast`, ...) are skipped. Every other option fails closed:
-/// target selectors may add targets, and `--release`, `--features`,
-/// `--profile` and `--target` change the build that a host replay does not
-/// reproduce, so they stay refused.
-fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
+/// `--lib`, `--bins`, `--all-targets` and the other target selectors may add
+/// targets, and `--release`, `--features`, `--profile` and `--target` change
+/// the build that a host replay does not reproduce, so a record carrying them
+/// stays uncovered.
+fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'_>> {
     let mut words = command.split_whitespace();
     if words.next()? != "cargo" || words.next()? != "test" {
         return None;
@@ -191,7 +218,10 @@ fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
         slot.push(inline.or_else(|| words.next())?);
     }
     match (package.as_slice(), target.as_slice(), filters.as_slice()) {
-        ([package], [target], []) | ([package], [target], [_]) => Some((package, target)),
+        ([package], [target], []) | ([package], [target], [_]) => {
+            Some(RecordedCargoScope::Integration { package, target })
+        }
+        ([package], [], []) | ([package], [], [_]) => Some(RecordedCargoScope::Package { package }),
         _ => None,
     }
 }
