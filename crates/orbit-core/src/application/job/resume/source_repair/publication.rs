@@ -12,7 +12,7 @@ pub(super) fn reviewed_head<'a>(
     identity: (&str, &str),
     repo: &std::path::Path,
 ) -> Result<&'a str, OrbitError> {
-    if !exact_sha(implementation) {
+    if !observation::is_exact_sha(implementation) {
         return Err(refuse(
             "review implementation is not an exact commit identity",
         ));
@@ -52,12 +52,8 @@ pub(super) fn reviewed_head<'a>(
     }
     if settle["reviewer_fixed"] != true
         || reviewed == implementation
-        || !exact_sha(reviewed)
-        || !run_git(
-            repo,
-            &["merge-base", "--is-ancestor", implementation, reviewed],
-        )?
-        .success
+        || !observation::is_exact_sha(reviewed)
+        || !observation::is_git_ancestor(repo, implementation, reviewed)?
     {
         return Err(refuse(
             "reviewer head is not an authenticated advancing correction",
@@ -179,8 +175,4 @@ pub(super) fn published_head<'a>(
         }
     }
     Ok(head)
-}
-
-fn exact_sha(sha: &str) -> bool {
-    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

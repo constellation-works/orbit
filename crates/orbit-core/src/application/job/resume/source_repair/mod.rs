@@ -20,7 +20,6 @@ use std::collections::BTreeSet;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunQuery;

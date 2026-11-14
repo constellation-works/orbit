@@ -223,20 +223,16 @@ impl OrbitRuntime {
         let (_, _, binding) = self.observe_published_source(source.clone(), task.clone(), false)?;
         let worktree = checkpoint("worktree", "worktree_setup")?;
         let checkout = std::path::Path::new(field(worktree, "workspace_path")?);
-        let git = |args: &[&str]| -> Result<String, OrbitError> {
-            let result = run_git(checkout, args)?;
-            if !result.success {
-                return Err(refuse("completion Git observation failed"));
-            }
-            Ok(result.stdout.trim().to_string())
-        };
         // [ORB-17140] A base that advanced after publication is not drift.
         // The receipts and review below stay bound to the base they judged,
         // and the resumed `pr_complete` applies its own base-freshness and
         // required-check gates to the published head before any merge.
-        if git(&["rev-parse", "HEAD"])? != binding.head_sha
-            || git(&["branch", "--show-current"])? != binding.branch
-            || !git(&["status", "--porcelain"])?.is_empty()
+        if observation::read_git_observation(checkout, &["rev-parse", "HEAD"], true)?
+            != binding.head_sha
+            || observation::read_git_observation(checkout, &["branch", "--show-current"], true)?
+                != binding.branch
+            || !observation::read_git_observation(checkout, &["status", "--porcelain"], true)?
+                .is_empty()
         {
             return Err(refuse("completion candidate or checkout changed"));
         }
@@ -362,8 +358,18 @@ impl OrbitRuntime {
                         && entry.sha256 == sha256_hex(&artifact.content)
                         && entry.writer == Some(ArtifactWriter::System)
                 })
-                || cert.final_candidate.tree != git(&["rev-parse", "HEAD^{tree}"])?
-                || cert.base.tree != git(&["rev-parse", &format!("{}^{{tree}}", binding.base_sha)])?
+                || cert.final_candidate.tree
+                    != observation::read_git_observation(
+                        checkout,
+                        &["rev-parse", "HEAD^{tree}"],
+                        true,
+                    )?
+                || cert.base.tree
+                    != observation::read_git_observation(
+                        checkout,
+                        &["rev-parse", &format!("{}^{{tree}}", binding.base_sha)],
+                        true,
+                    )?
                 || !cert.verdict.passed()
                 || !cert.validation_complete
                 || cert.final_candidate.commit != binding.head_sha

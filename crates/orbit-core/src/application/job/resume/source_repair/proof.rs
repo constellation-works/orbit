@@ -224,21 +224,6 @@ impl OrbitRuntime {
             return Err(refuse("source has no authenticated host commit"));
         }
         let repo = &self.paths().repo_root;
-        let git = |args: &[&str]| -> Result<String, OrbitError> {
-            let output = orbit_common::fs::git::run_git_within(
-                repo,
-                args,
-                if args.first() == Some(&"ls-remote") {
-                    orbit_common::fs::git::GIT_REMOTE_TIMEOUT
-                } else {
-                    orbit_common::fs::git::GIT_LOCAL_TIMEOUT
-                },
-            )?;
-            if !output.success {
-                return Err(refuse(format!("Git observation failed: {}", output.stderr)));
-            }
-            Ok(output.stdout.trim().to_string())
-        };
         for sha in [
             synced,
             pushed,
@@ -246,10 +231,7 @@ impl OrbitRuntime {
             base_sha,
             commit.head_sha.as_deref().unwrap_or_default(),
         ] {
-            if sha.len() != 40
-                || !sha.bytes().all(|b| b.is_ascii_hexdigit())
-                || git(&["rev-parse", "--verify", &format!("{sha}^{{commit}}")])? != sha
-            {
+            if !observation::is_exact_sha(sha) || !observation::resolves_to_commit(repo, sha)? {
                 return Err(refuse(
                     "candidate/base/commit object is unavailable or inexact",
                 ));
@@ -263,9 +245,9 @@ impl OrbitRuntime {
         // The host may rebase a commit: Git ancestry across that rewrite is
         // intentionally absent. Authenticate the entire successful host chain
         // rather than treating a caller's after-head as provenance.
-        if git(&["rev-parse", "--verify", &format!("{before}^{{commit}}")])? != before
-            || !run_git(repo, &["merge-base", "--is-ancestor", committed, before])?.success
-            || !run_git(repo, &["merge-base", "--is-ancestor", base_sha, synced])?.success
+        if !observation::resolves_to_commit(repo, before)?
+            || !observation::is_git_ancestor(repo, committed, before)?
+            || !observation::is_git_ancestor(repo, base_sha, synced)?
             || sync.get("rewritten").and_then(Value::as_bool) != Some(before != synced)
             || (before != synced
                 && prepared.get("sync_required").and_then(Value::as_bool) != Some(true))

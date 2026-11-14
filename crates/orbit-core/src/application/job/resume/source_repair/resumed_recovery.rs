@@ -197,16 +197,7 @@ pub(super) fn authenticated_repair_parent(
     if candidate != repair.head_sha
         || repair.head_sha_before == repair.head_sha
         || repair.workspace_path != workspace
-        || !run_git(
-            repo,
-            &[
-                "merge-base",
-                "--is-ancestor",
-                &repair.head_sha_before,
-                &repair.head_sha,
-            ],
-        )?
-        .success
+        || !observation::is_git_ancestor(repo, &repair.head_sha_before, &repair.head_sha)?
     {
         return Err(refuse(
             "failure-handoff candidate is not the resumed run's exact host repair receipt",
