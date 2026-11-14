@@ -22,7 +22,7 @@ The prescriptive invariants live in [specs/federated-workspace-mcp.md](./specs/f
 
 ## 1. Operator-configured remotes, implicit local destination
 
-The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). For one release a lone legacy `~/.orbit/mcp-destinations.toml` is still read; both files at once fail closed with `host_file_conflict`. Local workspaces need no entry [ORB-11044]; a missing file or an empty `hosts` list is a useful local-only federated server. A legacy row that names this machine's `machine_id` is collapsed to the single in-process local route; the host file refuses such an entry outright [ORB-11013]. The mux does not:
+The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). The retired `~/.orbit/mcp-destinations.toml` fails host-registry loads with `host_file_conflict` whenever present; move it aside, re-register each `ssh` row with `orbit host add <ssh-target>`, then delete it. Local workspaces need no entry [ORB-11044]; a missing file or an empty `hosts` list is a useful local-only federated server. The host file refuses an entry naming this machine's `machine_id` [ORB-11013]. The mux does not:
 
 - grow host-registry into a fleet inventory;
 - auto-discover the owner checkout of a repository;

@@ -23,7 +23,7 @@ The live implementation has five layers.
 | Layer | Owns | Must not own |
 |---|---|---|
 | orbit-types | Workspace identity DTOs, machine/workspace identifier validation, lifecycle enums and schema constants | Files, runtime construction, transport |
-| orbit-registry | Machine identity lifecycle and legacy host.toml migration; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation, legacy fallback and atomic writes | CLI orchestration, MCP framing, Core execution |
+| orbit-registry | Machine identity lifecycle and legacy host.toml migration; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation and atomic writes | CLI orchestration, MCP framing, Core execution |
 | orbit-config | Global machine settings schema and config.toml I/O | Workspace catalog persistence and runtime composition |
 | orbit-cmd | Registry-aware selection and Core runtime construction; the `orbit host` operations, which join the host file to the federated identity probe | Registry schemas or persistence |
 | CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
@@ -76,7 +76,7 @@ The prefix is also the unit of task *authority* across hosts: the host whose pre
 - Load validates every entry: `name` passes the machine-name validator and is unique case-insensitively across entries and the local `machine.name`; `machine_id` is valid, unique (`ambiguous_destination`) and never the local id (`host_is_local`); `task_prefix` is a valid stored prefix, unique, and never the local prefix (`task_prefix_conflict`); `ssh` is an SSH alias or `user@host` with no leading `-`, whitespace or shell metacharacters. Unknown keys and any other `schema_version` fail the load and keep the bytes.
 - Writes validate first, serialize canonically sorted by name, and replace the file atomically under a lock. The commit re-reads both host files under that lock and refuses if either changed since the command loaded them.
 - `orbit_registry::hosts::load_host_routes` is the one loader for federated serve, follower pull drains and replica worktree GC.
-- For one release, when only the legacy `~/.orbit/mcp-destinations.toml` exists its rows are read as routes with no name or prefix. The first `orbit host add`, `rename` or `remove` probes every retained legacy row, writes them to the host file (named after the remote's `machine.name`, or its SSH target when that is taken, with a numeric suffix when the SSH target is taken too) and deletes the legacy file. Adding a host already in the legacy file commits and reports the migration; removing a legacy row never contacts that host, with or without `--force`. If a retained row does not answer, the mutation refuses with `legacy_host_unreachable` and changes neither file. Doctor names a concrete `orbit host add <existing-ssh-target>` command to migrate the file. Both files at once fail every load with `host_file_conflict`.
+- The retired `~/.orbit/mcp-destinations.toml` is never parsed. Its presence alone or beside `hosts.toml` fails every load with `host_file_conflict`, naming the path and the remedy: move it aside, run `orbit host add <ssh-target>` for each `ssh` row, then delete the moved file. JSON compatibility fields remain: `legacy` on host rows and lists is always `false`, and `HostChange.migrated` is always `[]`.
 
 The `orbit host` operations live in orbit-cmd so the CLI and the dashboard share them. They probe a host with the federated MCP session (`ssh -T -F <orbit-ssh-config> -- <target> orbit mcp serve --remote-caller-machine-id <local id>`, agent authority, federated probe budget) and read the discovery envelope's `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`. A probe that answers with a different `machine_id` or `task_prefix` than the entry fails closed with `host_identity_mismatch`; the entry is never rewritten from a probe.
 
@@ -182,7 +182,7 @@ Older databases may retain tables and migration records from the removed fleet-r
 | selector unknown, ambiguous, inactive or checkoutless | Runtime construction refused |
 | task prefix conflicts after allocation | Runtime construction refused |
 | hosts.toml malformed, unknown key, future schema or duplicate name/id/prefix | Every consumer refuses; original bytes retained |
-| hosts.toml and mcp-destinations.toml both present | `host_file_conflict` on every consumer |
+| mcp-destinations.toml present, alone or beside hosts.toml | `host_file_conflict` on every consumer |
 | id-only task call, prefix neither local nor registered | `unknown_task_prefix`; no host is dialed |
 | id-only task call, prefix's host does not answer | `owner_unreachable`; no local mirror fallback |
 | id-only task call to a v1 MCP server, prefix is a registered remote host's | `task_prefix_remote` |

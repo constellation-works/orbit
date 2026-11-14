@@ -5,7 +5,7 @@
 //! version, protocol and workspaces are read from each host live and never
 //! persisted; only its name, SSH target, `machine_id`, task prefix and the
 //! optional `host_os` snapshot are stored. The OS snapshot is read from the
-//! host when it is added or migrated, so entries registered before discovery
+//! host when it is added, so entries registered before discovery
 //! reported an OS have none until they are removed and added again.
 
 use std::fmt::Write as _;
@@ -50,10 +50,7 @@ pub enum HostSubcommand {
 #[derive(Args)]
 #[command(
     after_help = "Examples:\n  orbit host add dk-server-2\n  orbit host add daniel@10.0.0.7 --name build-box\n\n\
-        With only mcp-destinations.toml, this migrates every legacy host to hosts.toml. \
-        Adding a host already in the legacy file succeeds and reports the migration, preserving \
-        its SSH target and migrated name (--name applies only to a new host). Every retained \
-        legacy host must answer. A host already in hosts.toml still refuses with host_exists."
+        A host already in hosts.toml refuses with host_exists."
 )]
 pub struct HostAddArgs {
     /// SSH alias or user@host that reaches the remote host
@@ -89,11 +86,6 @@ pub struct HostRenameArgs {
 }
 
 #[derive(Args)]
-#[command(
-    after_help = "With only mcp-destinations.toml, removal migrates the retained rows to hosts.toml. \
-        The removed legacy host is never contacted, even without --force; every retained host \
-        must answer. --force only overrides dependent replica checkouts and pull drains."
-)]
 pub struct HostRemoveArgs {
     /// Host name (case-insensitive) or machine_id
     #[arg(value_name = "HOST")]
@@ -177,13 +169,6 @@ fn list_payload(list: HostList) -> CommandOut {
             ),
         ]);
     }
-    if list.legacy {
-        table = table.trailing_notice(format!(
-            "Read from the legacy mcp-destinations.toml; the next `orbit host add`, `rename` or \
-             `remove` migrates it to {}.",
-            list.host_file.display()
-        ));
-    }
     let records = list
         .hosts
         .iter()
@@ -210,20 +195,8 @@ fn show_payload(detail: HostDetail) -> CommandOut {
 
 fn change_payload(change: HostChange) -> CommandOut {
     let mut text = String::new();
-    for migrated in &change.migrated {
-        let _ = writeln!(
-            text,
-            "migrated {} ({}, ssh {}, prefix {}) from mcp-destinations.toml",
-            migrated.name, migrated.machine_id, migrated.ssh, migrated.task_prefix
-        );
-    }
     let entry = &change.entry;
     match change.action {
-        "migrated" => {
-            if let Some(host) = &change.host {
-                text.push_str(&host_block(host));
-            }
-        }
         "renamed" => {
             let _ = writeln!(
                 text,
@@ -254,14 +227,11 @@ fn change_payload(change: HostChange) -> CommandOut {
 
 const UNKNOWN: &str = "unknown";
 
-/// The host name with its `local`, `legacy` and `SKEW` marks.
+/// The host name with its `local` and `SKEW` marks.
 fn marked_name(host: &HostRow) -> String {
     let mut marks = Vec::new();
     if host.local {
         marks.push("local");
-    }
-    if host.legacy {
-        marks.push("legacy");
     }
     if host.skew {
         marks.push("SKEW");

@@ -44,15 +44,12 @@ task_prefix = "AL"
 
 The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant fails closed with its own code: `host_name_conflict` (duplicate name), `task_prefix_conflict` (duplicate prefix), `host_is_local` (an entry naming this machine), or `invalid_input` (malformed SSH target or identity field).
 
-**Legacy file, one release.** While `~/.orbit/mcp-destinations.toml` is the only file, its rows are the membership:
-
-```toml
-[[destinations]]
-ssh = "orbit-linux"
-machine_id = "hm_alpha"
-```
-
-Each legacy row has exactly two required keys, `ssh` and `machine_id`. A machine-id-only row fails closed at config load with an actionable `invalid_input`, and a duplicate `machine_id` is `ambiguous_destination`. If a legacy row names the accepting machine's `machine_id`, the mux exposes exactly one route for that machine — the implicit local in-process destination — rather than duplicating selectors or opening loopback SSH. The first `orbit host` mutation migrates the legacy rows into the host file and deletes the legacy file. If both files exist, federated serve refuses with `host_file_conflict`, naming both paths.
+The retired `~/.orbit/mcp-destinations.toml` is never parsed. Its presence,
+alone or beside `hosts.toml`, fails every host-registry load with
+`host_file_conflict`, naming the file and the remedy. Move it aside, run
+`orbit host add <ssh-target>` for each `ssh` row, then delete the moved file.
+The JSON keys `legacy` on rows and lists remain constant `false`, and mutation
+results retain `migrated: []`; no mutation reports action `migrated`.
 
 ## Selector identity
 
@@ -132,7 +129,7 @@ Federated `orbit_workspace_list` is a **new session-unbound response shape**, no
 Implemented in [ORB-11014] as `orbit mcp serve --mode federated`
 (`crates/orbit-mcp/src/federated/`), with implicit local membership in
 [ORB-11044]. Remote membership is loaded once at startup from the host file
-(`hosts.toml`, or the legacy `mcp-destinations.toml` while it is the only file); the accepting machine is always prepended. Every list call then probes
+(`hosts.toml`); the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
 `machine_id`. After [ORB-11015] the mux advertises the canonical MCP tool

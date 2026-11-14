@@ -266,7 +266,7 @@ pub struct ForceOverridableRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HostRegistryCode {
-    /// Both the host file and the legacy destinations file exist.
+    /// The retired legacy destinations file exists.
     HostFileConflict,
     /// The probed `machine_id` is already registered.
     HostExists,
@@ -284,8 +284,6 @@ pub enum HostRegistryCode {
     UnknownHost,
     /// A local replica checkout or running pull drain depends on the host.
     HostInUse,
-    /// A legacy destination row did not answer during migration.
-    LegacyHostUnreachable,
     /// A task id's prefix is neither this host's nor a registered host's
     /// [ORB-14449].
     UnknownTaskPrefix,
@@ -309,7 +307,6 @@ impl HostRegistryCode {
             Self::HostIdentityMismatch => "host_identity_mismatch",
             Self::UnknownHost => "unknown_host",
             Self::HostInUse => "host_in_use",
-            Self::LegacyHostUnreachable => "legacy_host_unreachable",
             Self::UnknownTaskPrefix => "unknown_task_prefix",
             Self::TaskPrefixRemote => "task_prefix_remote",
             Self::OwnerUnreachable => "owner_unreachable",
