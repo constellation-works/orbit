@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Classify one ci.yml run for its `Change scope` job. Prints the reason and
-# appends `mode=full|docs|skip|affected:<crate>,...` to $GITHUB_OUTPUT. It
-# never fails: an unreadable answer, an API error, a selection error or an
+# Classify one workflow run for its scope job (ci.yml, ci-macos.yml,
+# codeql.yml, ci-cache-seed.yml). Prints the reason and appends
+# `mode=full|docs|skip|affected:<crate>,...` to $GITHUB_OUTPUT. It never
+# fails: an unreadable answer, an API error, a selection error or an
 # unexpected shape means `full`.
 #
 #   docs      every changed path is Markdown outside crates/ and plugin/.
@@ -10,9 +11,14 @@
 #             the configuration reference page, and scripts/test-*
 #             self-tests execute or digest RELEASING.md, npm/README.md and
 #             docs/dev/qa/path-leases-listener-sudo.md, so each is not a
-#             docs-only run. A push also requires a successful
-#             completed full check on BEFORE; a previous push may have been
-#             replaced while pending.
+#             docs-only run. A push also requires every parent check named
+#             by DOCS_BEFORE_CHECKS (one GitHub check name per line) to have
+#             a successful completed GitHub Actions run on BEFORE. Unset,
+#             that name is `Check / Clippy / Test`. A previous push may have
+#             been replaced while pending. When DOCS_BEFORE_CHECKS is set, a
+#             docs-only push with those checks is `docs` even if the same
+#             tree would otherwise be `skip`. ci.yml leaves it unset, so an
+#             exact tested tree stays `skip`.
 #   affected:<crate>,...
 #             a pull request whose changed paths sit in crates/ (Markdown
 #             aside): `ci-test-affected.py --pull-request-scope` names the
@@ -30,6 +36,9 @@
 # notice reading `full`, which the push `skip` requires of the head's run.
 #
 # Inputs (environment): EVENT, GH_REPO, PR (pull_request), SHA and BEFORE (push).
+# DOCS_BEFORE_CHECKS (optional): parent check names, one per line, that must
+# have completed successfully on BEFORE before a push may be `docs`. Unset
+# means `Check / Clippy / Test`. An empty value matches nothing.
 # PR_CHANGED_FILES (optional, ci.yml only): the changed_files count from the
 # PR object the Live PR state job already fetched, saving one pulls/<n> call
 # per pull_request run. When absent or not numeric (push runs, the event-
@@ -58,6 +67,29 @@ docs_only() {
     esac
   done
   [ "$seen" = 1 ]
+}
+
+# True when every named parent check has a successful completed GitHub
+# Actions run on BEFORE. A failed, cancelled, skipped, pending or missing
+# run is not enough: the ci.yml rule re-runs a docs-only delta whose parent
+# check did not succeed, and macOS and CodeQL use that same rule for their
+# own check names. A blank list matches nothing.
+before_docs_checks_passed() {
+  local checks checked=0 name encoded count
+  if [ -n "${DOCS_BEFORE_CHECKS+x}" ]; then
+    checks=$DOCS_BEFORE_CHECKS
+  else
+    checks="Check / Clippy / Test"
+  fi
+  while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    checked=1
+    encoded=$(jq -rn --arg n "$name" '$n|@uri') || return 1
+    count=$(api "repos/$GH_REPO/commits/$BEFORE/check-runs?check_name=${encoded}&filter=latest" |
+      jq -r '[.check_runs[] | select(.status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length' 2>/dev/null) || true
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || return 1
+  done <<<"$checks"
+  [ "$checked" = 1 ]
 }
 
 mode=full
@@ -120,20 +152,28 @@ elif [ "${EVENT:-}" = push ]; then
       reason="tree $tree is pull request head $head, whose Check / Clippy / Test passed on every crate"
     fi
   fi
-  if [ "$mode" = full ] && [[ "${BEFORE:-}" =~ ^[0-9a-f]{40}$ ]] && [[ ! "$BEFORE" =~ ^0+$ ]]; then
+  # ci.yml leaves DOCS_BEFORE_CHECKS unset, so this runs only when nothing
+  # narrower matched and an exact tested tree stays `skip`. macOS and CodeQL
+  # name their own parent checks and still narrow a docs-only push that would
+  # otherwise be `skip`: those workflows do not run on pull requests, so a
+  # same-tree merge has not been built or analysed by them.
+  if { [ "$mode" = full ] || [ -n "${DOCS_BEFORE_CHECKS+x}" ]; } &&
+    [[ "${BEFORE:-}" =~ ^[0-9a-f]{40}$ ]] && [[ ! "$BEFORE" =~ ^0+$ ]]; then
     compare=$(api "repos/$GH_REPO/compare/$BEFORE...$SHA")
     # The compare endpoint lists at most 300 files; beyond that, run in full.
     if [ "$(jq -r '.status // empty' <<<"$compare" 2>/dev/null)" = ahead ] &&
       [[ "$(jq -r '.files | length' <<<"$compare" 2>/dev/null)" =~ ^([1-9]|[1-9][0-9]|[12][0-9][0-9])$ ]] &&
       docs_only <<<"$(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$compare" 2>/dev/null)"; then
-      before_passed=$(api "repos/$GH_REPO/commits/$BEFORE/check-runs?check_name=Check%20%2F%20Clippy%20%2F%20Test&filter=latest" |
-        jq -r '[.check_runs[] | select(.status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length' 2>/dev/null)
       # BEFORE is only the previous tip, not necessarily a tested commit:
-      # branch concurrency can replace its pending run. Skipped or unfinished
-      # checks do not establish a safe base for a Markdown-only delta.
-      if [[ "$before_passed" =~ ^[1-9][0-9]*$ ]]; then
+      # branch concurrency can replace its pending run. Skipped, failed or
+      # unfinished checks do not establish a safe base for a Markdown-only delta.
+      if before_docs_checks_passed; then
         mode=docs
-        reason="every path pushed since tested commit $BEFORE is Markdown outside crates/ and plugin/"
+        if [ -n "${DOCS_BEFORE_CHECKS+x}" ]; then
+          reason="every path pushed since $BEFORE is Markdown outside crates/ and plugin/, and that commit's checks for this workflow completed successfully"
+        else
+          reason="every path pushed since tested commit $BEFORE is Markdown outside crates/ and plugin/"
+        fi
       fi
     fi
   fi

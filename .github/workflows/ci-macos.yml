@@ -20,6 +20,9 @@ on:
 # deploy-candidate dispatch for a chosen SHA is never queued behind, replaced
 # or cancelled by later agent-main pushes (see docs/DEVELOPMENT.md, Hosted CI).
 # Ordinary pushes keep the exact group below; no extra macOS push runs are added.
+# A docs-only push whose parent commit already completed both macOS jobs
+# skips those jobs (see the Change scope job). workflow_dispatch always runs
+# them. The concurrency group below is unchanged.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('run-{0}', github.run_id) || github.ref }}
   cancel-in-progress: false
@@ -40,7 +43,48 @@ env:
   UV_MACOS_ARM64_SHA256: 33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
 
 jobs:
+  # Docs-only pushes skip the two build jobs when BEFORE already has a
+  # successful completed run of both checks named below. The classifier's
+  # default parent check is ci.yml's `Check / Clippy / Test`, so this job
+  # names the macOS checks. An empty mode (the job never fails the workflow)
+  # runs the build jobs. workflow_dispatch runs them whatever the mode.
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      # The classification reads only the GitHub API. Check out the triggering
+      # commit so a run that sat queued still uses this workflow's script.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Classify the change
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          # Keep these names equal to the macOS job `name` values. Every one
+          # must have completed successfully on BEFORE before a docs push skips.
+          DOCS_BEFORE_CHECKS: |
+            macOS Clippy (informational)
+            macOS Sandbox
+        run: scripts/ci-change-scope.sh
+
   macos-clippy:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.scope.outputs.mode != 'docs') }}
     name: macOS Clippy (informational)
     runs-on: macos-latest
     timeout-minutes: 30
@@ -76,6 +120,8 @@ jobs:
         run: make ci-lint
 
   macos-sandbox:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.scope.outputs.mode != 'docs') }}
     name: macOS Sandbox
     runs-on: macos-latest
     timeout-minutes: 90 # Run 412443 hit 30 minutes before the sandbox suite finished. Runs 41259996536 and 41263713213 hit 45 minutes: one mid-suite, one in the evidence step after every test passed.

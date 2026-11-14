@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit agent guide: rules, branching, gates, code and test standards, local CodeQL"
-last_validated: 2026-11-01
+last_validated: 2026-11-14
 ---
 
 # Orbit — agent guide
@@ -61,7 +61,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 
 ## Local Rust CodeQL
 
-Hosted CodeQL (`.github/workflows/codeql.yml`) analyses every `agent-main` push and runs weekly, not on PRs; its alerts become repair tasks. Run it locally only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Then follow the [local CodeQL runbook](docs/runbooks/codeql-local.md):
+Hosted CodeQL (`.github/workflows/codeql.yml`) analyses `agent-main` pushes and runs weekly, not on PRs. A docs-only push whose parent commit already has a successful completed run of this workflow skips the analysis jobs; the parent's code-scanning result still covers that unchanged code, and alerts from runs that do execute become repair tasks. A push that changes any non-docs path, a docs-only push whose parent has no such run, and the weekly schedule still run every analysis job. Run it locally only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Then follow the [local CodeQL runbook](docs/runbooks/codeql-local.md):
 
 - Extraction checks are required evidence; results from incomplete extraction can't confirm a repair.
 - Run once per delivery against the final candidate, in the foreground with a timeout of at least 45 minutes, and read that run's `results.sarif`. An interrupted run starts over.
