@@ -408,8 +408,11 @@ PR jobs use two revisions: the primary checkout, build and tests use
 `github.event.pull_request.head.sha`, while workflow orchestration helpers use
 `github.sha`, the revision supplying the workflow (the PR merge ref). In
 `ci.yml`, a separate sparse checkout under `.orbit/tmp/workflow-ci` supplies
-`ci-await-jobs.py` and `ci-download-verified.sh`; all their invocations use that
-path. The scope job checks out `github.sha` directly. Keep this rule when adding
+`ci-download-verified.sh`, `ci-repack-nextest.py`, `ci-probe-bubblewrap.sh` and
+`ci-workspace-cache.py`; their invocations use that path. The Check job's
+`Await the test build and nextest shards` step instead runs
+`scripts/ci-await-jobs.py` as a dependency-producer from a full checkout of the
+base revision under `.orbit/tmp/dependency-producer`. The scope job checks out `github.sha` directly. Keep this rule when adding
 workflow-coupled `scripts/ci-*.py` or `scripts/ci-*.sh` helpers to any workflow:
 check them out before their first call and invoke them from that checkout.
 Candidate validation scripts such as `ci-guardrails.sh` stay in the primary
@@ -560,12 +563,13 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `Test shard 1/3` to `Test shard 3/3`, so changing `NEXTEST_SHARDS` or a shard
   name needs the same ruleset change before merge. Requiring only
   `Check / Clippy / Test`, which awaits every shard, would not depend on the
-  shard count. `scripts/test-pr-state-workflows.py` runs each shard's nextest
-  step and wait (every additional partition job's too) and the Check
-  job's wait with stub tools, and fails unless
-  those jobs together select `count:1/N` through `count:N/N` once each, each
-  shard waits for the upload step ahead of the partition guard and names every
-  uploaded part, and the Check
+  shard count. `scripts/test-pr-state-workflows.py` runs each test job's nextest and
+  archive-restore steps (every additional partition job's too), the build's pack
+  step and the Check job's wait with stub tools, and fails unless
+  those jobs together select `count:1/N` through `count:N/N` once each, the
+  build's last upload precedes the partition guard, each test job needs the whole
+  build job with `Require a successful test build` as its first step and downloads
+  every uploaded part with no archive-poll wait, and the Check
   job's wait names the build, every shard, every additional partition job, `CI guardrails` and `CI QA guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
   of the executed Check jobs against 400 s, with skipped and cancelled runs
