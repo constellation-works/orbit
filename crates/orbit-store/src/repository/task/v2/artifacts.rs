@@ -422,14 +422,16 @@ impl TaskV2Store {
             };
             self.bundle_store.rewrite_artifact_manifest(id, &manifest)?;
             let context_files = bundle.envelope.context_files.clone();
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
             append_creation_grant(
-                &self.bundle_store,
                 &mut bundle,
                 &context_files,
                 &[],
                 &fields.actor,
                 now,
+                &mut pending_events,
             )?;
+            self.bundle_store.append_events(id, &pending_events)?;
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             self.publish_task_index_and_lease_notices(&bundle.envelope, "task artifact update")?;

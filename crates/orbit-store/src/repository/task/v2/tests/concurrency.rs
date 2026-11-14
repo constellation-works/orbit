@@ -40,7 +40,7 @@ fn a_reader_never_observes_a_transition_between_its_event_and_its_envelope() {
                     let bundle = store.bundle_store.read_bundle(&id).expect("read bundle");
                     store
                         .bundle_store
-                        .append_event(&id, &transition_event(&bundle))
+                        .append_events(&id, &[transition_event(&bundle)])
                         .expect("append transition event");
                     event_appended.wait();
                     // Wide enough that a reader taking no lock lands inside the
