@@ -270,6 +270,18 @@ pub(crate) fn ensure_claim_recovery_target(
     Ok(())
 }
 
+/// Check the shared completion preconditions under the task write lock.
+/// Run ownership remains a separate gate because each writer has its own
+/// replacement and calling-run exemptions.
+pub(crate) fn ensure_completion_gates(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    ensure_post_deploy_criteria_met(runtime, task)?;
+    runtime.ensure_mutation_proposals_applied(task)?;
+    runtime.ensure_resolves_are_workspace_local(task)
+}
+
 /// Every ordinary completion writer checks the same persisted measurement
 /// record under the task lock. A successful run or review cannot substitute
 /// for an operator's post-deploy result, including on a reused candidate.
