@@ -105,12 +105,7 @@ pub(in crate::federated) struct DestinationSession {
     /// before a routed `tools/call` is written, so it is never lower than the
     /// phase in flight even while the reader is already blocked mid-line.
     line_cap: Arc<AtomicU64>,
-    probe_line_cap: u64,
     tool_result_line_cap: u64,
-    /// Whether the last request's answer arrived as one well-framed JSON-RPC
-    /// response. Only then is nothing of it left on the wire, so the session
-    /// may carry a later call.
-    answered: bool,
     peer_version: Option<String>,
     deadline: Instant,
     next_id: i64,
@@ -197,9 +192,7 @@ impl DestinationSession {
             writer: Some(writer),
             lines,
             line_cap,
-            probe_line_cap,
             tool_result_line_cap,
-            answered: false,
             peer_version: None,
             deadline: Instant::now() + timeout,
             next_id: 0,
@@ -212,25 +205,6 @@ impl DestinationSession {
     /// previous phases left of the old one.
     pub(super) fn restart_budget(&mut self, timeout: Duration) {
         self.deadline = Instant::now() + timeout;
-    }
-
-    /// Prepare an idle pooled session for the next call: a fresh probe
-    /// budget, and the probe line ceiling the last `tools/call` raised.
-    pub(super) fn rearm_for_reuse(&mut self, probe_timeout: Duration) {
-        self.line_cap.store(self.probe_line_cap, Ordering::Release);
-        self.restart_budget(probe_timeout);
-    }
-
-    /// Whether this session may be parked for a later call: its framing is
-    /// intact (every write completed and the last request was answered) and
-    /// its process still runs.
-    pub(super) fn reusable(&mut self) -> bool {
-        self.writer.is_some() && self.answered && !self.has_exited()
-    }
-
-    /// Whether the session's process has ended. Never waits.
-    pub(super) fn has_exited(&mut self) -> bool {
-        !matches!(self.child.try_wait(), Ok(None))
     }
 
     #[cfg(test)]
@@ -393,7 +367,6 @@ impl DestinationSession {
             &params,
             matches!(lost, LostAnswer::OutcomeUnknown { .. }),
         );
-        self.answered = false;
         self.next_id += 1;
         let id = self.next_id;
         self.send(
@@ -583,7 +556,6 @@ impl DestinationSession {
                         format!("emitted an invalid JSON-RPC response while awaiting '{method}'"),
                     ));
                 }
-                self.answered = true;
                 if let Some(error) = message.get("error") {
                     // Preserve the JSON-RPC error's structured code and
                     // message; the formatted text is only diagnostic detail.

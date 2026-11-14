@@ -76,7 +76,7 @@ const WINDOWS: &[(&str, Option<i64>)] = &[
 /// A validated selection: the window, the smallest denominator a ranked row
 /// needs, how paths are grouped, and which regressions the Regressions
 /// ranking counts.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CodebaseQuery {
     window: &'static str,
     days: Option<i64>,
@@ -135,7 +135,7 @@ impl CodebaseQuery {
                 .map(|days| Utc::now() - chrono::Duration::days(days)),
             min_support: self.min_support,
             rollup: self.rollup,
-            filter: self.filter,
+            filter: self.filter.clone(),
         }
     }
 
@@ -158,7 +158,7 @@ impl CodebaseQuery {
 /// partner cap is 10. Rollup is always `file` and regression filters are not
 /// parameters. Analytics and path detail keep [`CodebaseQuery::parse`]'s
 /// 90-day default and their own filters.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RelatedQuery {
     query: CodebaseQuery,
     top: usize,
@@ -192,19 +192,19 @@ impl RelatedQuery {
     }
 
     /// Resolved window: `7d`, `30d`, `90d` or `all`.
-    pub fn window(self) -> &'static str {
+    pub fn window(&self) -> &'static str {
         self.query.window
     }
 
     /// Resolved partner cap.
-    pub fn top(self) -> usize {
+    pub fn top(&self) -> usize {
         self.top
     }
 
     /// File-rollup selection with no regression filter, for the related scan
     /// and ranking.
-    pub fn codebase_query(self) -> CodebaseQuery {
-        self.query
+    pub fn codebase_query(&self) -> CodebaseQuery {
+        self.query.clone()
     }
 }
 

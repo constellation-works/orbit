@@ -68,14 +68,10 @@ pub trait DestinationProbe: Send + Sync {
         self.probe(destination)
     }
 
-    /// The session for a single routed `tools/call`.
+    /// One short-lived session for a single routed `tools/call`.
     ///
     /// List and route never share a session or a health cache: a list that
-    /// showed a workspace does not decide the next call's error. An
-    /// implementation may hand a later call the same transport (SSH child and
-    /// remote server process), but never a snapshot, tool surface or health
-    /// verdict: each returned session answers `snapshot` and
-    /// `advertised_tools` live.
+    /// showed a workspace does not decide the next call's error.
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError>;
 
     /// Open only the deterministic protocol endpoint. No public-route fallback.

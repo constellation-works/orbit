@@ -30,10 +30,6 @@
 # notice reading `full`, which the push `skip` requires of the head's run.
 #
 # Inputs (environment): EVENT, GH_REPO, PR (pull_request), SHA and BEFORE (push).
-# PR_CHANGED_FILES (optional, ci.yml only): the changed_files count from the
-# PR object the Live PR state job already fetched, saving one pulls/<n> call
-# per pull_request run. When absent or not numeric (push runs, the event-
-# payload fallback, ci-cache-seed.yml), the count is fetched here instead.
 set -uo pipefail
 
 scripts=$(cd "$(dirname "$0")" && pwd)
@@ -64,11 +60,7 @@ mode=full
 reason="no narrower scope applies"
 
 if [ "${EVENT:-}" = pull_request ]; then
-  if [[ "${PR_CHANGED_FILES:-}" =~ ^[0-9]+$ ]]; then
-    count=$PR_CHANGED_FILES
-  else
-    count=$(api "repos/$GH_REPO/pulls/$PR" | jq -r '.changed_files // empty' 2>/dev/null)
-  fi
+  count=$(api "repos/$GH_REPO/pulls/$PR" | jq -r '.changed_files // empty' 2>/dev/null)
   # The files endpoint lists at most 3000 entries; beyond that, run in full.
   if [[ "$count" =~ ^[0-9]+$ ]] && ((count > 0 && count < 3000)); then
     pages=$(api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100")
