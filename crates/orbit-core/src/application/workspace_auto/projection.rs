@@ -42,6 +42,9 @@ pub(super) struct ReadinessProjection<'a> {
     pub(super) selection: &'a AdmissionSelection,
     pub(super) light_budget: &'a LightBudget,
     pub(super) examined: &'a [String],
+    /// Tasks this drain holds after a leaf failed at job load, with the
+    /// pass's detail text.
+    pub(super) leaf_load_failed: &'a BTreeMap<String, String>,
     pub(super) live_leaves: &'a [LiveLeafRun],
     /// Executor OS limits and follower census, read once for the response.
     /// An `also_task` projection reuses them instead of reading the census again.
@@ -69,6 +72,7 @@ pub(super) fn project_readiness_tasks(
         selection,
         light_budget,
         examined,
+        leaf_load_failed,
         live_leaves,
         host_os_limits,
         follower_evidence,
@@ -343,6 +347,11 @@ pub(super) fn project_readiness_tasks(
             if let Some(run_ids) = claimed_by_task.get(&task.id) {
                 object.insert("reason".to_string(), Value::String("claimed_by_live_child".to_string()));
                 object.insert("run_ids".to_string(), json!(run_ids));
+            } else if let Some(detail) = leaf_load_failed.get(&task.id) {
+                // The live drain will not start this task again. Eligible stays
+                // false, so the task cannot take a projected slot.
+                object.insert("reason".to_string(), Value::String("leaf_load_failed".to_string()));
+                object.insert("detail".to_string(), json!(detail));
             } else if let Some(shutdown) = host_shutdown_holding.as_ref() {
                 object.insert(
                     "reason".to_string(),

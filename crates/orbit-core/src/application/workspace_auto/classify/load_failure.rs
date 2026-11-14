@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_store::V2AuditEventFilter;
+use orbit_types::task::Task;
 use orbit_types::workflow::{ChildDispatchPhase, JobRunState, JobTargetType};
 
 use crate::OrbitRuntime;
@@ -19,11 +20,39 @@ const STARTED_STEP_BODY_KIND: &str = "step_started";
 
 /// One task held for the rest of this drain after its leaf failed at load.
 #[derive(Debug, Clone)]
-pub(super) struct LeafLoadFailureHold {
+pub(in crate::application::workspace_auto) struct LeafLoadFailureHold {
     pub(super) task_id: String,
     pub(super) leaf_run_id: String,
     pub(super) error: String,
     pub(super) finished_at: DateTime<Utc>,
+}
+
+impl LeafLoadFailureHold {
+    /// Detail the pass records and readiness projects for this hold.
+    pub(in crate::application::workspace_auto) fn leaf_load_failure_detail(&self) -> String {
+        format!(
+            "leaf {} failed at job load: {}",
+            self.leaf_run_id, self.error
+        )
+    }
+}
+
+/// Drop holds this snapshot no longer applies.
+///
+/// The task must still be an admissible leaf, and it must not have been
+/// updated after the failure: that change lifts the hold. One copy, so the
+/// pass and readiness cannot keep different tasks.
+pub(in crate::application::workspace_auto) fn retain_leaf_load_failure_holds(
+    holds: &mut BTreeMap<String, LeafLoadFailureHold>,
+    admissible_leaves: &[String],
+    task_lookup: &BTreeMap<String, Task>,
+) {
+    holds.retain(|task_id, hold| {
+        admissible_leaves.contains(task_id)
+            && task_lookup
+                .get(task_id)
+                .is_none_or(|task| task.updated_at <= hold.finished_at)
+    });
 }
 
 /// This drain's leaves that ended `failed` before any activity step started.
@@ -35,7 +64,7 @@ pub(super) struct LeafLoadFailureHold {
 /// keeps that same job record: activity rows are persisted only on success.
 /// A started activity is an audit `step_started` event. When that event is
 /// present the leaf is not held, so ordinary handling re-admits its task.
-pub(super) fn leaf_load_failure_holds(
+pub(in crate::application::workspace_auto) fn leaf_load_failure_holds(
     runtime: &OrbitRuntime,
     action: &str,
     drain_run_id: Option<&str>,

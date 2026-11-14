@@ -16,6 +16,7 @@ mod projection;
 mod readiness;
 mod readiness_hosts;
 mod task_port;
+mod wave;
 mod window;
 
 pub(crate) use adopt::adopt_orphaned_deliveries;

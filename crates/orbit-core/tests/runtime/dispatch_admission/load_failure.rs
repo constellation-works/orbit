@@ -7,7 +7,9 @@ use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
 use orbit_types::workflow::{ChildDispatch, JobRunState, JobTargetType, PipelineState};
 use serde_json::json;
 
-use super::{Seed, classify, isolated, last_pass, running_run, runtime, seed};
+use super::{
+    Seed, TaskPriority, classify, isolated, last_pass, readiness_task, running_run, runtime, seed,
+};
 
 const LOAD_ERROR: &str = "invalid input: script manifest .orbit/resources/scripts/fixture.yaml: entry 'scripts/missing.mjs' does not resolve to a regular file inside the workspace";
 
@@ -244,4 +246,44 @@ fn a_leaf_that_started_steps_is_readmitted_by_the_same_drain() {
             .all(|entry| entry.reason.as_deref() != Some("leaf_load_failed")),
         "{recorded:?}"
     );
+}
+
+/// Readiness used to call the held task `ready` and give it a projected slot.
+/// The drain pass already holds it, so the task behind it looked saturated.
+#[test]
+fn readiness_reports_a_load_failed_leaf_as_held_not_ready() {
+    const TEST: &str =
+        "dispatch_admission::load_failure::readiness_reports_a_load_failed_leaf_as_held_not_ready";
+    if !isolated(TEST) {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let held = seed(
+        &runtime,
+        Seed::named("load fails held").priority(TaskPriority::High),
+    );
+    let next = seed(&runtime, Seed::named("starts once the hold is visible"));
+    // One slot: a held task reported as ready would leave `next` saturated.
+    let drain = running_run(
+        &runtime,
+        "workspace_auto_pipeline",
+        json!({"max_active_leaf_runs": 1}),
+    );
+    let leaf = failed_leaf(&runtime, &drain, &held.id, true);
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .expect("readiness");
+    let held_entry = readiness_task(&readiness, &held.id);
+    assert_eq!(held_entry["eligible"], false, "{readiness}");
+    assert_eq!(held_entry["reason"], "leaf_load_failed", "{readiness}");
+    let detail = held_entry["detail"].as_str().expect("hold detail");
+    assert!(
+        detail.contains(&format!("leaf {leaf} failed at job load"))
+            && detail.contains("does not resolve"),
+        "{held_entry}"
+    );
+    let next_entry = readiness_task(&readiness, &next.id);
+    assert_eq!(next_entry["eligible"], true, "{readiness}");
+    assert_eq!(next_entry["reason"], "ready", "{readiness}");
 }
