@@ -510,8 +510,8 @@ expectExtractFailure(
   /symlink/,
   'npm symlink archive rejection'
 );
-expectThrow(
-  () => installer.extractTarGz(process.env.TRAVERSAL_ARCHIVE, process.env.TMP_ROOT),
+expectExtractFailure(
+  process.env.TRAVERSAL_ARCHIVE,
   /unsafe release archive member/,
   'npm traversal archive rejection'
 );

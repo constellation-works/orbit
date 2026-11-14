@@ -674,13 +674,27 @@ run_priority_case() {
     >"$TMP/priority-$case_name.out" || fail "$case_name: wrapper failed"
 }
 
-# assert_lowered_priority NAME checks niceness of at least 10 and, on Linux, an idle or best-effort 7 IO class.
+# assert_lowered_priority NAME checks the child against the caller baseline
+# captured in priority-direct.out: at least niceness 10, strictly lowered
+# relative to a caller below that floor, and never below a caller already
+# at or past it. An absolute >= 10 alone cannot fail under `make ci`, whose
+# caller the outer wrapper already reniced to the floor.
 assert_lowered_priority() {
   local output="$TMP/priority-$1.out"
-  local niceness io_class
+  local niceness io_class caller_niceness
   niceness="$(sed -n 1p "$output")"
+  caller_niceness="$(sed -n 1p "$TMP/priority-direct.out")"
+  [[ "$caller_niceness" =~ ^-?[0-9]+$ ]] \
+    || fail "$1: caller baseline niceness was '$caller_niceness', expected a number"
   [[ "$niceness" =~ ^[0-9]+$ && "$niceness" -ge 10 ]] \
     || fail "$1: wrapped child niceness was '$niceness', expected at least 10"
+  if [[ "$caller_niceness" -lt 10 ]]; then
+    [[ "$niceness" -gt "$caller_niceness" ]] \
+      || fail "$1: wrapped child niceness was '$niceness', expected lowered relative to caller baseline '$caller_niceness'"
+  else
+    [[ "$niceness" -eq "$caller_niceness" ]] \
+      || fail "$1: wrapped child niceness was '$niceness', expected caller baseline '$caller_niceness' kept (never lowered past it)"
+  fi
   if [[ "$(uname -s)" == Linux ]]; then
     io_class="$(sed -n 2p "$output")"
     [[ "$io_class" == "best-effort: prio 7" || "$io_class" == idle ]] \

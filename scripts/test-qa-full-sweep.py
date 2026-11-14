@@ -4172,11 +4172,21 @@ def self_test():
     if cli_help_children("Usage: orbit task show <ID>\nArguments:\n  id  Task ID\n"):
         raise AssertionError("leaf CLI arguments were mistaken for commands")
     command = ["cargo", "test", "--lib", "renamed_filter"]
-    for output in ("", "running 0 tests\n",
-                   "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s 9 filtered out;",
-                   "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"):
+    # Each fixture carries a valid target announcement and a complete outer
+    # suite, so it reaches the guard it names instead of failing on the
+    # missing-announcement precondition: removing the zero-passing,
+    # FAILED-summary or malformed-summary guard lets its fixture pass.
+    cargo_stderr = "     Running unittests src/lib.rs (target/debug/deps/fixture)\n"
+    for output in ("",
+                   "running 0 tests\n"
+                   "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+                   "running 1 test\ntest first ... ok\n"
+                   "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+                   "test result: truncated",
+                   "running 2 tests\ntest first ... ok\ntest second ... FAILED\n"
+                   "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"):
         try:
-            validate_cargo_test_evidence(command, {"stdout": output, "stderr": "", "exit_code": 0})
+            validate_cargo_test_evidence(command, {"stdout": output, "stderr": cargo_stderr, "exit_code": 0})
         except ValueError:
             continue
         raise AssertionError(f"vacuous or failed cargo evidence passed: {output!r}")
@@ -4340,9 +4350,31 @@ def self_test():
         evidence = temp / "retained-evidence"
         evidence.mkdir()
         (evidence / "failure.png").write_bytes(b"failure evidence")
-        excluded = [str(evidence.relative_to(temp))]
-        if not any(str(evidence.relative_to(temp)).startswith(path) for path in excluded):
+        # Exercise candidate_source itself in a scratch repo: the retained
+        # evidence is an untracked candidate input until excluded the way
+        # main() excludes it, so dropping the exclusion fails this check.
+        candidate_repo = temp / "candidate-repo"
+        candidate_repo.mkdir()
+        retained = candidate_repo / "retained-evidence"
+        retained.mkdir()
+        (retained / "failure.png").write_bytes(b"failure evidence")
+        (candidate_repo / "keep.txt").write_text("candidate input\n")
+        for git_args in (["init", "-q"],
+                         ["-c", "user.name=qa-full-sweep", "-c", "user.email=qa@example.invalid",
+                          "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "fixture"]):
+            subprocess.run(["git", "-C", str(candidate_repo), *git_args],
+                           check=True, capture_output=True, text=True)
+        included_paths = [path for path, *_ in candidate_source(candidate_repo)["untracked"]]
+        if "retained-evidence/failure.png" not in included_paths:
+            raise AssertionError("candidate fixture did not list retained evidence as an input")
+        excluded_source = candidate_source(candidate_repo, [retained.relative_to(candidate_repo)])
+        excluded_paths = [path for path, *_ in excluded_source["untracked"]]
+        if "retained-evidence/failure.png" in excluded_paths:
             raise AssertionError("retained browser evidence is not excluded from candidate inputs")
+        if "keep.txt" not in excluded_paths:
+            raise AssertionError("candidate exclusion dropped an unrelated candidate input")
+        if any("retained-evidence" in line for line in excluded_source["status"]):
+            raise AssertionError("retained browser evidence leaked into candidate status")
 
         # Exercise the shell boundary too: python3 is a capture fixture, so no
         # full sweep or candidate build is launched by this regression check.

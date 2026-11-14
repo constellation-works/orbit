@@ -1676,7 +1676,9 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
 
     def test_goldens_without_summary_fails(self):
         # A successful cargo with no harness summary is missing evidence,
-        # not a pass: all nine legs must refuse it.
+        # not a pass. check-goldens.sh runs under `set -euo pipefail`, so
+        # the first summary-less leg's refusal exits the script: only that
+        # first refusal is exercised here, not all nine legs.
         self.write_executable(
             self.bin / "cargo",
             '#!/usr/bin/env python3\nimport json, os, sys\n'
