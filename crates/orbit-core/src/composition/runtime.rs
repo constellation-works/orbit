@@ -48,6 +48,20 @@ impl OrbitRuntime {
         roots: OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
     ) -> Result<Self, OrbitError> {
+        Self::initialize_from_resolved_roots_with_task_prefix(roots, binding, None)
+    }
+
+    /// [`Self::initialize_from_resolved_roots`] that projects `task_prefix`
+    /// onto the task-registry handle this open creates.
+    ///
+    /// `None` leaves the allocator prefix untouched. The runtime kernel does
+    /// not load machine config; composition supplies the prefix it already
+    /// classified from the narrow machine-identity read.
+    pub fn initialize_from_resolved_roots_with_task_prefix(
+        roots: OrbitRuntimeRoots,
+        binding: Option<WorkspaceRuntimeBinding>,
+        task_prefix: Option<&str>,
+    ) -> Result<Self, OrbitError> {
         ProductProfile::Orbit.validate_roots(&[
             &roots.global_root,
             &roots.shared_root,
@@ -70,6 +84,7 @@ impl OrbitRuntime {
             true,
             HostLifetime::ShortLived,
             false,
+            task_prefix,
         )
     }
 
@@ -87,6 +102,7 @@ impl OrbitRuntime {
             false,
             HostLifetime::ShortLived,
             true,
+            None,
         )
     }
 
@@ -169,6 +185,18 @@ impl OrbitRuntime {
         shared_root: &Path,
         local_root: &Path,
     ) -> Result<Self, OrbitError> {
+        Self::from_resolved_roots_with_task_prefix(global_root, shared_root, local_root, None)
+    }
+
+    /// [`Self::from_resolved_roots`] that projects `task_prefix` onto the
+    /// task-registry handle this open creates. See
+    /// [`Self::initialize_from_resolved_roots_with_task_prefix`].
+    pub fn from_resolved_roots_with_task_prefix(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        task_prefix: Option<&str>,
+    ) -> Result<Self, OrbitError> {
         build_runtime(
             global_root,
             shared_root,
@@ -177,6 +205,7 @@ impl OrbitRuntime {
             true,
             HostLifetime::ShortLived,
             false,
+            task_prefix,
         )
     }
 
@@ -203,6 +232,27 @@ impl OrbitRuntime {
         binding: WorkspaceRuntimeBinding,
         host_lifetime: HostLifetime,
     ) -> Result<Self, OrbitError> {
+        Self::from_resolved_roots_with_binding_for_task_prefix(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            host_lifetime,
+            None,
+        )
+    }
+
+    /// [`Self::from_resolved_roots_with_binding_for`] that projects
+    /// `task_prefix` onto the task-registry handle this open creates. See
+    /// [`Self::initialize_from_resolved_roots_with_task_prefix`].
+    pub fn from_resolved_roots_with_binding_for_task_prefix(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+        task_prefix: Option<&str>,
+    ) -> Result<Self, OrbitError> {
         build_runtime(
             global_root,
             shared_root,
@@ -211,6 +261,7 @@ impl OrbitRuntime {
             true,
             host_lifetime,
             false,
+            task_prefix,
         )
     }
 
@@ -228,6 +279,7 @@ impl OrbitRuntime {
             false,
             HostLifetime::ShortLived,
             true,
+            None,
         )
     }
 
@@ -321,6 +373,7 @@ pub fn pin_executable_generation_as(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_runtime(
     global_root: &Path,
     shared_root: &Path,
@@ -329,6 +382,7 @@ fn build_runtime(
     reconcile_stale_runs: bool,
     host_lifetime: HostLifetime,
     read_only: bool,
+    task_prefix: Option<&str>,
 ) -> Result<OrbitRuntime, OrbitError> {
     ProductProfile::Orbit.validate_roots(&[global_root, shared_root, local_root])?;
     let generation = pin_executable_generation(global_root, read_only)?;
@@ -391,6 +445,7 @@ fn build_runtime(
             read_only,
             config_loader,
             &APPLICATION_PORT,
+            if read_only { None } else { task_prefix },
         )?
     };
     let runtime = OrbitRuntime::from_kernel(kernel);

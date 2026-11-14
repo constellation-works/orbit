@@ -10,7 +10,6 @@ use orbit_core::application::task::{
     TaskListResultPolicy, TaskListResultProfile, artifact_put_result,
 };
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::task::is_task_show_projection_field;
 use orbit_types::tool::{McpTransport, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value};
@@ -264,7 +263,7 @@ fn local_tool_session_context(
     runtime: &OrbitRuntime,
     owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
 ) -> Result<ToolSessionContext, OrbitError> {
-    let (machine_id, machine_name) = local_machine_identity(&runtime.global_root())?;
+    let (machine_id, machine_name) = local_machine_identity(runtime);
     Ok(ToolSessionContext {
         workspace: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
         workspace_id: owner
@@ -280,12 +279,13 @@ fn local_tool_session_context(
     })
 }
 
-fn local_machine_identity(
-    global_root: &std::path::Path,
-) -> Result<(String, Option<String>), OrbitError> {
-    match inspect_machine_identity(global_root)? {
-        MachineIdentityState::Present(identity) => Ok((identity.id, Some(identity.name))),
-        MachineIdentityState::Absent => Ok((LOCAL_MACHINE_ID_FALLBACK.to_string(), None)),
+fn local_machine_identity(runtime: &OrbitRuntime) -> (String, Option<String>) {
+    // Open already attached this from the narrow machine-identity read.
+    // A runtime with no location (in-memory, or opened outside the factory)
+    // keeps the historical unattributed fallback and does not read config.
+    match runtime.automation_execution_location() {
+        Some(location) => (location.machine_id.clone(), location.machine_name.clone()),
+        None => (LOCAL_MACHINE_ID_FALLBACK.to_string(), None),
     }
 }
 

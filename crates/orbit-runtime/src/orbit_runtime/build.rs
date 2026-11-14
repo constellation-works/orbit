@@ -58,6 +58,7 @@ impl RuntimeKernel {
         read_only: bool,
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
+        task_prefix: Option<&str>,
     ) -> Result<Self, OrbitError> {
         let access = if read_only {
             builder::StateAccess::ReadOnly
@@ -73,6 +74,7 @@ impl RuntimeKernel {
                 runtime_config,
                 host_lifetime,
                 access,
+                task_prefix,
             )?,
             binding,
             &roots.global_root,
@@ -100,6 +102,7 @@ impl RuntimeKernel {
                 runtime_config,
                 host_lifetime,
                 builder::StateAccess::WriteFree,
+                None,
             )?,
             binding,
             &roots.global_root,
@@ -159,6 +162,7 @@ impl RuntimeKernel {
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
+            composition_snapshot: None,
             host_signals: default_host_signal_probe(),
             task_pr_forge: default_task_pr_forge(),
             event_log: event_bus::EventLog::default(),
@@ -202,6 +206,7 @@ impl RuntimeKernel {
             runtime_config,
             HostLifetime::ShortLived,
             builder::StateAccess::Write,
+            None,
         )?;
         let host_resources = Arc::new(
             HostResourceMonitor::new(
@@ -236,6 +241,7 @@ impl RuntimeKernel {
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
+            composition_snapshot: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),
             // Nor is it bound to a repository whose PRs it could close.

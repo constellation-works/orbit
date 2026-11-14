@@ -129,6 +129,10 @@ impl OrbitRuntime {
         Self::from_kernel(self.kernel.with_workspace_catalog(catalog))
     }
 
+    pub fn with_composition_snapshot(self, snapshot: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self::from_kernel(self.kernel.with_composition_snapshot(snapshot))
+    }
+
     pub fn admission_policy_snapshot(&self) -> Self {
         Self::from_kernel(self.kernel.admission_policy_snapshot())
     }

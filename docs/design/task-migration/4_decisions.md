@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Task authority is per prefix, not per host
 
 **Recorded:** 2026-09 · [ORB-12126]
-**Code anchors:** `crates/orbit-store/src/workflow/task/import.rs::import_tasks`, `crates/orbit-cmd/src/registry/runtime/selection.rs::sync_task_prefix_for_identity`
+**Code anchors:** `crates/orbit-store/src/workflow/task/import.rs::import_tasks`, `crates/orbit-runtime/src/builder.rs::build_v2_task_backends`
 
 ### Context
 

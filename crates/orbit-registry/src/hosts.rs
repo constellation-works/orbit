@@ -298,8 +298,19 @@ pub fn legacy_destinations_path(global_root: &Path) -> PathBuf {
 /// unsupported schema or both files at once fail closed and leave the bytes
 /// untouched.
 pub fn load_host_registry(global_root: &Path) -> Result<HostRegistry, OrbitError> {
-    let local = match inspect_machine_identity(global_root)? {
-        MachineIdentityState::Present(identity) => Some(identity),
+    load_host_registry_with_identity(global_root, &inspect_machine_identity(global_root)?)
+}
+
+/// [`load_host_registry`] for a caller that already classified this machine.
+///
+/// A runtime open has that classification in hand. Threading it here keeps
+/// the host file from parsing global `config.toml` a second time.
+pub fn load_host_registry_with_identity(
+    global_root: &Path,
+    identity: &MachineIdentityState,
+) -> Result<HostRegistry, OrbitError> {
+    let local = match identity {
+        MachineIdentityState::Present(identity) => Some(identity.clone()),
         MachineIdentityState::Absent => None,
     };
     let snapshot = FileSnapshot::read(global_root)?;

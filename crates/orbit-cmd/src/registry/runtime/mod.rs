@@ -10,9 +10,7 @@ use orbit_core::runtime::{
     HostLifetime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
     WorkspaceRuntimeBinding, managed_workspace_selector_from_env,
 };
-use orbit_store::maintenance::task_registry::{
-    TaskRegistryStore, task_registry_path, workspace_config_path,
-};
+use orbit_store::maintenance::task_registry::workspace_config_path;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
@@ -31,4 +29,5 @@ pub use factory::{
     ConfigLayerStamp, RegisteredRuntimeFactory, RegisteredRuntimeStamp, ResolvedWorkspaceBinding,
     ResolvedWorkspaceSelection, workspace_runtime_binding,
 };
+pub(crate) use selection::opened_selector_inputs;
 pub use selection::{global_root_for, selector_looks_like_path};
