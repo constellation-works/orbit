@@ -16,7 +16,6 @@ use orbit_core::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
@@ -115,10 +114,9 @@ fn ship(
 
 /// `orbit.workflow.ship` as an operator session calls it.
 fn ship_tool(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    runtime.run_tool_with_context_and_role(
+    runtime.run_tool_with_context(
         "orbit.workflow.ship",
         input,
-        Role::Admin,
         ToolContext {
             session_context: ToolSessionContext {
                 effective_capabilities: BTreeSet::from([McpCapability::Operator]),

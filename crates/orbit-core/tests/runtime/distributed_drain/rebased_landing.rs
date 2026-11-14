@@ -633,10 +633,9 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             std::fs::write(&response, changed.to_string()).unwrap();
             assert!(
                 owner
-                    .run_tool_with_context_and_role(
+                    .run_tool_with_context(
                         "orbit.task.retry_handoff",
                         request.clone(),
-                        Role::Admin,
                         ToolContext {
                             session_context: ToolSessionContext {
                                 effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -669,10 +668,9 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         );
         assert!(
             owner
-                .run_tool_with_context_and_role(
+                .run_tool_with_context(
                     "orbit.task.retry_handoff",
                     request.clone(),
-                    Role::Admin,
                     ToolContext {
                         session_context: ToolSessionContext {
                             effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -738,10 +736,9 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
 
     assert!(
         owner
-            .run_tool_with_context_and_role(
+            .run_tool_with_context(
                 "orbit.task.retry_handoff",
                 request.clone(),
-                Role::Admin,
                 ToolContext {
                     session_context: ToolSessionContext {
                         effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -764,10 +761,9 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     std::fs::write(&blob, b"{}").unwrap();
     assert!(
         owner
-            .run_tool_with_context_and_role(
+            .run_tool_with_context(
                 "orbit.task.retry_handoff",
                 request.clone(),
-                Role::Admin,
                 ToolContext {
                     session_context: ToolSessionContext {
                         effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -782,10 +778,9 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     std::fs::write(&blob, certified_bytes).unwrap();
     assert_eq!(owner.landing_attempts().unwrap()[0], stopped);
     let submitted = owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.retry_handoff",
             request.clone(),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -864,10 +859,9 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     }
     let settled = owner.landing_attempts().unwrap();
     let replay = owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.retry_handoff",
             request,
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     effective_capabilities: BTreeSet::from([McpCapability::Operator]),

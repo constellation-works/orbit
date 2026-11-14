@@ -662,10 +662,9 @@ impl FollowerRunObserver for FollowerShow<'_> {
         self.asked
             .borrow_mut()
             .push((machine_id.to_string(), run_id.to_string()));
-        let mut answer = self.pair.follower.run_tool_with_context_and_role(
+        let mut answer = self.pair.follower.run_tool_with_context(
             "orbit.workflow.run.observe",
             json!({"id": run_id}),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -956,10 +955,9 @@ fn hydration_observes_stored_runs_without_reconciliation() {
             before_reservations,
             vec![("fixture-reservation".to_string(), None)]
         );
-        let denied = pair.follower.run_tool_with_context_and_role(
+        let denied = pair.follower.run_tool_with_context(
             "orbit.workflow.run.observe",
             json!({"id": leaf}),
-            Role::Admin,
             ToolContext::default(),
         );
         assert!(

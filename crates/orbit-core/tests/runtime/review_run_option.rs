@@ -261,10 +261,9 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
         ..ToolContext::default()
     };
     // The child is admitted, then its worker cannot start.
-    let _ = runtime.run_tool_with_context_and_role(
+    let _ = runtime.run_tool_with_context(
         "orbit.pipeline.invoke",
         json!({"job_name": "task_auto_pipeline", "input": {"task_ids": [], "mode": "pr"}}),
-        orbit_types::policy::Role::Admin,
         context,
     );
     // Workspace policy alone would capture none for this child.

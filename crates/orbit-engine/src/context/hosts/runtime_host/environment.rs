@@ -216,16 +216,15 @@ macro_rules! environment_methods {
         /// resolved. Workflow commit attribution treats this as opaque config
         /// data and falls back when the run or model is unavailable.
         fn resolved_crew_model(&self, run_id: &str) -> Result<Option<String>, OrbitError>;
-        fn run_tool_with_context_and_role(
+        fn run_tool_with_context(
             &self,
             name: &str,
             input: Value,
-            role: Role,
             tool_context: ToolContext,
         ) -> Result<Value, OrbitError>;
         /// Execute an engine-private VCS/PR operation for deterministic shipment.
         ///
-        /// Unlike `run_tool_with_context_and_role`, this boundary never consults
+        /// Unlike `run_tool_with_context`, this boundary never consults
         /// the public Tool registry, public authorization, or an activity
         /// allowlist. `OrbitRuntime` answers with
         /// [`crate::run_private_vcs_operation`]; tests may substitute an

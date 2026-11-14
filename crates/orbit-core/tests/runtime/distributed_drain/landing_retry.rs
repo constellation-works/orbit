@@ -472,10 +472,9 @@ fn retry_tool_input(
     input: Value,
     capability: McpCapability,
 ) -> Result<Value, OrbitError> {
-    runtime.run_tool_with_context_and_role(
+    runtime.run_tool_with_context(
         "orbit.task.retry_handoff",
         input,
-        Role::Admin,
         ToolContext {
             session_context: ToolSessionContext {
                 effective_capabilities: BTreeSet::from([capability]),

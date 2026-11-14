@@ -1590,11 +1590,10 @@ fn a_cross_os_known_red_report_from_off_the_owners_branch_is_refused() {
     let error = pair
         .wire
         .owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.drain.claim.settle",
             json!({"claim_id": delivered.claim_id, "run_id": leaf,
             "settlement": ClaimMutation::AcceptHandoff(delivered.clone())}),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     caller_machine_id: Some(FOLLOWER.into()),
@@ -1825,13 +1824,12 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
     };
     let settle = |owner: &OrbitRuntime| {
         owner
-            .run_tool_with_context_and_role(
+            .run_tool_with_context(
                 "orbit.drain.claim.settle",
                 json!({
                     "claim_id": handoff.claim_id, "run_id": fixture.leaf,
                     "settlement": ClaimMutation::AcceptHandoff(handoff.clone()),
                 }),
-                Role::Admin,
                 ToolContext {
                     session_context: ToolSessionContext {
                         caller_machine_id: Some(FOLLOWER.to_string()),

@@ -5,7 +5,6 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
-use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
