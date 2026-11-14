@@ -11,7 +11,9 @@ the whole split test gate has, so its elapsed time stays the gate's wall time
 and its conclusion stays the gate's result. It reads the run's jobs through
 `gh api` (GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID from the runner), using
 the latest attempt of each job. A job that completes with any conclusion but
-success fails the wait at once. API errors are retried until the timeout.
+success fails the wait at once. API errors are retried until the timeout;
+failed listings are reported as unavailable rather than as current job status.
+A rate limit with an explicit reset or retry time beyond the deadline fails early.
 
 Single-page job listings use ETag conditional requests at three-second intervals.
 Authenticated 304 responses do not consume GitHub's primary rate limit.
@@ -63,10 +65,6 @@ import time
 
 # Bound on reaping a listing killed at the deadline, added to --timeout-seconds.
 CLEANUP_SECONDS = 5
-
-FIELDS = (".jobs[] | {id, run_id, run_attempt, head_sha, name, status, conclusion, started_at, completed_at, html_url,"
-          " steps: [.steps[]? | {name, number, status, conclusion}]}")
-
 
 class ListingTimeout(Exception):
     """The job listing was still running when the wait budget ran out."""
@@ -132,9 +130,23 @@ class JobListingPoller:
         self.not_modified = 0
         self.server_minimum = 0
         self.primary_remaining = 1000
+        self.last_error = "unusable response"
+        self.rate_limit_delay = 0
 
     def _backoff_minimum(self, headers, http_status):
         """Fold one response's backoff headers into the poll interval floor."""
+        if http_status in ("403", "429"):
+            self.last_error = f"HTTP {http_status} rate limit"
+            try:
+                retry = float(headers.get("retry-after", "0"))
+                reset = (float(headers["x-ratelimit-reset"]) - time.time()
+                         if headers.get("x-ratelimit-remaining") == "0"
+                         and "x-ratelimit-reset" in headers else 0)
+                self.rate_limit_delay = max(self.rate_limit_delay, retry, reset)
+            except ValueError:
+                pass
+        elif http_status and http_status not in ("200", "304"):
+            self.last_error = f"HTTP {http_status}"
         try:
             self.server_minimum = float(headers.get("x-poll-interval", str(self.server_minimum)))
             minimum = max(self.server_minimum, float(headers.get("retry-after", "0")))
@@ -176,36 +188,50 @@ class JobListingPoller:
 
     def read_job_listing(self, remaining):
         started = time.monotonic()
+        self.last_error = "unusable response"
+        self.rate_limit_delay = 0
         self.poll_seconds = max(self.server_minimum, self.fallback_seconds)
         self.requests += 1
         if self.paginated:
             status, stdout = request_job_listing(
-                ["--include", "--paginate", "--jq", FIELDS, self.endpoint], remaining)
+                ["--include", "--paginate", self.endpoint], remaining)
             pages = self._parse_paginated_listing(stdout)
-            if not pages:
-                if status:
-                    return None
-                try:
-                    return {job["name"]: job for line in stdout.splitlines() if line.strip()
-                            for job in [json.loads(line)]}
-                except (ValueError, KeyError):
-                    return None
             minimum = self.server_minimum
             for http_status, headers, _ in pages:
                 minimum = max(minimum, self._backoff_minimum(headers, http_status))
             self.poll_seconds = max(minimum, self.fallback_seconds)
-            if status:
+            if status or not pages:
                 return None
             jobs = {}
+            total = None
+            returned = 0
             try:
-                for http_status, _, body in pages:
+                for index, (http_status, headers, body) in enumerate(pages):
                     if http_status != "200":
                         return None
-                    for line in body:
-                        if line.strip():
-                            job = json.loads(line)
-                            jobs[job["name"]] = job
-            except (ValueError, KeyError):
+                    payload = json.loads("\n".join(body))
+                    page_jobs = payload["jobs"]
+                    page_total = payload["total_count"]
+                    if (not isinstance(page_jobs, list) or isinstance(page_total, bool)
+                            or not isinstance(page_total, int) or page_total < 0):
+                        return None
+                    if total is None:
+                        total = page_total
+                    if total != page_total:
+                        return None
+                    returned += len(page_jobs)
+                    has_next = 'rel="next"' in headers.get("link", "")
+                    if has_next != (index < len(pages) - 1):
+                        return None
+                    if has_next and len(page_jobs) != 100:
+                        return None
+                    for job in page_jobs:
+                        if not isinstance(job.get("name"), str) or not isinstance(job.get("status"), str):
+                            return None
+                        jobs[job["name"]] = job
+                if returned != total or len(jobs) != returned:
+                    return None
+            except (ValueError, KeyError, TypeError, AttributeError):
                 return None
             return jobs
         arguments = ["--include", self.endpoint]
@@ -242,13 +268,19 @@ class JobListingPoller:
                 if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
                     return None
                 jobs = payload["jobs"]
-                if payload.get("total_count") != len(jobs):
+                if (isinstance(payload.get("total_count"), bool)
+                        or not isinstance(payload.get("total_count"), int)
+                        or payload["total_count"] != len(jobs)):
                     return None
-                self.jobs = {job["name"]: job for job in jobs}
-                if len(self.jobs) != len(jobs):
+                if any(not isinstance(job.get("name"), str) or not isinstance(job.get("status"), str)
+                       for job in jobs):
                     return None
+                parsed_jobs = {job["name"]: job for job in jobs}
+                if len(parsed_jobs) != len(jobs):
+                    return None
+                self.jobs = parsed_jobs
                 self.etag = headers.get("etag")
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, AttributeError):
                 return None
         else:
             print(f"ci-await: job listing returned unexpected HTTP status {http_status}", file=sys.stderr)
@@ -327,7 +359,7 @@ class JobListingPoller:
                 for artifact in artifacts:
                     if artifact_is_available(artifact) and isinstance(artifact.get("name"), str):
                         names.add(artifact["name"])
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, AttributeError):
                 return None
             if returned == total:
                 return names
@@ -411,6 +443,7 @@ def await_workflow_jobs(args, poller):
     deadline = time.monotonic() + args.timeout_seconds
     reported = set()
     pending = []
+    failures = 0
     while True:
         remaining = deadline - time.monotonic()
         jobs = None
@@ -422,6 +455,10 @@ def await_workflow_jobs(args, poller):
             except ListingTimeout:
                 blocked = True
                 listing = "job listing still running at the deadline, killed"
+        if jobs is None and not blocked and remaining > 0:
+            failures += 1
+        elif jobs is not None:
+            failures = 0
         if jobs is not None and time.monotonic() < deadline:
             pending = []
             absent = []
@@ -433,12 +470,17 @@ def await_workflow_jobs(args, poller):
                 status, conclusion, url = job["status"], job.get("conclusion"), job.get("html_url")
                 started, completed = job.get("started_at") or "", job.get("completed_at") or ""
                 step = next((step for step in job.get("steps") or [] if step.get("name") == args.step), None)
+                if step is not None and step.get("status") == "completed" and step.get("conclusion") != "success":
+                    dependency_failure_record(jobs, job, step)
+                    print(f"ci-await: {name} step '{args.step}' concluded "
+                          f"{step.get('conclusion') or 'without a conclusion'}: {url}", file=sys.stderr)
+                    return 1
+                if status == "completed" and conclusion != "success":
+                    dependency_failure_record(jobs, job)
+                    print(f"ci-await: {name} concluded {conclusion or 'without a conclusion'}: {url}",
+                          file=sys.stderr)
+                    return 1
                 if step is not None and step.get("status") == "completed":
-                    if step.get("conclusion") != "success":
-                        dependency_failure_record(jobs, job, step)
-                        print(f"ci-await: {name} step '{args.step}' concluded "
-                              f"{step.get('conclusion') or 'without a conclusion'}: {url}", file=sys.stderr)
-                        return 1
                     if name not in reported:
                         reported.add(name)
                         print(f"ci-await: {name} step '{args.step}' succeeded started={started}")
@@ -446,11 +488,6 @@ def await_workflow_jobs(args, poller):
                 if status != "completed":
                     pending.append(f"{name} ({status})")
                     continue
-                if conclusion != "success":
-                    dependency_failure_record(jobs, job)
-                    print(f"ci-await: {name} concluded {conclusion or 'without a conclusion'}: {url}",
-                          file=sys.stderr)
-                    return 1
                 if name not in reported:
                     reported.add(name)
                     print(f"ci-await: {name} succeeded started={started} completed={completed} "
@@ -469,6 +506,11 @@ def await_workflow_jobs(args, poller):
                     blocked = True
                     listing = "artifact listing still running at the deadline, killed"
                 if available is None:
+                    remaining = deadline - time.monotonic()
+                    if poller.rate_limit_delay > remaining > 0:
+                        print(f"ci-await: artifact listing unavailable (last error {poller.last_error}); "
+                              "rate limit retry is beyond the deadline", file=sys.stderr)
+                        return 1
                     pending.append("archive parts (listing unavailable)")
                 else:
                     missing = [name for name in args.artifacts if name not in available]
@@ -482,11 +524,17 @@ def await_workflow_jobs(args, poller):
                 print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded{reached}{parts}")
                 return 0
         remaining = deadline - time.monotonic()
+        if remaining > 0 and jobs is None and poller.rate_limit_delay > remaining:
+            print(f"ci-await: job listing unavailable ({failures} consecutive failures, "
+                  f"last error {poller.last_error}); rate limit retry is beyond the deadline",
+                  file=sys.stderr)
+            return 1
         if remaining <= 0:
-            if jobs is None and pending:
+            if jobs is None and failures:
+                waiting = (f"every job (listing unavailable, {failures} consecutive failures, "
+                           f"last error {poller.last_error})")
+            elif jobs is None and pending and not blocked:
                 waiting = ", ".join(pending)
-                if blocked:
-                    waiting += f" (latest {listing})"
             elif jobs is None:
                 waiting = f"every job ({listing})"
             elif pending:

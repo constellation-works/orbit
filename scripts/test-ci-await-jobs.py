@@ -47,10 +47,15 @@ class AwaitJobsTests(unittest.TestCase):
         self.raw_job_body = None
         # Optional (page, elapsed) -> (status, headers, JSON payload or None).
         self.artifact_reply = None
+        self.job_reply = None
+        self.job_total = None
+        self.advance_clock = False
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if fixture.advance_clock:
+                    (fixture.root / "advance-clock").write_text("31")
                 fixture.requests.append(self.path)
                 fixture.request_headers.append(dict(self.headers))
                 if "/artifacts" in self.path:
@@ -73,6 +78,17 @@ class AwaitJobsTests(unittest.TestCase):
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if fixture.job_reply:
+                    elapsed = float(self.headers.get("X-Fixture-Time", "0"))
+                    reply = fixture.job_reply(elapsed, self.path)
+                    if reply is not None:
+                        status, headers = reply
+                        self.send_response(status)
+                        for name, value in headers.items():
+                            self.send_header(name, value)
+                        self.end_headers()
+                        self.wfile.write(b'{"message":"API rate limit exceeded"}')
+                        return
                 if fixture.raw_job_body is not None:
                     raw = fixture.raw_job_body
                     body = raw.encode() if isinstance(raw, str) else raw
@@ -87,7 +103,8 @@ class AwaitJobsTests(unittest.TestCase):
                 second_page = "&page=2" in self.path
                 if fixture.pages:
                     response = fixture.pages[1 if second_page else 0]
-                body = b"" if response is None else json.dumps({"total_count": len(response),
+                body = b"" if response is None else json.dumps({"total_count": fixture.job_total if fixture.job_total is not None else
+                                                                 sum(len(page) for page in fixture.pages) if fixture.pages else len(response),
                                                                  "jobs": response}).encode()
                 etag = '"' + hashlib.sha256(body).hexdigest() + '"'
                 unchanged = fixture.timed_response and self.headers.get("If-None-Match") == etag
@@ -154,8 +171,11 @@ def sleep(seconds):
 sleep(0)
 sys.argv = sys.argv[1:]
 namespace = runpy.run_path(sys.argv[0])
+def monotonic():
+    marker = Path(os.environ["CI_AWAIT_CLOCK_OUTPUT"]).with_name("advance-clock")
+    return max(elapsed, float(marker.read_text())) if marker.exists() else elapsed
 namespace["main"].__globals__["time"] = types.SimpleNamespace(
-    monotonic=lambda: elapsed, sleep=sleep, time=time.time)
+    monotonic=monotonic, sleep=sleep, time=time.time)
 try:
     raise SystemExit(namespace["main"]())
 finally:
@@ -269,6 +289,27 @@ finally:
                     self.assertEqual(result.returncode, 1, result.stdout)
                     self.assertIn(f"concluded {conclusion}", result.stderr)
 
+    def test_listing_failure_does_not_report_stale_job_status(self):
+        self.timed_response = lambda elapsed: [job("Test build", "in_progress")]
+        self.job_reply = lambda elapsed, path: (403, {}) if elapsed else None
+        result = self.wait(timeout="130", jobs=["Test build"], poll="15", virtual=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("listing unavailable", result.stderr)
+        self.assertIn("consecutive failures", result.stderr)
+        self.assertIn("HTTP 403", result.stderr)
+        self.assertNotIn("waiting for Test build (in_progress)", result.stderr)
+
+    def test_rate_limit_reset_beyond_deadline_fails_promptly(self):
+        for headers in ({"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 300)},
+                        {"Retry-After": "300"}):
+            with self.subTest(headers=headers):
+                self.job_reply = lambda elapsed, path: (403, headers)
+                result = self.wait(timeout="30", jobs=["Test build"], poll="15", virtual=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("rate limit", result.stderr.lower())
+                self.assertIn("deadline", result.stderr.lower())
+                self.assertLess(float((self.root / "elapsed").read_text()), 30)
+
     def test_conditional_polling_honors_server_limits_and_the_absolute_deadline(self):
         self.timed_response = lambda elapsed: [job("Test build", "in_progress")]
         for headers, interval in (({}, 3), ({"X-Poll-Interval": "7"}, 7),
@@ -290,7 +331,8 @@ finally:
                                  "unchanged HTTP 304 listings must retain the interval")
 
     def test_a_first_page_etag_cannot_hide_a_failed_job_on_a_later_page(self):
-        self.pages = [[job("Test build")], [job("Test shard 1/2", conclusion="failure")]]
+        self.pages = [[job("Test build")] + [job(f"other-{i}") for i in range(99)],
+                      [job("Test shard 1/2", conclusion="failure")]]
         self.response_headers = {"ETag": '"first-page"'}
         result = self.wait([job("unused")], jobs=["Test build", "Test shard 1/2"])
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -300,7 +342,7 @@ finally:
 
     def test_paginated_listing_honors_server_backoff_without_hiding_later_pages(self):
         building = [job("Test build", "in_progress")]
-        self.pages = [building, building]
+        self.pages = [building + [job(f"other-{i}") for i in range(99)], [job("other-99")]]
         self.response_headers = {"Retry-After": "60"}
         result = self.wait([job("unused")], timeout="31", jobs=["Test build"],
                            poll="15", virtual=True)
@@ -314,13 +356,30 @@ finally:
         # A backoff header must not hide a later-page negative conclusion.
         self.requests.clear()
         self.request_headers.clear()
-        self.pages = [[job("Test build")], [job("Test shard 1/2", conclusion="failure")]]
+        self.pages = [[job("Test build")] + [job(f"other-{i}") for i in range(99)],
+                      [job("Test shard 1/2", conclusion="failure")]]
         self.response_headers = {"Retry-After": "60"}
         result = self.wait([job("unused")], jobs=["Test build", "Test shard 1/2"])
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("Test shard 1/2 concluded failure", result.stderr)
         self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
         self.assertIn("paginated=true", result.stdout)
+
+    def test_incomplete_paginated_listing_is_never_success(self):
+        full = [job("Test build")] + [job(f"other-{i}") for i in range(99)]
+        for case in ("short-page", "count-mismatch", "non-200"):
+            with self.subTest(case=case):
+                self.requests.clear()
+                self.pages = [[job("Test build")] if case == "short-page" else full,
+                              [job("other-99")]]
+                self.job_total = 102 if case == "count-mismatch" else None
+                self.job_reply = (lambda elapsed, path: (503, {}) if "&page=2" in path else None
+                                  ) if case == "non-200" else None
+                result = self.wait([job("unused")], timeout="2", jobs=["Test build"],
+                                   poll="1", virtual=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn("awaited jobs succeeded", result.stdout)
+                self.assertIn("listing unavailable", result.stderr)
 
     def test_waits_until_every_named_job_succeeds(self):
         building = [job("Test build", "in_progress"), job("Test shard 1/2", "queued"),
@@ -364,7 +423,8 @@ finally:
         # upload, nor wait out its timeout for an upload that never comes.
         for build in (job("Test build", "in_progress", steps=[(UPLOAD, "completed", "skipped")]),
                       job("Test build", conclusion="failure", steps=[(UPLOAD, "completed", "skipped")]),
-                      job("Test build", conclusion="failure", steps=[(UPLOAD, "queued", None)])):
+                      job("Test build", conclusion="failure", steps=[(UPLOAD, "queued", None)]),
+                      job("Test build", conclusion="failure", steps=[(UPLOAD, "completed", "success")])):
             with self.subTest(build=build):
                 self.requests.clear()
                 result = self.wait([build], jobs=["Test build"], step=UPLOAD)
@@ -414,6 +474,13 @@ finally:
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn("timed out after 0 s", result.stderr)
                 self.assertNotIn("awaited jobs succeeded", result.stdout)
+
+    def test_successful_listing_returning_after_deadline_is_rejected(self):
+        self.advance_clock = True
+        result = self.wait([job("Test build")], timeout="30", jobs=["Test build"], virtual=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("only after the deadline", result.stderr)
+        self.assertNotIn("awaited jobs succeeded", result.stdout)
 
     def test_the_poll_sleep_does_not_outlast_the_deadline(self):
         started = time.monotonic()
@@ -495,9 +562,10 @@ finally:
                 result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
                                    artifact_names=["nextest-archive-1"])
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
-                self.assertEqual(float((self.root / "elapsed").read_text()), 7,
-                                 "the backoff minimum cannot extend the absolute deadline")
+                early = status in (403, 429) and ("Retry-After" in headers or "X-RateLimit-Reset" in headers)
+                self.assertIn("rate limit retry is beyond the deadline" if early else
+                              "timed out after 7 s waiting for archive parts", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 0 if early else 7)
                 self.assertEqual(self.artifact_request_times(), [0], self.requests)
 
     def test_paginated_artifact_listing_folds_backoff_from_every_page(self):
@@ -524,10 +592,11 @@ finally:
                 result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
                                    artifact_names=["nextest-archive-1"])
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("timed out after 7 s", result.stderr)
+                self.assertIn("rate limit retry is beyond the deadline" if second_status == 429 else
+                              "timed out after 7 s", result.stderr)
                 self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
                 self.assertEqual(self.artifact_request_times(), [0, 0], self.requests)
-                self.assertEqual(float((self.root / "elapsed").read_text()), 7)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 0 if second_status == 429 else 7)
 
     def test_artifact_polling_uses_fallback_interval(self):
         # Completed jobs carry an ETag, so the job listing drops to a 3 s
