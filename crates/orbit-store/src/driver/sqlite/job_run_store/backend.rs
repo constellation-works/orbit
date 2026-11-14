@@ -400,6 +400,11 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.read_run(run_id)
     }
 
+    fn get_job_runs_by_id(&self, run_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        self.store
+            .job_runs_by_id_for_workspace(&self.workspace_id, run_ids)
+    }
+
     fn get_job_run_state(&self, run_id: &str) -> Result<Option<JobRunState>, OrbitError> {
         self.store
             .get_job_run_state_for_workspace(&self.workspace_id, run_id)

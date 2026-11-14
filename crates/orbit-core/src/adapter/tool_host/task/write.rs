@@ -7,13 +7,15 @@
 //! the operator command's semantics (its screening, `--approve`, `--force`),
 //! which no MCP request can reach.
 
-use orbit_common::OrbitError;
+use std::collections::BTreeSet;
+
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::governance::task::TASK_CLI_OPTIONS_PARAM;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string,
     optional_string_list_alias, reject_unknown_tool_fields, required_string,
 };
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
     unknown_task_show_field_message,
@@ -288,7 +290,15 @@ fn update_without_repilot(
     if let Some(target) = requested_status
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
-        let current = runtime.get_task(&id)?;
+        // Status for the lifecycle gate is one keyed envelope, not a bundle
+        // read. The locked update reads the task itself.
+        let current = runtime
+            .stores()
+            .tasks()
+            .task_envelopes_for_ids(&BTreeSet::from([id.clone()]))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.clone()))?;
         if let Some(kind) = guarded_lifecycle_write(current.status, target, input, operator)? {
             let written = match kind {
                 GuardedLifecycleWrite::Approve => runtime.transition_task_to_backlog_screened(

@@ -1,13 +1,14 @@
 //! Run detail JSON and supplementary audit projections.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use orbit_core::application::job::{
     JobRunProjectionEvidence, JobRunProjectionProfile, RecordedJobRun,
     display_steps_with_agent_execution_to_json, project_job_run, run_display_steps,
 };
 use orbit_core::runtime::audit::run::{RunAuditView, RunProviderProcess};
-use orbit_core::{JobRun, OrbitRuntime};
+use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 /// One lazy scan of a run's audit trail, shared by the steps and
@@ -60,32 +61,27 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             ..JobRunProjectionEvidence::default()
         },
     );
-    // Child dispatches persist lineage rather than task input. Resolve their
-    // runs first, then share one task-title lookup with the parent header.
-    let children = state
+    // Child dispatches persist lineage rather than task input. One
+    // steps-free read covers every child. Only a non-terminal child is
+    // reconciled, so a dead leaf does not stay running, and a row that
+    // cannot be read still leaves that dispatch without state or labels.
+    let child_ids = state
         .iter()
         .flat_map(|state| &state.child_dispatches)
-        .filter_map(|dispatch| {
-            runtime.show_job_run(&dispatch.child_run_id).map_or_else(
-                |error| {
-                    tracing::warn!(child_run_id = %dispatch.child_run_id, %error, "child run state and task labels unavailable");
-                    None
-                },
-                Some,
-            )
-        })
+        .map(|dispatch| dispatch.child_run_id.clone())
         .collect::<Vec<_>>();
+    let children = load_child_runs(runtime, &child_ids);
     let titles = or_warn(
-        super::tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
+        super::tasks::task_titles(runtime, std::iter::once(run).chain(children.values())),
         run_id,
         "task titles",
     );
     super::tasks::add_tasks(&mut full, run, &titles);
     if let Some(dispatches) = full["child_dispatches"].as_array_mut() {
         for dispatch in dispatches {
-            if let Some(child) = children
-                .iter()
-                .find(|child| dispatch["child_run_id"] == child.run_id)
+            if let Some(child) = dispatch["child_run_id"]
+                .as_str()
+                .and_then(|id| children.get(id))
             {
                 super::tasks::add_tasks(dispatch, child, &titles);
                 // A fire-and-forget dispatch can stay submitted forever. Its
@@ -237,6 +233,60 @@ pub(super) fn recorded_run_detail_to_json(
         "steps_source": steps.source.as_str(),
         "provider_processes": [],
     })
+}
+
+/// Steps-free rows for `child_ids`, indexed by run id.
+///
+/// A non-terminal row is replaced by [`OrbitRuntime::show_job_run`] so a
+/// dead leaf does not stay running. A row that cannot be read is left out,
+/// and the dispatch renders with null state and task labels.
+fn load_child_runs(runtime: &OrbitRuntime, child_ids: &[String]) -> HashMap<String, JobRun> {
+    if child_ids.is_empty() {
+        return HashMap::new();
+    }
+    let loaded = match runtime.get_job_runs_by_id(child_ids) {
+        Ok(runs) => runs,
+        Err(error) => {
+            for id in child_ids {
+                warn_child_unavailable(id, &error);
+            }
+            return HashMap::new();
+        }
+    };
+    let mut runs: HashMap<String, JobRun> = loaded
+        .into_iter()
+        .map(|run| (run.run_id.clone(), run))
+        .collect();
+    let loaded_ids: HashSet<String> = runs.keys().cloned().collect();
+    let live: Vec<String> = runs
+        .iter()
+        .filter(|(_, run)| !run.state.is_terminal())
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in live {
+        match runtime.show_job_run(&id) {
+            Ok(run) => {
+                runs.insert(run.run_id.clone(), run);
+            }
+            Err(error) => {
+                warn_child_unavailable(&id, &error);
+                runs.remove(&id);
+            }
+        }
+    }
+    let mut missing = HashSet::new();
+    for id in child_ids {
+        if loaded_ids.contains(id) || !missing.insert(id.clone()) {
+            continue;
+        }
+        let error = OrbitError::not_found(NotFoundKind::JobRun, id.clone());
+        warn_child_unavailable(id, &error);
+    }
+    runs
+}
+
+fn warn_child_unavailable(child_run_id: &str, error: &OrbitError) {
+    tracing::warn!(child_run_id, %error, "child run state and task labels unavailable");
 }
 
 /// The run detail still renders when one supplementary read fails, but the

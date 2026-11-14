@@ -150,6 +150,16 @@ payload["author"] = {"name": "danieljhkim", "url": "https://github.com/danieljhk
 (broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "constellation-works", "owner drift")
 
+broken = clone_fixture("codex-malformed-urls")
+manifest_path = broken / "plugin" / ".codex-plugin" / "plugin.json"
+payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+payload["author"]["url"] = "https://["
+for field in ("websiteURL", "privacyPolicyURL", "termsOfServiceURL"):
+    payload["interface"][field] = "https://["
+manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+for field in ("author.url", "interface.websiteURL", "interface.privacyPolicyURL", "interface.termsOfServiceURL"):
+    expect_failure(broken, f"plugin.json.{field} must be an absolute https:// URL", field)
+
 if errors:
     print("test-validate-codex-plugin: failed", file=sys.stderr)
     for error in errors:

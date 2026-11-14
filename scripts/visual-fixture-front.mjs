@@ -320,6 +320,29 @@ function loopbackUpstream(raw) {
   return url;
 }
 
+// Check the client authority before any local response or upstream rewrite.
+// Raw headers retain duplicates that Node's normalized headers can hide.
+function admittedAuthority(req) {
+  const values = (name) => {
+    const found = [];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      if (req.rawHeaders[i].toLowerCase() === name) found.push(req.rawHeaders[i + 1]);
+    }
+    return found;
+  };
+  const hosts = values('host');
+  const origins = values('origin');
+  if (hosts.length !== 1 || origins.length > 1) return false;
+  const authority = /^(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]+))?$/i.exec(hosts[0]);
+  if (!authority || (authority[2] !== undefined && Number(authority[2]) > 65535)) return false;
+  if (values('sec-fetch-site').some((site) => site !== 'same-origin' && site !== 'none')) return false;
+  if (origins.length === 0) return /^(GET|HEAD|OPTIONS)$/.test(req.method || '');
+  const origin = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]+))?$/i.exec(origins[0]);
+  return !!origin && origin[1].toLowerCase() === authority[1].toLowerCase()
+    && Number(origin[2] ?? 80) === Number(authority[2] ?? 80)
+    && (origin[2] === undefined || Number(origin[2]) <= 65535);
+}
+
 // Origin-form only. `new URL(req.url, upstream)` treats a network-path (`//host`),
 // a leading-slash backslash, and an absolute URI as a new authority, so those
 // forms are rejected before any URL is built from the request target.
@@ -811,6 +834,10 @@ async function main() {
   const byRoute = new Map(loaded.map((asset) => [asset.route, asset]));
   const server = http.createServer((req, res) => {
     try {
+      if (!admittedAuthority(req)) {
+        sendPlain(res, 403, 'cross-origin requests not allowed');
+        return;
+      }
       const parsed = confinedRequestTarget(req.url || '/', upstream);
       if (parsed.error) {
         sendPlain(res, parsed.error, parsed.message);

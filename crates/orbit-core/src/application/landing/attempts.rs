@@ -34,12 +34,7 @@ impl OrbitRuntime {
         &self,
         handoff_id: &str,
     ) -> Result<Option<LandingAttempt>, OrbitError> {
-        Ok(self
-            .stores()
-            .tasks()
-            .landing_attempts()?
-            .into_iter()
-            .find(|attempt| attempt.handoff_id == handoff_id))
+        self.stores().tasks().landing_attempt(handoff_id)
     }
 
     /// Open the next attempt for this handoff, before any job exists to carry

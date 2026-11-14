@@ -127,6 +127,17 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))
     }
 
+    /// Steps-free run rows for `run_ids`, for a projection that needs state,
+    /// timing and task labels only.
+    ///
+    /// One statement per chunk of ids, selecting no step rows, with `input`
+    /// limited to the task keys the run list labels from. Missing ids are
+    /// omitted. This does not reconcile; a non-terminal child still needs
+    /// [`Self::show_job_run`] so a dead leaf is not shown as running.
+    pub fn get_job_runs_by_id(&self, run_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        self.stores().jobs().get_job_runs_by_id(run_ids)
+    }
+
     /// A job filter must name a known job or one with recorded runs.
     fn ensure_listable_job(&self, job_id: Option<&str>) -> Result<(), OrbitError> {
         if let Some(job_id) = job_id
