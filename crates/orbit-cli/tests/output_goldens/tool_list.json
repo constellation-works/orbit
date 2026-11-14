@@ -2587,7 +2587,7 @@
       },
       {
         "name": "request_id",
-        "description": "Retry-safe creation identity; selects guarded creation, which accepts fewer fields.",
+        "description": "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'.",
         "param_type": "string",
         "required": false
       }
@@ -3389,7 +3389,7 @@
       },
       {
         "name": "request_id",
-        "description": "Retry-safe write identity; selects a guarded update, which accepts fewer fields.",
+        "description": "Retry-safe write identity; selects guarded update (as do expected_revision, verdict, complete), which accepts only its mode's fields: 'verdict', 'complete'; 'comment'; or 'status' and the add fields. Omit guarded keys for an ordinary update.",
         "param_type": "string",
         "required": false
       },
