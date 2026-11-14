@@ -270,15 +270,11 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
         hold_lock(Path::new(&target));
         return;
     }
-    let limit_case =
-        std::thread::spawn(a_drain_at_the_deferral_limit_fails_on_an_admission_section);
     orbit_core::test_support::with_task_commit_lock_timeout(
         LOCK_DEADLINE,
         passes_held_out_by_a_shared_holder,
     );
-    if let Err(panic) = limit_case.join() {
-        std::panic::resume_unwind(panic);
-    }
+    a_drain_at_the_deferral_limit_fails_on_an_admission_section();
 }
 
 fn passes_held_out_by_a_shared_holder() {
