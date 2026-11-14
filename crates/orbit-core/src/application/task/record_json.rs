@@ -368,10 +368,15 @@ fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> Orb
 
 /// A list projection preserves the row and marks unreadable fields as unknown,
 /// with a warning, rather than discarding every healthy task in the page.
-///
-/// The row and the page status index are the ones `query_task_rows` already
-/// hydrated for this page, so no field re-reads the store and no per-row
-/// status-index query runs.
+/// Fields backed by the hydrated task row reuse its history, comment and
+/// artifact sidecars; dependency status fields use the page's shared status
+/// index without a per-row index query. Other projections can still need fresh
+/// runtime-derived data: experiments, OS and placement readouts, crew
+/// enrichment (`resolved_crew`, `crew_model`, `crew_unresolved`), and the
+/// deliberate store read for `open_decisions`, which keeps unreadable decision
+/// evidence unknown and warning-producing. Pilot prerequisite warnings use
+/// the shared index when it contains the prerequisite and fall back to a
+/// runtime status lookup when it does not.
 pub(crate) fn task_listing_field_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
