@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use crate::application::job::{
     ActivityInvocationEvidence, JobRunListParams, JobRunProjectionEvidence,
-    JobRunProjectionProfile, SubmissionKind, project_job_run, run_display_steps,
-    run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
+    JobRunProjectionProfile, ShipModeResolutionProfile, SubmissionKind, project_job_run,
+    run_display_steps, run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
 use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunRecoveryAttempts,
@@ -84,12 +84,10 @@ fn ship(
             "`task_ids` must not contain duplicates".to_string(),
         ));
     }
-    let mode = match optional_string(&input, "mode")? {
-        Some(raw) => ShipMode::parse(&raw)?,
-        None => runtime
-            .workspace_runtime_binding()
-            .map_or(ShipMode::Pr, |binding| binding.ship_mode),
-    };
+    let explicit = optional_string(&input, "mode")?
+        .map(|raw| ShipMode::parse(&raw))
+        .transpose()?;
+    let mode = runtime.resolve_ship_mode(explicit, ShipModeResolutionProfile::BoundRuntimeOnly)?;
     let base = optional_string(&input, "base")?;
     let allowed_crews = parse_optional_string_array_field(&input, "allowed_crews")?;
     let actor = actor(runtime, agent.as_deref(), model.as_deref());

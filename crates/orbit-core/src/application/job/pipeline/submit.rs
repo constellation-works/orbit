@@ -103,7 +103,79 @@ pub(crate) enum SubmittedDefinition<'a> {
     Snapshot { spec: &'a JobV2, yaml: &'a str },
 }
 
+/// Legacy profile governing how an omitted ship mode is resolved when the
+/// runtime has no workspace binding.
+///
+/// Surfaces choose only their established profile; the resolution policy
+/// itself lives in [`OrbitRuntime::resolve_ship_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShipModeResolutionProfile {
+    /// Native CLI legacy: load the registry under the runtime's global root
+    /// and accept only a single checkout whose `orbit_dir` equals the
+    /// runtime's shared root; that workspace's mode wins. A missing or
+    /// ambiguous match warns and falls back to `pr`, and registry load
+    /// errors propagate.
+    NativeCliLegacyRoot,
+    /// Tool and HTTP legacy: no registry lookup; an unbound runtime falls
+    /// back to `pr` without a warning.
+    BoundRuntimeOnly,
+}
+
 impl OrbitRuntime {
+    /// Resolve the effective ship mode for a `ship` invocation.
+    ///
+    /// An explicit mode always wins. Otherwise a bound runtime uses its
+    /// workspace binding's mode. Only an unbound runtime consults
+    /// `profile`: see [`ShipModeResolutionProfile`] for the two legacy
+    /// policies this preserves.
+    pub fn resolve_ship_mode(
+        &self,
+        explicit: Option<crate::application::workflow::ShipMode>,
+        profile: ShipModeResolutionProfile,
+    ) -> Result<crate::application::workflow::ShipMode, OrbitError> {
+        if let Some(mode) = explicit {
+            return Ok(mode);
+        }
+        if let Some(binding) = self.workspace_runtime_binding() {
+            return Ok(binding.ship_mode);
+        }
+        match profile {
+            ShipModeResolutionProfile::BoundRuntimeOnly => {
+                Ok(crate::application::workflow::ShipMode::Pr)
+            }
+            ShipModeResolutionProfile::NativeCliLegacyRoot => {
+                let registry_path =
+                    orbit_registry::workspace_registry::registry_path_for(&self.global_root());
+                let registry =
+                    orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
+                let orbit_dir = self.shared_root();
+                let mut checkouts = registry
+                    .checkouts
+                    .iter()
+                    .filter(|checkout| checkout.orbit_dir == orbit_dir);
+                let checkout = checkouts.next().filter(|_| checkouts.next().is_none());
+                let mode = checkout
+                    .and_then(|checkout| {
+                        registry
+                            .workspaces
+                            .iter()
+                            .find(|workspace| workspace.id == checkout.workspace_id)
+                    })
+                    .map(crate::application::workflow::resolved_ship_mode);
+                let Some(mode) = mode else {
+                    tracing::warn!(
+                        registry_path = %registry_path.display(),
+                        orbit_dir = %orbit_dir.display(),
+                        fallback = "pr",
+                        "workspace was not found in registry; falling back to PR ship mode"
+                    );
+                    return Ok(crate::application::workflow::ShipMode::Pr);
+                };
+                Ok(mode)
+            }
+        }
+    }
+
     /// Submit a `ship` workflow run (the `task_auto_pipeline` job).
     ///
     /// Shared entry point for every non-interactive submission surface
