@@ -84,7 +84,6 @@ fn foreign_pid_namespace_never_condemns_a_live_owner() {
         PidNamespaceScope::Foreign,
         |_| ProbeOutcome::NoProcess,
         |_| false,
-        |_| false,
     );
     assert_eq!(identity, OwnerIdentity::ForeignPidNamespace);
 }
@@ -100,7 +99,6 @@ fn same_pid_namespace_still_detects_a_genuinely_dead_owner() {
         Some(persisted.as_str()),
         PidNamespaceScope::Same,
         |_| ProbeOutcome::NoProcess,
-        |_| false,
         |_| false,
     );
     assert_eq!(identity, OwnerIdentity::Missing);

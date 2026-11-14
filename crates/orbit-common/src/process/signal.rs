@@ -5,8 +5,7 @@ use std::io;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::identity::{
-    ProbeOutcome, is_stable_token, legacy_lstart_matches, probe_process_start_identity,
-    stable_tokens_match,
+    ProbeOutcome, is_stable_token, probe_process_start_identity, stable_tokens_match,
 };
 
 /// A process identity retained across signals and waits. Linux uses a pidfd;
@@ -70,33 +69,27 @@ impl BoundProcess {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             if let Some(expected) = expected {
-                let matches = if is_stable_token(expected) {
-                    match probe_process_start_identity(pid) {
-                        ProbeOutcome::Token(current) => stable_tokens_match(expected, &current),
-                        ProbeOutcome::NoProcess => {
-                            return if process.is_alive()? {
-                                Err(io::Error::other(
-                                    "process identity absent while bound process is live",
-                                ))
-                            } else {
-                                Ok(None)
-                            };
-                        }
-                        ProbeOutcome::Unavailable => {
-                            return Err(io::Error::other("process identity unavailable"));
-                        }
-                    }
-                } else {
-                    if !legacy_lstart_matches(pid, expected) {
+                if !is_stable_token(expected) {
+                    return if process.is_alive()? {
+                        Err(io::Error::other("process identity cannot be verified"))
+                    } else {
+                        Ok(None)
+                    };
+                }
+                let matches = match probe_process_start_identity(pid) {
+                    ProbeOutcome::Token(current) => stable_tokens_match(expected, &current),
+                    ProbeOutcome::NoProcess => {
                         return if process.is_alive()? {
                             Err(io::Error::other(
-                                "legacy process identity cannot be verified",
+                                "process identity absent while bound process is live",
                             ))
                         } else {
                             Ok(None)
                         };
                     }
-                    true
+                    ProbeOutcome::Unavailable => {
+                        return Err(io::Error::other("process identity unavailable"));
+                    }
                 };
                 if !matches {
                     return Ok(None);
