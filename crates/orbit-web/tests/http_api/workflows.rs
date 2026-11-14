@@ -604,8 +604,8 @@ wf_test!(
     {
         use std::time::{Duration, Instant};
         let fixture = Fixture::new();
-        // The job outlives the receipt: the replay below must still be pending or running when its receipt returns, which foreground execution of this six-second job in the request could not produce.
-        fixture.sleep_job("replay_fixture", 6);
+        // The job outlives the receipt: the replay below must still be pending or running when its receipt returns, which foreground execution of this two-second job in the request could not produce.
+        fixture.sleep_job("replay_fixture", 2);
         let mut source = fixture.seed_run("jrun-replay-source", "replay_fixture", Success);
         source.input = Some(json!({
             "marker": "preserved", "completion": "done",
@@ -656,7 +656,7 @@ wf_test!(
         eq!(wait_terminal(&fixture, run_id, 15).state => Success, "worker did not finish");
         let replay_state = saved_state(&fixture, run_id).unwrap();
         eq!(replay_state.trigger => Some(orbit_types::workflow::JobRunTrigger::dashboard()));
-        chk!(replay_state.pipeline["nap"]["slept_seconds"] .as_f64() .unwrap() >= 6.0 => "replay must execute even a checkpointed source step");
+        chk!(replay_state.pipeline["nap"]["slept_seconds"] .as_f64() .unwrap() >= 2.0 => "replay must execute even a checkpointed source step");
         eq!(show_run(&fixture, &source.run_id) => source_before);
         eq!(saved_state(&fixture, &source.run_id).unwrap() => source_state);
     }

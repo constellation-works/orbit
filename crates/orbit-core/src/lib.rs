@@ -90,6 +90,9 @@ pub mod test_support {
     /// Replace the backlog forecast's wall-time budget for a scenario with
     /// arrivals, in milliseconds, in an isolated test's server child.
     pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
+    /// Replace the backlog forecast's generated-node bound for a scenario
+    /// with arrivals, in an isolated test's server child.
+    pub use crate::application::backlog_forecast::MAX_GENERATED_ENV as BACKLOG_FORECAST_MAX_GENERATED_ENV;
     pub use crate::application::distributed::admission_checkpoint::{
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };

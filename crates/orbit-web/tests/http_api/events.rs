@@ -121,7 +121,17 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
                     ..TaskAddParams::default()
                 })
                 .unwrap();
-            let server = fixture.server(false);
+            let server = fixture.server_with_envs(
+                false,
+                &[
+                    ("ORBIT_TEST_EVENTS_SCAN_INTERVAL_MS", "75".as_ref()),
+                    (
+                        "ORBIT_TEST_EVENTS_HOST_RESOURCES_INTERVAL_MS",
+                        "75".as_ref(),
+                    ),
+                    ("ORBIT_TEST_EVENTS_DRAIN_RECHECK_INTERVAL_MS", "75".as_ref()),
+                ],
+            );
             let mut stream = open(&server, None);
 
             // Connect: the drain phase, then the host sample, both level state.

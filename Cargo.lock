@@ -2379,6 +2379,7 @@ dependencies = [
  "orbit-registry",
  "orbit-store",
  "orbit-types",
+ "orbit-web",
  "rcgen",
  "reqwest",
  "rusqlite",

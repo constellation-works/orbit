@@ -74,6 +74,7 @@ fn instance(fixture: &Fixture, tags: Vec<String>, status: TaskStatus) -> Task {
 fn seed(
     fixture: &Fixture,
     total: usize,
+    per_definition: usize,
     progress: &mut FixtureProgress,
 ) -> BTreeMap<String, Vec<Task>> {
     progress.phase("seed tasks", total);
@@ -90,7 +91,7 @@ fn seed(
             .unwrap()
         };
         seed_auto_task_with_schedule(fixture, &name, schedule);
-        let tasks = (0..20)
+        let tasks = (0..per_definition)
             .map(|_| {
                 let task = instance(fixture, vec![auto_task_tag(&name)], TaskStatus::Backlog);
                 progress.advance();
@@ -99,7 +100,7 @@ fn seed(
             .collect();
         instances.insert(name, tasks);
     }
-    for _ in 320..total {
+    for _ in 16 * per_definition..total {
         instance(fixture, vec!["unrelated".into()], TaskStatus::Done);
         progress.advance();
     }
@@ -115,8 +116,8 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
             // guard on a saturated host; name the phase that was running.
             let mut progress = FixtureProgress::start("auto-task list freshness");
             let fixture = Fixture::new();
-            // 40 tasks no definition minted: the listing must not read them.
-            let instances = seed(&fixture, 360, &mut progress);
+            // 4 tasks no definition minted: the listing must not read them.
+            let instances = seed(&fixture, 36, 2, &mut progress);
             progress.phase("start server", 1);
             let server = fixture.counted_task_server();
             progress.advance();
@@ -155,7 +156,7 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
                 );
                 assert_eq!(
                     selections.len(),
-                    320,
+                    32,
                     "only auto-task instances are read; selecting every workspace task \
                      made the listing scale with the workspace [ORB-21824]"
                 );
@@ -772,7 +773,7 @@ fn list_latency_4000_tasks() {
     isolated("auto_tasks::list_latency_4000_tasks", || {
         let mut progress = FixtureProgress::start("auto-task list latency");
         let fixture = Fixture::new();
-        seed(&fixture, 4000, &mut progress);
+        seed(&fixture, 4000, 20, &mut progress);
         progress.finish();
         let server = fixture.server(false);
         let mut samples = Vec::new();

@@ -8,6 +8,11 @@ license.workspace = true
 [package.metadata.orbit]
 stability = "internal"
 
+[features]
+# Test-only hooks for HTTP fixture servers. Enable it only from
+# `[dev-dependencies]`, never in a shipped build.
+test-support = []
+
 [lints]
 workspace = true
 
@@ -48,6 +53,7 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orbit-web = { path = ".", features = ["test-support"] }
 # Exercise production lock-denial writes through the runner action in HTTP fixtures.
 orbit-engine = { path = "../orbit-engine" }
 orbit-store = { path = "../orbit-store" }
