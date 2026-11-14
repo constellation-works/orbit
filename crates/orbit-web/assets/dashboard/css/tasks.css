@@ -37,14 +37,17 @@
 /* The full page has no list for the task to be outside of. Its crew lives
    in the shared detail lever row, so the entire dock-only note can go. */
 main.tasks-layout.task-page-mode .pinned-external { display: none; }
-/* The filter bar (status pills) spans the full width of the Tasks view,
-   above the list and the dock, and wraps only when the chips exceed that
-   width. The list and the dock start 12px below it. */
+/* The filter bar (status pills) heads the list column, with the dock's tab
+   bar level with it in the column beside. Where the pills would wrap there
+   but fit in fewer rows across the list and dock columns together,
+   log-tail.js adds `filter-spans` and the bar takes both columns, the dock
+   starting below it with the list (see the layout below). The list starts
+   12px below the bar. */
 /* --tasks-list-lead (log-tail.js) lowers the list when the dock's tab bar is
    taller than the bar's own room, so the first card and the first task block
    start level. */
 main.tasks-layout > .controls {
-  grid-column: 1 / -1;
+  grid-column: 1;
   grid-row: 1;
   border-bottom: 0;
   padding: 0 0 12px;
@@ -836,10 +839,12 @@ main.tasks-layout > .controls {
   #tasks-body > .row.no-quick .task-quick-cell { display: none; }
 }
 
-/* Below the full-width filter bar: the list, then the Drain dock (the
-   Auto-drain status card, Start a window, Locks held, Log) beside the list.
-   An open task takes the dock's place, and below 1000px, where shell.css
-   stacks every main grid, the task list takes the full width. */
+/* The filter bar, then the list below it; the Drain dock (the Auto-drain
+   status card, Start a window, Locks held, Log) beside both, its tab bar
+   level with the bar. With `filter-spans` the bar takes both columns and the
+   dock starts below it with the list. An open task takes the dock's place,
+   and below 1000px, where shell.css stacks every main grid, the task list
+   takes the full width. */
 main.tasks-layout {
   grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px);
   grid-template-rows: auto minmax(0, 1fr);
@@ -847,7 +852,9 @@ main.tasks-layout {
 }
 main.tasks-layout:not(:has(> .tasks-dock > #side-dock)) { grid-template-columns: minmax(0, 1fr); }
 main.tasks-layout > .col-tasks { grid-column: 1; grid-row: 2; }
-main.tasks-layout > .tasks-dock { grid-column: 2; grid-row: 2; }
+main.tasks-layout > .tasks-dock { grid-column: 2; grid-row: 1 / -1; }
+main.tasks-layout.filter-spans:not(.task-pane-open) > .controls { grid-column: 1 / -1; }
+main.tasks-layout.filter-spans:not(.task-pane-open) > .tasks-dock { grid-row: 2; }
 .tasks-dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 /* Without room for the dock (an open task, or below 1000px) only its message
    area stays, floating at the foot of the view (see below). */
@@ -1005,9 +1012,11 @@ main.tasks-layout.task-pane-open {
   grid-template-rows: auto minmax(0, 1fr);
   column-gap: 0;
 }
+/* The bar heads the list column; the resizer and the task start at the top,
+   level with it. */
 main.tasks-layout.task-pane-open > .col-tasks { grid-column: 1; grid-row: 2; }
-main.tasks-layout.task-pane-open > .task-pane-resizer { grid-column: 2; grid-row: 2; }
-main.tasks-layout.task-pane-open > .task-detail-pane { grid-column: 3; grid-row: 2; }
+main.tasks-layout.task-pane-open > .task-pane-resizer { grid-column: 2; grid-row: 1 / -1; }
+main.tasks-layout.task-pane-open > .task-detail-pane { grid-column: 3; grid-row: 1 / -1; }
 .task-pane-resizer { display: none; }
 main.tasks-layout.task-pane-open > .task-pane-resizer {
   display: block;

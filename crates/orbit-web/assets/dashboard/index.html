@@ -170,8 +170,9 @@
 
     <section class="tab-pane" data-tab="tasks">
       <main class="tasks-layout" id="tasks-main">
-        <!-- The filter bar spans the full width of the Tasks view, above the
-             list and the dock, and wraps only when the chips exceed it. -->
+        <!-- The filter bar heads the list column, level with the dock's tabs;
+             where the chips would wrap there but fit in fewer rows across
+             both columns, it spans the dock column too (log-tail.js). -->
         <div class="controls">
           <div id="task-filter" role="group" aria-label="Filter tasks"></div>
         </div>
