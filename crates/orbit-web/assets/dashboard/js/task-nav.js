@@ -671,10 +671,12 @@ export function syncTaskControls(context) {
   refreshChips(context);
 }
 
-// The current entry is a Tasks entry (the list or a full page), not another
-// destination that a search debounce outlived.
+// An empty hash is the default Tasks board, as on a bare dashboard load.
+// Explicit Tasks entries include the list and a full page; other destinations
+// keep their own entry when a search debounce outlives a tab switch.
 function onTasksEntry() {
-  return /^#tasks([/?]|$)/.test(window.location.hash || "");
+  const hash = window.location.hash || "";
+  return hash === "" || /^#tasks([/?]|$)/.test(hash);
 }
 
 // A filter change rewrites the current Tasks entry rather than pushing one, so
