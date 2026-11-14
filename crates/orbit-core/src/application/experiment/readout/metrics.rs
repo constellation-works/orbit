@@ -13,6 +13,7 @@ use super::model::{
     ReadoutMetric, SegmentEstimate,
 };
 use super::stats;
+use crate::application::statistics;
 
 pub(super) fn values<'a>(tasks: impl Iterator<Item = &'a TaskOutcome>, metric: &str) -> Vec<f64> {
     tasks
@@ -31,7 +32,7 @@ pub(super) fn estimate(label: &str, spec: &MetricSpec, values: &[f64]) -> Estima
             Estimate {
                 n,
                 mean: stats::mean(values),
-                mean_interval: stats::wilson(successes, n),
+                mean_interval: statistics::wilson_95(successes, n),
                 median: None,
                 median_interval: None,
                 successes: Some(successes),
@@ -40,9 +41,15 @@ pub(super) fn estimate(label: &str, spec: &MetricSpec, values: &[f64]) -> Estima
         Kind::Mean => Estimate {
             n,
             mean: stats::mean(values),
-            mean_interval: stats::bootstrap(&format!("{label}:mean"), values, stats::mean),
-            median: stats::median(values),
-            median_interval: stats::bootstrap(&format!("{label}:median"), values, stats::median),
+            mean_interval: stats::bootstrap(&format!("{label}:mean"), values, |sample| {
+                stats::mean(sample)
+            }),
+            median: statistics::median(&mut values.to_vec()),
+            median_interval: stats::bootstrap(
+                &format!("{label}:median"),
+                values,
+                statistics::median,
+            ),
             successes: None,
         },
         // A ratio is not a mean of per-task values. Callers use `ratio_estimate`.
