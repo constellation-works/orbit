@@ -147,7 +147,9 @@ impl OrbitRuntime {
             guard_work_start,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
-            Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
+            Some(_) => {
+                crate::runtime::context::trusted_write_identity(agent.as_deref(), model.as_deref())
+            }
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;

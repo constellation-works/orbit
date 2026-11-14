@@ -585,7 +585,7 @@ impl OwnerLocal {
         let owner = OrbitRuntime::from_roots_with_binding(
             &unbound.global_root(),
             &repo.join(".orbit"),
-            orbit_core::WorkspaceRuntimeBinding {
+            orbit_core::runtime::WorkspaceRuntimeBinding {
                 logical_workspace_id: workspace_id.clone(),
                 task_partition_id: workspace_id.clone(),
                 owner_machine_id: None,

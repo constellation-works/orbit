@@ -8,7 +8,8 @@
 
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};

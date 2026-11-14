@@ -7,10 +7,8 @@
 //! refused. [ORB-20158] An enabled one loads.
 
 use orbit_core::application::job::JobRunListParams;
-use orbit_core::{
-    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, OrbitRuntime,
-    TaskPriority, TaskStatus, TaskType,
-};
+use orbit_core::{AutoTaskAddParams, OrbitRuntime, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
 #[path = "auto_task_reuse.rs"]
@@ -584,7 +582,7 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
         let runtime = OrbitRuntime::from_roots_with_binding(
             &global,
             &repo.join(".orbit"),
-            orbit_core::WorkspaceRuntimeBinding {
+            orbit_core::runtime::WorkspaceRuntimeBinding {
                 logical_workspace_id: "ws_continuation".into(),
                 task_partition_id: "ws_continuation".into(),
                 owner_machine_id: None,

@@ -7,7 +7,7 @@ use orbit_types::task::{
 };
 
 use crate::application::contracts::CreationCrewAssignment;
-use crate::context::resolve_write_actor_label;
+use crate::runtime::context::resolve_write_actor_label;
 
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 

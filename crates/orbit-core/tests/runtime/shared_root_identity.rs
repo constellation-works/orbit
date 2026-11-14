@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::adapter::HubCoordinationExecutor;
-use orbit_core::{OrbitRuntime, ShipMode, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};

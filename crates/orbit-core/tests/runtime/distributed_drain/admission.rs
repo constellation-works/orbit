@@ -1139,7 +1139,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
                     .auto_task_add(orbit_core::AutoTaskAddParams {
                         name: format!("tool-routing-{}", held.len()),
                         description: "Preclaim requirement regression".into(),
-                        schedule: orbit_core::AutoTaskSchedule::every_minutes(60),
+                        schedule: orbit_types::workflow::AutoTaskSchedule::every_minutes(60),
                         template: serde_json::from_value(json!({
                             "title": "Automated tool requirement",
                             "description": "Same requirements as hand-authored work.",
@@ -1149,7 +1149,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
                             "complexity": "low", "status": "backlog",
                         }))
                         .unwrap(),
-                        dedupe: orbit_core::DedupePolicy::SkipIfOpen,
+                        dedupe: orbit_types::workflow::DedupePolicy::SkipIfOpen,
                     })
                     .unwrap();
                 let task = owner.auto_task_mint(&definition.name).unwrap();

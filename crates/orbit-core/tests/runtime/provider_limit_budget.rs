@@ -7,7 +7,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::telemetry::{
     InvocationTrace, ProviderLimitObservation, ProviderLimitSource, TokenUsage,

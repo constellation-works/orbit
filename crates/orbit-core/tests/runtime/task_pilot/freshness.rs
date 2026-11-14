@@ -258,7 +258,7 @@ fn bind_pr_ship_mode(workspace: &mut Workspace) {
     workspace.runtime = OrbitRuntime::from_roots_with_binding(
         &workspace.runtime.global_root(),
         &workspace.repo.join(".orbit"),
-        orbit_core::WorkspaceRuntimeBinding {
+        orbit_core::runtime::WorkspaceRuntimeBinding {
             logical_workspace_id: workspace_id.clone(),
             task_partition_id: workspace_id,
             owner_machine_id: None,

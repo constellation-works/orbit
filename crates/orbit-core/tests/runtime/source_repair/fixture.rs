@@ -2,7 +2,8 @@
 use crate::fixture_template::TreeTemplate;
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_store::contracts::JobRunStepParams;
 use orbit_types::task::{ExecutionLocation, ExternalRef};

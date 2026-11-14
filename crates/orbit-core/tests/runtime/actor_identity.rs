@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::context::ActorKind;
+use orbit_core::runtime::context::ActorKind;
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{Layer, layer::Context, prelude::*};

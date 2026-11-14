@@ -9,12 +9,12 @@ orbit_common::isolate_test_process!();
 use std::path::Path;
 
 use chrono::{Duration, Utc};
+use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{AutoTaskDefinition, OrbitRuntime};
 use orbit_types::task::{TaskArtifact, TaskStatus, TaskType};
-use orbit_types::workflow::{AutoTaskSchedule, SWEEP_CURSOR_ARTIFACT};
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, SWEEP_CURSOR_ARTIFACT};
 use serde_json::Value;
 
 const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[

@@ -11,9 +11,9 @@ use std::path::Path;
 
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus,
-    WorkspaceRuntimeBinding,
 };
 use orbit_engine::RuntimeHost;
 use orbit_tools::{ReservationOwnerContext, ToolContext};

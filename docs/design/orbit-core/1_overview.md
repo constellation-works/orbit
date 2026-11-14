@@ -320,9 +320,7 @@ moved the backlog forecast out of `task` to its own place in the order:
   `task/selector_match.rs`, exported as `task::task_selectors_contain_path`.
   Task listing and pilot no-diff scope checks call the task-owned helper,
   preserving exact and bidirectional containment, normalization, symbol
-  selectors and empty-path behavior. `search::task_selectors_contain_path`
-  remains an explicit compatibility re-export; retiring it after consumers
-  migrate is a follow-up [ORB-23016].
+  selectors and empty-path behavior.
 - **Notice closure.** `notice` sits outside the order, above `task`: it reads
   tasks for poster authority and linked-task status. A transition into done
   closes linked notices through `task::TaskNoticePort`

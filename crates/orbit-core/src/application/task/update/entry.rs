@@ -172,7 +172,7 @@ impl OrbitRuntime {
             TaskUpdateContext {
                 operator_decision_authority: agent.is_none()
                     && model.is_none()
-                    && self.actor().kind == crate::context::ActorKind::Human,
+                    && self.actor().kind == crate::runtime::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Lifecycle,
@@ -302,7 +302,7 @@ impl OrbitRuntime {
             TaskUpdateContext {
                 operator_decision_authority: agent.is_none()
                     && model.is_none()
-                    && self.actor().kind == crate::context::ActorKind::Human,
+                    && self.actor().kind == crate::runtime::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Forced,

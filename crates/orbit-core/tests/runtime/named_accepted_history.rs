@@ -9,13 +9,11 @@
 //! never "never accepted".
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{
-    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, OrbitRuntime,
-    TaskPriority, TaskStatus, TaskType,
-};
+use orbit_core::{AutoTaskAddParams, OrbitRuntime, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
     AUTO_TASK_ACCEPTED_HISTORY_SCHEMA_VERSION, AutoTaskAcceptedHistoryFile,
-    AutoTaskCompletionContract, AutoTaskCompletionReceipt, AutoTaskResultStatus, auto_task_tag,
+    AutoTaskCompletionContract, AutoTaskCompletionReceipt, AutoTaskResultStatus, AutoTaskSchedule,
+    AutoTaskTemplate, DedupePolicy, auto_task_tag,
 };
 use serde_json::Value;
 

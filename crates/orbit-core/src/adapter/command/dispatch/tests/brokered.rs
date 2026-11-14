@@ -371,7 +371,7 @@ fn bound_runtime(fixture: &Fixture) -> (OrbitRuntime, String) {
     let runtime = OrbitRuntime::from_roots_with_binding(
         &fixture.global_root,
         &fixture.workspace_root,
-        crate::WorkspaceRuntimeBinding {
+        crate::runtime::WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_run_own".to_string(),
             task_partition_id: partition.clone(),
             owner_machine_id: None,
