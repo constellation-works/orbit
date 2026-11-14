@@ -332,15 +332,19 @@ fn requests_write_sidecar(fields: &[String]) -> bool {
 }
 
 /// Whether the tool answered its request's single-field projection with the bare
-/// field value rather than a keyed object. `orbit.task.show` does for every field
-/// except `terminal`, which keeps its `{"terminal": …}` key. The field list uses
-/// the handler's `fields`-before-`field` precedence.
+/// field value rather than a keyed object. `orbit.task.show` does only for the
+/// `field` alias, for every field except `terminal`, which keeps its
+/// `{"terminal": …}` key. A `fields` array — which takes precedence over
+/// `field` — always answers keyed by field name, even for one field.
 pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<bool, OrbitError> {
     if tool_name != "orbit.task.show" {
         return Ok(false);
     }
+    if input.get("fields").is_some() {
+        return Ok(false);
+    }
     Ok(matches!(
-        optional_csv_or_string_list_alias(input, &["fields", "field"])?.as_deref(),
+        optional_csv_or_string_list_alias(input, &["field"])?.as_deref(),
         Some([field]) if field != "terminal"
     ))
 }
@@ -375,9 +379,9 @@ pub(crate) fn shape_tool_output(
     }
 
     if !fields.is_empty() {
-        // A single-field tool projection returns the raw value (`["comments"]`
-        // → the comments array). CLI `--fields` is an object-key filter, so
-        // re-wrap that value before selecting.
+        // A bare single-field tool projection returns the raw value (a
+        // `field`-alias `comments` → the comments array). CLI `--fields` is
+        // an object-key filter, so re-wrap that value before selecting.
         let output = wrap_single_field_value(output, fields, bare_field);
         let shaped = filter_top_level_fields(output, fields);
         ensure_write_sidecars_present(tool_name, fields, &shaped)?;

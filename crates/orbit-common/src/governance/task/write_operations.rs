@@ -80,7 +80,11 @@ const ADD_MODEL_PARAM: ParamSpec = cli_only(
 
 /// The response projection a write takes.
 pub(super) const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
-    mcp_only("fields", ParamType::StringList, "Response field names."),
+    mcp_only(
+        "fields",
+        ParamType::StringList,
+        "Response fields, keyed (even one).",
+    ),
     mcp_only("field", ParamType::String, "One response field."),
 ];
 

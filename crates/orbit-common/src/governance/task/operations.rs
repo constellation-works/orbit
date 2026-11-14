@@ -549,7 +549,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Field names to return; `delivery` is selected alone.",
+                    "Fields to return, keyed (even one); `delivery` alone.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,

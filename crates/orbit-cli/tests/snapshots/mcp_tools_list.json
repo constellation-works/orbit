@@ -408,7 +408,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Response field names."
+          "description": "Response fields, keyed (even one)."
         },
         "field": {
           "type": "string",
@@ -693,7 +693,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Field names to return."
+          "description": "Fields to return, keyed (even one)."
         },
         "field": {
           "type": "string",
@@ -906,7 +906,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Response field names."
+          "description": "Response fields, keyed (even one)."
         },
         "field": {
           "type": "string",

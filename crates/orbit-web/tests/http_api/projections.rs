@@ -370,7 +370,7 @@ fn assert_pilot_warnings(fixture: &Fixture, server: &Server, id: &str, expected:
             json!({"id": id, "fields": ["pilot_warnings"]}),
         )
         .unwrap();
-    check_eq!(&shown => expected; "field-scoped show pilot_warnings for {id}");
+    check_eq!(&shown["pilot_warnings"] => expected; "field-scoped show pilot_warnings for {id}");
     check_eq!(&show_task(fixture, id)["pilot_warnings"] => expected; "show pilot_warnings for {id}");
     check_eq!(&tool_row(&listed_tasks(fixture), id)["pilot_warnings"] => expected; "tool list pilot_warnings for {id}");
 }

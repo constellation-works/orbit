@@ -764,8 +764,10 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
     match render {
         Render::Notice { verb } => Ok(super::notice::render_notice(verb, value).into()),
         Render::TaskShow { fields } => {
-            // MCP structuredContent wraps arrays and scalars in objects. Undo
-            // only those envelopes for a bare single-field projection.
+            // The CLI's single-field JSON is the bare value. A current host
+            // keys a `fields` projection by field name, so unwrap that key;
+            // an older host's bare answer reaches here as MCP
+            // structuredContent's `items`/`value` envelope, so undo that too.
             let value = if matches!(fields.as_slice(), [field] if field != "terminal")
                 && value.as_object().is_some_and(|object| object.len() == 1)
             {
@@ -777,6 +779,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
                             .get("value")
                             .filter(|value| !value.is_object() && !value.is_array())
                     })
+                    .or_else(|| fields.first().and_then(|field| value.get(field)))
                     .cloned()
                     .unwrap_or(value)
             } else {

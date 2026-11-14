@@ -88,25 +88,41 @@ run's task in `review` (`rule`, `field`, `pattern`, `matched`, `run_id`, and
 still in that review; otherwise `null`. Approve the task to finish it.
 
 Show without a projection returns the full task. A projection returns only
-the requested fields as JSON: a single field returns its value, and multiple
-fields return an object keyed by field name. A single derived `terminal`
-selection remains keyed as `{"terminal": ...}`. It is read-only and reports
-whether the task refuses implementer writes.
+the requested fields, and its shape depends on the surface and on whether
+the names came from `fields` or from the `field` alias:
+
+- Over MCP (and `orbit tool run`), a `fields` array of any length returns an
+  object keyed by field name: `fields: ["status"]` returns
+  `{"status": "proposed"}` and `fields: ["artifacts"]` returns
+  `{"artifacts": [...]}`. Multiple fields return that same keyed object.
+- The `field` alias returns one field's bare value: `field: "status"`
+  returns `"proposed"` and `field: "artifacts"` returns a bare array. On
+  the MCP wire a bare non-object is carried as `{"value": ...}`, or as
+  `{"items": [...]}` for an array; that envelope is the transport's, not
+  the projection's.
+- A single derived `terminal` selection remains keyed as
+  `{"terminal": ...}` under both forms. It is read-only and reports
+  whether the task refuses implementer writes.
 
 On the CLI, `orbit task show --fields` takes the same names, repeated or
 comma-separated. Without `--json`, a single field prints its bare value and
-several fields print each under a `Field:` heading; with `--json`, the shapes
-above apply.
+several fields print each under a `Field:` heading. With `--json`, a single
+field returns its bare JSON value (`--fields status` returns `"proposed"`,
+`--fields artifacts` returns a bare array; `terminal` alone stays keyed as
+above) and several fields return an object keyed by field name, whether the
+task was read locally or from another host.
 
 Write responses without a projection omit the append-heavy `comments` and
 `history`; request those fields explicitly when needed. Write projections
-use the same field catalogue above.
+use the same field catalogue and the same shapes above: a `fields` array
+keys even one field by name, and the `field` alias returns its bare value.
 
 A write response may also carry optional `warnings` metadata. It is not a task
 field: `warnings` is absent when empty, is attached to every object response
-(including a projection of more than one field), and is refused as a `fields`
-selector. A single-field projection such as `fields: ["id"]` returns the bare
-value and cannot carry it, so omit `fields` on the write when warnings matter.
+(including a one-field `fields` projection), and is refused as a `fields`
+selector. A bare single-field projection such as `field: "id"` returns the
+bare value and cannot carry it, so use `fields` or omit the projection on
+the write when warnings matter.
 
 `crew` selects execution; work only a human can do (credentials, approvals,
 physical access, operator-only decisions) sets it to the human-kind crew

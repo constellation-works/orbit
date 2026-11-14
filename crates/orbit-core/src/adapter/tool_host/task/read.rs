@@ -109,12 +109,8 @@ impl OrbitRuntime {
                     "application task reads are limited to the application task.show fields".into(),
                 ));
             }
-            let projected = super::super::json::task_fields_to_json(self, &task, &fields)?;
-            if fields.as_slice() == ["terminal"] {
-                serde_json::json!({ "terminal": projected })
-            } else {
-                projected
-            }
+            // `fields` is an array here, so even one field stays keyed.
+            super::super::json::task_fields_to_json(self, &task, &fields, true)?
         } else {
             let path = string("path")?;
             validate_relative_artifact_path(path)
