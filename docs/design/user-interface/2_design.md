@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Design"
 owner: gemini
 last_updated: 2026-11-14
-last_validated: 2026-11-11
+last_validated: 2026-11-14
 status: Draft
 feature: user-interface
 doc_role: design
@@ -378,27 +378,29 @@ Under **All workspaces** it inserts **Fleet** immediately after **Drain**, with
 `fleet` supported in the remembered dock mode and `#tasks?dock=fleet`.
 It stays beside the task list and gives way to an open task. Below 1000px the
 list keeps the full width, so the dock is not beside it. An explicit dock route
-(`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain or Log
-link, or the bottom log bar) shows the dock in place of the list at that width:
+(`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain, Log or
+Notices link, `#notices`, or the bottom log bar) shows the dock in place of the list at that width:
 its tabs sit directly under the top nav. The rail's **Tasks** item returns to
 the list, dropping only `dock=` from the hash and keeping the list's filters.
 From any other destination, or a full task page, the rail's **Tasks** item
 reopens the list with the filter it was left on (status chips, More filters and
 search), not the default set; it does not reopen an open task. A bare `#tasks`
 on a fresh load still shows the default set.
-Any Tasks route without `dock=` shows the list again. The rail marks Drain rather than Tasks while the dock stands in for the
-list. The dock route is how a phone drives a drain: its tabs and drain controls
+Any Tasks route without `dock=` shows the list again. The rail marks Drain rather than Tasks while the Drain dock route stands in for the
+list. A Log or Notices dock route keeps Tasks marked. The dock route is how a phone drives a drain: its tabs and drain controls
 are 44px targets, Stop and Start stick to the foot of the scrolling pane, and a
 live window folds the Start form behind **Start another window**, so state, Stop
-and warnings lead. The log scrolls within 70% of the viewport height there. Drain contains the Auto-drain status card
+and warnings lead. The log and the notices list scroll within 70% of the viewport height there. Drain contains the Auto-drain status card
 and a simple **Start a window** card. Retired Locks held links and remembered
 dock modes open Drain. Backlog readiness still names holding tasks, and each
 task detail lists its own context files and lock contention. Log is the live,
-filterable tail; its tab names the worst level present. The active tab's
-first card (Auto-drain on Drain or the log) starts level with the
+filterable tail; its tab names the worst level present. Notices, after Log,
+lists open notices and those closed or expired in the last 24 hours, and names
+the open count when it is above zero. The active tab's
+first card (Auto-drain on Drain, the log, or the notices list) starts level with the
 first task block, with the tab bar above that line. The outer dock ends with
 the list; this bottom alignment applies to the dock, not every card. Auto-drain
-keeps its natural height, while the Log panel fills its pane.
+keeps its natural height, while the Log and Notices panels fill their panes.
 The first cards share the same depth below the tabs, so switching views
 keeps the shared tab strip and content viewport fixed. Drain action and state
 feedback belongs only to Drain: it remains in that scrollable pane when
@@ -559,10 +561,10 @@ WORK › **Leases** (`#leases`) is the read-only view of the workspace's path le
 
 ## 9c. Notices
 
-WORK › **Notices** (`#notices`) is built around reading a notice first and acting on it on demand [ORB-22369]. It reads `GET /api/notices`, the same payload as the banner over every view, and adds no fields.
+The Tasks dock's **Notices** tab, after Log, is built around reading a notice first and acting on it on demand [ORB-22369] [ORB-24808]. `#notices` opens Tasks with that tab selected, including the fleet-notice banner's link. It reads `GET /api/notices`, the same payload as the banner over every view, and adds no fields. The tab shows the open-notice count, in the Log tab's state style, only when that count is above zero.
 
 - **One list.** Open notices appear first. Recently closed notices (closed or expired in the last 24 hours) follow under a `Recently closed (N)` heading when present. An empty list is one line.
-- **One row per notice.** Severity leads, then title, scope and one time: when the notice lapses if that is within a day, otherwise its age, or for an ended notice when it ended. Incidents sort first in either list, then maintenance, then info, keeping the server's order within a severity. A title that does not fit is cut on the row and shown whole once open; at phone width the row is two lines and the title wraps.
+- **One row per notice.** The dock is narrow, so every row is two lines: severity, scope and one time on the first (when the notice lapses if that is within a day, otherwise its age, or for an ended notice when it ended), then the title, which wraps. Incidents sort first in either list, then maintenance, then info, keeping the server's order within a severity. A scope or time that does not fit is cut. Close stays on the first line.
 - **Open on demand.** The row opens the body, when it opened and who posted it, its expiry, more than one report, the linked task and how an ended notice ended.
 - **Close asks only when chosen.** Close is a row action; choosing it opens the row with one reason input and moves focus there. Escape or Cancel steps back. A refused close stays on the row with the server's words and the typed reason, and a refresh keeps a half-typed reason.
 - **Posting is a dialog.** Title, severity and body come first. Severity defaults to info, the kind that raises no banner, so an accidental post disturbs nobody. Scope, linked task and expiry fold under Options, whose summary states the defaults; left alone they are this workspace, no task and the server's default expiry for the severity. Escape keeps the draft and Cancel discards it; a refused post stays open with its reason.
@@ -608,6 +610,7 @@ Targeted axe scans cover contrast and scroll-region focus on the affected routes
 - [ORB-15923] split Observe into Health (Incidents with Incidents | Events | Errors, Doctor) and Analytics (Metrics, Reliability with Pipeline | Tools, Codebase, Cost), removed the Audit tab, moved the denial badge to Health, and deleted the old `#audit…` and moved Health hashes without aliases.
 
 - [ORB-22369] redesigned the Notices view around reading and acting on a notice: one list with an Open and Recently closed switch, one severity-led row per notice, a close reason asked only once Close is chosen, and a post dialog.
+- [ORB-24808] moved that list from its own rail page into the Tasks dock, after Log. `#notices` opens Tasks with the Notices tab selected, and the tab shows the open count when it is above zero.
 - [ORB-18555] added the read-only Leases view: active and queued path leases by path with their holders, and recent `overlap_landed` notices.
 - [ORB-12738] added the read-only Plugins tab: installed-plugin state, the generic `kv`/`table`/`markdown`/`json` panel renderer, and link tiles.
 - [ORB-16517] cleared operation success messages across the dashboard after 60 seconds while preserving submission warning lines until subsequent operator actions.

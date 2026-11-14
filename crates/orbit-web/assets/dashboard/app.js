@@ -1582,6 +1582,8 @@ function activeRefreshJobs({ poll = false } = {}) {
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
     if (includeRunningRuns) add("Running runs", fetchRunningRuns(activeRunsRequest));
+    // The Notices list lives in the Tasks dock, so it refreshes with Tasks.
+    add("Notices", fetchAndRenderNotices({ shareRecent: poll }));
     return jobs;
   }
 
@@ -1663,11 +1665,6 @@ function activeRefreshJobs({ poll = false } = {}) {
     // so a refused notice read (a replica checkout) leaves the leases shown.
     add("Leases", fetchAndRenderLeases());
     add("Leases › Landings", fetchAndRenderLeaseLandings());
-    return jobs;
-  }
-
-  if (activeTab === "notices") {
-    add("Notices", fetchAndRenderNotices({ shareRecent: poll }));
     return jobs;
   }
 

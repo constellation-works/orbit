@@ -1,4 +1,4 @@
-// Notices view and the fleet-notice banner.
+// Notices dock tab and the fleet-notice banner.
 //
 // Reads `GET /api/notices` (open notices plus the last 24h of closed and
 // expired ones) and writes through `POST /api/notices` and
@@ -7,12 +7,13 @@
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
 //
-// The page is one list: open notices first, then recently closed ones under
-// a "Recently closed" heading. A row scans as severity, title, scope and age
-// or expiry; its body opens from the row, and Close asks for its reason only
-// once chosen. Posting is a modal dialog with title, severity and body up front.
+// The list lives in the Tasks dock, after Log: open notices first, then
+// recently closed ones under a "Recently closed" heading. A row scans as
+// severity, title, scope and age or expiry; its body opens from the row,
+// and Close asks for its reason only once chosen. Posting is a modal dialog
+// with title, severity and body up front. `#notices` opens this tab.
 
-import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, makeRowDisclosure, onWorkspaceChange, relativeTime, requestJson, requestPanel, syncNodes } from './common.js';
+import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, makeRowDisclosure, onWorkspaceChange, pinnedInfoHint, relativeTime, requestJson, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -21,7 +22,7 @@ function noticesPath() {
   return isAggregateView() ? "/api/notices?workspace=all" : "/api/notices";
 }
 
-// One /api/notices read serves the banner, the rail count and the Notices
+// One /api/notices read serves the banner, the dock count and the Notices
 // panel, which all render from the same payload. Concurrent callers always
 // join the read in flight. Scheduled polls may also reuse a completed read
 // for half the 30s poll interval, so the banner and panel share one request
@@ -84,9 +85,13 @@ function noticeLink(notice) {
   return link;
 }
 
-function setRailNoticeCount(count) {
-  const railCount = $("rail-count-notices");
-  if (railCount) railCount.textContent = count ? String(count) : "";
+// The Log tab's state pill: a count only while it is above zero, so an empty
+// span drops the pill. The rail button that used to carry this count is gone.
+function setDockNoticeCount(count) {
+  const state = $("dock-notices-state");
+  if (!state) return;
+  const open = Number.isFinite(count) ? count : 0;
+  state.textContent = open > 0 ? `${open} open` : "";
 }
 
 function hideNoticeBanner() {
@@ -96,18 +101,18 @@ function hideNoticeBanner() {
   banner.replaceChildren();
 }
 
-// The banner and its rail count belong to the workspace visit that read them.
+// The banner and its dock count belong to the workspace visit that read them.
 // A scope switch clears both, so a read still in flight for the previous scope
 // cannot restore them, and a failed read for the new scope shows none of them.
 onWorkspaceChange(() => {
-  setRailNoticeCount(0);
+  setDockNoticeCount(0);
   hideNoticeBanner();
 });
 
 export function renderNoticeBanner(payload) {
   const banner = $("notice-banner");
   if (!banner) return;
-  setRailNoticeCount(Array.isArray(payload?.open) ? payload.open.length : 0);
+  setDockNoticeCount(Array.isArray(payload?.open) ? payload.open.length : 0);
   const notices = Array.isArray(payload?.banner) ? payload.banner : [];
   if (!notices.length) {
     hideNoticeBanner();
@@ -495,8 +500,16 @@ function wirePostDialog() {
     resetDraft();
     dialog.close();
   });
+  // `#notices` is rewritten to `#tasks?dock=notices` without a second event,
+  // and a dock switch uses replaceState. Close once the Tasks pane is no
+  // longer showing the Notices tab.
+  const noticesDockShown = () => Boolean(
+    document.querySelector('.tab-pane[data-tab="tasks"].active') && $("side-dock")?.dataset.mode === "notices",
+  );
   window.addEventListener("hashchange", () => {
-    if (dialog.open && !window.location.hash.startsWith("#notices")) dialog.close();
+    queueMicrotask(() => {
+      if (dialog.open && !noticesDockShown()) dialog.close();
+    });
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -533,7 +546,7 @@ function wirePostDialog() {
   });
 }
 
-// The heading's info hint, the Post control and the dialog are static page
+// The heading's info hint, the Post control and the dialog are static dock
 // furniture: wired once, before the first read so they answer even when that
 // read fails. Later renders only update the Post control's state.
 let noticesPageWired = false;
@@ -541,8 +554,9 @@ let noticesPageWired = false;
 function wireNoticesPage() {
   if (noticesPageWired) return;
   noticesPageWired = true;
-  $("notices-hint-slot")?.append(infoHint(PAGE_HINT));
+  $("notices-hint-slot")?.append(pinnedInfoHint(PAGE_HINT));
   const button = el("button", { class: "action save notice-post-toggle", text: "Post", type: "button", id: "notices-post-toggle" });
+  button.setAttribute("aria-label", "Post a notice");
   button.setAttribute("aria-haspopup", "dialog");
   button.disabled = true;
   $("notices-post-slot")?.append(button);
@@ -557,8 +571,8 @@ function syncPostControl(payload, canWrite) {
   const refusal = payload?.can_write === true ? WORKSPACE_REQUIRED : OPERATOR_REQUIRED;
   const hint = slot.querySelector(".info-hint");
   if (canWrite) hint?.remove();
-  else if (!hint) slot.append(infoHint(refusal));
-  else if (hint.textContent !== refusal) hint.replaceWith(infoHint(refusal));
+  else if (!hint) slot.append(pinnedInfoHint(refusal));
+  else if (hint.textContent !== refusal) hint.replaceWith(pinnedInfoHint(refusal));
   const dialog = $("notices-post-dialog");
   if (!canWrite && dialog?.open) dialog.close();
 }

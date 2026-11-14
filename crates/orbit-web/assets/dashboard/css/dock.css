@@ -1,4 +1,4 @@
-/* Tasks dock: Drain, Fleet and Log. */
+/* Tasks dock: Drain, Fleet, Log and Notices. */
 
 /* The view host: the tabs, then one view. */
 #side-dock {
@@ -46,8 +46,8 @@
 .dock-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) { .dock-seg { transition: none; } }
 
-/* The worst log level present, as a small tinted pill. */
-.dock-seg .dock-log-state:not(:empty) {
+/* A count, or the worst log level, as a small tinted pill. Empty text hides it. */
+.dock-seg .dock-seg-count:not(:empty) {
   padding: 1px 7px;
   border-radius: 10px;
   background: var(--warn-wash);
@@ -60,6 +60,7 @@
 .dock-pane { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 12px; }
 #side-dock[data-mode="drain"] .dock-pane[data-pane="drain"] { display: flex; }
 #side-dock[data-mode="log"] .dock-pane[data-pane="log"] { display: flex; }
+#side-dock[data-mode="notices"] .dock-pane[data-pane="notices"] { display: flex; overflow: hidden; }
 
 .dock-pane > .panel {
   flex: 1 1 auto;

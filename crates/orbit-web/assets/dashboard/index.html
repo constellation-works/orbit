@@ -85,7 +85,6 @@
           <a class="tab rail-drain" id="rail-drain" href="#tasks?dock=drain" draggable="false" aria-label="Drain"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v9M6.5 8.5 10 12l3.5-3.5M3.5 16.5h13"/></svg><span class="rail-label">Drain</span><span class="rail-count rail-drain-state" id="rail-drain-state" hidden></span></a>
           <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span><span class="rail-count alert" id="rail-count-jobs-failing" hidden></span></button>
           <button class="tab" data-tab="leases" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="9" width="10" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span class="rail-label">Leases</span></button>
-          <button class="tab" data-tab="notices" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5.5 2 6H3c.5-.5 2-2 2-6M8.5 17a1.5 1.5 0 0 0 3 0"/></svg><span class="rail-label">Notices</span><span class="rail-count" id="rail-count-notices"></span></button>
           </div>
 
           <div class="rail-group">
@@ -204,9 +203,10 @@
           </div>
           <div class="col-log" id="side-dock" data-home="tasks" data-mode="drain">
             <div class="dock-head">
-              <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
+              <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Dock views">
                 <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Drain</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
-                <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
+                <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-seg-count dock-log-state"></span></button>
+                <button type="button" role="tab" class="dock-seg" id="dock-tab-notices" data-mode="notices" aria-selected="false" aria-controls="dock-pane-notices" tabindex="-1">Notices <span id="dock-notices-state" class="dock-seg-count"></span></button>
               </div>
             </div>
             <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
@@ -260,6 +260,24 @@
                 </div>
                 <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
                   <div class="inner" id="logInner"></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="dock-pane" id="dock-pane-notices" role="tabpanel" aria-labelledby="dock-tab-notices" data-pane="notices">
+              <section class="panel" id="notices-panel">
+                <header>
+                  <span class="notices-head-title">
+                    <h2 class="visually-hidden">Notices</h2>
+                    <span id="notices-hint-slot"></span>
+                  </span>
+                  <span class="notices-head-actions" id="notices-post-slot"></span>
+                </header>
+                <div class="body" id="notices-body" role="region" aria-label="Notices">
+                  <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row" style="width: 80%"></div>
+                  </div>
                 </div>
               </section>
             </div>
@@ -883,61 +901,6 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="notices" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <main class="notices-layout">
-        <section class="panel" id="notices-panel">
-          <header>
-            <span class="notices-head-title">
-              <span>Notices</span>
-              <span id="notices-hint-slot"></span>
-            </span>
-            <span class="notices-head-actions" id="notices-post-slot"></span>
-          </header>
-          <div class="body" id="notices-body" role="region" aria-label="Notices">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-              <div class="skeleton skeleton-row"></div>
-              <div class="skeleton skeleton-row" style="width: 80%"></div>
-            </div>
-          </div>
-        </section>
-      </main>
-      <!-- Posting is a modal dialog in the top layer. Severity defaults to the one
-           kind that raises no banner, and the options keep the server's defaults. -->
-      <dialog id="notices-post-dialog" class="notice-post" aria-labelledby="notices-post-heading">
-        <h3 id="notices-post-heading">Post a notice</h3>
-        <form id="notices-post-form">
-          <label for="notices-post-title">Title</label>
-          <input id="notices-post-title" class="notice-post-title" required maxlength="120" autocomplete="off" />
-          <fieldset class="notice-post-severity">
-            <legend>Severity</legend>
-            <label><input type="radio" name="notices-post-kind" value="incident" /> Incident</label>
-            <label><input type="radio" name="notices-post-kind" value="maintenance" /> Maintenance</label>
-            <label><input type="radio" name="notices-post-kind" value="info" checked /> Info</label>
-          </fieldset>
-          <label for="notices-post-body">Body</label>
-          <textarea id="notices-post-body" class="notice-post-body" rows="4"></textarea>
-          <details class="notice-post-options" id="notices-post-options">
-            <summary>Options <span id="notices-post-summary"></span></summary>
-            <div class="notice-post-option-fields">
-              <label for="notices-post-scope">Scope</label>
-              <select id="notices-post-scope" class="notice-post-scope">
-                <option value="workspace">This workspace</option>
-                <option value="global">Global</option>
-              </select>
-              <label for="notices-post-linked">Linked task</label>
-              <input id="notices-post-linked" class="notice-post-linked" autocomplete="off" />
-              <label for="notices-post-expires">Expires in hours</label>
-              <input id="notices-post-expires" class="notice-post-expires" type="number" min="1" placeholder="Default" />
-            </div>
-          </details>
-          <p id="notices-post-feedback" class="notice-feedback" role="status" aria-live="polite"></p>
-          <div class="notice-post-actions">
-            <button type="submit" id="notices-post-submit" class="action save">Post notice</button>
-            <button type="button" id="notices-post-cancel" class="action cancel">Cancel</button>
-          </div>
-        </form>
-      </dialog>
-    </section>
     <section class="tab-pane" data-tab="plugins" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- One generic surface for every installed plugin: its state, the
            panels its manifest declares, and its link tiles. No plugin ships
@@ -1000,6 +963,43 @@
       <button type="button" class="sb-open" id="log-statusbar-open">Open log</button>
     </div>
     <div id="gantt-tooltip" role="tooltip" aria-hidden="true"></div>
+    <!-- Posting is a modal dialog in the top layer, outside the dock pane so a
+         hidden tab cannot keep it from opening. Severity defaults to the one
+         kind that raises no banner, and the options keep the server's defaults. -->
+    <dialog id="notices-post-dialog" class="notice-post" aria-labelledby="notices-post-heading">
+      <h3 id="notices-post-heading">Post a notice</h3>
+      <form id="notices-post-form">
+        <label for="notices-post-title">Title</label>
+        <input id="notices-post-title" class="notice-post-title" required maxlength="120" autocomplete="off" />
+        <fieldset class="notice-post-severity">
+          <legend>Severity</legend>
+          <label><input type="radio" name="notices-post-kind" value="incident" /> Incident</label>
+          <label><input type="radio" name="notices-post-kind" value="maintenance" /> Maintenance</label>
+          <label><input type="radio" name="notices-post-kind" value="info" checked /> Info</label>
+        </fieldset>
+        <label for="notices-post-body">Body</label>
+        <textarea id="notices-post-body" class="notice-post-body" rows="4"></textarea>
+        <details class="notice-post-options" id="notices-post-options">
+          <summary>Options <span id="notices-post-summary"></span></summary>
+          <div class="notice-post-option-fields">
+            <label for="notices-post-scope">Scope</label>
+            <select id="notices-post-scope" class="notice-post-scope">
+              <option value="workspace">This workspace</option>
+              <option value="global">Global</option>
+            </select>
+            <label for="notices-post-linked">Linked task</label>
+            <input id="notices-post-linked" class="notice-post-linked" autocomplete="off" />
+            <label for="notices-post-expires">Expires in hours</label>
+            <input id="notices-post-expires" class="notice-post-expires" type="number" min="1" placeholder="Default" />
+          </div>
+        </details>
+        <p id="notices-post-feedback" class="notice-feedback" role="status" aria-live="polite"></p>
+        <div class="notice-post-actions">
+          <button type="submit" id="notices-post-submit" class="action save">Post notice</button>
+          <button type="button" id="notices-post-cancel" class="action cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
     <script type="module" src="/static/app.js"></script>
   </body>
 </html>

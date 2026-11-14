@@ -111,13 +111,14 @@
 .rail-drain-state[hidden] { display: none; }
 .rail-drain-state[data-drain-state="winding_down"], .rail-drain-state.held { color: var(--warn-fg); }
 .rail-drain-state[data-drain-state="pulling"] { color: var(--accent); }
-/* Without room beside the list, a dock route stands in for it, so the rail marks
-   Drain and not Tasks. Keep these in step with .rail .tab.active above. */
+/* Without room beside the list, the Drain dock route stands in for it, so the
+   rail marks Drain and not Tasks. Log and Notices keep Tasks marked: the dock
+   is still the Tasks view. Keep these in step with .rail .tab.active above. */
 @media (max-width: 1000px) {
-  .shell:has(.tab-pane.active > main.dock-route) .rail .tab.active[data-tab="tasks"] { background: transparent; color: var(--fg-soft); font-weight: 400; }
-  .shell:has(.tab-pane.active > main.dock-route) .rail .tab.active[data-tab="tasks"] .rail-ico { color: var(--fg-dim); }
-  .shell:has(.tab-pane.active > main.dock-route) .rail .rail-drain { background: var(--bg-selected); color: var(--fg-strong); font-weight: 500; }
-  .shell:has(.tab-pane.active > main.dock-route) .rail .rail-drain .rail-ico { color: var(--accent); }
+  .shell:has(main.dock-route):has(#side-dock[data-mode="drain"]) .rail .tab.active[data-tab="tasks"] { background: transparent; color: var(--fg-soft); font-weight: 400; }
+  .shell:has(main.dock-route):has(#side-dock[data-mode="drain"]) .rail .tab.active[data-tab="tasks"] .rail-ico { color: var(--fg-dim); }
+  .shell:has(main.dock-route):has(#side-dock[data-mode="drain"]) .rail .rail-drain { background: var(--bg-selected); color: var(--fg-strong); font-weight: 500; }
+  .shell:has(main.dock-route):has(#side-dock[data-mode="drain"]) .rail .rail-drain .rail-ico { color: var(--accent); }
 }
 
 .rail-ico { width: 17px; height: 17px; flex: 0 0 auto; color: var(--fg-dim); }

@@ -175,7 +175,7 @@
 .log-live { display: inline-flex; align-items: center; gap: 6px; }
 .log-live .live-dot { background: var(--status-done); box-shadow: none; }
 #side-dock.disconnected .log-live { color: var(--status-blocked); }
-.dock-log-state { color: var(--warn-fg); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.dock-seg-count { color: var(--warn-fg); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .dock-log-state[data-level="err"] { color: var(--danger-fg); }
 .dock-log-state[data-level="deny"] { color: var(--status-review); }
 .log-foot {
