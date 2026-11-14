@@ -16,20 +16,11 @@
 // still-running strip share one x-axis and one hover cursor.
 
 import {
-  el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
+  el, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
-
-// `el` from common.js, also applying the table and focus attributes it leaves out.
-function el(tag, opts = {}, children = []) {
-  const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex"]) {
-    if (opts[name] != null) node.setAttribute(name, String(opts[name]));
-  }
-  return node;
-}
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const GIB = 1024 ** 3;

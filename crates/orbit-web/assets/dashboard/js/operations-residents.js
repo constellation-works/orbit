@@ -29,17 +29,6 @@ function resetUiFor(visit) {
   Object.assign(ui, { revision: visit.revision, payload: null, selected: null, startForm: null, pending: null });
 }
 
-// `el` sets only class, text, title, role, type and aria-*; form controls
-// also need their name, value and constraints.
-const EL_HANDLED = new Set(["id", "class", "text", "title", "style", "role", "type"]);
-function node(tag, attrs = {}, children = []) {
-  const made = el(tag, attrs, children);
-  for (const [name, value] of Object.entries(attrs)) {
-    if (value == null || EL_HANDLED.has(name) || name.startsWith("aria-")) continue;
-    made.setAttribute(name, String(value));
-  }
-  return made;
-}
 
 function fact(label, value) {
   return el("div", { class: "resident-fact" }, [
@@ -113,14 +102,14 @@ function field(label, control, hint) {
 }
 
 function input(name, attrs = {}) {
-  return node("input", { name, type: "text", ...attrs });
+  return el("input", { name, type: "text", ...attrs });
 }
 
 function rightBoxes(prefix, legend, checked = []) {
   return el("fieldset", { class: "resident-rights" }, [
     el("legend", { text: legend }),
     ...RIGHTS.map(right => {
-      const box = node("input", { type: "checkbox", name: `${prefix}-${right}`, value: right });
+      const box = el("input", { type: "checkbox", name: `${prefix}-${right}`, value: right });
       box.checked = checked.includes(right);
       return el("label", { class: "resident-right" }, [box, el("span", { text: right })]);
     }),
@@ -194,29 +183,29 @@ function routineNote(payload) {
 }
 
 function startForm(payload) {
-  const crew = node("select", { name: "crew" }, (payload.crews || []).map(name => {
-    const option = node("option", { value: name, text: name });
+  const crew = el("select", { name: "crew" }, (payload.crews || []).map(name => {
+    const option = el("option", { value: name, text: name });
     option.selected = name === payload.default_crew;
     return option;
   }));
-  const continuity = node("select", { name: "continuity" }, [
-    node("option", { value: "prefer", text: "prefer" }),
-    node("option", { value: "off", text: "off" }),
+  const continuity = el("select", { name: "continuity" }, [
+    el("option", { value: "prefer", text: "prefer" }),
+    el("option", { value: "off", text: "off" }),
   ]);
-  const complexity = node("select", { name: "complexity" }, ["low", "medium", "hard", "xhard"].map(level => {
-    const option = node("option", { value: level, text: level });
+  const complexity = el("select", { name: "complexity" }, ["low", "medium", "hard", "xhard"].map(level => {
+    const option = el("option", { value: level, text: level });
     option.selected = level === "medium";
     return option;
   }));
   const submit = el("button", { class: "operation-button primary", type: "submit", text: "Start resident" });
   const cancel = button("Cancel", "Cancel starting a resident");
   const status = el("p", { class: "resident-start-status", role: "status", "aria-live": "polite" });
-  const form = node("form", { class: "resident-form resident-start", "aria-label": "Start a resident" }, [
+  const form = el("form", { class: "resident-form resident-start", "aria-label": "Start a resident" }, [
     el("h3", { class: "resident-start-title", text: "Start a resident" }),
     el("fieldset", { class: "resident-step" }, [
       el("legend", { text: "1 · What it should do" }),
       field("Goal", input("goal", { maxlength: "240", required: "", placeholder: "One line: what the resident keeps true" })),
-      field("Exit criteria", node("textarea", { name: "exit_criteria", rows: "3" }), "One per line, 1–8."),
+      field("Exit criteria", el("textarea", { name: "exit_criteria", rows: "3" }), "One per line, 1–8."),
       field("Watch tags", input("watch_tags"), "Comma-separated."),
       field("Watch tasks", input("watch_tasks"), "Comma-separated task ids."),
     ]),
@@ -501,7 +490,7 @@ function authorityForm(payload, mandate) {
   const quote = input("quote", { placeholder: "Your words, kept with the grant" });
   const grant = button("Widen", `Widen ${mandate.task_id}`);
   const narrow = button("Narrow", `Narrow ${mandate.task_id}`);
-  const form = node("form", { class: "resident-form resident-authority-form", "aria-label": `Authority for ${mandate.task_id}` }, [
+  const form = el("form", { class: "resident-form resident-authority-form", "aria-label": `Authority for ${mandate.task_id}` }, [
     el("div", { class: "resident-authority-column" }, [
       grantRights,
       field("Add workspaces", input("workspaces"), "Comma-separated."),
@@ -606,7 +595,7 @@ function composer(payload, mandate, action) {
     if (ui.pending) ui.pending.text = text.value;
     confirm.disabled = unavailable || !text.value.trim();
   });
-  const form = node("form", { class: "resident-composer", "aria-label": `${spec.label} ${mandate.task_id}` }, [
+  const form = el("form", { class: "resident-composer", "aria-label": `${spec.label} ${mandate.task_id}` }, [
     el("span", { class: "resident-field-label", text: spec.ask }),
     el("div", { class: "resident-control" }, [text, gated(payload, "resident_write", confirm), cancel]),
   ]);

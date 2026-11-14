@@ -725,6 +725,7 @@
         "log_format/tests/scan.rs::post_window_errors_do_not_consume_the_match_budget_or_advance_coverage",
         "log_format/tests/scan.rs::rejected_lines_build_no_value",
         "log_format/tests/scan.rs::segments_last_written_before_the_window_are_not_opened",
+        "tests/dashboard_assets.rs::dashboard_common_el_applies_all_attributes_without_allow_list",
         "tests/dashboard_assets.rs::dashboard_markdown_call_sites_use_sanitizing_wrapper",
         "tests/dashboard_assets.rs::dashboard_task_create_keeps_uncertain_submission_on_retry_authorization_refusal",
         "tests/host_tunnels.rs::a_dead_child_is_replaced_by_the_next_request",
