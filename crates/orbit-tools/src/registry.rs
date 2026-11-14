@@ -338,6 +338,10 @@ impl ToolRegistry {
             && name != "orbit.task.pull"
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
+            // Guarded writes own their input contract (ORB-24434): a field
+            // outside the guarded set must name the selector that chose the
+            // mode, so the handler's refusal runs instead of this generic one.
+            && !is_guarded_task_write(name, &input)
         {
             let aliases = declared_aliases(name);
             let retired_fields = declared_retired_fields(name);
@@ -593,6 +597,18 @@ fn spec_aliases<V>(
             .flat_map(|spec| spec.wire_params())
             .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias))),
     );
+}
+
+/// A guarded task write owns its input contract, so the registry must not
+/// refuse its unknown fields first: the handler names the selector that chose
+/// the mode (ORB-24434).
+fn is_guarded_task_write(name: &str, input: &Value) -> bool {
+    if name != "orbit.task.add" && name != "orbit.task.update" {
+        return false;
+    }
+    ["request_id", "expected_revision", "verdict", "complete"]
+        .iter()
+        .any(|key| input.get(*key).is_some())
 }
 
 /// Retired names that must reach `OperationSpec::parse_input`.
