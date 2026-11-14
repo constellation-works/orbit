@@ -4,7 +4,7 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410]
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410, ORB-24411]
 last_validated: 2026-11-14
 ---
 
@@ -1410,6 +1410,15 @@ Store schema v89 adds two partial indexes on `task_reservations`:
 `(workspace_orbit_dir, expires_at) WHERE released_at IS NULL`. Active lock,
 lease and claim reads use them. The migration is index-only, so older binaries
 keep reading and writing and it waits for nothing.
+
+## Execution-claim indexes (schema v90)
+
+Store schema v90 adds partial expression indexes on coordination rows: one by
+claim task, one over claims whose phase still protects a footprint (`claimed`,
+`running`, `handed_off`, `repair_pending`), and three on lifecycle rows (claim
+task, admission run, and bound leaf run). Task writes and footprint checks use
+them. The migration is index-only, so older binaries keep reading and writing
+and it waits for nothing.
 
 ## Verify the upgrade
 

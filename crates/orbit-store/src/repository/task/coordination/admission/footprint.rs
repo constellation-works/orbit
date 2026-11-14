@@ -16,7 +16,7 @@ impl TaskCommitBoundary {
         if status != TaskStatus::InProgress {
             return Ok(());
         }
-        let claims = self.execution_claims()?;
+        let claims = self.footprint_protecting_claims()?;
         if claims.is_empty() {
             return Ok(());
         }
@@ -54,7 +54,7 @@ impl TaskCommitBoundary {
     ) -> Result<Vec<TaskLockConflict>, OrbitError> {
         let lock_modes = self.store.footprint_lock_modes();
         Ok(self
-            .execution_claims()?
+            .footprint_protecting_claims()?
             .iter()
             .filter(|claim| claim.phase.protects_footprint())
             .flat_map(|claim| {

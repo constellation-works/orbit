@@ -21,6 +21,8 @@ mod lookup;
 mod refusal;
 mod retention;
 
+#[cfg(test)]
+pub(super) use lookup::{claim_decodes, reset_claim_decodes};
 pub use refusal::admission_refusal;
 
 /// The in-section re-check of assessment-scoped holds a caller gives

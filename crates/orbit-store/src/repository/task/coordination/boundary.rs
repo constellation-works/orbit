@@ -542,23 +542,42 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| self.store.task_coordination_rows(&self.workspace_id, kind))
     }
 
-    /// Dependent coordination rows of `kind` whose payload carries `value` as
-    /// a JSON string, settling an interrupted commit first. Every row with a
-    /// string field equal to `value` is among them, so a caller decodes only
-    /// these and keeps its exact matches instead of decoding every row of the
-    /// kind inside its section.
-    pub(super) fn coordination_rows_mentioning(
+    /// Lifecycle rows whose claim names `task_id`, settling an interrupted
+    /// commit first. The v90 task index narrows the read; callers still
+    /// re-check `claim.task_id` after decode. Row order is `row_id`.
+    pub(super) fn lifecycle_rows_for_claim_task(
         &self,
-        kind: &str,
-        value: &str,
+        task_id: &str,
     ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
-        // Payloads are compact `serde_json` encodings, which escape a string
-        // the same way wherever it sits.
-        let needle =
-            serde_json::to_string(value).map_err(|error| OrbitError::Store(error.to_string()))?;
         self.enter_ordinary(|| {
             self.store
-                .task_coordination_rows_containing(&self.workspace_id, kind, &needle)
+                .lifecycle_rows_for_claim_task(&self.workspace_id, task_id)
+        })
+    }
+
+    /// Lifecycle rows whose claim was admitted by `run_id`, settling an
+    /// interrupted commit first. Callers re-check `claim.run_context.run_id`.
+    /// Row order is `row_id`.
+    pub(super) fn lifecycle_rows_for_claim_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.store
+                .lifecycle_rows_for_claim_run(&self.workspace_id, run_id)
+        })
+    }
+
+    /// Lifecycle rows whose bound leaf run is `run_id`, settling an
+    /// interrupted commit first. Callers re-check the whole `bound_run`.
+    /// Row order is `row_id`.
+    pub(super) fn lifecycle_rows_for_bound_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.store
+                .lifecycle_rows_for_bound_run(&self.workspace_id, run_id)
         })
     }
 
