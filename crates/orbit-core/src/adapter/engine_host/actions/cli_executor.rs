@@ -1,6 +1,6 @@
 use orbit_engine::{DispatchError, ResolvedCliExecutor, ResolvedShellExecutor};
 use orbit_types::workflow::ExecutorType;
-use orbit_types::workflow::activity_job::{Provider, ProviderEntryPoint};
+use orbit_types::workflow::activity_job::Provider;
 
 use crate::OrbitRuntime;
 use crate::application::executor::{declared_image_input, declared_inspection_args};
@@ -69,10 +69,7 @@ pub(crate) fn resolve_cli_executor(
     // fails with a stable diagnostic and never silently falls back to a
     // different runtime.
     match Provider::parse(provider) {
-        Ok(parsed)
-            if Provider::capabilities(ProviderEntryPoint::Orbit).contains(&parsed)
-                && parsed.has_cli_runtime() =>
-        {
+        Ok(parsed) if Provider::capabilities().contains(&parsed) && parsed.has_cli_runtime() => {
             Ok(ResolvedCliExecutor {
                 command: parsed.as_str().to_string(),
                 args: Vec::new(),

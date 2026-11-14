@@ -181,8 +181,7 @@ pub use activity_roles::JobActivityRoles;
 pub use activity_v2::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, FleetNoticeGuidance,
     IncompleteContinuationPolicy, OnDenial, Provider, ProviderAlias, ProviderDeprecation,
-    ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity, ProviderParseError,
-    ProviderResolution, ProviderResolveRequest, ProviderSource, RETIRED_BACKEND_MIGRATION,
+    ProviderIdentity, ProviderParseError, ProviderSource, RETIRED_BACKEND_MIGRATION,
     RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION, ResponseCorrectionPolicy,
     RetiredAgentBackend, check_retired_backend_value, requires_native_inspection,
     retired_provider_id,
