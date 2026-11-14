@@ -40,8 +40,44 @@ env:
   UV_MACOS_ARM64_SHA256: 33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
 
 jobs:
+  # A docs-only push skips both build jobs only when BEFORE already has a
+  # successful completed run of each of them. workflow_dispatch is not a push,
+  # and an empty mode fails open, so both still run. The job never fails the
+  # workflow: a classifier error costs the full macOS run.
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Classify the change
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          DOCS_BEFORE_CHECKS: |
+            macOS Clippy (informational)
+            macOS Sandbox
+        run: scripts/ci-change-scope.sh
+
   macos-clippy:
     name: macOS Clippy (informational)
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.scope.outputs.mode != 'docs') }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -77,6 +113,8 @@ jobs:
 
   macos-sandbox:
     name: macOS Sandbox
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.scope.outputs.mode != 'docs') }}
     runs-on: macos-latest
     timeout-minutes: 90 # Run 412443 hit 30 minutes before the sandbox suite finished. Runs 41259996536 and 41263713213 hit 45 minutes: one mid-suite, one in the evidence step after every test passed.
     steps:

@@ -3,13 +3,16 @@ type: runbook
 summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-11-08
+last_validated: 2026-11-14
 ---
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
 
 Hosted CodeQL analyses `main` pushes and runs daily on `agent-main` (not pull
-requests). Use this
+requests). A docs-only push whose parent already has a successful completed
+run of that workflow skips the analysis jobs; a non-docs path, a parent
+without that proof, `workflow_dispatch` and the daily schedule still run every
+analysis job. Use this
 procedure before handoff only when the agent guide (`CLAUDE.md`, "Local Rust
 CodeQL") requires it: a code-scanning or CodeQL repair, a task tagged
 `security` or `security-review`, or a change to `.github/codeql/**` or
