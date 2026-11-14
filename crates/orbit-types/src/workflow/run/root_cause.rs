@@ -48,9 +48,10 @@ pub const CHILD_TIMEOUT_ERROR_CODE: &str = "child_timeout";
 
 /// Error code of a run the host manager stopped. With recorded sender
 /// evidence, the run is `held`, not `interrupted`, and failure queries do not
-/// count it. A supervisor-observed non-signal crash is `failed` without
-/// `worker_terminated`; stale-owner reconciliation can instead record a dead
-/// worker as `interrupted` with that code. If reconciliation finalizes before
+/// count it. A supervisor-observed non-signal crash of a running worker is
+/// `failed` without `worker_terminated`; a pending worker exit is interrupted
+/// startup. Stale-owner reconciliation can instead record a dead worker as
+/// `interrupted` with that code. If reconciliation finalizes before
 /// the sender evidence is recorded, later evidence does not rewrite the state.
 pub const OPERATOR_STOPPED_ERROR_CODE: &str = "operator_stopped";
 
