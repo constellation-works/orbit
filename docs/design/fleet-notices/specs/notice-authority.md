@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: who may post, update and close fleet notices (operator, orchestrator, managed agent), and the size, rate and open-count limits"
-last_validated: 2026-11-05
+last_validated: 2026-11-14
 title: Spec — Notice authority and limits
 owner: claude
 status: Draft

@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: MCP roles — every tool in one toolset, roles as named toolset sets, --role and machine.mcp.role, refusal, remote and federated forwarding, size budgets"
 last_updated: 2026-11-05
-last_validated: 2026-11-05
+last_validated: 2026-11-14
 title: Spec — MCP roles and toolsets
 owner: claude
 status: Implemented
