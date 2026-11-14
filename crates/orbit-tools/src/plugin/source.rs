@@ -18,8 +18,10 @@
 //! exactly the one whoever controls the URL would tamper with.
 
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
+use orbit_common::fs::archive::{BoundedReader, member_path_refusal};
+use orbit_common::observability::logging::format_error_chain;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{OrbitError, StorageLayer};
@@ -666,7 +668,10 @@ pub(super) fn unpack_tar<R: Read>(
     let mut archive = tar::Archive::new(BoundedReader::new(
         reader,
         limits.unpacked_bytes,
-        source_name,
+        format!(
+            "plugin archive '{source_name}' unpacks to more than {} bytes",
+            limits.unpacked_bytes
+        ),
     ));
     let entries = archive
         .entries()
@@ -712,13 +717,10 @@ pub(super) fn unpack_tar<R: Read>(
 /// otherwise bury the bound this module is enforcing and leave the operator
 /// with a message that does not say what went wrong.
 fn unpack_failure(source_name: &str, error: &std::io::Error) -> OrbitError {
-    let mut causes = vec![error.to_string()];
-    let mut cause = std::error::Error::source(error);
-    while let Some(inner) = cause {
-        causes.push(inner.to_string());
-        cause = inner.source();
-    }
-    OrbitError::Io(format!("unpack {source_name}: {}", causes.join(": ")))
+    OrbitError::Io(format!(
+        "unpack {source_name}: {}",
+        format_error_chain(error)
+    ))
 }
 
 /// Unpack one zip under the same rules as [`unpack_tar`].
@@ -781,7 +783,11 @@ pub(super) fn unpack_zip(
         // The header's own size is attacker-controlled, so the copy is what
         // enforces the bound, not the declared length.
         let written = std::io::copy(
-            &mut BoundedReader::new(&mut entry, budget, source_name),
+            &mut BoundedReader::new(
+                &mut entry,
+                budget,
+                format!("plugin archive '{source_name}' unpacks to more than {budget} bytes"),
+            ),
             &mut out,
         )
         .map_err(|error| unpack_failure(source_name, &error))?;
@@ -816,67 +822,13 @@ fn too_many_entries(source_name: &str, limit: usize) -> OrbitError {
 
 /// Refuse a member whose path would write outside the unpack root.
 fn refuse_escaping_member(path: &Path, source_name: &str) -> Result<(), OrbitError> {
-    let refuse = |why: &str| {
-        Err(OrbitError::InvalidInput(format!(
-            "plugin archive '{source_name}' contains the entry '{}', which {why}; refusing to \
-             unpack it",
+    if let Some(why) = member_path_refusal(path) {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin archive '{source_name}' contains the entry '{}', which {why}; refusing to unpack it",
             path.display()
-        )))
-    };
-    if path.components().next().is_none() {
-        return refuse("has an empty path");
-    }
-    for component in path.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir => {
-                return refuse("traverses out of the archive root with `..`");
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return refuse("is an absolute path");
-            }
-        }
+        )));
     }
     Ok(())
-}
-
-/// A reader that fails the unpack once the stream passes `limit` bytes.
-///
-/// One byte of headroom is kept so reaching exactly `limit` is still a
-/// successful read: the error fires only on the byte that would exceed it.
-struct BoundedReader<R> {
-    inner: R,
-    remaining: u64,
-    limit: u64,
-    source_name: String,
-}
-
-impl<R: Read> BoundedReader<R> {
-    fn new(inner: R, limit: u64, source_name: &str) -> Self {
-        Self {
-            inner,
-            remaining: limit.saturating_add(1),
-            limit,
-            source_name: source_name.to_string(),
-        }
-    }
-}
-
-impl<R: Read> Read for BoundedReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let capacity = usize::try_from(self.remaining)
-            .unwrap_or(usize::MAX)
-            .min(buf.len());
-        if capacity == 0 {
-            return Err(std::io::Error::other(format!(
-                "plugin archive '{}' unpacks to more than {} bytes",
-                self.source_name, self.limit
-            )));
-        }
-        let read = self.inner.read(&mut buf[..capacity])?;
-        self.remaining -= read as u64;
-        Ok(read)
-    }
 }
 
 /// Resolve a directory source to its plugin root.

@@ -6,11 +6,12 @@
 //! index state — the manifest is the only non-bundle entry.
 
 use std::fs::File;
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::archive::{BoundedReader, member_path_refusal};
 use orbit_common::fs::io::with_shared_file_lock;
+use orbit_common::observability::logging::format_error_chain;
 
 use crate::driver::file::task_bundle::{PENDING_WRITE_FILE_NAME, bundle_lock_target};
 
@@ -292,7 +293,16 @@ pub(super) fn extract_archive_with_limits(
     // budget. The per-entry logical-size check below is the sparse-safe
     // half: GNU sparse holes are created by seek/set_len without those
     // bytes ever appearing in the stream.
-    let bounded = BoundedReader::new(decoder, limits.unpacked_bytes, archive_path);
+    let bounded = BoundedReader::new(
+        decoder,
+        limits.unpacked_bytes,
+        format!(
+            "archive '{}' unpacks to more than {} bytes (MAX_TASK_ARCHIVE_UNPACKED_BYTES = {})",
+            archive_path.display(),
+            limits.unpacked_bytes,
+            limits.unpacked_bytes
+        ),
+    );
     let mut archive = tar::Archive::new(bounded);
     let mut count = 0usize;
     let mut remaining_output = limits.unpacked_bytes;
@@ -348,85 +358,23 @@ pub(super) fn extract_archive_with_limits(
 /// Report an extraction failure with its whole cause chain, so a bound
 /// enforced by [`BoundedReader`] is not buried under tar's wrapper error.
 fn extract_failure(archive_path: &Path, error: &std::io::Error) -> OrbitError {
-    let mut causes = vec![error.to_string()];
-    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
-    while let Some(inner) = cause {
-        causes.push(inner.to_string());
-        cause = inner.source();
-    }
     OrbitError::Store(format!(
         "failed to extract archive '{}': {}",
         archive_path.display(),
-        causes.join(": ")
+        format_error_chain(error)
     ))
 }
 
 /// Refuse a member whose path would write outside the extraction root.
 fn refuse_escaping_member(path: &Path, archive_path: &Path) -> Result<(), OrbitError> {
-    let refuse = |why: &str| {
-        Err(OrbitError::Store(format!(
+    if let Some(why) = member_path_refusal(path) {
+        return Err(OrbitError::Store(format!(
             "archive '{}' contains the entry '{}', which {why}; refusing to extract it",
             archive_path.display(),
             path.display()
-        )))
-    };
-    if path.components().next().is_none() {
-        return refuse("has an empty path");
-    }
-    for component in path.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir => {
-                return refuse("traverses out of the archive root with `..`");
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return refuse("is an absolute path");
-            }
-        }
+        )));
     }
     Ok(())
-}
-
-/// A reader that fails once the decompressed stream passes `limit` bytes.
-///
-/// One byte of headroom is kept so reaching exactly `limit` is still a
-/// successful read: the error fires only on the byte that would exceed it.
-struct BoundedReader<R> {
-    inner: R,
-    remaining: u64,
-    limit: u64,
-    archive_path: PathBuf,
-}
-
-impl<R: Read> BoundedReader<R> {
-    fn new(inner: R, limit: u64, archive_path: &Path) -> Self {
-        Self {
-            inner,
-            remaining: limit.saturating_add(1),
-            limit,
-            archive_path: archive_path.to_path_buf(),
-        }
-    }
-}
-
-impl<R: Read> Read for BoundedReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let capacity = usize::try_from(self.remaining)
-            .unwrap_or(usize::MAX)
-            .min(buf.len());
-        if capacity == 0 {
-            return Err(std::io::Error::other(format!(
-                "archive '{}' unpacks to more than {} bytes \
-                 (MAX_TASK_ARCHIVE_UNPACKED_BYTES = {})",
-                self.archive_path.display(),
-                self.limit,
-                self.limit
-            )));
-        }
-        let read = self.inner.read(&mut buf[..capacity])?;
-        self.remaining -= read as u64;
-        Ok(read)
-    }
 }
 
 fn map_io(context: &'static str) -> impl Fn(std::io::Error) -> OrbitError {

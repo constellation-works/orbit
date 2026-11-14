@@ -285,7 +285,8 @@ where
     }
 }
 
-fn format_error_chain(value: &(dyn std::error::Error + 'static)) -> String {
+/// Format an error and its causes, outermost first.
+pub fn format_error_chain(value: &dyn std::error::Error) -> String {
     let mut formatted = value.to_string();
     let mut source = value.source();
     while let Some(error) = source {

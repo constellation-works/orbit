@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod cwd;
 pub mod directory_lock;
 pub mod file_lock;

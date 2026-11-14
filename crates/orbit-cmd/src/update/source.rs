@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::observability::logging::format_error_chain;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
 };
@@ -145,18 +146,6 @@ pub fn release_source_from_env() -> Box<dyn ReleaseSource> {
     Box::new(HttpReleaseSource::new(repo))
 }
 
-/// `error` and its causes, outermost first. reqwest's own message omits why a
-/// request failed (a refused redirect, a TLS or connect error).
-fn error_chain(error: &dyn std::error::Error) -> String {
-    let mut message = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        message.push_str(&format!(": {cause}"));
-        source = cause.source();
-    }
-    message
-}
-
 /// GitHub Releases over HTTPS.
 #[derive(Debug, Clone)]
 pub struct HttpReleaseSource {
@@ -194,7 +183,7 @@ impl HttpReleaseSource {
             .map_err(|error| {
                 OrbitError::Execution(format!(
                     "failed to download {what} from {url}: {}",
-                    error_chain(&error)
+                    format_error_chain(&error)
                 ))
             })?;
         if response
