@@ -12,8 +12,16 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};
 use serde_json::{Value, json};
 
-const CONFIG: &str =
-    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
+/// Synthetic worker credential. The macOS guard refuses `claude` unless
+/// `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` reaches the provider
+/// environment; this fixture value is not a real token [ORB-15154].
+const FIXTURE_CLAUDE_WORKER_TOKEN: &str = "fixture-claude-worker-token";
+
+/// Built-in pass names plus the synthetic credential. `[execution.env] pass`
+/// replaces the default list, so the fixture restates every built-in name.
+const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n\
+     [execution.env]\npass = [\"HOME\", \"PATH\", \"CODEX_HOME\", \"TMPDIR\", \"USER\", \
+     \"__CF_USER_TEXT_ENCODING\", \"CLAUDE_CODE_OAUTH_TOKEN\"]\n";
 
 fn runtime_at(root: &Path) -> OrbitRuntime {
     runtime_at_config(root, CONFIG)
@@ -57,6 +65,13 @@ fn activity_resolved_tools(
 fn dispatched_deny_list(runtime: &OrbitRuntime, root: &Path, activity: &str) -> Vec<String> {
     use std::os::unix::fs::PermissionsExt as _;
 
+    // The fixture carries its own synthetic worker credential, so the macOS
+    // tokenless-Claude guard passes with neither real variable in the parent
+    // environment. Same class as ORB-15247; the production guard is unchanged.
+    let _credential = orbit_common::test_env::scoped([(
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        Some(FIXTURE_CLAUDE_WORKER_TOKEN),
+    )]);
     let recorded = root.join(format!("{activity}.deny"));
     let bin = root.join(format!("{activity}-provider"));
     std::fs::write(
