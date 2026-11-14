@@ -77,7 +77,7 @@ impl OrbitRuntime {
     /// earlier prune removed and recorded ([ORB-12490]).
     ///
     /// `statuses` narrows the sweep; empty means
-    /// [`CONTEXT_REPAIR_SWEEP_STATUSES`]. With `restore`, each recorded
+    /// `CONTEXT_REPAIR_SWEEP_STATUSES`. With `restore`, each recorded
     /// restoration is written; without it the sweep only plans.
     ///
     /// Nothing here deletes a declaration. The sweep that used to drop

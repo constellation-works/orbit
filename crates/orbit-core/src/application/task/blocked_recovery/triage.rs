@@ -7,7 +7,7 @@
 //! whose options live in a proposal comment. [`LegacyBlockedTriageRecord`] is
 //! the only reader of a marker's outcome, disposition, actor and run; the
 //! proposal's replacement text stays with the decision channel.
-//! [`triage_candidacy`] stays as the one rule the auto-task
+//! `triage_candidacy` stays as the one rule the auto-task
 //! `skip_unless_blocked_candidates` precondition reads: a block episode
 //! qualifies while final recovery's escalation, or the backstop's silence,
 //! leaves it for a human.
@@ -259,7 +259,7 @@ pub struct BlockedTriageView {
 
 impl OrbitRuntime {
     /// `task`'s current block episode candidacy at `now`, from its current
-    /// history, comments and artifacts: [`triage_candidacy`].
+    /// history, comments and artifacts: `triage_candidacy`.
     pub fn block_triage_candidacy_of(
         &self,
         task: &Task,

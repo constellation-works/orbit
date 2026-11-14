@@ -471,7 +471,7 @@ impl ProviderLimitsView {
 
 impl OrbitRuntime {
     /// This host's provider limits at `now`. An unreadable store is reported
-    /// in [`ProviderLimitsView::error`] rather than failing the caller, as
+    /// in `ProviderLimitsView::error` rather than failing the caller, as
     /// admission treats it.
     #[must_use]
     pub fn provider_limits_view(&self, now: DateTime<Utc>) -> ProviderLimitsView {

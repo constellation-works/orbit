@@ -10,8 +10,5 @@ mod view;
 pub(crate) use gate::ProviderLimit;
 pub use orbit_config::ProviderLimitThreshold;
 pub(crate) use pressure::UsagePressureRead;
-pub use pressure::{CrewUsagePressure, PressureWindow, UsagePressure};
-pub use view::{
-    CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
-    UngatedLaneLimit, short_time,
-};
+pub use pressure::{CrewUsagePressure, UsagePressure};
+pub use view::{ProviderLimitReading, ProviderUsageStatus, short_time};

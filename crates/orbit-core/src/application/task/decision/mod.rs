@@ -34,5 +34,5 @@ pub(crate) mod rules;
 
 #[cfg(feature = "test-support")]
 pub(crate) use answering::answer_checkpoint;
+pub use listing::DecisionListProfile;
 pub(crate) use listing::decision_request_json;
-pub use listing::{DecisionListProfile, DecisionRequestListing};

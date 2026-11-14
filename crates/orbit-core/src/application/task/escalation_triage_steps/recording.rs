@@ -69,7 +69,7 @@ impl OrbitRuntime {
 
     /// Record the lane's decision on `request.task_id`'s held assessment,
     /// under the task write lock: one comment, one decision request and one
-    /// [`PILOT_WARNING_TRIAGED_EVENT`] marker, nothing else. Refused unless
+    /// `PILOT_WARNING_TRIAGED_EVENT` marker, nothing else. Refused unless
     /// the held assessment awaits triage: no marker names it and no operator
     /// has decided it.
     pub fn record_pilot_warning_triage(

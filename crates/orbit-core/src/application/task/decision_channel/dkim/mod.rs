@@ -15,8 +15,8 @@ mod resolver;
 mod verification;
 
 pub use model::DkimTxtResolver;
-pub use model::DkimVerifyError;
-pub use resolver::SystemDkimTxtResolver;
+pub(crate) use model::DkimVerifyError;
+pub(crate) use resolver::SystemDkimTxtResolver;
 pub use verification::sender_domain_of;
 pub use verification::verify_dkim;
 #[cfg(feature = "test-support")]

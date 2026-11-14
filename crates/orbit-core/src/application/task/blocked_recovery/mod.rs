@@ -49,16 +49,15 @@ pub(in crate::application::task) use readout::block_json;
 pub(crate) mod steps;
 mod triage;
 
-pub use episode::{
-    BlockEpisode, BlockSource, EpisodeDisposition, FinalRecoveryRecord, episode_disposition,
-};
+pub(crate) use episode::BlockSource;
+pub use episode::{BlockEpisode, EpisodeDisposition, FinalRecoveryRecord};
+pub use input::BlockedRecoveryInput;
 pub(crate) use input::BlockedRecoveryPreparation;
-pub use input::{BlockedRecoveryInput, BlockedRecoveryTick, BlockedRecoveryView};
-pub use next_step::BlockedNextStep;
-pub use recheck::{BLOCKED_TASK_RECHECKED_EVENT, BlockedRecheckSettlement, RecheckKind};
-pub use triage::{
-    BLOCKED_TASK_TRIAGE_RESUMED_EVENT, BLOCKED_TASK_TRIAGED_EVENT, BlockedTriageView, TriageBasis,
-    TriageCandidacy, TriageEpisode, TriageTarget, triage_candidacy,
+pub(crate) use recheck::BlockedRecheckSettlement;
+pub use recheck::RecheckKind;
+pub(crate) use triage::{
+    BLOCKED_TASK_TRIAGE_RESUMED_EVENT, BLOCKED_TASK_TRIAGED_EVENT, TriageCandidacy, TriageTarget,
+    triage_candidacy,
 };
 pub(crate) use triage::{
     LegacyBlockedTriageDisposition, LegacyBlockedTriageOutcome, LegacyBlockedTriageRecord,
