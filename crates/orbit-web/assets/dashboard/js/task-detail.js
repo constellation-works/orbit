@@ -1,8 +1,8 @@
 // Orbit dashboard task detail: the detail body, its tabs and the runs tab.
 
-import { captureWorkspaceVisit, copyWithFeedback, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
+import { captureWorkspaceVisit, copyWithFeedback, el, elapsedDurationInfo, fetchJson, fmtDuration, formatDateTime, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
 import { humanCrewFor } from './task-crew.js';
-import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM, taskDispatchIdentity } from './task-shared.js';
+import { absTimeNode, canMutateTask, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM, taskDispatchIdentity } from './task-shared.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, claimAttention, deliverySteps, lastKnownClaims } from './distributed.js';
 import { buildTaskMeta, buildStageStrip } from './task-lifecycle.js';
 import { buildActionsRow } from './task-actions.js';
@@ -271,7 +271,7 @@ export function buildTaskDetail(task, context, drain = null) {
     });
   }
   // Answered state (picked option, by whom, when) for any task.
-  const decisionHistoryBlock = addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task, context), true, true);
+  const decisionHistoryBlock = addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task), true, true);
   decisionHistoryBlock.hidden = true;
 
   // The rendered Markdown is the disclosure's whole body, so it sits in the
@@ -302,7 +302,7 @@ export function buildTaskDetail(task, context, drain = null) {
 
   // The overview leads; context, history, runs, artifacts and the thread each
   // have a tab of their own, so the pane shows one subject at a time.
-  const history = taskHistory.buildTaskHistory(task, context);
+  const history = taskHistory.buildTaskHistory(task);
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
   const comments = Array.isArray(task.comments) ? task.comments.length : 0;
   const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
@@ -326,7 +326,7 @@ export function buildTaskDetail(task, context, drain = null) {
     showsEditor("context_files") ? actionFooter("context_files", "Context files actions", contextFilesEditSlot) : null,
   ].filter(Boolean);
   const commentsContent = el("div", { class: "comments-tab-content" }, [
-    comments > 0 ? taskComments.buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+    comments > 0 ? taskComments.buildCommentsPanel(task) : el("p", { class: "field-empty", text: "No comments yet." }),
   ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
   // The tab appears only once a read finds a claim this workspace holds for
@@ -388,7 +388,7 @@ export function buildTaskDetail(task, context, drain = null) {
     onTaskChanged: () => refreshTasks(context),
     onClaims: paintDelivery,
     onContent: (rendered) => detail.setTabAvailable("delivery", rendered),
-    formatTime: (value) => fmtAbsTimeValue(context, value),
+    formatTime: (value) => formatDateTime(value),
     pullRequest,
   }));
   renderTaskRuns(runs, task, context);
@@ -552,7 +552,7 @@ function renderTaskRuns(node, task, context) {
       children.push(el("p", { class: "field-empty", text: "No runs recorded for this task." }));
     } else if (load.items) {
       const list = el("ul", { class: "task-run-list" });
-      for (const run of load.items) list.appendChild(buildTaskRun(run, task, context));
+      for (const run of load.items) list.appendChild(buildTaskRun(run, task));
       children.push(list);
       if (load.total > load.items.length) {
         children.push(el("p", { class: "task-runs-more", text: `Latest ${load.items.length} of ${load.total} runs.` }));
@@ -566,7 +566,7 @@ function renderTaskRuns(node, task, context) {
   }
 }
 
-function buildTaskRun(run, task, context) {
+function buildTaskRun(run, task) {
   const runId = String(run.run_id || "");
   const link = el("a", { class: "mono task-run-id", text: runId });
   link.href = taskRunHref(task, runId);
@@ -576,7 +576,7 @@ function buildTaskRun(run, task, context) {
     el("div", { class: "task-run-head" }, [link, stateCell(run.state || "unknown")]),
     el("div", { class: "task-run-meta" }, [
       run.job_id ? el("span", { class: "task-run-job", text: run.job_id }) : null,
-      when ? absTimeNode(context, when) : null,
+      when ? absTimeNode(when) : null,
       durationMs != null ? el("span", { text: fmtDuration(durationMs) }) : null,
     ]),
     run.error_message ? el("div", { class: "task-run-error", text: run.error_message }) : null,

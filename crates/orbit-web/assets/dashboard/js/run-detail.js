@@ -9,10 +9,10 @@
 // cross-domain shell. Gantt retry data is independent of the Events table page.
 //
 // Receives one-time context via initRunDetail(runDetailContext()) with state accessors
-// (re-exported by app's routerContext), formatters, run-action builders (from runs.js),
+// (re-exported by app's routerContext), run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText, infoHint } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, fmtDuration, formatDate, formatDateTime, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText, infoHint } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -55,28 +55,12 @@ function hasCtx(key) {
   return !!(c && typeof c[key] === "function");
 }
 
-// --- wrappers for ctx-provided values (formatters, callbacks, builders) ---
-
-function fmtTimestamp(v) {
-  return hasCtx("fmtTimestamp") ? _runDetailCtx.fmtTimestamp(v) : (v || "-");
-}
-
-function fmtDuration(v) {
-  return hasCtx("fmtDuration") ? _runDetailCtx.fmtDuration(v) : (v == null ? "-" : String(v));
-}
+// --- wrappers for ctx-provided callbacks and builders ---
 
 function recordDurationText(record) {
   const { durationMs, isLive } = elapsedDurationInfo(record);
   const text = fmtDuration(durationMs);
   return isLive && text !== "-" ? `${text} ↻` : text;
-}
-
-function fmtAbsTime(v) {
-  return hasCtx("fmtAbsTime") ? _runDetailCtx.fmtAbsTime(v) : (v || "-");
-}
-
-function fmtRelative(v) {
-  return hasCtx("fmtRelative") ? _runDetailCtx.fmtRelative(v) : (v || "-");
 }
 
 function setRunDetailSubtab(name) {
@@ -340,8 +324,8 @@ export function renderRunDetailMeta() {
   const launches = Array.isArray(run.agent_executions) ? run.agent_executions : [];
   addCell("reasoning effort", launches.length ? [...new Set(launches.map(launch =>
     `${launch.crew || launch.provider || "agent"} · ${launch.model || "unknown model"} · ${launch.reasoning_effort === null ? "provider default" : launch.reasoning_effort || "unknown"}`))].join("; ") : "unknown");
-  addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
-  addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
+  addCell("started", run.started_at ? formatDateTime(run.started_at) : "-");
+  addCell("finished", run.finished_at ? formatDateTime(run.finished_at) : "-");
   addCell("duration", recordDurationText(run));
   // ORB-16572: a delivery run's captured review layer and whether workspace
   // policy or the run's own `--review` decided it.
@@ -442,18 +426,18 @@ function buildRequestsHeld(detail) {
     class: `child-dispatch-notice ${className}`,
   }, [el("strong", { text: `${label}: ` }), el("span", { text })]));
   line("Requests held", refusal
-    ? `${refusal}${pass.recorded_at ? ` (last pass ${fmtAbsTime(pass.recorded_at)})` : ""}`
+    ? `${refusal}${pass.recorded_at ? ` (last pass ${formatDateTime(pass.recorded_at)})` : ""}`
     : "See the breaker or refused settlements below.");
   if (breaker) {
     const remaining = Math.max(0, Math.ceil((Date.parse(breaker.half_open_at) - Date.now()) / 1000));
     const classes = breaker.failure_classes?.length ? ` (${breaker.failure_classes.join(", ")})` : "";
     const next = remaining > 0
-      ? `half-opens at ${fmtAbsTime(breaker.half_open_at)} (in ${Math.floor(remaining / 60)}m ${remaining % 60}s) to admit one probe claim`
-      : `half-open since ${fmtAbsTime(breaker.half_open_at)}: admits one probe claim once nothing this drain claimed is unsettled`;
-    line("Breaker", `open after ${breaker.failures} consecutive failed claims${classes} since ${fmtAbsTime(breaker.opened_at)}; ${next}`, "pull-breaker");
+      ? `half-opens at ${formatDateTime(breaker.half_open_at)} (in ${Math.floor(remaining / 60)}m ${remaining % 60}s) to admit one probe claim`
+      : `half-open since ${formatDateTime(breaker.half_open_at)}: admits one probe claim once nothing this drain claimed is unsettled`;
+    line("Breaker", `open after ${breaker.failures} consecutive failed claims${classes} since ${formatDateTime(breaker.opened_at)}; ${next}`, "pull-breaker");
   }
   for (const settlement of settlements) {
-    line("Settlement refused", `leaf ${settlement.leaf_run_id || "-"} owner ${settlement.owner} refused it ${settlement.refusals} time(s) since ${fmtAbsTime(settlement.first_refused_at)}: ${settlement.reason}; next attempt after ${fmtAbsTime(settlement.retry_after)}`, "refused-settlement");
+    line("Settlement refused", `leaf ${settlement.leaf_run_id || "-"} owner ${settlement.owner} refused it ${settlement.refusals} time(s) since ${formatDateTime(settlement.first_refused_at)}: ${settlement.reason}; next attempt after ${formatDateTime(settlement.retry_after)}`, "refused-settlement");
     panel.appendChild(el("p", { class: "settlement-remedy", text: settlement.remedy }));
   }
   return panel;
@@ -476,7 +460,7 @@ function buildProviderProcesses(processes) {
     ];
     if (blocked) parts.push("blocked=stopped-descendant");
     if (process.finished) parts.push("finished");
-    if (process.last_activity_at) parts.push(`last activity ${fmtAbsTime(process.last_activity_at)}`);
+    if (process.last_activity_at) parts.push(`last activity ${formatDateTime(process.last_activity_at)}`);
     panel.appendChild(el("div", { class: "child-dispatch-row provider-process" }, [
       el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
     ]));
@@ -597,7 +581,7 @@ function buildCrewWindow(window) {
   panel.appendChild(el("div", { class: "label", text: summary }));
   for (const exclusion of excluded) {
     const source = CREW_EXCLUSION_SOURCES[exclusion.source] || "preflight";
-    const until = exclusion.until ? ` until ${fmtAbsTime(exclusion.until)}` : "";
+    const until = exclusion.until ? ` until ${formatDateTime(exclusion.until)}` : "";
     panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source})${until}: ${exclusion.reason}` }),
     ]));
@@ -677,8 +661,8 @@ function buildStillWaiting(pass, run = {}) {
   // A local drain dates its lists only when it deferred a pass on a busy
   // lock, which keeps the last completed pass's lists.
   const answered = !pass.waiting_recorded_at ? ""
-    : pullDrain ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})`
-    : ` (as of the last completed pass at ${fmtAbsTime(pass.waiting_recorded_at)})`;
+    : pullDrain ? ` (the owner answered ${formatDateTime(pass.waiting_recorded_at)})`
+    : ` (as of the last completed pass at ${formatDateTime(pass.waiting_recorded_at)})`;
   const reasonTaskTotal = deferredTotal + excludedTotal;
   const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
   const additionalSummary = additionalAdmissible === 1
@@ -737,7 +721,7 @@ function buildPassWarning(run) {
   const panel = el("div", { class: "child-dispatch-panel pass-warning" });
   panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
     el("strong", { text: what }),
-    el("span", { text: `${count} (last pass ${fmtAbsTime(pass.recorded_at)})` }),
+    el("span", { text: `${count} (last pass ${formatDateTime(pass.recorded_at)})` }),
   ]));
   const message = el("pre", { class: "run-failure-message mono" });
   appendLinkified(message, pass.last_pass_error, run.workspace_id || getWorkspace());
@@ -873,7 +857,7 @@ function buildRunCancellation(run) {
   const head = el("div", { class: "run-failure-head" }, [
     el("strong", { text: "Cancelled" }),
     actor ? el("span", { class: "run-failure-where", text: ` by ${actor}` }) : null,
-    at ? el("span", { class: "run-cancelled-when", text: ` at ${fmtAbsTime(at)}` }) : null,
+    at ? el("span", { class: "run-cancelled-when", text: ` at ${formatDateTime(at)}` }) : null,
   ]);
   const box = el("section", { class: "run-failure run-cancelled" }, [head]);
   box.setAttribute("aria-label", "Why this run was cancelled");

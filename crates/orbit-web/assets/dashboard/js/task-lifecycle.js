@@ -275,9 +275,9 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
   const rows = [];
   if (task.started_at) {
     const schedule = el("span", { class: "value" });
-    if (task.not_before) schedule.append("scheduled ", absTimeNode(context, task.not_before));
+    if (task.not_before) schedule.append("scheduled ", absTimeNode(task.not_before));
     else schedule.append("not scheduled");
-    schedule.append(" · started ", absTimeNode(context, task.started_at));
+    schedule.append(" · started ", absTimeNode(task.started_at));
     rows.push(row("schedule", "Scheduled", schedule));
   } else if (showsEditor("not_before")) {
     rows.push(row("schedule", "Scheduled", editor("not_before")));

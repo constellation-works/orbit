@@ -8,10 +8,10 @@
 // runs table and the run-detail meta in app.js).
 //
 // Receives one-time context via initRuns(runsContext()) containing the
-// callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
-// formatters) that the actions and render depend on. No direct import from app.js.
+// callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns)
+// that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindTaskLink } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, fmtDuration, formatAge, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindTaskLink } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -116,14 +116,6 @@ function doFetchAndRenderRunEvents() {
     try { return _runsCtx.fetchAndRenderRunEvents(); } catch (_) { return Promise.resolve(); }
   }
   return Promise.resolve();
-}
-
-function fmtTimestampValue(v) {
-  return hasCtx("fmtTimestamp") ? _runsCtx.fmtTimestamp(v) : (v || "-");
-}
-
-function fmtDurationValue(v) {
-  return hasCtx("fmtDuration") ? _runsCtx.fmtDuration(v) : (v == null ? "-" : String(v));
 }
 
 export function initRuns(ctx) {
@@ -1103,7 +1095,7 @@ function runCountCell(value, kind) {
 
 function runDurationCell(run) {
   const { durationMs, isLive, longRun } = runDurationInfo(run);
-  const formatted = fmtDurationValue(durationMs);
+  const formatted = fmtDuration(durationMs);
   const text = (isLive && formatted !== "-") ? `${formatted} ↻` : formatted;
   return el("span", { class: "duration" }, [
     text,
@@ -1311,7 +1303,7 @@ function runGroupRow(group, attributed, listed) {
     runTaskLinks(first),
     failedAt,
     el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: `${runs.length} runs` })]),
-    el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+    el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(denials, "denials"),
     runCountCell(toolFails, "tool-fails"),
     el("span", { class: "duration", text: "—" }),
@@ -1335,7 +1327,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
   const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
   const friction = runFriction(r);
   const { durationMs, isLive } = runDurationInfo(r);
-  const formattedDuration = fmtDurationValue(durationMs);
+  const formattedDuration = fmtDuration(durationMs);
   const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
   const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
   if (r.retry_source_run_id) {
@@ -1375,7 +1367,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
     runTaskLinks(r),
     runFailedAtCell(r),
     runIdCell,
-    el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+    el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(friction.denials, "denials"),
     runCountCell(friction.toolFails, "tool-fails"),
     runDurationCell(r),

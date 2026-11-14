@@ -1,7 +1,8 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -216,7 +217,6 @@ function taskContext() {
     },
     statusOrder: STATUS_ORDER,
     defaultActiveStatuses: DEFAULT_ACTIVE_STATUSES,
-    fmtAbsTime,
     refreshDashboard,
   };
 }
@@ -264,11 +264,6 @@ function auditContext() {
     navigateToRun: nTR,
     setActiveTab: sAT,
     refreshDashboard,
-    fmtDuration,
-    fmtTimestamp,
-    fmtRelative,
-    fmtAbsTime,
-    truncate,
   };
 }
 
@@ -294,12 +289,6 @@ function diagnosticsContext() {
       incidentDiagLimit = Math.min(Number(limit) || incidentDiagLimit, 200);
       refreshDashboard();
     },
-    fmtRelative,
-    fmtDuration,
-    // ORB-10871: incident expansion states exact first/last timestamps, not
-    // just "3h ago" — the raw evidence has to be locatable in Events.
-    fmtAbsTime,
-    truncate,
     setActiveTab: sAT,
     navigateToRun: nTR,
   };
@@ -425,8 +414,6 @@ function runsContext() {
       && jobRunLimit > lastRunsMeta.limit,
     markRunsLoading,
     getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
-    fmtTimestamp,
-    fmtDuration,
     loadMoreRuns,
   };
 }
@@ -455,11 +442,6 @@ function runDetailContext() {
     // callbacks the run-detail renderers invoke (Gantt click handler etc.)
     fetchAndRenderRunEvents,
     setRunDetailSubtab,
-    // formatters (the shared clock lives in common.js)
-    fmtTimestamp,
-    fmtDuration,
-    fmtRelative,
-    fmtAbsTime,
     // run action builders (from runs.js) and nav for renderRunDetailMeta
     navigateToRun: nTR,
     setActiveTab: sAT,
@@ -656,7 +638,7 @@ function renderFrictions(payload) {
       el("div", { class: "top" }, [
         el("span", { class: "id", text: friction.id, title: friction.id }),
         el("span", { class: "spacer" }),
-        el("span", { class: "when", text: fmtTimestamp(friction.created_at), title: fmtAbsTime(friction.created_at) }),
+        el("span", { class: "when", text: formatAge(friction.created_at), title: formatDateTime(friction.created_at) }),
         accordion ? el("span", { class: "friction-row-toggle", text: expanded ? "▾" : "▸" }) : null,
       ]),
       openButton,
@@ -744,8 +726,8 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   const textValue = (text, mono) => el("span", { class: mono ? "value mono" : "value", text });
   const rows = [factRow("ID", textValue(friction.id, true))];
   if (friction.model) rows.push(factRow("Model", textValue(friction.model)));
-  rows.push(factRow("Reported", textValue(fmtAbsTime(friction.created_at))));
-  if (friction.resolved_at) rows.push(factRow("Resolved", textValue(fmtAbsTime(friction.resolved_at))));
+  rows.push(factRow("Reported", textValue(formatDateTime(friction.created_at))));
+  if (friction.resolved_at) rows.push(factRow("Resolved", textValue(formatDateTime(friction.resolved_at))));
   if (friction.during_task) {
     const link = buildKnowledgeValueList([friction.during_task], { taskLinks: true });
     link.classList.add("value");
@@ -1187,16 +1169,6 @@ function wireTaskIdResolver() {
     if (event.preventDefault) event.preventDefault();
     lookupTask(candidate);
   });
-}
-
-function fmtRelative(iso) {
-  return fmtTimestamp(iso);
-}
-
-function truncate(text, max) {
-  if (text == null) return "";
-  if (text.length <= max) return text;
-  return text.slice(0, max) + "\u2026";
 }
 
 // ORB-00039/00040: the aggregate ("All workspaces") view has no concrete

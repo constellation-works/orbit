@@ -1696,6 +1696,14 @@ export function isHttpUrl(url) {
   return scheme.startsWith("http://") || scheme.startsWith("https://");
 }
 
+/// Cuts `text` to `max` characters and ends a cut string with an ellipsis.
+/// A missing value is empty.
+export function truncate(text, max) {
+  if (text == null) return "";
+  if (text.length <= max) return text;
+  return text.slice(0, max) + "\u2026";
+}
+
 // ---------------------------------------------------------------------------
 // Durations use one compact format across dashboard views.
 
