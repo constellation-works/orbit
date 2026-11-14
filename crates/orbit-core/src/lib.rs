@@ -181,6 +181,7 @@ pub use application::distributed::WorkspacePullRequest;
 pub use application::job::{
     CatalogReferenceLayer, DrainAdmissionsStopRequest, DrainWindowExtensionRequest,
     DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitStatus,
+    ShipModeResolutionProfile,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,

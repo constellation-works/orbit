@@ -2,7 +2,9 @@
 
 use clap::{Args, ValueEnum};
 use orbit_core::application::job::SubmissionKind;
-use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
+use orbit_core::{
+    CompletionPolicy, OrbitError, OrbitRuntime, ShipModeResolutionProfile, find_workflow,
+};
 
 use crate::command::{CommandOut, Execute};
 
@@ -85,7 +87,10 @@ impl ShipCommand {
 
 impl Execute for ShipCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mode = resolve_ship_mode(&self, runtime)?;
+        let mode = runtime.resolve_ship_mode(
+            self.mode.map(ShipMode::to_core),
+            ShipModeResolutionProfile::NativeCliLegacyRoot,
+        )?;
         ensure_workflow_exists(SHIP_WORKFLOW)?;
         // Ship is the one workflow whose submission carries task-level
         // admission checks, so it must not use the generic CLI dispatcher.
@@ -126,51 +131,6 @@ impl Execute for ShipCommand {
             notices.notes(),
         )
     }
-}
-
-/// Resolve the effective ship mode for a `ship` invocation.
-///
-/// An explicit `--mode` wins. Otherwise the mode is resolved from the current
-/// workspace binding. Standalone runtimes without a binding may use a single
-/// unambiguous registry checkout for their data root. If no workspace can be
-/// identified, fall back to `pr` so omitted configuration uses reviewable delivery.
-fn resolve_ship_mode(
-    args: &ShipCommand,
-    runtime: &OrbitRuntime,
-) -> Result<orbit_core::ShipMode, OrbitError> {
-    if let Some(mode) = args.mode {
-        return Ok(mode.to_core());
-    }
-    if let Some(binding) = runtime.workspace_runtime_binding() {
-        return Ok(binding.ship_mode);
-    }
-    let registry_path =
-        orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
-    let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
-    let orbit_dir = runtime.shared_root();
-    let mut checkouts = registry
-        .checkouts
-        .iter()
-        .filter(|checkout| checkout.orbit_dir == orbit_dir);
-    let checkout = checkouts.next().filter(|_| checkouts.next().is_none());
-    let mode = checkout
-        .and_then(|checkout| {
-            registry
-                .workspaces
-                .iter()
-                .find(|workspace| workspace.id == checkout.workspace_id)
-        })
-        .map(orbit_core::resolved_ship_mode);
-    let Some(mode) = mode else {
-        tracing::warn!(
-            registry_path = %registry_path.display(),
-            orbit_dir = %orbit_dir.display(),
-            fallback = "pr",
-            "workspace was not found in registry; falling back to PR ship mode"
-        );
-        return Ok(orbit_core::ShipMode::Pr);
-    };
-    Ok(mode)
 }
 
 fn ensure_workflow_exists(workflow_alias: &'static str) -> Result<(), OrbitError> {
