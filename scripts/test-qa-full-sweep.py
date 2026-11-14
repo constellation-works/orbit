@@ -198,6 +198,34 @@ def read_stat(pid):
     except (IndexError, ValueError, UnicodeError):
         raise Unreadable(f"process {pid} status is malformed")
 
+def is_descendant(pid, ancestor=None):
+    if ancestor is None:
+        ancestor = os.getpid()
+    if pid == ancestor:
+        return True
+    seen = set()
+    current = pid
+    for _ in range(1024):
+        if current == ancestor:
+            return True
+        if current <= 1 or current in seen:
+            return False
+        seen.add(current)
+        try:
+            stat = read_stat(current)
+        except Unreadable:
+            return None
+        if stat is None:
+            return False
+        try:
+            parent = int(stat.get("ppid", 0))
+        except (TypeError, ValueError):
+            return None
+        if parent == current:
+            return False
+        current = parent
+    return None
+
 # @DARWIN_PROC_TABLE@
 def identity(pid):
     # None only when the process is gone; Unreadable when the read failed.
@@ -234,7 +262,9 @@ def identity(pid):
     return None
 
 def snapshot():
-    # Raises Unreadable unless every visible process was read.
+    # Raises Unreadable unless every relevant visible process was read.
+    # Same-user siblings provably not descending from this supervisor are
+    # skipped; descendants and indeterminate ancestry still raise.
     found = {}
     if os.path.isdir("/proc"):
         try:
@@ -243,7 +273,17 @@ def snapshot():
             raise Unreadable(f"process table is unreadable: {error}")
         for entry in entries:
             if entry.isdigit():
-                info = identity(int(entry))
+                pid = int(entry)
+                try:
+                    info = identity(pid)
+                except Unreadable:
+                    try:
+                        descendant = is_descendant(pid)
+                    except OSError:
+                        descendant = None
+                    if descendant is False:
+                        continue
+                    raise
                 if info is not None:
                     found[info["pid"]] = info
         return found
@@ -578,6 +618,41 @@ def _proc_stat(pid):
         raise ProcessObservationUnavailable(f"process {pid} status is malformed: {error}") from error
 
 
+def _is_descendant(pid, ancestor=None):
+    """Whether pid descends from ancestor (default: this process).
+
+    Walks the /proc parent chain with stat reads only. Returns False only
+    when the chain provably ends without the ancestor; None when a link in
+    the chain is unreadable for a reason other than the process being gone.
+    """
+    if ancestor is None:
+        ancestor = os.getpid()
+    if pid == ancestor:
+        return True
+    seen = set()
+    current = pid
+    for _ in range(1024):
+        if current == ancestor:
+            return True
+        if current <= 1 or current in seen:
+            return False
+        seen.add(current)
+        try:
+            stat = _proc_stat(current)
+        except ProcessObservationUnavailable:
+            return None
+        if stat is None:
+            return False
+        try:
+            parent = int(stat.get("ppid", 0))
+        except (TypeError, ValueError):
+            return None
+        if parent == current:
+            return False
+        current = parent
+    return None
+
+
 def _proc_table_native():
     """Whether identities come from /proc or libproc, with working directories."""
     if os.path.isdir("/proc"):
@@ -631,8 +706,11 @@ def _proc_identity(pid):
 def _proc_snapshot():
     """Every visible process identity.
 
-    Raises ProcessObservationUnavailable when the table or any entry in it
-    could not be read: a partial table is not a complete one."""
+    Raises ProcessObservationUnavailable when the table or any relevant
+    entry in it could not be read: a partial table is not a complete one.
+    A same-user entry that is provably not a descendant of this process is
+    skipped without poisoning the table; descendants and indeterminate
+    ancestry still raise so unknown stays unknown."""
     found = {}
     if os.path.isdir("/proc"):
         try:
@@ -641,7 +719,23 @@ def _proc_snapshot():
             raise ProcessObservationUnavailable(error.errno, f"process table is unreadable: {error}") from error
         for entry in entries:
             if entry.isdigit():
-                info = _proc_identity(int(entry))
+                pid = int(entry)
+                try:
+                    info = _proc_identity(pid)
+                except ProcessObservationUnavailable:
+                    # A same-user sibling that is provably not a descendant
+                    # (for example a Yama ptrace_scope=1 denial for an
+                    # unrelated runner agent) cannot be one of this sweep's
+                    # workers. Skip it without poisoning the table; a
+                    # descendant or an indeterminate ancestry still aborts
+                    # so unknown stays unknown.
+                    try:
+                        descendant = _is_descendant(pid)
+                    except OSError:
+                        descendant = None
+                    if descendant is False:
+                        continue
+                    raise
                 if info is not None:
                     found[info["pid"]] = info
         return found
