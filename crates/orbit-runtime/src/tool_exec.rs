@@ -411,11 +411,15 @@ fn canonical_repo_root(runtime: &RuntimeKernel) -> PathBuf {
         .unwrap_or_else(|_| runtime.context.paths().repo_root.clone())
 }
 
-/// Memoised checkout roots, keyed by `(canonical cwd, canonical repo root)`.
-/// The facts this resolves do not change for the life of a process, so a
-/// long-lived MCP server pays any git fallback once per cwd instead of on
-/// every tool call.
-type ActiveCheckoutRootCache = HashMap<(PathBuf, PathBuf), Option<PathBuf>>;
+/// Memoised positively verified checkout roots, keyed by `(canonical cwd,
+/// canonical repo root)`. A verified root does not change for the life of a
+/// process, so a long-lived MCP server pays any git fallback once per cwd
+/// instead of on every tool call. A `None` result is never memoised: the
+/// git probes collapse a timeout or execution failure into `None`, so a
+/// cached `None` would poison the pair for the process lifetime after one
+/// transient outage. Re-probing an unrecognised checkout costs git spawns
+/// but always falls back to the registered root, as before.
+type ActiveCheckoutRootCache = HashMap<(PathBuf, PathBuf), PathBuf>;
 
 static ACTIVE_CHECKOUT_ROOT_CACHE: OnceLock<Mutex<ActiveCheckoutRootCache>> = OnceLock::new();
 
@@ -435,10 +439,12 @@ pub(crate) fn active_git_checkout_root(
     let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let key = (canonical_cwd.clone(), canonical_repo_root.to_path_buf());
     if let Some(cached) = active_checkout_root_cache().get(&key) {
-        return cached.clone();
+        return Some(cached.clone());
     }
     let resolved = active_git_checkout_root_uncached(canonical_repo_root, cwd, &canonical_cwd);
-    active_checkout_root_cache().insert(key, resolved.clone());
+    if let Some(root) = &resolved {
+        active_checkout_root_cache().insert(key, root.clone());
+    }
     resolved
 }
 

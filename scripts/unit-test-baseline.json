@@ -401,6 +401,7 @@
         "application/tests/vision_probe.rs::successful_run_without_the_code_is_image_not_seen_and_a_returned_code_is_seen",
         "bootstrap/tests/global_defaults.rs::stamp_rejects_a_symlinked_resources_directory",
         "runtime/tests/block_on_run_failure.rs::terminal_run_publication_precedes_coupled_task_cleanup",
+        "runtime/tests/tool_exec.rs::failed_first_checkout_probe_recovers_to_inspection_slot_in_same_process",
         "runtime/tests/tool_exec.rs::root_resolution_uses_owned_inspection_slot_and_rejects_planted_checkouts"
       ]
     },
