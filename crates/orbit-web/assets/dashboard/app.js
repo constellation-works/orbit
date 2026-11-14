@@ -12,7 +12,7 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, noticesDockShown, setDockMode, setDockRouteShown } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, noticesDockShown, residentsDockShown, setDockMode, setDockRouteShown } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -39,6 +39,7 @@ import { fetchAndRenderPlugins } from './js/plugins.js';
 import { fetchAndRenderMemory, memoryRoute, setMemorySelection } from './js/memory.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
+import { fetchAndRenderResidents } from './js/operations-residents.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -1584,6 +1585,7 @@ function activeRefreshJobs({ poll = false } = {}) {
     if (includeRunningRuns) add("Running runs", fetchRunningRuns(activeRunsRequest));
     // The Notices list lives in the Tasks dock, so it refreshes with Tasks.
     add("Notices", fetchAndRenderNotices({ shareRecent: poll }));
+    add("Residents", fetchAndRenderResidents());
     return jobs;
   }
 
@@ -1795,23 +1797,25 @@ function fetchAndRenderTaskLocks() {
 // polls only on its safety net: each panel below refetches on the notice kinds
 // it shows, quietly, as a poll would. Other pages keep their 30 s poll; the
 // in-flight count, drain chip and host chips follow notices on every page.
-// Fleet notices are not a change-stream kind, so the visible Notices dock keeps
-// its own 30 s read while the stream stretches the Tasks poll.
-const NOTICES_DOCK_REFRESH_MS = 30_000;
+// Notices and resident checkpoints are not change-stream kinds, so the visible
+// dock pane keeps its 30 s read while the stream stretches the Tasks poll.
+const TASKS_DOCK_REFRESH_MS = 30_000;
 
-function watchNoticesDock() {
+function watchTasksDockPanels() {
   const tick = () => {
     const stale = activeTab === "tasks" && !isAggregateView() && !document.hidden
-      && changeStreamLive() && noticesDockShown();
+      && changeStreamLive();
     // Every other state is polled at its normal cadence by the Tasks refresh.
-    const read = stale ? fetchAndRenderNotices({ shareRecent: true }) : Promise.resolve();
-    read.catch(error => console.error("Notices refresh failed", error)).finally(() => setTimeout(tick, NOTICES_DOCK_REFRESH_MS));
+    const read = !stale ? Promise.resolve()
+      : noticesDockShown() ? fetchAndRenderNotices({ shareRecent: true })
+        : residentsDockShown() ? fetchAndRenderResidents() : Promise.resolve();
+    read.catch(error => console.error("Dock refresh failed", error)).finally(() => setTimeout(tick, TASKS_DOCK_REFRESH_MS));
   };
-  setTimeout(tick, NOTICES_DOCK_REFRESH_MS);
+  setTimeout(tick, TASKS_DOCK_REFRESH_MS);
 }
 
 function wireChangeStream() {
-  watchNoticesDock();
+  watchTasksDockPanels();
   setStreamCoverage(() => activeTab === "tasks" && !isAggregateView() && changeStreamLive());
   onChangeStreamLive((live) => {
     reschedulePolling();

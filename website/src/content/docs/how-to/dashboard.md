@@ -106,12 +106,12 @@ Confirm the selected workspace before you act.
 
 | Rail | Shows |
 |---|---|
-| **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, and **[Notices](#notices)**. |
+| **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, **[Notices](#notices)**, and **[Residents](#residents)**. |
 | **Drain** | Only in windows 1000px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
 | **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
-| **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
+| **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
 | **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, Hosts, and Other. |
@@ -176,8 +176,9 @@ previews files already stored on the task; it does not attach files.
 
 In the right dock, **Drain** holds the [auto-drain](#auto-drain) card,
 **Log** is a live `orbit.log` tail you can filter to **all**, **err**,
-**deny**, or **warn**, and **Notices** lists open and recently closed fleet
-notices. Opening a task replaces the dock with its detail.
+**deny**, or **warn**, **Notices** lists open and recently closed fleet
+notices, and **[Residents](#residents)** sets up and steers resident
+mandates. Opening a task replaces the dock with its detail.
 
 With one workspace selected, Tasks updates live; other views refresh every
 30 seconds. A hidden tab stops refreshing, but new failed runs add a
@@ -369,6 +370,30 @@ Click one to filter the list.
   (the default) or a follower to run the pull.
 - Stopping a pull drain leaves admitted tasks claimed by their owner. See
   [Stop, cancel, and settle](/how-to/distributed-drain/#stop-cancel-and-settle).
+
+## Residents
+
+**Residents** is a tab on the Tasks dock (**Tasks dock > Residents**). It sets
+up and steers [resident mandates](/reference/resident-mandates/) in the
+selected workspace. `#tasks/residents` (or `#operations/residents`) opens Tasks
+with this tab selected.
+
+To start one, click **Start** to open the dialog and fill in three steps: what
+it should do, what it may do (rights need **Your words**; with no rights the
+resident only observes), and when it runs. The flow creates the mandate,
+grants the rights, then turns the cycle routine on. If a later step is refused,
+the message names the step and says what already exists.
+
+The **Cycle routine** row must be on: without it, no cycle wakes a mandate.
+Mandates that need you (an open request, an invalid mandate, or a stall) sort
+first. Select a mandate to answer its requests and steer it:
+
+- **Pause**, **Takeover**, and **Stop** ask for a reason, as
+  `orbit resident control` does. **Relay** asks for the direction to send, as
+  `orbit resident relay` does. **Wake for status**, **Resume**, and
+  **Release** run at once.
+- **Change authority** adds or removes rights and workspaces, and can shorten
+  the deadline. A widening needs your words in **Quote**.
 
 ## Runs and errors
 
@@ -602,10 +627,9 @@ running.
 ## Automation
 
 **Automation** holds the workspace's recurring work: **Routines** (with the
-host scheduler clock), **Auto-tasks**, **Scripts**, and
-[**Residents**](#residents). Its controls need one active workspace and an
-[operator session](#authorization). For what routines and auto-tasks are, see
-[Schedule recurring work](/how-to/recurring-work/).
+host scheduler clock), **Auto-tasks**, and **Scripts**. Its controls need one
+active workspace and an [operator session](#authorization). For what routines
+and auto-tasks are, see [Schedule recurring work](/how-to/recurring-work/).
 
 ### Routines
 
@@ -655,28 +679,6 @@ listed: use **ship** or the [auto-drain](#auto-drain).
 capabilities. Review the diff shown, then grant it with
 **Grant `<digest>`**. The grant is bound to the digest you reviewed. See
 [Script steps](/reference/activity-job-yaml/#script-steps).
-
-### Residents
-
-**Residents** sets up and steers
-[resident mandates](/reference/resident-mandates/) in the selected workspace.
-
-To start one, click **Start a resident** and fill in three steps: what it
-should do, what it may do (rights need **Your words**; with no rights the
-resident only observes), and when it runs. The flow creates the mandate,
-grants the rights, then turns the cycle routine on. If a later step is
-refused, the message names the step and says what already exists.
-
-The **Cycle routine** row must be on: without it, no cycle wakes a mandate.
-Mandates that need you (an open request, an invalid mandate, or a stall) sort
-first. Select a mandate to answer its requests and steer it:
-
-- **Pause**, **Takeover**, and **Stop** ask for a reason, as
-  `orbit resident control` does. **Relay** asks for the direction to send, as
-  `orbit resident relay` does. **Wake for status**, **Resume**, and
-  **Release** run at once.
-- **Change authority** adds or removes rights and workspaces, and can shorten
-  the deadline. A widening needs your words in **Quote**.
 
 ## Knowledge › Frictions
 
@@ -770,8 +772,17 @@ state and prints the error on the card:
 | **[Hosts](#hosts)** | The serving machine's registered SSH hosts. |
 | **Other** | Keys no other Settings page shows, workspace cleanup, and the raw TOML files. |
 
+Every page starts with one bar that holds its controls and **Reload**. On
+**Workflow** the bar jumps to a section, searches the settings, and expands
+or collapses every section. Each row shows the key and its description, the
+effective value with what the key accepts and the value underneath it, the
+source of the value (**Default**, **Unset**, **Workspace**, **Global**, or
+**Environment**), and **Edit**. A key you cannot change here shows
+**Read-only** with the reason.
+
 Routines, auto-task definitions, and the workspace registry (`base_branch`,
-`ship_mode`) are not editable here. Writes need an
+`ship_mode`) are not editable here; **Workflow** shows the registry values
+read-only. Writes need an
 [operator session](#authorization).
 
 ### Edit a value

@@ -174,6 +174,7 @@ function paintDrainHostSelect(ordered, selected) {
     select.dataset.hosts = signature;
   }
   select.value = selected || "";
+  select.title = selected ? `Drain host: ${selected}` : "Drain host";
 }
 function onDrainHostChanged(value) {
   if (isAggregateView()) {
@@ -254,7 +255,12 @@ function renderAutoDrainHead(payload) {
     if (title) title.textContent = isAggregateView() ? 'Auto-draining' : 'Auto-drain';
   }
   const pill = $("auto-drain-phase");
-  if (pill) pill.dataset.drainState = pulling ? "pulling" : phase;
+  if (pill) {
+    pill.dataset.drainState = pulling ? "pulling" : phase;
+    const pillLabel = pulling ? pullLabel : phase === "idle" ? "Idle" : label;
+    pill.setAttribute("aria-label", pillLabel);
+    pill.title = pillLabel;
+  }
   const dot = $("auto-drain-dot");
   if (dot) dot.className = `drain-dot ${pulling ? "pulling" : phase}`;
   const text = $("auto-drain-phase-label");
@@ -266,6 +272,20 @@ function renderAutoDrainHead(payload) {
   // admissions have stopped.
   const when = $("auto-drain-when");
   if (when) when.textContent = !pulling && phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
+  // Full header values stay in the row's name/title when members shrink or drop.
+  const header = card?.querySelector(":scope > header");
+  if (header) {
+    const parts = [isAggregateView() ? "Auto-draining" : "Auto-drain"];
+    const hostSelect = $("auto-drain-host");
+    if (hostSelect?.value) parts.push(hostSelect.value);
+    const phaseText = text?.textContent?.trim();
+    if (phaseText) parts.push(phaseText);
+    if (when?.textContent?.trim()) parts.push(when.textContent.trim());
+    const summary = parts.join(" · ");
+    header.setAttribute("aria-label", summary);
+    header.title = summary;
+    if (pill && phaseText) { pill.setAttribute("aria-label", phaseText); pill.title = phaseText; }
+  }
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement
       && !$('auto-drain-operation-feedback')?.matches(".pending, .success, .error")) {
@@ -293,13 +313,21 @@ function autoDrainWindow(payload) {
     figure.dataset.stat = key;
     stats.appendChild(figure);
   };
-  if (capacity.admitted_workers != null) {
-    stat("running", "running", running);
-    stat("admitted", "admitted", capacity.admitted_workers);
-  }
+  stat("running", "running", running);
+  if (capacity.admitted_workers != null) stat("admitted", "admitted", capacity.admitted_workers);
   const approvals = autoDrainApprovals(payload.approvals);
   if (approvals) stat("approved", "approved", approvals.approved, approvals.held, approvals.title);
   if (stats.children.length === 0) return null;
+  // Full counts stay in the row's name/title when members shrink or drop.
+  const countParts = [`${running} running`];
+  if (capacity.admitted_workers != null) countParts.push(`${capacity.admitted_workers} admitted`);
+  if (approvals) {
+    countParts.push(`${approvals.approved} approved`);
+    if (approvals.held) countParts.push(approvals.held);
+  }
+  const countSummary = `This window: ${countParts.join(", ")}`;
+  stats.setAttribute("aria-label", countSummary);
+  stats.title = countSummary;
   if (!approvals || !approvals.reasons.length) return stats;
   const summary = el("div", { class: "drain-approval-summary" });
   approvals.reasons.forEach(([reason, count], index) => {

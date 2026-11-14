@@ -92,6 +92,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/config-topics.js"),
     ),
     (
+        "/static/js/settings-ui.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/settings-ui.js"),
+    ),
+    (
         "/static/js/hosts.js",
         JS,
         include_bytes!("../assets/dashboard/js/hosts.js"),
