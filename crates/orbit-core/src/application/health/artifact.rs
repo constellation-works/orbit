@@ -58,12 +58,6 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_config::DEMOTED_DEFAULT_AUTO_TASKS;
 
-use super::activity_catalog::repair_retired_activity_backends as repair_activity_backends;
-
-pub use super::activity_catalog::{
-    FIX_RETIRED_ACTIVITY_BACKENDS_CMD, RetiredActivityBackendRepair, RetiredActivityBackendSkip,
-};
-
 use super::artifact_diagnosis;
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
@@ -507,15 +501,6 @@ impl OrbitRuntime {
             removed += retire_catalog(&catalog)?;
         }
         Ok(removed)
-    }
-
-    /// Remove known retired `spec.backend` values from schemaVersion 2
-    /// agent-loop activities. Unknown backends and unrelated malformed
-    /// files are left untouched and listed for a manual edit.
-    pub fn repair_retired_activity_backends(
-        &self,
-    ) -> Result<RetiredActivityBackendRepair, OrbitError> {
-        repair_activity_backends(self)
     }
 }
 

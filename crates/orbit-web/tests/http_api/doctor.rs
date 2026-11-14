@@ -160,7 +160,6 @@ fn no_dashboard_request_runs_a_doctor_repair() {
             "fix_stale_artifacts",
             "fix_orphan_task_stores",
             "fix_automation_pins",
-            "fix_retired_activity_backends",
             "remove_graph",
             "confirm",
             "deep",
