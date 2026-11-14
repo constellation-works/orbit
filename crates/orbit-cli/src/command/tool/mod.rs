@@ -7,7 +7,6 @@ mod list;
 mod manifest;
 mod remove;
 mod run;
-mod scaffold;
 mod show;
 mod support;
 

@@ -57,10 +57,6 @@ pub(super) fn tool_file_stem(tool_path: &Path) -> &str {
     file_name
 }
 
-pub(super) fn sidecar_manifest_path(tool_path: &Path) -> PathBuf {
-    sidecar_manifest_path_with_extension(tool_path, "yaml")
-}
-
 fn sidecar_manifest_path_with_extension(tool_path: &Path, extension: &str) -> PathBuf {
     let parent = tool_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = tool_file_stem(tool_path);

@@ -363,7 +363,6 @@ A panel or link does not grant backend access or start a service.
 
 Existing executable tools and v1 sidecars remain supported. Prefer a v2 plugin
 for new work that needs grants, schemas, bundled assets or conformance.
-`orbit tool scaffold` is deprecated and still writes a v1 sidecar.
 
 A v1 sidecar describes one executable's tool, for example
 `hello.orbit-tool.yaml` beside `hello.py`:

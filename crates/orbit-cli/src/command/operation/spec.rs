@@ -545,14 +545,6 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             "admin".to_string(),
             None,
         ),
-        ToolSubcommand::Scaffold(args) => (
-            "scaffold",
-            args.name.clone(),
-            Some("tool".to_string()),
-            args.name.clone().or_else(|| Some(args.path.clone())),
-            "admin".to_string(),
-            None,
-        ),
         ToolSubcommand::Remove(args) => (
             "remove",
             Some(args.name.clone()),
