@@ -111,7 +111,7 @@ expected on the default port, `7878`.
   answers.
 - **Remote-run links.** Where a task's execution line says which machine ran
   it (`on build-box`) and that machine is registered on the serving host, the
-  name links to that run on that host, as `?host=<name>&workspace=<workspace>&window=<window>#runs?run_id=<run>`.
+  name links to that run on that host, as `?host=<name>&workspace=<workspace>&window=<window>#runs/<run>`.
   An unregistered machine stays plain text.
 - **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Health, Analytics) uses that
   same form and carries the selected host, workspace and time window, so a link

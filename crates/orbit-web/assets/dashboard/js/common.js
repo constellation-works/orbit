@@ -824,7 +824,7 @@ export function scopedHashHref(hash) {
 /// `all` token for the aggregate view) and the time window, so a link opened in
 /// a new tab, copied or reloaded shows the same run in the same scope.
 export function runHref(runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
-  return scopedHref(`#runs?run_id=${encodeURIComponent(runId)}`, { host, workspace });
+  return scopedHref(`#runs/${encodeURIComponent(runId)}`, { host, workspace });
 }
 
 /// The dashboard address that selects task `taskId` on the Tasks tab,
@@ -910,7 +910,7 @@ export function bindRunLink(link, runId, { host = selectedRunHost(), workspace =
       window.dispatchEvent(new HashChangeEvent("hashchange"));
       return;
     }
-    window.location.hash = `#runs?run_id=${encodeURIComponent(runId)}`;
+    window.location.hash = `#runs/${encodeURIComponent(runId)}`;
   });
   return link;
 }
