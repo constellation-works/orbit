@@ -43,13 +43,13 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   update open details without discarding unsaved editors.
 
 The Tasks dock holds the Auto-drain status and forecast, a simple **Start a
-window** card, **Locks held** and **Log**. It gives way to the task pane when
-a task opens. Below 1000px the list keeps the full width, and an explicit Drain,
-Locks held or Log link shows the dock in its place; the rail's **Tasks** item
+window** card, and **Log**. It gives way to the task pane when
+a task opens. Below 1000px the list keeps the full width, and an explicit Drain or
+Log link shows the dock in its place; the rail's **Tasks** item
 returns to the list, keeping its filters.
-Locks held lists holders by task or locked paths by file, marking a path more
-than one task holds, with a
-filter by task ID. On a replica checkout, Start pulls directly from the
+Backlog readiness names holding tasks; each task detail lists its context
+files and lock contention. Retired Locks held links and remembered dock modes
+open Drain. On a replica checkout, Start pulls directly from the
 owner; the Auto-drain card can stop that pull's admissions.
 
 The rail workspace dropdown is a single-select. **All workspaces** is its first
@@ -64,8 +64,7 @@ preference retain a multi-workspace choice, dropping workspaces no longer
 available. Several `workspaces=` values open **All workspaces** with that filter;
 one value opens that workspace's board.
 
-With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**,
-**Locks held**, **Log**. Drain reuses the Auto-drain body, with an
+With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**, **Log**. Drain reuses the Auto-drain body, with an
 **Auto-draining** header followed by a workspace select, an owner-first host select and phase pill.
 The workspace select lists the selected host's owned workspaces in alphabetical order,
 defaulting to the first with a live drain on any host; the host select lists

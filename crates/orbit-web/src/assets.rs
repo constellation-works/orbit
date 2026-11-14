@@ -526,11 +526,6 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         JS,
         include_bytes!("../assets/dashboard/js/memory.js"),
     ),
-    (
-        "/static/js/locks.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/locks.js"),
-    ),
 ];
 pub(super) const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",

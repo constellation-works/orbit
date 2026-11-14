@@ -6,7 +6,6 @@ import { taskPilotWarningsFilter, buildChips, buildTasksHash, buildTasksFilterHa
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import * as globalSearch from './js/global-search.js';
 import { initTaskCreate } from './js/task-create.js';
-import { initLocks, paintLocks } from './js/locks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -197,6 +196,7 @@ let frictionNoDefault = false;
 // Health strip state
 let jobsInFlightSequence = 0;
 let runningRunsSequence = 0;
+let taskLocksSequence = 0;
 
 // ORB-00030: workspaces the dashboard is serving. Empty/one entry => single
 // mode (no selector). More than one => global mode (selector shown).
@@ -472,21 +472,6 @@ function runDetailContext() {
     renderRunGantt,
     renderRunEvents,
   };
-}
-
-// The last locks read and the workspace it belongs to.
-let lastLocks = null;
-
-function renderLocksPanel(payload) {
-  // The In progress rows count each task's locked files from the same read,
-  // and the dock renders the same locks read.
-  setTaskLocks(payload);
-  lastLocks = { payload, workspace: getWorkspace() };
-  paintLocksPanel(payload);
-}
-
-function paintLocksPanel(payload) {
-  paintLocks(payload);
 }
 
 function knowledgeStatusPill(status) {
@@ -1026,12 +1011,9 @@ function wireFrictionPagination() {
 // restores every panel.
 
 // ORB-00039: in aggregate mode the per-workspace fetches are skipped, so the
-// panels they feed (audit summary, locked files) show an inline placeholder.
+// audit summary shows an inline placeholder.
 function renderAggregatePlaceholders() {
   renderPanelPlaceholder("audit-summary-body");
-  renderPanelPlaceholder("locks-body");
-  const locksCount = $("locks-count");
-  if (locksCount) locksCount.textContent = "—";
 }
 
 // Most Health panels are fed exclusively by per-workspace endpoints and
@@ -1510,14 +1492,6 @@ function tasksSlowReadsDue() {
   return due;
 }
 
-// The Locks held panel shows while the dock is on its Drain or Locks view and
-// no task pane has replaced the dock.
-function locksPanelShown() {
-  const panel = $("locks-panel");
-  if (!panel || typeof panel.getClientRects !== "function") return true;
-  return panel.getClientRects().length > 0;
-}
-
 // The open backlog or proposed task whose full readiness entry the drain
 // read adds beside the workspace list.
 function drainDetailTaskId() {
@@ -1527,10 +1501,11 @@ function drainDetailTaskId() {
   return ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
 }
 
-// In progress and Blocked rows show their locked-file counts, and the dock
-// beside the list holds the Locks held panel; read locks while either shows.
+// Running rows show locked-file counts; an open task detail also needs the
+// lock read for context contention.
 function taskLocksShown() {
-  return activeStatuses.has("in-progress") || activeStatuses.has("blocked") || locksPanelShown();
+  return activeStatuses.has("in-progress") || activeStatuses.has("blocked")
+    || Boolean(taskState.selectedTaskId || taskState.taskPageId || taskState.pinnedExternalTask);
 }
 
 function activeRefreshJobs({ poll = false } = {}) {
@@ -1809,8 +1784,12 @@ function fetchRunningRuns(request) {
 
 function fetchAndRenderTaskLocks() {
   const visit = captureWorkspaceVisit();
-  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count").catch(error => {
-    if (visit.isCurrent()) setTaskLocks(null);
+  const sequence = ++taskLocksSequence;
+  const current = () => visit.isCurrent() && sequence === taskLocksSequence;
+  return fetchJson("/api/tasks/locks").then(payload => {
+    if (current()) setTaskLocks(payload);
+  }).catch(error => {
+    if (current()) setTaskLocks(null);
     throw error;
   });
 }
@@ -2226,8 +2205,6 @@ const tasksContext = taskContext();
 // rows when it changes what they say about a backlog task's wait.
 onDrainReadinessChange(() => {
   if (activeTab === "tasks") renderTaskList(lastTasks, taskContext());
-  // Each lock row counts the waiting tasks it holds back.
-  if (lastLocks && lastLocks.workspace && lastLocks.workspace === getWorkspace()) paintLocksPanel(lastLocks.payload);
 });
 // Run start times and file locks arrive apart from the task list too.
 onTaskRuntimeChange(() => {
@@ -2278,7 +2255,6 @@ wireChangeStream();
 wireReliabilityWindowSelector();
 wireWindowSelector("tools-window-selector", { windows: TOOLS_WINDOWS });
 wireDoctorPanel();
-initLocks();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();

@@ -607,7 +607,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     legacyRoute = true;
   }
   if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log"].includes(dockView)) {
-    dockView = dockView === "auto-drain" ? "drain" : dockView;
+    dockView = ["auto-drain", "locks"].includes(dockView) ? "drain" : dockView;
     query.set("dock", dockView);
     query.delete("dockMode");
     query.delete("panel");
