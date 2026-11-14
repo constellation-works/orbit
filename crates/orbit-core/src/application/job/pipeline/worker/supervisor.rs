@@ -102,6 +102,13 @@ pub(crate) trait PipelineRunHost: Send + Sync {
     /// Whether durable provider evidence proves no provider remains active.
     fn providers_stopped(&self, run_id: &str) -> bool;
 
+    /// Keep the stopped worker's candidate before the run is terminalized,
+    /// returning a clause naming where it is kept. Hosts without a
+    /// worktree to keep return `None`.
+    fn preserve_rescue_candidate(&self, _run_id: &str) -> Option<String> {
+        None
+    }
+
     /// Terminalize `run_id`, releasing the task reservations it owns. Returns
     /// whether this call performed the terminal write.
     fn terminalize_run(
@@ -129,6 +136,11 @@ impl PipelineRunHost for OrbitRuntime {
             run_id,
             &orbit_common::process::identity::probe_process_liveness,
         )
+    }
+
+    fn preserve_rescue_candidate(&self, run_id: &str) -> Option<String> {
+        let run = self.get_job_run_backend(run_id).ok().flatten()?;
+        self.keep_rescue_candidate(&run)
     }
 
     fn terminalize_run(
@@ -667,6 +679,21 @@ impl PipelineWorkerSupervisor {
         if !self.host.providers_stopped(&run.run_id) {
             return Ok(false);
         }
+        // A worker stopped externally leaves its candidate only in its
+        // worktree; keep it under its rescue ref before terminalizing,
+        // while that worktree still exists.
+        let message = if matches!(
+            error_code,
+            Some(OPERATOR_STOPPED_ERROR_CODE) | Some(WORKER_TERMINATED_ERROR_CODE)
+        ) {
+            match self.host.preserve_rescue_candidate(&current.run_id) {
+                Some(clause) => format!("{message}; {clause}"),
+                None => message.to_string(),
+            }
+        } else {
+            message.to_string()
+        };
+        let message = message.as_str();
         let (state, started_at, audit_name) = match current.state {
             JobRunState::Pending => (
                 JobRunState::Interrupted,
