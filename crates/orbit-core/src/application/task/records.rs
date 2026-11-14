@@ -1,7 +1,7 @@
 //! Coordinated task document, history, artifact, and search-index writes.
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_search::LexicalIndex;
+use orbit_search::{LexicalIndex, TaskSidecarSearchText};
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
     TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
@@ -55,11 +55,36 @@ impl TaskRecordService<'_> {
             );
             return;
         }
+        // Index the sidecars a `Task` does not carry (comment bodies,
+        // artifact paths) from the row this write settled, so search can
+        // answer this task from the index alone. A row that cannot be read
+        // (in flight, a backend without one) indexes the task fields only,
+        // which records the lesser coverage and keeps the bundle-matcher
+        // fallback for this task until a later write or reindex covers it.
+        let sidecars = self
+            .store
+            .get_task_row(&task.id, true)
+            .ok()
+            .flatten()
+            .map(|row| TaskSidecarSearchText {
+                comments: row
+                    .comments
+                    .into_iter()
+                    .map(|comment| comment.message)
+                    .collect(),
+                artifact_paths: row
+                    .artifacts
+                    .into_iter()
+                    .map(|artifact| artifact.path)
+                    .collect(),
+            });
         match self
             .lexical_index
             .store()
-            .and_then(|index| index.index_task(task))
-        {
+            .and_then(|index| match &sidecars {
+                Some(sidecars) => index.index_task_with_sidecar_text(task, sidecars),
+                None => index.index_task(task),
+            }) {
             Ok(_) => {}
             // A sandbox can deny the write without the open observing a
             // read-only mount (a provider-native sandbox under bare
@@ -327,8 +352,23 @@ impl crate::OrbitRuntime {
         observation: &orbit_store::contracts::DeferredBranchObservation,
     ) -> Result<orbit_store::contracts::BranchObservationOutcome, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.stores()
+        let outcome = self
+            .stores()
             .tasks()
-            .record_deferred_branch_observation(observation)
+            .record_deferred_branch_observation(observation)?;
+        // A retained receipt lands an artifact (and maybe a comment)
+        // outside `update_task`, and both are indexed search fields now:
+        // refresh the owner's chunks or its recorded sidecar coverage
+        // would vouch for text the index does not hold. A deferred
+        // receipt has written nothing yet; settlement lands it inside a
+        // claim commit, whose next ordinary task write re-indexes.
+        if matches!(
+            outcome,
+            orbit_store::contracts::BranchObservationOutcome::Retained
+        ) && let Ok(Some(task)) = self.stores().tasks().get_task(&observation.task_id)
+        {
+            self.stores().task_records().index_task(&task);
+        }
+        Ok(outcome)
     }
 }

@@ -22,10 +22,14 @@ Terms are quoted literally before FTS parsing. Prefer a few distinctive terms fr
 the task; search does not infer synonyms. Task create/update writes chunks
 synchronously in both CLI and long-lived hosts; deletion retracts them.
 
-The bundle matcher supplements BM25 for comments, external references, artifact
-manifest paths, and unindexed tasks. It matches a case-insensitive substring,
-so a multi-word query on these fields must be contiguous. Artifact payloads are
-not searched. Frictions match a single case-insensitive substring, so query
+Comments, external references, and artifact manifest paths are indexed as
+chunks too, and a substring supplement over the index supplements BM25 for
+them — and for queries inside a token of any indexed field. It matches a
+case-insensitive substring, so a multi-word query on these fields must be
+contiguous. Tasks not yet indexed with those sidecar fields still fall back
+to a bundle-document matcher with the same substring semantics; an
+`orbit search reindex` after upgrade indexes every task with them. Artifact
+payloads are not searched. Frictions match a single case-insensitive substring, so query
 words must be adjacent. Empty multi-word results and partial task results carry
 notes explaining the semantics for each searched kind.
 

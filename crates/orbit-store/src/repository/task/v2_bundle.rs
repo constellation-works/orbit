@@ -474,6 +474,15 @@ impl TaskBundleStoreV2 {
     /// [`Self::read_bundle_if_settled`], which decides authoritatively and
     /// reports the failure itself.
     pub(crate) fn read_search_docs(&self, task_id: &str) -> Option<TaskSearchDocs> {
+        // One span per call on the task-query target, like the freshness
+        // span, so search cost audits can count bundle-document reads at
+        // the composed-runtime boundary.
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_search_docs_read",
+            task_id = %task_id,
+        )
+        .entered();
         let bundle_dir = self.bundle_path(task_id).ok()?;
         if !bundle_dir.try_exists().ok()? {
             return None;

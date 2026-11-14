@@ -11,9 +11,37 @@ use super::{
 
 impl OrbitRuntime {
     /// Rebuild the lexical task corpus, including previously unindexed tasks.
+    ///
+    /// Each task is rebuilt with the sidecars its listed row carries
+    /// (comment bodies, artifact paths), so a reindexed store is fully
+    /// covered and search answers it without bundle-document reads. A task
+    /// whose row cannot be read is rebuilt from its task fields alone and
+    /// keeps the lesser coverage.
     pub fn search_reindex(&self) -> Result<orbit_search::SearchIndexStats, OrbitError> {
         let tasks = self.stores().tasks().list_tasks()?;
-        self.stores().lexical_index().store()?.reindex_tasks(&tasks)
+        let mut records = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let sidecars = match self.get_listed_task_row(&task.id) {
+                Ok(Some(row)) => Some(orbit_search::TaskSidecarSearchText {
+                    comments: row
+                        .comments
+                        .into_iter()
+                        .map(|comment| comment.message)
+                        .collect(),
+                    artifact_paths: row
+                        .artifacts
+                        .into_iter()
+                        .map(|artifact| artifact.path)
+                        .collect(),
+                }),
+                _ => None,
+            };
+            records.push((task, sidecars));
+        }
+        self.stores()
+            .lexical_index()
+            .store()?
+            .reindex_tasks_with_sidecar_text(&records)
     }
 
     pub fn search_index_stats(&self) -> Result<orbit_search::SearchIndexStats, OrbitError> {

@@ -16,6 +16,21 @@ const CHUNKS_DDL: &str = r#"
     ON chunks(source_kind, source_id, field, chunk_idx);
 "#;
 
+/// Which task fields each source's chunks cover: `1` is the fields a
+/// [`Task`](orbit_types::task::Task) alone carries, `2` also carries the
+/// sidecars it does not — comments and artifact paths. A source with no
+/// row was indexed before coverage was recorded and counts as `1`, so an
+/// upgraded store keeps the bundle-matcher fallback for it until a reindex
+/// or an ordinary task write re-indexes it at the current version.
+const COVERAGE_DDL: &str = r#"
+    CREATE TABLE IF NOT EXISTS source_index_coverage (
+        source_kind TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        fields_version INTEGER NOT NULL,
+        PRIMARY KEY (source_kind, source_id)
+    );
+"#;
+
 /// The FTS5 index plus the triggers that mirror `chunks` into it. FTS5 cannot
 /// remove a row's tokens without the original text, which is why the delete
 /// and update triggers replay `old.content`.
@@ -43,10 +58,41 @@ const CORPUS_FTS_DDL: &str = r#"
     END;
 "#;
 
+/// The trigram twin of `corpus_fts` over the same `chunks`: a phrase query
+/// of three or more characters matches as a substring (case-insensitively,
+/// diacritics intact), which is the bundle matcher's `contains_lowercased`
+/// semantics the porter index cannot answer. It exists so the substring
+/// supplement reads the index instead of every task's bundle documents.
+const CORPUS_SUBSTRING_FTS_DDL: &str = r#"
+    CREATE VIRTUAL TABLE corpus_substring_fts USING fts5(
+        content,
+        content = 'chunks',
+        content_rowid = 'id',
+        tokenize = 'trigram'
+    );
+
+    CREATE TRIGGER chunks_substring_after_insert AFTER INSERT ON chunks BEGIN
+        INSERT INTO corpus_substring_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+
+    CREATE TRIGGER chunks_substring_after_delete AFTER DELETE ON chunks BEGIN
+        INSERT INTO corpus_substring_fts(corpus_substring_fts, rowid, content)
+        VALUES ('delete', old.id, old.content);
+    END;
+
+    CREATE TRIGGER chunks_substring_after_update AFTER UPDATE ON chunks BEGIN
+        INSERT INTO corpus_substring_fts(corpus_substring_fts, rowid, content)
+        VALUES ('delete', old.id, old.content);
+        INSERT INTO corpus_substring_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+"#;
+
 pub fn ensure_schema(conn: &Connection) -> Result<(), OrbitError> {
     let obsolete = table_exists(conn, "embeddings")? || table_exists(conn, "id_allocations")?;
     if !obsolete
         && schema_present(conn)?
+        && table_exists(conn, "corpus_substring_fts")?
+        && table_exists(conn, "source_index_coverage")?
         && !corpus_fts_has_inline_columns(conn)?
         && !table_exists(conn, legacy_task_fts_table())?
     {
@@ -55,6 +101,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch("BEGIN IMMEDIATE").map_err(store_error)?;
     let result = (|| {
         conn.execute_batch(CHUNKS_DDL).map_err(store_error)?;
+        conn.execute_batch(COVERAGE_DDL).map_err(store_error)?;
         let adopted = adopt_inline_corpus_fts(conn)?;
         if !table_exists(conn, "corpus_fts")? {
             conn.execute_batch(CORPUS_FTS_DDL).map_err(store_error)?;
@@ -64,6 +111,17 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), OrbitError> {
             }
         }
         migrate_legacy_task_fts(conn)?;
+        // After every chunk-copying migration above, so the rebuild picks
+        // up adopted and legacy chunks as well as an upgraded store's own.
+        if !table_exists(conn, "corpus_substring_fts")? {
+            conn.execute_batch(CORPUS_SUBSTRING_FTS_DDL)
+                .map_err(store_error)?;
+            conn.execute(
+                "INSERT INTO corpus_substring_fts(corpus_substring_fts) VALUES ('rebuild')",
+                [],
+            )
+            .map_err(store_error)?;
+        }
         conn.execute_batch("DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS id_allocations;")
             .map_err(store_error)?;
         Ok::<_, OrbitError>(())
