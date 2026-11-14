@@ -306,7 +306,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "source_task_id",
                 ParamType::String,
-                "For bug tasks: the originating task whose implementation introduced the defect.",
+                "Task whose change introduced this bug.",
             ),
             both(
                 "crew",

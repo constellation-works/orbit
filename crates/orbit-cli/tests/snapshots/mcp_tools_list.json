@@ -399,7 +399,7 @@
         },
         "source_task_id": {
           "type": "string",
-          "description": "For bug tasks: the originating task whose implementation introduced the defect."
+          "description": "Task whose change introduced this bug."
         },
         "crew": {
           "type": [
