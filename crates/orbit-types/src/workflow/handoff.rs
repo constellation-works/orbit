@@ -655,6 +655,74 @@ impl AlreadyResolved {
     }
 }
 
+/// Whether `reported` is the scope [`already_landed_scope`] computes for
+/// `task` and `comments`, allowing only the owner's recording of the
+/// `regression_from` relations this handoff itself supplied.
+///
+/// A claimed leaf cannot write its task's relations, so it returns culprit
+/// task IDs in its handoff and the owner records them as `regression_from`
+/// relations when it accepts the handoff [ORB-24696]. Those recorded
+/// relations appear in the owner's current scope but not in the scope the
+/// leaf verified, and must not invalidate that verification. Every other
+/// difference — a removed, reordered or changed relation, a relation the
+/// handoff did not supply, or any other scope key — still does.
+pub fn already_landed_scope_matches(
+    reported: &serde_json::Value,
+    task: &crate::task::Task,
+    comments: &[crate::task::TaskComment],
+    supplied_regression_from: &[String],
+) -> bool {
+    let expected = already_landed_scope(task, comments);
+    if reported == &expected {
+        return true;
+    }
+    if supplied_regression_from.is_empty() {
+        return false;
+    }
+    let (Some(reported), Some(expected)) = (reported.as_object(), expected.as_object()) else {
+        return false;
+    };
+    if reported.len() != expected.len()
+        || reported
+            .iter()
+            .any(|(key, value)| key != "relations" && expected.get(key) != Some(value))
+    {
+        return false;
+    }
+    let (Some(reported_relations), Some(expected_relations)) = (
+        reported.get("relations").and_then(|value| value.as_array()),
+        expected.get("relations").and_then(|value| value.as_array()),
+    ) else {
+        return false;
+    };
+    // The reported relations must survive in order; every extra relation in
+    // the current scope must be a plain `regression_from` link (the exact
+    // shape the owner records on acceptance) to a supplied target.
+    let supplied: BTreeSet<&str> = supplied_regression_from
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut matched = 0;
+    for relation in expected_relations {
+        if reported_relations.get(matched) == Some(relation) {
+            matched += 1;
+            continue;
+        }
+        let plain_supplied = relation.as_object().is_some_and(|relation| {
+            relation.len() == 2
+                && relation.get("type").and_then(|value| value.as_str()) == Some("regression_from")
+                && relation
+                    .get("target")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|target| supplied.contains(target))
+        });
+        if !plain_supplied {
+            return false;
+        }
+    }
+    matched == reported_relations.len()
+}
+
 pub fn already_landed_scope(
     task: &crate::task::Task,
     comments: &[crate::task::TaskComment],

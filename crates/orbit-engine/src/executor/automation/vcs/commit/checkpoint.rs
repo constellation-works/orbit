@@ -16,6 +16,24 @@ use super::clean_tree::Verifier;
 use super::no_diff::{self, NoDiff};
 use super::tagged_no_diff;
 
+/// The `regression_from` culprits this run's implementer supplied, which the
+/// owner records as relations on acceptance [ORB-24696]. Read through the
+/// same implementation-output channel the commit step uses for its summary.
+fn supplied_regression_from_input<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    input: &Value,
+) -> Result<Vec<String>, OrbitError> {
+    let Some(output) = super::summary::commit_implementation_input(host, run_id, input)? else {
+        return Ok(Vec::new());
+    };
+    let Some(implementation) = output.get("implementation") else {
+        return Ok(Vec::new());
+    };
+    orbit_types::workflow::implementer_regression_from(implementation)
+        .map_err(|defect| OrbitError::InvalidInput(format!("invalid implementer output: {defect}")))
+}
+
 /// Accept a clean tree at the pinned HEAD only with structured evidence: a
 /// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
 /// covering delivery. A stale artifact of one kind never shadows valid
@@ -56,7 +74,15 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
                 Ok(Some(_)) | Err(OrbitError::InvalidInput(_)) => {}
                 Err(error) => return Err(error),
             }
-            return AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha);
+            let supplied = supplied_regression_from_input(host, run_id, input)?;
+            return AlreadyLanded::verify_with_supplied_regression_from(
+                host,
+                task,
+                workspace_path,
+                run_id,
+                base_sha,
+                &supplied,
+            );
         }
         Ok(Some(_)) => match NoDiff::verify(host, task, workspace_path, run_id, base_sha) {
             Ok(checkpoint) => return Ok(checkpoint),
@@ -70,8 +96,18 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     };
     match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
         Ok(None) => Err(no_diff_error),
-        Ok(Some(_)) => AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha)
-            .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}"))),
+        Ok(Some(_)) => {
+            let supplied = supplied_regression_from_input(host, run_id, input)?;
+            AlreadyLanded::verify_with_supplied_regression_from(
+                host,
+                task,
+                workspace_path,
+                run_id,
+                base_sha,
+                &supplied,
+            )
+            .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}")))
+        }
         Err(error @ OrbitError::InvalidInput(_)) => {
             Err(OrbitError::Execution(format!("{no_diff_error}; {error}")))
         }
@@ -145,13 +181,21 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revisio
     workspace: &Path,
     run_id: &str,
     checkpoint: &Value,
+    supplied_regression_from: &[String],
 ) -> Result<(), OrbitError> {
     match checkpoint["decision"].as_str() {
         Some(no_diff::DECISION) => {
             NoDiff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
         }
         Some(already_landed::DECISION) => {
-            AlreadyLanded::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+            AlreadyLanded::verify_handoff_at_revision_with_supplied_regression_from(
+                host,
+                task,
+                workspace,
+                run_id,
+                checkpoint,
+                supplied_regression_from,
+            )
         }
         Some(tagged_no_diff::DECISION) => {
             tagged_no_diff::verify_handoff_at_revision(task, checkpoint)
