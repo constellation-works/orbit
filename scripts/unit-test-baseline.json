@@ -290,6 +290,7 @@
         "application/job/run/tests/reconcile.rs::reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish",
         "application/job/run/tests/reconcile.rs::reconciliation_keeps_a_rescue_candidate_for_a_host_manager_stopped_worker",
         "application/job/run/tests/reconcile.rs::reconciling_a_reaped_worker_mid_cancel_leaves_the_outcome_to_the_canceller",
+        "application/job/run/tests/reconcile.rs::stopped_worker_rescue_records_failure_for_distinct_staged_content",
         "application/job/tests/crew_pools/activity.rs::empty_final_recovery_pool_refuses_to_draw",
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_draw_honours_the_run_allowlist",
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_is_drawn_once_and_frozen_for_the_run",

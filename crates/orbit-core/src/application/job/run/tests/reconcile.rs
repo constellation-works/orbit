@@ -13,7 +13,7 @@ use std::process::{Child, Command, Stdio};
 use chrono::Utc;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
+use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE, PipelineState};
 use serde_json::json;
 
 use super::super::WORKER_TERMINATED_ERROR_CODE;
@@ -201,6 +201,12 @@ fn reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish() 
 }
 
 fn git(repo: &std::path::Path, args: &[&str]) -> String {
+    String::from_utf8_lossy(&git_stdout(repo, args))
+        .trim()
+        .to_string()
+}
+
+fn git_stdout(repo: &std::path::Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -216,7 +222,21 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
         "git {args:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    output.stdout
+}
+
+fn git_succeeds(repo: &std::path::Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Orbit Test")
+        .env("GIT_AUTHOR_EMAIL", "orbit@example.com")
+        .env("GIT_COMMITTER_NAME", "Orbit Test")
+        .env("GIT_COMMITTER_EMAIL", "orbit@example.com")
+        .status()
+        .expect("git")
+        .success()
 }
 
 /// A host-manager stop keeps the worker's uncommitted candidate under its
@@ -503,4 +523,247 @@ fn reconciliation_holds_a_worker_the_host_manager_stopped() {
             assert!(counted, "{} must count as a failure", case.label);
         }
     }
+}
+
+/// What preservation must not change: the branch, both distinct file versions,
+/// and the status that names them.
+struct CandidateFingerprint {
+    head: String,
+    branch: String,
+    status: Vec<u8>,
+    staged_diff: Vec<u8>,
+    working_diff: Vec<u8>,
+    index_file: Vec<u8>,
+    worktree_file: Vec<u8>,
+    commits: String,
+}
+
+fn candidate_fingerprint(repo: &std::path::Path) -> CandidateFingerprint {
+    CandidateFingerprint {
+        head: git(repo, &["rev-parse", "HEAD"]),
+        branch: git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        status: git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"]),
+        staged_diff: git_stdout(repo, &["diff", "--cached", "--binary"]),
+        working_diff: git_stdout(repo, &["diff", "HEAD", "--binary"]),
+        index_file: git_stdout(repo, &["show", ":candidate.txt"]),
+        worktree_file: std::fs::read(repo.join("candidate.txt")).expect("worktree file"),
+        commits: git(repo, &["rev-list", "--all", "--count"]),
+    }
+}
+
+fn init_candidate_repo(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("candidate.txt"), "base\n").expect("base file");
+    git(&repo, &["add", "candidate.txt"]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+    repo
+}
+
+fn bind_candidate_run(runtime: &OrbitRuntime, repo: &std::path::Path) -> JobRun {
+    let run = insert_pending_run(runtime, "task_pr_pipeline");
+    let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    state.pipeline["worktree"] = json!({"workspace_path": repo});
+    runtime
+        .write_run_state(&run.run_id, &state)
+        .expect("write run state");
+    run
+}
+
+fn assert_fingerprint_unchanged(
+    repo: &std::path::Path,
+    before: &CandidateFingerprint,
+    label: &str,
+) {
+    let after = candidate_fingerprint(repo);
+    assert_eq!(after.head, before.head, "{label} moved HEAD");
+    assert_eq!(after.branch, before.branch, "{label} moved the branch");
+    assert_eq!(after.status, before.status, "{label} changed status");
+    assert_eq!(
+        after.staged_diff, before.staged_diff,
+        "{label} changed the index diff"
+    );
+    assert_eq!(
+        after.working_diff, before.working_diff,
+        "{label} changed the working diff"
+    );
+    assert_eq!(
+        after.index_file, before.index_file,
+        "{label} changed the index file"
+    );
+    assert_eq!(
+        after.worktree_file, before.worktree_file,
+        "{label} changed the worktree file"
+    );
+}
+
+/// Unique staged content must not be reported as a complete rescue. A clean
+/// tree, an unstaged edit, and a staged edit that matches the worktree still
+/// keep the single documented commit.
+#[test]
+fn stopped_worker_rescue_records_failure_for_distinct_staged_content() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &stopped_worker_rescue_records_failure_for_distinct_staged_content,
+    )) {
+        return;
+    }
+    let (root, runtime) = test_runtime();
+
+    for (label, working) in [("staged-only", "base\n"), ("distinct-working", "working\n")] {
+        let repo = init_candidate_repo(root.path(), label);
+        std::fs::write(repo.join("candidate.txt"), "staged unique\n").expect("stage");
+        git(&repo, &["add", "candidate.txt"]);
+        std::fs::write(repo.join("candidate.txt"), working).expect("working copy");
+        let before = candidate_fingerprint(&repo);
+        assert!(
+            String::from_utf8_lossy(&before.status).contains("MM candidate.txt"),
+            "{label}: {}",
+            String::from_utf8_lossy(&before.status)
+        );
+        let run = bind_candidate_run(&runtime, &repo);
+        let rescue_ref = format!("refs/orbit/rescue/{}", run.run_id);
+        let clause = runtime
+            .keep_rescue_candidate(&run)
+            .expect("preservation clause");
+        assert!(
+            clause.contains("could not be kept") && clause.contains("staged paths differ"),
+            "{label}: {clause}"
+        );
+        let record = &runtime
+            .read_run_state(&run.run_id)
+            .expect("read state")
+            .expect("state")
+            .pipeline["rescue_candidate"];
+        assert!(record["rescue_ref"].is_null(), "{label}: {record}");
+        assert!(record["rescue_commit"].is_null(), "{label}: {record}");
+        assert!(record["partial_commit"].is_null(), "{label}: {record}");
+        assert!(
+            record["failure"]
+                .as_str()
+                .is_some_and(|failure| failure.contains("staged paths differ")),
+            "{label}: {record}"
+        );
+        assert!(
+            !git_succeeds(&repo, &["rev-parse", "--verify", &rescue_ref]),
+            "{label} wrote {rescue_ref}"
+        );
+        assert_fingerprint_unchanged(&repo, &before, label);
+        assert_eq!(
+            candidate_fingerprint(&repo).commits,
+            before.commits,
+            "{label} created a commit"
+        );
+    }
+
+    let clean = init_candidate_repo(root.path(), "clean");
+    let clean_before = candidate_fingerprint(&clean);
+    let clean_run = bind_candidate_run(&runtime, &clean);
+    let clean_ref = format!("refs/orbit/rescue/{}", clean_run.run_id);
+    let clean_clause = runtime
+        .keep_rescue_candidate(&clean_run)
+        .expect("clean clause");
+    assert!(
+        clean_clause.contains(&format!("rescue candidate kept at `{clean_ref}`")),
+        "{clean_clause}"
+    );
+    let clean_record = &runtime
+        .read_run_state(&clean_run.run_id)
+        .expect("read clean state")
+        .expect("clean state")
+        .pipeline["rescue_candidate"];
+    assert_eq!(clean_record["rescue_ref"], clean_ref.as_str());
+    assert_eq!(clean_record["rescue_commit"], clean_before.head.as_str());
+    assert!(clean_record["partial_commit"].is_null(), "{clean_record}");
+    assert!(clean_record.get("failure").is_none(), "{clean_record}");
+    assert_eq!(git(&clean, &["rev-parse", &clean_ref]), clean_before.head);
+    assert_fingerprint_unchanged(&clean, &clean_before, "clean");
+    assert_eq!(candidate_fingerprint(&clean).commits, clean_before.commits);
+
+    let unstaged = init_candidate_repo(root.path(), "unstaged");
+    std::fs::write(unstaged.join("candidate.txt"), "working\n").expect("unstaged edit");
+    let unstaged_before = candidate_fingerprint(&unstaged);
+    assert!(
+        String::from_utf8_lossy(&unstaged_before.status).starts_with(" M candidate.txt"),
+        "{}",
+        String::from_utf8_lossy(&unstaged_before.status)
+    );
+    let unstaged_run = bind_candidate_run(&runtime, &unstaged);
+    let unstaged_ref = format!("refs/orbit/rescue/{}", unstaged_run.run_id);
+    let unstaged_clause = runtime
+        .keep_rescue_candidate(&unstaged_run)
+        .expect("unstaged clause");
+    assert!(
+        unstaged_clause.contains(&format!("rescue candidate kept at `{unstaged_ref}`")),
+        "{unstaged_clause}"
+    );
+    let unstaged_record = &runtime
+        .read_run_state(&unstaged_run.run_id)
+        .expect("read unstaged state")
+        .expect("unstaged state")
+        .pipeline["rescue_candidate"];
+    let unstaged_commit = unstaged_record["rescue_commit"]
+        .as_str()
+        .expect("unstaged commit");
+    assert_eq!(unstaged_record["partial_commit"], unstaged_commit);
+    assert_eq!(
+        git(&unstaged, &["rev-parse", &format!("{unstaged_commit}^")]),
+        unstaged_before.head
+    );
+    assert_eq!(
+        git_stdout(
+            &unstaged,
+            &["show", &format!("{unstaged_commit}:candidate.txt")]
+        ),
+        b"working\n"
+    );
+    assert_eq!(
+        git(&unstaged, &["rev-parse", &unstaged_ref]),
+        unstaged_commit
+    );
+    assert_fingerprint_unchanged(&unstaged, &unstaged_before, "unstaged");
+
+    let matching = init_candidate_repo(root.path(), "matching-staged");
+    std::fs::write(matching.join("candidate.txt"), "staged unique\n").expect("matching edit");
+    git(&matching, &["add", "candidate.txt"]);
+    let matching_before = candidate_fingerprint(&matching);
+    assert!(
+        String::from_utf8_lossy(&matching_before.status).starts_with("M  candidate.txt"),
+        "{}",
+        String::from_utf8_lossy(&matching_before.status)
+    );
+    let matching_run = bind_candidate_run(&runtime, &matching);
+    let matching_ref = format!("refs/orbit/rescue/{}", matching_run.run_id);
+    let matching_clause = runtime
+        .keep_rescue_candidate(&matching_run)
+        .expect("matching clause");
+    assert!(
+        matching_clause.contains(&format!("rescue candidate kept at `{matching_ref}`")),
+        "{matching_clause}"
+    );
+    let matching_record = &runtime
+        .read_run_state(&matching_run.run_id)
+        .expect("read matching state")
+        .expect("matching state")
+        .pipeline["rescue_candidate"];
+    let matching_commit = matching_record["rescue_commit"]
+        .as_str()
+        .expect("matching commit");
+    assert_eq!(matching_record["partial_commit"], matching_commit);
+    assert_eq!(
+        git(&matching, &["rev-parse", &format!("{matching_commit}^")]),
+        matching_before.head
+    );
+    assert_eq!(
+        git_stdout(
+            &matching,
+            &["show", &format!("{matching_commit}:candidate.txt")]
+        ),
+        b"staged unique\n"
+    );
+    assert_eq!(
+        git(&matching, &["rev-parse", &matching_ref]),
+        matching_commit
+    );
+    assert_fingerprint_unchanged(&matching, &matching_before, "matching-staged");
 }

@@ -6,7 +6,10 @@
 //! is finalized, the host that stopped it commits those changes detached
 //! (or pins `HEAD` when clean) under `refs/orbit/rescue/<run>` and records
 //! the ref and commit in the run's pipeline state, so `orbit run show`
-//! names where the candidate survives after teardown.
+//! names where the candidate survives after teardown. When the index holds
+//! a version of a path the working tree does not, one commit would drop the
+//! staged version: the record stores `failure`, no ref is written, and the
+//! branch, index and files stay for salvage.
 
 use std::path::PathBuf;
 
