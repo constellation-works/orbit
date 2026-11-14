@@ -109,78 +109,21 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     max_attempts: u32,
 ) -> Result<StepOutcome, DispatchError> {
     // An admitted `--auto-fix` check repair carries hosted job logs as its
-    // evidence, which may quote any marker below; only its own marker
-    // decides it.
-    let check_repair = orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic());
-    let stops = |marked: bool| marked && !check_repair;
-    // Signing in requires the operator; a repair agent cannot make this
-    // provider usable, nor give its selected model capacity [ORB-14149] or
-    // its account usage [ORB-14695], and the post-recovery attempt would
-    // rerun the same model. Preserve the marker for claimed-leaf settlement.
-    if stops(orbit_types::workflow::is_provider_unavailable(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14266] Nor can it get past the provider's content policy: the
-    // repair agent and the rerun would send the same task to the same filter.
-    if stops(orbit_types::workflow::is_provider_refusal(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-13987] Nor can it install a tool required validation could not
-    // find; repairing the candidate would only spend the recovery budget.
-    if stops(orbit_types::workflow::is_validation_environment_failure(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14260] Nor can it reach a claimed task's owner when the step's
-    // own coordinator could not: its sandbox masks the same credentials.
-    // Branch on the typed code; a failure with no code falls back to the
-    // legacy marker inside the classifier.
-    if stops(orbit_types::workflow::is_owner_route_unavailable(
-        failure.failure_code().as_ref(),
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-23956] Nor can another agent record the owner approval this step
-    // is waiting on. The declared stop is a hold, so the original outcome
-    // and its message stay as the implementer left them.
-    if stops(orbit_types::workflow::is_owner_signoff_required(
-        failure.failure_code().as_ref().map(|code| code.as_str()),
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14258] Nor can it fix a required command the base itself fails;
-    // the task is held until the command passes on a new base instead.
-    if stops(orbit_types::workflow::is_baseline_red_failure(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14269] Nor can it clear a blocker the implementer already declared.
-    // Another agent would only spend the recovery budget the stop was meant
-    // to avoid.
-    if stops(orbit_types::workflow::is_task_blocked_by_agent(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // Nor can it run `orbit` while an upgrade refuses the step's agents; the
-    // step runs again once the upgrade settles.
-    if stops(orbit_types::workflow::is_upgrade_pending(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
+    // evidence, which may quote any unrepairable marker; only its own
+    // marker decides it.
+    let diagnostic = failure.diagnostic();
+    let check_repair = orbit_types::workflow::is_pr_auto_fix_check_repair(&diagnostic);
+    // No class in the one unrepairable table can be repaired by an agent:
+    // it cannot make a provider usable, give its selected model capacity
+    // or its account usage, get past its content policy, install a tool
+    // required validation could not find, reach a claimed task's owner,
+    // record the owner approval the step waits on, fix a required command
+    // the base itself fails, clear a blocker already declared, or run
+    // `orbit` while an upgrade refuses the step's agents. Preserve the
+    // marker for claimed-leaf settlement.
+    if !check_repair
+        && super::unrepairable_failure(failure.failure_code().as_ref(), Some(&diagnostic)).is_some()
+    {
         return failure.into_result();
     }
     let Some(declared) = recovery_activity_for_step(step, ctx) else {

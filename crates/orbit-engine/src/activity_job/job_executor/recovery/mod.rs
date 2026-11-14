@@ -9,6 +9,7 @@ mod input;
 mod invocation;
 mod observation;
 mod retry;
+mod unrepairable;
 
 use super::*;
 
@@ -20,6 +21,7 @@ pub(super) use input::{
 };
 pub(super) use invocation::crew_overridden_recovery_spec;
 pub(super) use retry::{StepFailure, recover_or_return_original};
+pub(super) use unrepairable::{UnrepairableFailure, unrepairable_failure};
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";

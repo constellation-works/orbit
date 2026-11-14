@@ -49,87 +49,58 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             "host-owned preparation recovery refused or exhausted; preserve the candidate without source repair",
         );
     }
-    // [ORB-19224] No decision about the task lets a lane run a required check
-    // its sandbox refuses, such as `orbit plugin test` inside a macOS worker
-    // that did not hand it to the host replay: the failure handoff keeps the
-    // candidate and a claimed leaf releases its claim.
-    if orbit_types::workflow::is_validation_route_unavailable(None, Some(error_message)) {
-        return skip(
-            "required validation cannot run in the lane that tried it and was not handed to its \
-             host replay; the candidate was not judged",
-        );
-    }
-    // [ORB-13987] No decision about the task fixes a host that lacks a tool;
-    // the failure handoff keeps the candidate for a resume instead.
-    if orbit_types::workflow::is_validation_environment_failure(None, Some(error_message)) {
-        return skip(
-            "required validation lacked a tool in its environment; the candidate was not judged",
-        );
-    }
-    // [ORB-14258] Nor fix a required command the base fails the same way; the
-    // failure handoff holds the task until the command passes on a new base.
-    if orbit_types::workflow::is_baseline_red_failure(None, Some(error_message)) {
-        return skip(
-            "required validation fails on the base exactly as on the candidate; the candidate \
-             did not cause it",
-        );
-    }
-    // [ORB-14269] Nor does another agent clear a blocker the implementer or
-    // step recovery [ORB-14268] declared. The failure handoff records the
-    // kind and keeps the candidate.
-    if orbit_types::workflow::is_task_blocked_by_agent(None, Some(error_message)) {
-        return skip("an agent declared a blocker; the candidate was not judged by another agent");
-    }
-    // Nor judges a candidate whose agent an Orbit upgrade refused mid-step;
-    // the failure handoff keeps it for the run after the upgrade.
-    if orbit_types::workflow::is_upgrade_pending(None, Some(error_message)) {
-        return skip("an Orbit upgrade refused the step's agent; the candidate was not judged");
-    }
-    // [ORB-14149] Nor does any decision give the provider's model capacity;
-    // the candidate stays in the worktree for a resume.
-    if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {
-        return skip(
-            "the provider reported the selected model at capacity; the candidate was not judged",
-        );
-    }
-    // [ORB-14695] Nor outlasts the provider account's usage limit; run
-    // finalization holds the task until the reset the provider reported.
-    if orbit_types::workflow::is_provider_limit(None, Some(error_message)) {
-        return skip(
-            "the provider reported its account's usage limit reached; the candidate was not judged",
-        );
-    }
-    // [ORB-14266] Nor makes an unusable provider usable, or gets past its
-    // content policy. Run finalization holds the task in the backlog with
-    // that provider's crews excluded for a while instead.
-    if orbit_types::workflow::is_provider_unavailable(None, Some(error_message)) {
-        return skip("the provider could not be used on this host; the candidate was not judged");
-    }
-    if orbit_types::workflow::is_provider_refusal(None, Some(error_message)) {
-        return skip(
-            "the provider's content policy refused the turn; the candidate was not judged",
-        );
-    }
-    // [ORB-14260] Nor can a recovery agent in the same sandbox reach the
-    // claimed task's owner its step could not; the claim is released.
-    // Branch on the typed code the step failure carried (or the dispatch
-    // error's own); only a failure with no code reaches the legacy
-    // marker fallback inside the classifier.
+    // No class in the one unrepairable table is judged by another agent:
+    // no decision lets a lane run a required check its sandbox refuses,
+    // fixes a host that lacks a tool, fixes a required command the base
+    // fails the same way, clears a blocker already declared, judges a
+    // candidate whose agent an upgrade refused, gives the provider's
+    // model capacity, outlasts its account's usage limit, makes an
+    // unusable provider usable or gets past its content policy, reaches
+    // a claimed task's owner, or records the owner approval the
+    // implementer is waiting on. The failure handoff keeps the candidate
+    // (and a claimed leaf releases its claim). Branch on the typed code
+    // the step failure carried (or the dispatch error's own); only a
+    // failure with no code reaches the legacy marker fallback.
     let typed_code = failure_code.cloned().or_else(|| error.step_failure_code());
-    if orbit_types::workflow::is_owner_route_unavailable(typed_code.as_ref(), Some(error_message)) {
-        return skip(
-            "the claimed worker could not reach its owner through the run's coordinator; the \
-             candidate was not judged",
-        );
-    }
-    // [ORB-23956] Nor can another agent record the owner approval the
-    // implementer is waiting on. The failure handoff leaves the candidate,
-    // and run finalization holds the task with the declared message.
-    if orbit_types::workflow::is_owner_signoff_required(
-        typed_code.as_ref().map(|code| code.as_str()),
-        Some(error_message),
-    ) {
-        return skip("recorded owner approval is still missing; another agent cannot record it");
+    if let Some(unrepairable) = unrepairable_failure(typed_code.as_ref(), Some(error_message)) {
+        return skip(match unrepairable {
+            UnrepairableFailure::ValidationRouteUnavailable => {
+                "required validation cannot run in the lane that tried it and was not handed to its \
+                 host replay; the candidate was not judged"
+            }
+            UnrepairableFailure::ValidationEnvironment => {
+                "required validation lacked a tool in its environment; the candidate was not judged"
+            }
+            UnrepairableFailure::BaselineRed => {
+                "required validation fails on the base exactly as on the candidate; the candidate \
+                 did not cause it"
+            }
+            UnrepairableFailure::BlockedByAgent => {
+                "an agent declared a blocker; the candidate was not judged by another agent"
+            }
+            UnrepairableFailure::UpgradePending => {
+                "an Orbit upgrade refused the step's agent; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderCapacityExhausted => {
+                "the provider reported the selected model at capacity; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderLimit => {
+                "the provider reported its account's usage limit reached; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderUnavailable => {
+                "the provider could not be used on this host; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderRefusal => {
+                "the provider's content policy refused the turn; the candidate was not judged"
+            }
+            UnrepairableFailure::OwnerRouteUnavailable => {
+                "the claimed worker could not reach its owner through the run's coordinator; the \
+                 candidate was not judged"
+            }
+            UnrepairableFailure::OwnerSignoffRequired => {
+                "recorded owner approval is still missing; another agent cannot record it"
+            }
+        });
     }
     // A `worktree_setup` that could not find a dependency is not transient:
     // the dependency is either resolvable through its registered owner or
