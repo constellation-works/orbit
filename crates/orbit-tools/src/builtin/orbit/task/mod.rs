@@ -1,3 +1,3 @@
 pub mod artifact_put;
-pub(super) mod guarded;
+pub(crate) mod guarded;
 mod operation;
