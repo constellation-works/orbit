@@ -179,7 +179,11 @@ pub(super) fn add(
                 .iter()
                 .map(|raw| ExternalRef::parse_key(raw))
                 .collect::<Result<Vec<_>, _>>()?,
-            source_task_id: optional_string(options, "source_task_id")?,
+            // The operator command sends `--source-task` through the CLI
+            // options; the tool surface sends `source_task_id` directly.
+            // Only one path ever carries it, so the first present wins.
+            source_task_id: optional_string(options, "source_task_id")?
+                .or(optional_string(input, "source_task_id")?),
             crew: optional_string(input, "crew")?,
             orchestrator: optional_string(input, "orchestrator")?,
             orchestrator_model: optional_string(input, "orchestrator_model")?,

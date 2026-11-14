@@ -233,7 +233,7 @@ The current kinds, each pointing from this task to its target:
 - `spawned_from` (task): this follow-up was filed from the target. Orbit sets it on
   follow-up tasks it files. Set it with `relations`.
 - `regression_from` (task): the target introduced the defect this task fixes. Set it with
-  `add --source-task`, `source_task_id` on update, or `relations`.
+  `add --source-task`, `source_task_id` on add or update, or `relations`.
 - `supersedes` (task): this task replaces the target. Orbit sets it when a sweep
   consolidates tasks. Set it with `relations`.
 - `related_to` (task): a plain cross-reference. Set it with `relations`.

@@ -2550,6 +2550,12 @@
         "required": false
       },
       {
+        "name": "source_task_id",
+        "description": "Task whose change introduced this bug.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "crew",
         "description": "Crew that runs this task.",
         "param_type": "string",
