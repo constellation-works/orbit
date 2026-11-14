@@ -83,6 +83,9 @@ pub mod test_support {
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     pub use crate::application::automation::with_reset_probe_hook;
+    /// Replace the backlog forecast's wall-time budget for a scenario with
+    /// arrivals, in milliseconds, in an isolated test's server child.
+    pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
     pub use crate::application::distributed::admission_checkpoint::{
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };
@@ -109,9 +112,6 @@ pub mod test_support {
     pub use crate::application::notice::test_support::with_notice_post_time;
     pub use crate::application::resident::with_resident_cycle_admission_checkpoint;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
-    /// Replace the backlog forecast's wall-time budget for a scenario with
-    /// arrivals, in milliseconds, in an isolated test's server child.
-    pub use crate::application::task::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
     pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
     pub use crate::application::task::{
         with_decision_answer_checkpoint, with_decision_dkim_resolver,
@@ -194,6 +194,7 @@ pub use application::routines::seed::{
 // Kept for the orbit-core runtime integration test: `application::search` is
 // `pub(crate)`, so an integration test cannot name `GlobalSearchParams` through
 // its owning module.
+pub use application::backlog_forecast::BacklogForecastHistory;
 pub use application::search::{
     GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
 };

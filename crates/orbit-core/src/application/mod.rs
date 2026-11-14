@@ -22,7 +22,7 @@ mod application_authority;
 pub mod attention;
 pub mod audit_event;
 pub mod auto_tasks;
-mod backlog_forecast;
+pub(crate) mod backlog_forecast;
 pub mod change_watch;
 pub mod codebase;
 pub mod config;
