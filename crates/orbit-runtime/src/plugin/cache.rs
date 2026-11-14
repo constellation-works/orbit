@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::SystemTime;
 
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginLoadError, load_plugin_dir, manifest_digest, resolve_plugin_definitions,
+    LoadedPlugin, PluginLoadError, load_plugin_dir_without_tests, manifest_digest,
+    resolve_plugin_definitions,
 };
 use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME};
 
@@ -108,7 +109,11 @@ pub fn load_installed_plugin(
         return Ok(cached.loaded);
     }
 
-    let loaded = Arc::new(load_plugin_dir(&root)?);
+    // Host serving never reads `LoadedPlugin.tests`, so skip the golden
+    // parse: no `spec.tests` file is opened on this path. Golden validation
+    // still happens in `orbit plugin validate`/`test` and at install time,
+    // which use the full loader.
+    let loaded = Arc::new(load_plugin_dir_without_tests(&root)?);
     plugin_host_load_cache().plugins.insert(
         root,
         CachedPluginLoad {
