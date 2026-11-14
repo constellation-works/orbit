@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::routines::{
-    action_capability, authorization_denied, authorized_caller, record_operation_audit, status_json,
+    OperationAudit, action_capability, authorization_denied, authorized_caller, status_json,
 };
 use super::tasks::human_comment_author;
 use super::{blocking, workspace_label};
@@ -262,22 +262,11 @@ async fn resident_write<T: Serialize + Send + 'static>(
 ) -> Response {
     let started = Instant::now();
     let workspace = workspace_label(&runtime).await;
+    let audit = OperationAudit::new(&runtime, &workspace, operation, target, arguments);
     let caller = match authorized_caller(&DASHBOARD_RESIDENT_WRITE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                operation,
-                target,
-                "",
-                &arguments,
-                None,
-                Some(&denial),
-                None,
-                started,
-            )
-            .await;
+            audit.denied(&denial, started).await;
             return authorization_denied(denial);
         }
     };
@@ -287,19 +276,7 @@ async fn resident_write<T: Serialize + Send + 'static>(
         Err(_) => Some("refused".to_string()),
         Ok(value) => partial_failure(value),
     };
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        operation,
-        target,
-        "",
-        &arguments,
-        Some(&caller),
-        None,
-        failure.as_deref(),
-        started,
-    )
-    .await;
+    audit.settled(&caller, failure.as_deref(), started).await;
     match result {
         Ok(value) => Json(value).into_response(),
         Err(response) => *response,

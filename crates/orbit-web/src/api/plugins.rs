@@ -29,9 +29,7 @@ use orbit_core::adapter::command::PluginSummary;
 use orbit_types::plugin::PluginStatus;
 use serde_json::{Value, json};
 
-use super::routines::{
-    action_capability, authorization_denied, authorized_caller, record_operation_audit,
-};
+use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
 use super::workspaces::abbreviate_home;
 use super::{blocking, not_found, validate_id, workspace_label};
 use crate::state::{DashboardState, Ws};
@@ -93,22 +91,17 @@ async fn mutate_plugin(
     };
     let started = Instant::now();
     let workspace = workspace_label(&runtime).await;
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        operation.id,
+        namespace.as_str(),
+        body.clone(),
+    );
     let caller = match authorized_caller(operation, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                operation.id,
-                &namespace,
-                "",
-                &body,
-                None,
-                Some(&denial),
-                None,
-                started,
-            )
-            .await;
+            audit.denied(&denial, started).await;
             return authorization_denied(denial);
         }
     };
@@ -161,54 +154,18 @@ async fn mutate_plugin(
     };
     match result {
         Ok(Some(summary)) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                operation.id,
-                &namespace,
-                "",
-                &body,
-                Some(&caller),
-                None,
-                None,
-                started,
-            )
-            .await;
+            audit.succeeded(&caller, started).await;
             let home = orbit_common::fs::path::home_dir().ok();
             Json(json!({"plugin": plugin_to_json(&summary, home.as_deref())})).into_response()
         }
         Ok(None) => {
             let failure = format!("plugin not found: {namespace}");
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                operation.id,
-                &namespace,
-                "",
-                &body,
-                Some(&caller),
-                None,
-                Some(&failure),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &failure, started).await;
             not_found(failure)
         }
         Err(error) => {
             let failure = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                operation.id,
-                &namespace,
-                "",
-                &body,
-                Some(&caller),
-                None,
-                Some(&failure),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &failure, started).await;
             plugin_write_error(error)
         }
     }
