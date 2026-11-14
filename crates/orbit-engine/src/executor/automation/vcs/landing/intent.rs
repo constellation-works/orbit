@@ -11,9 +11,7 @@ use crate::context::{HandoffLandingStep, RuntimeHost};
 use super::super::git::{fetch_remote_base, git_command_success};
 use super::super::pr::diagnostics;
 use super::super::pr::{PrMergeState, classify_pr_state, read_pr_status};
-use super::observe::{
-    adopt_base_update, contains_commit, observe_candidate, pin_for, resolve_landing_ref,
-};
+use super::observe::{adopt_base_update, observe_candidate, pin_for, resolve_landing_ref};
 use super::record::{complete, describe, record, stop, stop_pr};
 use super::run::LandingPass;
 
@@ -140,10 +138,10 @@ pub(super) fn reconcile_intent<H: RuntimeHost + ?Sized>(
                 &candidate.landing_branch,
                 &candidate.delivery,
             )?;
-            let merged = contains_commit(
+            let merged = crate::executor::automation::vcs::git::is_ancestor(
                 &context.workspace_path,
-                &landing,
                 &candidate.candidate.commit,
+                &landing,
             )?;
             (
                 merged,

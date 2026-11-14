@@ -422,10 +422,7 @@ impl CiQueries for HostCiQueries {
             args.extend(missing);
             git_success(&self.repo_root, &args)?;
         }
-        git_command_success(
-            &self.repo_root,
-            &["merge-base", "--is-ancestor", ancestor, descendant],
-        )
+        crate::executor::automation::vcs::git::is_ancestor(&self.repo_root, ancestor, descendant)
     }
 }
 

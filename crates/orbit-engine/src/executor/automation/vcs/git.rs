@@ -568,6 +568,23 @@ pub(crate) fn verify_direct_remote_target(
     Ok(())
 }
 
+pub(crate) fn is_ancestor(
+    dir: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, OrbitError> {
+    git_command_success(
+        dir,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )
+}
+
 pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<bool, OrbitError> {
     let outcome = git_run(current_dir, args)?;
     if outcome.timed_out {

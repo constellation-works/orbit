@@ -4,7 +4,7 @@
 //! issues a different certificate, and retries with materially different inputs.
 use super::super::super::input::required_input_string;
 use super::super::completion_deadline::now_ms;
-use super::super::git::{GitDeadlineGuard, git_command_success, git_output};
+use super::super::git::{GitDeadlineGuard, git_output};
 use super::super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, rebase_in_progress,
     record_failed_handoff,
@@ -311,10 +311,7 @@ fn refresh<H: RuntimeHost + ?Sized>(
     let new_base = required_input_string(&next, "base_sha")?;
     if next["base_ref"] != base_ref
         || new_base == old_base
-        || !git_command_success(
-            workspace,
-            &["merge-base", "--is-ancestor", old_base, new_base],
-        )?
+        || !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, new_base)?
     {
         return Err(refusal(
             "base did not strictly advance along its prepared ancestry",

@@ -171,10 +171,7 @@ fn classify_base(
     if base_sha == landing_sha {
         return Ok(BaseStatus::Live);
     }
-    if git_command_success(
-        repo_root,
-        &["merge-base", "--is-ancestor", base_sha, &landing_sha],
-    )? {
+    if crate::executor::automation::vcs::git::is_ancestor(repo_root, base_sha, &landing_sha)? {
         return Ok(BaseStatus::Landed(format!(
             "its tip '{base_sha}' is already an ancestor of '{landing_ref}' ('{landing_sha}')"
         )));

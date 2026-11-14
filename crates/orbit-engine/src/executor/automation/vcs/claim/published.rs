@@ -6,7 +6,7 @@ use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffCandidate, HandoffD
 
 use crate::context::RuntimeHost;
 
-use super::super::git::{git_command_success, git_output, git_success};
+use super::super::git::{git_output, git_success};
 use super::super::pr::{
     DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status,
 };
@@ -195,15 +195,10 @@ fn observe_published<H: RuntimeHost + ?Sized>(
     let candidate =
         observe_accepted_revision(workspace_path, &submitted.candidate, "candidate", &context)?;
     let base = observe_accepted_revision(workspace_path, &submitted.base, "base", &context)?;
-    if !git_command_success(
+    if !crate::executor::automation::vcs::git::is_ancestor(
         workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            &base.commit,
-            &candidate.commit,
-        ],
+        &base.commit,
+        &candidate.commit,
     )? {
         return Err(refused(format!(
             "{context}: candidate '{}' does not descend from validated base '{}' in \

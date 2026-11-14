@@ -4,8 +4,7 @@ use super::super::absorbed::{
     ABSORBING_STEP, AbsorbedReason, AbsorbedRefusal, covering_commit, task_scope_digest,
 };
 use super::super::git::{
-    git_command_success, git_output, git_output_raw, git_success, git_timeout_error,
-    timeout_recovery_error,
+    git_output, git_output_raw, git_success, git_timeout_error, timeout_recovery_error,
 };
 use super::super::handoff::{HandoffContext, rebase_in_progress};
 use super::checkpoint::{RecoveryCheckpointLookup, recovery_checkpoint_lookup, recovery_run_id};
@@ -382,10 +381,7 @@ fn base_overtook_recovery(
         return Ok(false);
     }
     Ok(prepared != landed
-        && git_command_success(
-            workspace,
-            &["merge-base", "--is-ancestor", &landed, &prepared],
-        )?)
+        && crate::executor::automation::vcs::git::is_ancestor(workspace, &landed, &prepared)?)
 }
 
 /// How the current HEAD relates to the certified recovery of the prepared

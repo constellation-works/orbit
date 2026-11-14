@@ -15,9 +15,8 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::claim::carry_to_durable_ref;
 use super::freshness::commit_sha;
 use super::git::{
-    GitTimeoutBudget, GitTimeoutBudgetGuard, direct_remote_target, fetch_remote_base,
-    git_command_success, git_output, git_success, normalize_base_branch,
-    verify_direct_remote_target,
+    GitTimeoutBudget, GitTimeoutBudgetGuard, direct_remote_target, fetch_remote_base, git_output,
+    git_success, normalize_base_branch, verify_direct_remote_target,
 };
 use super::handoff::{
     FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, comment_already_recorded,
@@ -532,16 +531,10 @@ fn push_decision(
     ]);
     let fetch_refs: Vec<&str> = fetch_args.iter().map(String::as_str).collect();
     git_success(workspace_path, &fetch_refs)?;
-    if git_command_success(
-        workspace_path,
-        &["merge-base", "--is-ancestor", remote_sha, local_sha],
-    )? {
+    if crate::executor::automation::vcs::git::is_ancestor(workspace_path, remote_sha, local_sha)? {
         return Ok(PushDecision::FastForward);
     }
-    if git_command_success(
-        workspace_path,
-        &["merge-base", "--is-ancestor", local_sha, remote_sha],
-    )? {
+    if crate::executor::automation::vcs::git::is_ancestor(workspace_path, local_sha, remote_sha)? {
         return Ok(PushDecision::RemoteAhead);
     }
     Ok(PushDecision::Diverged)
@@ -645,16 +638,7 @@ fn repair_commits(
     lease: &str,
     local_sha: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
-    if !git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            lease,
-            local_sha,
-        ],
-    )? {
+    if !crate::executor::automation::vcs::git::is_ancestor(workspace_path, lease, local_sha)? {
         return Ok(None);
     }
     let listed = git_output(
@@ -715,16 +699,7 @@ fn merge_commit_on_base(
         return Ok(false);
     }
     let remote_base = format!("refs/remotes/origin/{base}");
-    git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            merge_commit,
-            &remote_base,
-        ],
-    )
+    crate::executor::automation::vcs::git::is_ancestor(workspace_path, merge_commit, &remote_base)
 }
 
 /// Where the repair was pushed, or why neither ref accepted it.

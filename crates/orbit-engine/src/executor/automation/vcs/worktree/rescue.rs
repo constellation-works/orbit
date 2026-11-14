@@ -27,9 +27,7 @@ use std::path::{Component, Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::Serialize;
 
-use super::super::git::{
-    git_command_success, git_output, git_output_with_env, git_run_bytes, git_success,
-};
+use super::super::git::{git_output, git_output_with_env, git_run_bytes, git_success};
 use super::super::operations::CANDIDATE_REF_PREFIX;
 
 /// The store's directory under the owning checkout.
@@ -229,11 +227,8 @@ pub(super) fn committed_recovery(
     }
     let contains_head = |recovery: &WorktreeGcRecovery| {
         recovery.commit == head
-            || git_command_success(
-                worktree,
-                &["merge-base", "--is-ancestor", &head, &recovery.commit],
-            )
-            .unwrap_or(false)
+            || crate::executor::automation::vcs::git::is_ancestor(worktree, &head, &recovery.commit)
+                .unwrap_or(false)
     };
     if let Some(recovery) = origin_run_refs(worktree, branch, task_ids, run_id)
         .unwrap_or_default()

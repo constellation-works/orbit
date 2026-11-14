@@ -11,7 +11,7 @@ use super::super::completion_hold::{ChangedPaths, candidate_commit_changed_paths
 use super::super::git::{git_command_success, git_output};
 use super::super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 use super::intent::LandingView;
-use super::observe::{contains_commit, observe_or_stop, resolve_landing_ref};
+use super::observe::{observe_or_stop, resolve_landing_ref};
 use super::record::{complete, completion_hold_stop, record, stop, stop_for_repair};
 use super::run::LandingPass;
 
@@ -29,7 +29,11 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     let observed = observe_or_stop(host, context, None, view)?;
     let landing = resolve_landing_ref(&workspace, &candidate.landing_branch, &candidate.delivery)?;
 
-    if contains_commit(&workspace, &landing, &candidate.candidate.commit)? {
+    if crate::executor::automation::vcs::git::is_ancestor(
+        &workspace,
+        &candidate.candidate.commit,
+        &landing,
+    )? {
         let evidence = json!({
             "delivery": "local_candidate",
             "landing_ref": landing,
@@ -74,14 +78,10 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     // cannot fast-forward lands nothing and stops below.
     let before = git_output(&checkout, &["rev-parse", "HEAD"])?;
     let run_id = input_string_field(input, "run_id");
-    if git_command_success(
+    if crate::executor::automation::vcs::git::is_ancestor(
         &checkout,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            before.trim(),
-            &candidate.candidate.commit,
-        ],
+        before.trim(),
+        &candidate.candidate.commit,
     )? {
         let run_id = run_id.clone().ok_or_else(|| {
             OrbitError::InvalidInput("handoff_land: run_id is required".to_string())
@@ -116,7 +116,11 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     )?;
     // The ref itself is the evidence either way: a failed fast-forward left it
     // where it was, which is a resolved intent rather than an uncertain one.
-    let merged = contains_commit(&workspace, &landing, &candidate.candidate.commit)?;
+    let merged = crate::executor::automation::vcs::git::is_ancestor(
+        &workspace,
+        &candidate.candidate.commit,
+        &landing,
+    )?;
     let evidence = json!({
         "delivery": "local_candidate",
         "landing_ref": landing,
@@ -178,7 +182,7 @@ pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
         &context.candidate.landing_branch,
         &context.candidate.delivery,
     )?;
-    if !contains_commit(&workspace, &landing, covering_commit)? {
+    if !crate::executor::automation::vcs::git::is_ancestor(&workspace, covering_commit, &landing)? {
         return Err(stop(
             host,
             context,
