@@ -565,3 +565,7 @@ v90 task_coordination_claim_indexes
 v91 agent_task_facts
 + ["table","agent_task_facts","agent_task_facts","CREATE TABLE agent_task_facts (\n            workspace_id TEXT NOT NULL,\n            task_id TEXT NOT NULL,\n            format_version INTEGER NOT NULL,\n            source TEXT NOT NULL,\n            facts_json TEXT NOT NULL,\n            PRIMARY KEY (workspace_id, task_id)\n        ) WITHOUT ROWID"]
 
+v92 job_run_host_id_indexes
++ ["index","idx_job_run_allocations_host_run_id","job_run_id_allocations","CREATE INDEX idx_job_run_allocations_host_run_id\n         ON job_run_id_allocations(run_id)"]
++ ["index","idx_job_runs_host_run_id","job_runs","CREATE INDEX idx_job_runs_host_run_id ON job_runs(run_id)"]
+

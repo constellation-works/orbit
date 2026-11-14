@@ -337,7 +337,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
             }
             let now=Utc::now();
-            let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
+            let id=next_run_id_conn(conn,RunIdRole::TopLevel,now)?;
             let run=JobRun {build: Some(orbit_common::process::build::current_orbit_build()), executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
@@ -438,8 +438,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         // the loser upsert over the sibling that committed first.
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-                let run_id =
-                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run_id = next_run_id_conn(&tx.tx, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
                     build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
@@ -490,8 +489,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                         run_id,
                     });
                 }
-                let run_id =
-                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run_id = next_run_id_conn(&tx.tx, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
                     build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
@@ -548,8 +546,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                         .ok_or_else(|| OrbitError::Store("keyed run disappeared".into()))?;
                     return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
                 }
-                let run_id =
-                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run_id = next_run_id_conn(&tx.tx, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
                     build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
@@ -631,7 +628,6 @@ impl JobRunStoreBackend for SqliteJobRunStore {
 
                 let run_id = next_run_id_conn(
                     &tx.tx,
-                    &self.workspace_id,
                     RunIdRole::Child,
                     params.scheduled_at,
                 )?;

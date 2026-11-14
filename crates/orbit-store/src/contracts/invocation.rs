@@ -12,8 +12,8 @@ pub struct InvocationQuery {
     pub succeeded_candidate_only: bool,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
-    /// Workspace the invocations were recorded under. Run ids are minted per
-    /// workspace, so a `job_run_id` filter only names one run together with
+    /// Workspace the invocations were recorded under. Historical run ids can
+    /// collide across workspaces, so a `job_run_id` filter needs
     /// this. Rows recorded before invocations carried a workspace, and whose
     /// run could not be attributed to exactly one workspace, never match.
     pub workspace_id: Option<String>,

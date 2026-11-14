@@ -710,7 +710,7 @@ pub(super) fn mutate(
                 if record.phase != LocalPullPhase::Claimed { return Err(invalid("leaf creation requires a persisted claim")); }
                 let claim = record.receipt.as_ref().and_then(|r| r.claim.as_ref()).ok_or_else(|| invalid("claim missing"))?;
                 let now = Utc::now();
-                let run_id = next_run_id_conn(conn, workspace, RunIdRole::Child, now)?;
+                let run_id = next_run_id_conn(conn, RunIdRole::Child, now)?;
                 let job = pipeline(&record.request)?;
                 // The claimed task lives in the owner's store, not this one, so
                 // the leaf carries the owner's snapshot of it. Crew resolution

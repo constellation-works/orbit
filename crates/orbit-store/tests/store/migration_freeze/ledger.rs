@@ -550,6 +550,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0091".to_string(),
                 "agent_task_facts".to_string()
             ),
+            (
+                "migration.v0092".to_string(),
+                "job_run_host_id_indexes".to_string()
+            ),
         ]
     );
 }

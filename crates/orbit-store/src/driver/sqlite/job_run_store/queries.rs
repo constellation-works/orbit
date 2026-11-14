@@ -490,7 +490,9 @@ pub(super) fn upsert_job_run_for_workspace_conn(
 const MAX_RUN_ID_SEQUENCE: u32 = 1023;
 
 /// Allocate the next free run id of `role` for the minute `submitted_at` falls
-/// in.
+/// in, across every workspace in the host's shared store. Workspace-scoped
+/// allocation lets same-slot routines mint identical worker identities.
+/// Existing colliding rows remain readable in their workspace partitions.
 ///
 /// Each role numbers its own sequence, so a run's children never consume the
 /// numbers its top-level siblings would take and neither borrows the other's
@@ -503,12 +505,11 @@ const MAX_RUN_ID_SEQUENCE: u32 = 1023;
 /// those references to unrelated work.
 ///
 /// Exhausting the sequence is an error rather than a fallback id. Roughly a
-/// thousand runs of one role in one workspace inside one minute is already
+/// thousand runs of one role on one host inside one minute is already
 /// pathological, and any id returned without a free-slot probe behind it would
 /// upsert over the live run already holding it.
 pub(super) fn next_run_id_conn(
     conn: &rusqlite::Connection,
-    workspace_id: &str,
     role: RunIdRole,
     submitted_at: DateTime<Utc>,
 ) -> Result<String, OrbitError> {
@@ -517,10 +518,9 @@ pub(super) fn next_run_id_conn(
         let candidate = run_id_candidate(&stem, role, sequence);
         let taken: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2)
-                     OR EXISTS(SELECT 1 FROM job_run_id_allocations
-                               WHERE workspace_id = ?1 AND run_id = ?2)",
-                rusqlite::params![workspace_id, candidate],
+                "SELECT EXISTS(SELECT 1 FROM job_runs WHERE run_id = ?1)
+                     OR EXISTS(SELECT 1 FROM job_run_id_allocations WHERE run_id = ?1)",
+                rusqlite::params![candidate],
                 |row| row.get(0),
             )
             .map_err(sqlite_store_error)?;

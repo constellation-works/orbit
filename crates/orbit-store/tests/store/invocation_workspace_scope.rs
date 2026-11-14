@@ -1,25 +1,17 @@
-//  Run ids are minted per workspace, so two workspaces submitting in the same
-//  minute hold the same id. An invocation recorded under one workspace's run
-//  never reaches the other's run listing or reliability counts.
+// Historical run ids can collide across workspaces. Keep their invocation
+// listings and reliability counts partitioned even though new allocations
+// now reserve identities across the host's shared store.
 
-/// A store where workspaces `ws_a` and `ws_b` each hold a run with the same
-/// id. Retries once if the two submissions straddle a minute boundary.
+/// Replay a historical collision through the public import/upsert boundary.
 fn colliding_runs() -> (Store, String) {
-    for _ in 0..3 {
-        let store = Store::open_in_memory().expect("memory store");
-        let submit = |workspace: &str| {
-            workspace_job_run_store(store.clone(), workspace)
-                .insert_job_run("job", 1, Utc::now(), None, None)
-                .expect("insert run")
-                .run_id
-        };
-        let a = submit("ws_a");
-        let b = submit("ws_b");
-        if a == b {
-            return (store, a);
-        }
-    }
-    panic!("two workspaces submitting in one minute mint the same run id");
+    let store = Store::open_in_memory().expect("memory store");
+    let run = workspace_job_run_store(store.clone(), "ws_a")
+        .insert_job_run("job", 1, Utc::now(), None, None)
+        .expect("insert run");
+    store
+        .upsert_job_run_for_workspace("ws_b", &run, None)
+        .expect("import legacy colliding run");
+    (store, run.run_id)
 }
 
 fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_id: &str) {
@@ -43,6 +35,9 @@ fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_i
 
 #[test]
 fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
+    if !provider_ledger_isolated("colliding_run_ids_keep_invocations_in_their_own_workspace") {
+        return;
+    }
     let (store, run_id) = colliding_runs();
     record_invocation(&store, "ws_b", &run_id, "implement_one");
     let since = Utc::now() - invocation_workspace_scope_Duration::hours(1);

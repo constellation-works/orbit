@@ -81,8 +81,8 @@ pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitE
 /// v36 `invocation_workspace_scope`: record the workspace each invocation
 /// belongs to.
 ///
-/// Run ids are minted per workspace, so two workspaces submitting in the same
-/// minute hold the same id and an invocation keyed by `job_run_id` alone was
+/// Run ids were minted per workspace, so two workspaces submitting in the same
+/// minute could hold the same id and an invocation keyed by `job_run_id` alone was
 /// read by both. The backfill attributes a legacy row only when exactly one
 /// workspace ever held its run id (`job_run_id_allocations`, plus `job_runs`);
 /// an ambiguous or orphaned row stays `NULL` and no workspace-scoped read
