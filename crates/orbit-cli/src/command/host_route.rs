@@ -297,8 +297,8 @@ fn deliver_notice_aggregate(
             "this machine has no [machine] identity yet; run `orbit init` first".into(),
         ));
     }
-    let client =
-        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority())?;
+    let authority = caller_authority_for_declared_model(input_declared_model(&input).as_deref());
+    let client = super::mcp::federated_aggregate_client(global_root.to_path_buf(), authority)?;
     let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| match render {
         AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
@@ -338,6 +338,7 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
         && !orbit_mcp::federated::load_destinations(global_root)?.is_empty()
     {
         let mut input = args.parsed_input()?;
+        carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
         super::tool::request_write_sidecars_from_cli_fields(&args.name, &mut input, &args.fields)?;
         let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
         let list_policy = TaskListResultPolicy::for_call(
@@ -510,6 +511,62 @@ pub(crate) fn caller_authority() -> McpSessionAuthority {
     }
 }
 
+/// A non-empty identity value, trimmed.
+fn trimmed_identity(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// The `model` a tool input already declares, if any.
+fn input_declared_model(input: &Value) -> Option<String> {
+    trimmed_identity(input.get("model").and_then(Value::as_str))
+}
+
+/// The model a routed `orbit tool run` declares, in the local path's order:
+/// the tool input's own `model` first, then `--model`, then the deprecated
+/// `--agent`, then `ORBIT_AGENT_MODEL`, then `ORBIT_AGENT_NAME`. Only one
+/// value is ever forwarded, so an input `model` is never duplicated by a
+/// conflicting flag value.
+fn declared_tool_run_model(
+    agent: Option<&str>,
+    model: Option<&str>,
+    input: &Value,
+) -> Option<String> {
+    input_declared_model(input)
+        .or_else(|| trimmed_identity(model))
+        .or_else(|| trimmed_identity(agent))
+        .or_else(|| trimmed_identity(std::env::var("ORBIT_AGENT_MODEL").ok().as_deref()))
+        .or_else(|| trimmed_identity(std::env::var("ORBIT_AGENT_NAME").ok().as_deref()))
+}
+
+/// Carry a routed `orbit tool run`'s declared model in its forwarded input,
+/// as the tool boundary's one identity key. An input that already declares
+/// a model is forwarded unchanged.
+fn carry_declared_model(agent: Option<&str>, model: Option<&str>, input: &mut Value) {
+    if input_declared_model(input).is_some() {
+        return;
+    }
+    let Some(declared) = declared_tool_run_model(agent, model, input) else {
+        return;
+    };
+    if let Some(object) = input.as_object_mut() {
+        object.insert("model".into(), Value::String(declared));
+    }
+}
+
+/// The authority for a routed call whose forwarded input declares a model:
+/// never Operator, exactly as a local agent call is attributed. A call
+/// that declares none keeps the caller's own authority.
+fn caller_authority_for_declared_model(declared: Option<&str>) -> McpSessionAuthority {
+    if trimmed_identity(declared).is_some() {
+        McpSessionAuthority::Agent
+    } else {
+        caller_authority()
+    }
+}
+
 /// One tool call a command reduces to, and how its answer renders.
 struct RoutedCall {
     name: String,
@@ -569,6 +626,7 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     )));
                 }
                 let mut input = args.parsed_input()?;
+                carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
                 super::tool::request_write_sidecars_from_cli_fields(
                     &args.name,
                     &mut input,
@@ -734,7 +792,9 @@ fn deliver(
             ));
         }
     };
-    let client = hosts::routed_client(global_root, &caller, caller_authority())?;
+    let authority =
+        caller_authority_for_declared_model(input_declared_model(&call.input).as_deref());
+    let client = hosts::routed_client(global_root, &caller, authority)?;
     let mut input = call.input;
     if let Some(selector) = selector
         && let Some(object) = input.as_object_mut()
