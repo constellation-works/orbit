@@ -2,8 +2,8 @@
 
 The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin.
 It serves `ui://orbit/control-center/v1/index.html` as
-`text/html;profile=mcp-app`; the old `ui://orbit/task-panel/v1/index.html` remains
-readable so an already-open panel can reload. `orbit_ui` action `open` advertises a
+`text/html;profile=mcp-app`; the retired `ui://orbit/task-panel/v1/index.html`
+answers `resource_not_found` like any other unknown URI. `orbit_ui` action `open` advertises a
 global entrypoint and `orbit_ui` action `inspect` a thread entrypoint. Opening either
 only reads. Existing data tools have no automatic widget metadata.
 
@@ -28,7 +28,7 @@ resource. Markdown escapes raw HTML before sanitization, strips resource-loading
 and form elements, and permits only HTTP(S) links with `noopener noreferrer`.
 Other UI text uses text sinks. CSP still blocks external assets, connections and
 frames. The protocol crate adds no dependency on the web runtime.
-Resource lookup accepts only the two exact versioned URIs. It does not resolve
+Resource lookup accepts only the exact versioned URI. It does not resolve
 paths, query strings or arbitrary artifact contents.
 
 The panel discovers workspaces and requires an explicit returned selector.
@@ -284,8 +284,8 @@ versions. A local no-op provider stub satisfies disposable initialization only.
 
 The production stdio probe checks:
 
-- Resource discovery, MIME/CSP metadata, global/thread entrypoints, the old URI
-  alias, arbitrary-resource refusal and ordinary-client data tools.
+- Resource discovery, MIME/CSP metadata, global/thread entrypoints, old-URI
+  refusal, arbitrary-resource refusal and ordinary-client data tools.
 - Proposed creation and matching retry, conflicting request-ID refusal,
   filtering/pagination, a fresh edit and stale-revision refusal without overwrite.
 - A comment and retry without duplicate evidence; independent detail page inputs.
@@ -373,8 +373,8 @@ Totals and truncation remain visible when a cap is reached. No arbitrary artifac
 reader, dispatch/retry/cancel, bulk action, merge, release, scheduler editor or
 operator-authority acquisition is provided. The candidate does not establish a
 full browser accessibility pass, real remote compatibility or long-lived upgrade
-compatibility. The old resource alias preserves one concrete reload contract;
-it is not proof of every live-client migration scenario.
+compatibility. The retired panel URI is refused; it is not a reload contract
+for live clients.
 
 Metadata and bridge contracts follow the official
 [UI guide](https://developers.openai.com/plugins/build/chatgpt-ui),

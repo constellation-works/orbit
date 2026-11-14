@@ -14,6 +14,7 @@ import threading
 ROOT = Path(__file__).resolve().parents[1]
 URI = "ui://orbit/control-center/v1/index.html"
 LEGACY_URI = "ui://orbit/task-panel/v1/index.html"
+# Retired: the old panel URI now answers resource_not_found like any unknown URI.
 
 
 def require(condition, message):
@@ -143,8 +144,7 @@ def main():
         require(contents["_meta"]["ui"]["csp"]["connectDomains"] == [], "resource allows network connections")
         require(contents["_meta"]["ui"]["csp"]["resourceDomains"] == [], "resource allows external assets")
         (output / "task-panel.html").write_text(contents["text"])
-        legacy = rpc("resources/read", {"uri": LEGACY_URI})["result"]["contents"][0]
-        require(legacy["text"] == contents["text"], "old open panels cannot load compatible resource")
+        require("error" in rpc("resources/read", {"uri": LEGACY_URI}), "retired panel URI accepted")
         for uri in ("file:///etc/passwd", URI + "?workspace=other", URI + "/../index.html"):
             require("error" in rpc("resources/read", {"uri": uri}), "arbitrary resource URI accepted")
         require(call("orbit_ui", {"action": "open"})["workspace"] is None, "empty open inferred a workspace")

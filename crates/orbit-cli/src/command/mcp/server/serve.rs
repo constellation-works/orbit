@@ -41,8 +41,7 @@ pub(in super::super) struct StdioLaunch {
 /// This is the entry point an SSH caller reaches, and its `--operator` is a
 /// statement there exactly as it is locally: the caller composed that argv over
 /// an SSH login to this machine, which is ownership of it, so there is no
-/// second authorization for the destination to make [ORB-12564]. A leftover
-/// file from the retired destination-side model is named once and ignored.
+/// second authorization for the destination to make [ORB-12564].
 pub(in super::super) fn serve_mcp_stdio(
     global_root: PathBuf,
     remote_caller_machine_id: Option<String>,
@@ -52,7 +51,6 @@ pub(in super::super) fn serve_mcp_stdio(
     launch: StdioLaunch,
     toolsets: McpToolsetSelection,
 ) -> Result<(), OrbitError> {
-    orbit_mcp::warn_ignored_caller_authorization(&global_root);
     let (host, mut session_context) = compose_server(
         global_root,
         remote_caller_machine_id,

@@ -715,9 +715,7 @@ impl ServerHandler for OrbitToolServer {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        if request.uri != presentation::RESOURCE_URI
-            && request.uri != presentation::LEGACY_RESOURCE_URI
-        {
+        if request.uri != presentation::RESOURCE_URI {
             return Err(McpError::resource_not_found(
                 "unknown UI resource",
                 Some(serde_json::json!({ "code": "resource_not_found" })),

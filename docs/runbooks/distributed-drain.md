@@ -119,10 +119,6 @@ Confirm:
 - binary versions and distributed-drain protocol revisions match;
 - each host has a distinct task prefix;
 - exactly one checkout of this repository reports role `owner`;
-- `orbit doctor` `mcp-callers` is `ok`, or a leftover
-  `~/.orbit/mcp-callers.toml` / `~/.orbit/mcp-ssh-acceptance/` warning that
-  those files **grant nothing** (delete them; deny access by removing the
-  caller's key from `~/.ssh/authorized_keys`);
 - when before-PR or before-landing review is on at the owner
   (`review.timing` is `before_pr` or `before_landing`), the owner sets a
   reviewer pool, the workspace ships through the PR route, and every follower

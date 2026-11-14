@@ -143,11 +143,6 @@ attempts among cooperating executors; a caller able to start a server can choose
 another machine's label, including locally from a managed agent context. It
 does not isolate mutually untrusted callers sharing that account.
 
-A destination upgraded from the older model may still carry
-`~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/`. Both are ignored:
-startup names them once in a warning, `orbit doctor` reports them, and deleting
-them is the whole migration. `orbit mcp callers` no longer exists.
-
 ## Dashboard
 
 ```bash

@@ -14,7 +14,6 @@ use rmcp::model::{MetaObject, Resource, ResourceContents, Tool, ToolAnnotations}
 use serde_json::{Value, json};
 
 pub(super) const RESOURCE_URI: &str = "ui://orbit/control-center/v1/index.html";
-pub(super) const LEGACY_RESOURCE_URI: &str = "ui://orbit/task-panel/v1/index.html";
 const MIME: &str = "text/html;profile=mcp-app";
 pub(super) const TASK_FIELDS: [&str; 6] = [
     "id",
