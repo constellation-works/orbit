@@ -2,7 +2,7 @@
 title: "Remote Access — Vision"
 owner: codex
 last_updated: 2026-11-04
-last_validated: 2026-11-05
+last_validated: 2026-11-14
 status: Accepted
 feature: remote-access
 doc_role: vision
