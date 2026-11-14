@@ -54,7 +54,7 @@ import {
   getActiveRunId,
   setActiveRunId,
   getActiveRunDetail,
-  loadedRunDetailIsTerminal,
+  runDetailPollNeeded,
   setActiveRunDetail,
   setActiveRunDetailError,
   getActiveRunEvents,
@@ -74,6 +74,7 @@ import {
   initRunDetail,
   beginRunDetailFetch,
   runDetailFetchCurrent,
+  completeRunDetailFetch,
 } from './js/run-detail.js';
 
 const STATUS_ORDER = [
@@ -1800,15 +1801,13 @@ function activeRefreshJobs({ poll = false } = {}) {
       renderRunDetailEmpty("Select a workspace to view this run.");
       return jobs;
     }
-    // A terminal run cannot change: the periodic tick re-reads nothing for
-    // it. First load (no detail yet), explicit refresh (poll is false),
-    // cancel/replay actions and run change notices fetch directly, outside
-    // this branch, so they still refresh the view.
-    if (poll && loadedRunDetailIsTerminal(getActiveRunId())) return jobs;
-    add("Run detail", fetchAndRenderRunDetail());
-    add("Run events", fetchAndRenderRunEvents());
-    add("Timeline retries", fetchAndRenderRunRetries());
-    add("Run logs", fetchAndRenderRunLogs());
+    // A terminal parent may still have live children or provider processes.
+    // Keep its joins current while settled audit channels stop independently.
+    // Explicit refresh still fetches every channel.
+    if (!poll || runDetailPollNeeded("detail", getActiveRunId())) add("Run detail", fetchAndRenderRunDetail());
+    if (!poll || runDetailPollNeeded("events", getActiveRunId())) add("Run events", fetchAndRenderRunEvents());
+    if (!poll || runDetailPollNeeded("retries", getActiveRunId())) add("Timeline retries", fetchAndRenderRunRetries());
+    if (!poll || runDetailPollNeeded("logs", getActiveRunId())) add("Run logs", fetchAndRenderRunLogs());
     return jobs;
   }
 
@@ -2001,6 +2000,7 @@ function fetchAndRenderRunEvents(offset = getActiveRunEventsOffset()) {
   return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?tail=true&offset=${offset}&limit=${RUN_EVENTS_LIMIT}`).then((events) => {
     if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents(events);
+    completeRunDetailFetch("events", token);
     renderRunEvents();
   }).catch((error) => {
     if (!runDetailFetchCurrent("events", token)) return;
@@ -2019,6 +2019,7 @@ function fetchAndRenderRunRetries() {
   return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?kind=step_retry&offset=0&limit=${RUN_RETRIES_LIMIT + 1}`).then((events) => {
     if (!runDetailFetchCurrent("retries", token)) return;
     setActiveRunRetries(events);
+    completeRunDetailFetch("retries", token);
     renderRunGantt();
   }).catch((error) => {
     if (!runDetailFetchCurrent("retries", token)) return;
@@ -2036,6 +2037,7 @@ function fetchAndRenderRunLogs() {
   return fetchJson(`/api/runs/${encodeURIComponent(runId)}/logs?limit=${RUN_EVENTS_LIMIT}`).then((logs) => {
     if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs(logs);
+    completeRunDetailFetch("logs", token);
     renderRunSteps();
   }).catch((error) => {
     if (!runDetailFetchCurrent("logs", token)) return;
