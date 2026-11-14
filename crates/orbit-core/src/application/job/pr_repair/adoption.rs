@@ -72,7 +72,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+use orbit_store::contracts::{JobRunOrder, JobRunQuery, TaskListFilter};
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
 use orbit_types::workflow::{
     self, COMPLETION_HOLD_KEY, DEFAULT_BRANCH_PREFIX, DeliveryRefusal, JobRun, JobRunState,
@@ -239,6 +239,43 @@ impl OrbitRuntime {
                     // Malformed bindings in an unrelated historical run cannot
                     // name a task, and must not refuse the other candidates.
                     ids.retain(|id| orbit_types::task::is_valid_orb_task_id(id));
+                    // Narrow by task state before reading envelopes: only a
+                    // task now in review/blocked/backlog can be repaired, so
+                    // intersect the projected ids with that bounded status
+                    // population (answered from the generated index alone)
+                    // and request metadata for at most those ids. A worker
+                    // reads through its owner, which has no local index, so
+                    // it keeps the keyed owner read.
+                    if self.worker_invocation().is_none() {
+                        let open_filter = TaskListFilter {
+                            statuses: Some(vec![
+                                TaskStatus::Review,
+                                TaskStatus::Blocked,
+                                TaskStatus::Backlog,
+                            ]),
+                            ..TaskListFilter::default()
+                        };
+                        match self.task_candidate_keys(&open_filter, usize::MAX) {
+                            Ok(Some(keys)) => {
+                                let open: std::collections::BTreeSet<String> =
+                                    keys.items.into_iter().map(|key| key.id).collect();
+                                ids.retain(|id| open.contains(id));
+                            }
+                            Ok(None) => {
+                                // The index cannot serve this filter: read
+                                // envelopes for the open statuses only (the
+                                // bounded side) and keep the projected ones.
+                                let candidates = self.task_candidates(&open_filter, usize::MAX)?;
+                                return Ok(candidates
+                                    .items
+                                    .into_iter()
+                                    .filter(|envelope| ids.contains(&envelope.id))
+                                    .map(crate::application::task::metadata_task)
+                                    .collect());
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
                     self.list_task_metadata_for_ids(&ids)
                 });
             match tasks {
