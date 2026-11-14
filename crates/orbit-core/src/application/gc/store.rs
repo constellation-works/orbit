@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
     AuditRetentionTable, JournalRetentionCandidates, ResourceHistoryKeep, ResourceMinutesTable,
-    ResourceUsageStoreBackend, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
-    StoreRetentionBackend, StoreSpace,
+    RetentionIdSource, RetentionSelection, RetentionWorkspaceScope, StoreRetentionBackend,
+    StoreSpace,
 };
 use serde::Serialize;
 
@@ -357,19 +357,21 @@ impl OrbitRuntime {
             ResourceMinutesTable::Host,
             ResourceMinutesTable::AdmissionForecast,
         ] {
-            let rows = store.resource_minutes_older_than(table, resource_cutoff, keep)?;
-            let rows_removed = if apply && rows > 0 {
-                run_batches(&mut writes, || {
-                    store.prune_resource_minutes_batch(
-                        table,
-                        resource_cutoff,
-                        keep,
-                        RETENTION_BATCH_ROWS,
-                    )
-                })?
-            } else {
-                0
-            };
+            // Rank once, without the writer lock. Repeating the ranking in
+            // every DELETE made a large history monopolize the host store.
+            let candidates = store.resource_retention_candidates(table, resource_cutoff, keep)?;
+            let rows = candidates.len() as u64;
+            let mut rows_removed = 0;
+            if apply {
+                for (index, batch) in candidates.chunks(RETENTION_BATCH_ROWS).enumerate() {
+                    if index > 0 {
+                        std::thread::sleep(BATCH_PAUSE);
+                    }
+                    rows_removed += timed_batch(&mut writes, || {
+                        store.delete_resource_retention_rows(table, batch)
+                    })? as u64;
+                }
+            }
             resource_minutes.push(ResourceMinutesRetentionReport {
                 table: table.table_name(),
                 retention_days: RESOURCE_MINUTES_RETENTION_DAYS,

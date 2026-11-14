@@ -5,11 +5,12 @@
 //! `application::job::orphan_adoption`'s and
 //! `application::job::pr_repair::adoption`'s decision; this step only supplies
 //! the drain's authority and its free leaf slots. Only a malformed step input
-//! or a failed checkpoint write fails it; candidate store or forge errors
-//! are reported in the completed pass instead.
+//! or a non-contention checkpoint failure fails it; candidate store or forge
+//! errors are reported in the completed pass instead. A busy checkpoint is
+//! retried on the next iteration, without replaying an adoption's effects.
 
 use chrono::Utc;
-use orbit_engine::{DispatchError, RuntimeHost};
+use orbit_engine::DispatchError;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -33,7 +34,24 @@ pub(crate) fn adopt_orphaned_deliveries(
         // This is a loop-body step: the enclosing loop may not checkpoint
         // until the drain ends. Save this pass now for run show and readiness,
         // using the transactional update that preserves operator controls.
-        runtime.checkpoint_step_diagnostic(run_id, "adopt_orphans", &output)?;
+        if let Err(error) = runtime
+            .stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.record_pipeline_output("adopt_orphans", output.clone());
+                Ok(())
+            })
+        {
+            if !error.is_lock_busy() {
+                return Err(DispatchError::JobExecution(format!(
+                    "persist step diagnostics (run {run_id}, step `adopt_orphans`): {error}"
+                )));
+            }
+            tracing::warn!(target: "orbit.core.drain", run_id, %error,
+                "adoption checkpoint deferred on a busy store; the next iteration retries");
+            output["checkpoint_deferred"] =
+                json!({"code": orbit_common::LOCK_BUSY_ERROR_CODE, "reason": error.to_string()});
+        }
     }
     Ok(output)
 }

@@ -1055,9 +1055,13 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   which names the holder's pid and section, on
   `pipeline_state.drain_last_pass`, and waits the drain's poll interval
   before the next pass retries; `orbit run show` reads `Admission pass
-  deferred: consecutive_failures=N`. Ten deferred passes in a row fail the
-  drain with that error, and any completed pass resets the count. Other
-  admission failures still fail the drain at once.
+  deferred: consecutive_failures=N`. Ten recorded deferred passes in a row
+  fail the drain with that error, and any completed pass resets the count.
+  If the database lock also prevents the deferral or orphan-adoption
+  diagnostic from being saved, the worker warns and continues within its
+  existing drain window. The next iteration retries; the last durable
+  diagnostic may be stale, and an unsaved pass does not increment its
+  counter. Other admission failures still fail the drain at once.
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. So does an owner whose `orbit` exits on its locked store
   before it answers the follower's SSH session (`session ended before answering
