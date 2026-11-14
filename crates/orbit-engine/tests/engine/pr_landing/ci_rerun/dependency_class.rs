@@ -49,7 +49,7 @@ fn land(fx: &Fixture, host: &DeliveryHost) -> String {
             &claimed,
             "handoff_land",
             &json!({}),
-            &json!({"handoff_id":"handoff-retry","task_id":TASK_ID,"run_id":RUN_ID,"max_wait_seconds":300,"poll_interval_seconds":5}),
+            &json!({"handoff_id":"handoff-retry","task_id":TASK_ID,"run_id":RUN_ID,"max_wait_seconds":300,"poll_interval_seconds":60}),
             false,
             &HashMap::new(),
             None,

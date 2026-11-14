@@ -398,7 +398,20 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// The repo, bare remote and earlier claim are the same for every row.
+    /// Build them once per child and copy; each row still runs its own replay.
     fn new(sandbox: &Path) -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(|| Self::fresh(sandbox));
+            seed.copy_into(sandbox)
+        })
+    }
+
+    fn fresh(sandbox: &Path) -> Self {
         let root = tempfile::tempdir_in(sandbox).unwrap();
         let forge = root.path().join("forge");
         let remote = forge.join("remote.git");
@@ -461,26 +474,7 @@ impl Fixture {
         );
         let claim = claim.canonicalize().unwrap();
 
-        let gh = sandbox.join("bin").join("gh");
-        fs::create_dir_all(gh.parent().unwrap()).unwrap();
-        fs::write(&gh, FAKE_GH.replace("__FORGE__", path_str(&forge))).unwrap();
-        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
-
-        // The real Git is found before the substitute shadows it on `PATH`.
-        let real_git = PathBuf::from(std::env::var_os("ORBIT_CLAIMED_PR_REUSE_REAL_GIT").unwrap());
-        let change_file = root.path().join("push-change");
-        let git_shim = sandbox.join("bin").join("git");
-        fs::write(
-            &git_shim,
-            PUSH_BOUNDARY_GIT
-                .replace("__GIT__", path_str(&real_git))
-                .replace("__REMOTE__", path_str(&remote))
-                .replace("__CHANGE__", path_str(&change_file))
-                .replace("__REF__", &format!("refs/heads/{EARLIER}")),
-        )
-        .unwrap();
-        fs::set_permissions(&git_shim, fs::Permissions::from_mode(0o755)).unwrap();
-        Self {
+        let fixture = Self {
             _root: root,
             forge,
             repo,
@@ -488,8 +482,72 @@ impl Fixture {
             earlier_head,
             claim,
             base_sha,
+            change_file: PathBuf::new(),
+        };
+        let change_file = fixture._root.path().join("push-change");
+        let fixture = Self {
             change_file,
+            ..fixture
+        };
+        fixture.install_boundary(sandbox);
+        fixture
+    }
+
+    /// Copy the pristine seed. Linked worktrees keep two absolute gitdir
+    /// links; relocate both without consulting the seed. `commondir` stays
+    /// relative. The substitute `gh` and push-boundary `git` embed this
+    /// copy's paths and are rewritten on the shared `PATH` entry.
+    fn copy_into(&self, sandbox: &Path) -> Self {
+        let destination = tempfile::tempdir_in(sandbox).unwrap();
+        git_fixture::copy_template(self._root.path(), destination.path());
+        let old_raw = self._root.path().to_path_buf();
+        let old_root = old_raw.canonicalize().unwrap();
+        let new_root = destination.path().canonicalize().unwrap();
+        for name in ["earlier", "claim"] {
+            relocate_linked_worktree(&old_raw, &old_root, &new_root, &new_root.join(name));
         }
+        let copied = Self {
+            _root: destination,
+            forge: new_root.join("forge"),
+            repo: new_root.join("repo").canonicalize().unwrap(),
+            earlier: new_root.join("earlier").canonicalize().unwrap(),
+            earlier_head: self.earlier_head.clone(),
+            claim: new_root.join("claim").canonicalize().unwrap(),
+            base_sha: self.base_sha.clone(),
+            change_file: new_root.join("push-change"),
+        };
+        git(
+            &copied.repo,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                path_str(&copied.forge.join("remote.git")),
+            ],
+        );
+        copied.install_boundary(sandbox);
+        copied
+    }
+
+    fn install_boundary(&self, sandbox: &Path) {
+        let gh = sandbox.join("bin").join("gh");
+        fs::create_dir_all(gh.parent().unwrap()).unwrap();
+        fs::write(&gh, FAKE_GH.replace("__FORGE__", path_str(&self.forge))).unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The real Git is found before the substitute shadows it on `PATH`.
+        let real_git = PathBuf::from(std::env::var_os("ORBIT_CLAIMED_PR_REUSE_REAL_GIT").unwrap());
+        let git_shim = sandbox.join("bin").join("git");
+        fs::write(
+            &git_shim,
+            PUSH_BOUNDARY_GIT
+                .replace("__GIT__", path_str(&real_git))
+                .replace("__REMOTE__", path_str(&self.forge.join("remote.git")))
+                .replace("__CHANGE__", path_str(&self.change_file))
+                .replace("__REF__", &format!("refs/heads/{EARLIER}")),
+        )
+        .unwrap();
+        fs::set_permissions(&git_shim, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     /// The candidate reference the owner kept from the earlier claim, as the
@@ -800,6 +858,69 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 fn path_str(path: &Path) -> &str {
     path.to_str().expect("utf8 fixture path")
+}
+
+/// Point a copied linked worktree at its copy. `checkout/.git` is a `gitdir:`
+/// file and the admin dir's `gitdir` points back. Git may have stored the
+/// seed's raw temp path or its canonical path; `commondir` stays relative.
+fn relocate_linked_worktree(
+    old_raw: &Path,
+    old_canonical: &Path,
+    new_root: &Path,
+    checkout: &Path,
+) {
+    let link = fs::read_to_string(checkout.join(".git")).unwrap_or_else(|error| {
+        panic!(
+            "copied worktree {} has no .git link: {error}",
+            checkout.display()
+        )
+    });
+    let recorded = link.trim().strip_prefix("gitdir: ").unwrap_or_else(|| {
+        panic!(
+            "copied worktree {} .git is not a gitdir link: {link}",
+            checkout.display()
+        )
+    });
+    let git_dir = new_root.join(fixture_relative(
+        Path::new(recorded),
+        old_raw,
+        old_canonical,
+    ));
+    assert!(
+        git_dir.starts_with(new_root.join("repo/.git/worktrees")),
+        "relocated gitdir {} left the worktree admin dir",
+        git_dir.display()
+    );
+    fs::write(
+        checkout.join(".git"),
+        format!("gitdir: {}\n", path_str(&git_dir)),
+    )
+    .unwrap();
+    fs::write(
+        git_dir.join("gitdir"),
+        format!("{}\n", path_str(&checkout.join(".git"))),
+    )
+    .unwrap();
+}
+
+fn fixture_relative(path: &Path, old_raw: &Path, old_canonical: &Path) -> PathBuf {
+    if let Ok(relative) = path.strip_prefix(old_canonical) {
+        return relative.to_path_buf();
+    }
+    if let Ok(relative) = path.strip_prefix(old_raw) {
+        return relative.to_path_buf();
+    }
+    if let Ok(canonical) = path.canonicalize()
+        && let Ok(relative) = canonical.strip_prefix(old_canonical)
+    {
+        return relative.to_path_buf();
+    }
+    panic!(
+        "worktree link {} is outside fixture roots {} and {}",
+        path.display(),
+        old_raw.display(),
+        old_canonical.display()
+    )
 }
 
 /// The `gh` surface the provider adapter calls, over any number of pull

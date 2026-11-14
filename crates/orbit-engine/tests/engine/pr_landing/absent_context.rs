@@ -38,6 +38,16 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
     ] {
         fs::write(fx.forge.join(name), value).unwrap();
     }
+    install_refresh_provider(sandbox, &fx.forge, context);
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    (fx, host)
+}
+
+/// The substitute provider, bound to `forge`. A newly written image is primed
+/// once so the host's first-exec assessment (ORB-15293) is not on the timed
+/// path. `handoff_land` with `max_wait_seconds: 0` still reads PR status under
+/// the 15s default process budget.
+fn install_refresh_provider(sandbox: &Path, forge: &Path, context: &str) {
     let provider = sandbox.join("bin/gh");
     fs::write(
         &provider,
@@ -46,21 +56,38 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
                 .join("tests/engine/pr_landing/fixtures/base-refresh-forge.sh"),
         )
         .unwrap()
-        .replace("__FORGE__", path_str(&fx.forge))
+        .replace("__FORGE__", path_str(forge))
         .replace("Protected (rust)", context),
     )
     .unwrap();
-    // `handoff_land` with `max_wait_seconds: 0` reads PR status under the 15s
-    // default process budget (`landing/run.rs` skips the recovery deadline, and
-    // `Deadline::remaining` still clamps a passed deadline to that budget).
-    // The first exec of this image is the host-wide assessment queue
-    // (`test_env::prime_executable`, ORB-15293). Land it here, before that read.
     fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
     let mut prime = Command::new(&provider);
     prime.arg("__prime__");
     test_env::prime_executable(&mut prime);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-    (fx, host)
+}
+
+/// `setup` for the unchanged [`NEW`] source, built once per child. Rows that
+/// only add a forge control file copy this seed instead of replaying its git
+/// preparation.
+fn copied_new_setup(sandbox: &Path) -> (Fixture, DeliveryHost) {
+    thread_local! {
+        static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+    }
+    TEMPLATE.with(|slot| {
+        let mut template = slot.borrow_mut();
+        let seed =
+            template.get_or_insert_with(|| setup_with_context(sandbox, NEW, "Protected (rust)").0);
+        let fx = seed.copy_to(sandbox);
+        let remote = fx.forge.join("orbit/test.git");
+        fs::write(fx.forge.join("remote"), path_str(&remote)).unwrap();
+        git(
+            &fx.repo,
+            &["remote", "set-url", "origin", path_str(&remote)],
+        );
+        install_refresh_provider(sandbox, &fx.forge, "Protected (rust)");
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+        (fx, host)
+    })
 }
 
 #[test]
@@ -562,7 +589,11 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                         "wrong_event" => NEW.replace("pull_request:", "push:"),
                         _ => NEW.into(),
                     };
-                    let (fx, host) = setup(row, &source);
+                    let (fx, host) = if source == NEW {
+                        copied_new_setup(row)
+                    } else {
+                        setup(row, &source)
+                    };
                     if matches!(case, "legacy-pending" | "legacy-failed") {
                         fs::write(
                             fx.forge.join("legacy-state"),

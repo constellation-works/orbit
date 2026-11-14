@@ -43,7 +43,10 @@ fn a_head_without_any_required_check_run_is_retriggered_once_then_held() {
     isolated(
         "absent_check_runs::a_head_without_any_required_check_run_is_retriggered_once_then_held",
         |sandbox| {
-            let (fx, host, input) = absent_check_runs(sandbox);
+            let (fx, host, mut input) = absent_check_runs(sandbox);
+            // 300s crosses the 300s grace and the 300s re-trigger wait in a
+            // few polls. The cap on this interval is 600s.
+            input["poll_interval_seconds"] = json!(300);
             let error =
                 complete_with_logical_clock(&host, &input).expect_err("absent checks never merge");
             match &error {
