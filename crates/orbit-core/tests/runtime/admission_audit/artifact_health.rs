@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
-use orbit_core::application::health::artifact::{
-    ArtifactCondition, ArtifactHealth, ArtifactKind, FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
-};
+use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactHealth, ArtifactKind};
 const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 use orbit_common::security::release::sha256_hex;
 
@@ -106,17 +104,6 @@ fn activity_catalog_health_reports_unreadable_directories() {
                 .contains(blocked.to_str().expect("fixture path"))
         );
         assert!(fault.detail.contains(&source_error), "{fault:?}");
-        assert!(
-            !fault
-                .remediation
-                .contains(FIX_RETIRED_ACTIVITY_BACKENDS_CMD)
-        );
-        let repair = runtime
-            .repair_retired_activity_backends()
-            .expect("repair scan");
-        assert!(repair.repaired.is_empty());
-        assert!(repair.skipped.iter().any(|skip| skip.path == blocked));
-
         drop(restore);
         assert_eq!(
             blocked
@@ -708,10 +695,10 @@ fn run_isolated_child_fixture(test_name: &str, child_flag: &str) {
 
 #[cfg(unix)]
 #[test]
-fn retired_backend_repair_confines_links_cycles_and_special_files() {
+fn activity_catalog_scan_confines_links_cycles_and_special_files() {
     if !crate::admission_audit::isolate(
         module_path!(),
-        "retired_backend_repair_confines_links_cycles_and_special_files",
+        "activity_catalog_scan_confines_links_cycles_and_special_files",
     ) {
         return;
     }
@@ -719,13 +706,13 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
     const CHILD_FLAG: &str = "ORBIT_ACTIVITY_REPAIR_FIXTURE_CHILD";
     if std::env::var_os(CHILD_FLAG).is_none() {
         run_isolated_child_fixture(
-            "retired_backend_repair_confines_links_cycles_and_special_files",
+            "activity_catalog_scan_confines_links_cycles_and_special_files",
             CHILD_FLAG,
         );
         return;
     }
 
-    use std::os::unix::fs::{FileTypeExt, symlink};
+    use std::os::unix::fs::symlink;
 
     let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
     let (runtime, _workspace, activities) = workspace_runtime(root.path());
@@ -770,7 +757,7 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
     .expect("write regular");
     std::fs::write(&deep, agent_loop_yaml("deep_loop", "  backend: auto\n")).expect("write deep");
 
-    // A configured root that is itself a link stays a root and is repaired.
+    // A configured root that is itself a link stays a root.
     let linked_catalog = root.path().join("linked_catalog");
     std::fs::create_dir_all(&linked_catalog).expect("linked catalog");
     let global_resources = root.path().join("global/resources");
@@ -781,7 +768,6 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
         agent_loop_yaml("global_loop", "  backend: http\n"),
     )
     .expect("write global root activity");
-    let global_loop = global_resources.join("activities/global_loop.yaml");
 
     let refused = [&final_link, &dir_link, &cycle, &fifo];
     let report = runtime
@@ -794,12 +780,6 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
             .find(|finding| &finding.path == path)
             .unwrap_or_else(|| panic!("doctor must report {}: {findings:?}", path.display()));
         assert_eq!(finding.condition, ArtifactCondition::Faulty);
-        assert!(
-            !finding
-                .remediation
-                .contains(FIX_RETIRED_ACTIVITY_BACKENDS_CMD),
-            "a refused entry is not offered the automatic repair: {finding:?}"
-        );
     }
     assert!(
         findings
@@ -808,71 +788,6 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
         "doctor must not inspect through links: {findings:?}"
     );
 
-    let expected_repaired = {
-        let mut paths = vec![
-            deep.clone(),
-            global_loop.clone(),
-            hard_link.clone(),
-            regular.clone(),
-        ];
-        paths.sort();
-        paths
-    };
-    let mut expected_skipped: Vec<PathBuf> = refused.iter().map(|path| (*path).clone()).collect();
-    expected_skipped.sort();
-    for pass in ["first", "second"] {
-        let repair = runtime
-            .repair_retired_activity_backends()
-            .expect("repair pass");
-        let mut repaired = repair.repaired.clone();
-        repaired.sort();
-        let mut skipped: Vec<PathBuf> = repair
-            .skipped
-            .iter()
-            .map(|skip| skip.path.clone())
-            .collect();
-        skipped.sort();
-        if pass == "first" {
-            assert_eq!(repaired, expected_repaired, "{pass} pass: {repair:?}");
-        } else {
-            assert!(repaired.is_empty(), "repair is idempotent: {repair:?}");
-        }
-        assert_eq!(
-            skipped, expected_skipped,
-            "{pass} pass reports refusals: {repair:?}"
-        );
-
-        assert_eq!(
-            std::fs::read_to_string(&external_final).expect("external final"),
-            external_final_body
-        );
-        assert_eq!(
-            std::fs::read_to_string(&external_nested).expect("external nested"),
-            external_nested_body
-        );
-        assert_eq!(
-            std::fs::read_to_string(&external_hard).expect("external hard link target"),
-            external_hard_body
-        );
-        for link in [&final_link, &dir_link, &cycle] {
-            assert!(
-                link.symlink_metadata()
-                    .expect("link survives")
-                    .file_type()
-                    .is_symlink()
-            );
-        }
-        assert!(
-            fifo.symlink_metadata()
-                .expect("fifo survives")
-                .file_type()
-                .is_fifo()
-        );
-    }
-    for path in &expected_repaired {
-        let after = std::fs::read_to_string(path).expect("read repaired activity");
-        assert!(!after.contains("backend:"), "{}: {after}", path.display());
-    }
     assert!(
         global_resources
             .join("activities")

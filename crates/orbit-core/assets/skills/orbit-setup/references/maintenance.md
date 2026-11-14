@@ -177,7 +177,6 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-locks` | Lock files whose recorded holder process is dead. |
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
-| `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
 | `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |

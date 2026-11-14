@@ -252,14 +252,9 @@ directory (env override, global managed tree, workspace `.orbit/resources/activi
 and applies the same `load_activity_catalog_asset` + tool-policy validation catalog
 construction uses, so a workspace file that fails job
 dispatch cannot be reported healthy. Retired `spec.backend: http|auto` findings
-name `orbit doctor --fix-retired-activity-backends`, which deletes only that
-key from schemaVersion 2 agent-loop activities. Both the scan and the repair
-stay confined to each configured catalog directory (which may itself be a
-link): links below it — linked `.yaml` files and linked directories — and
-special files such as FIFOs are reported rather than followed or read, so a
-link cycle cannot loop the walk and a link cannot redirect the rewrite to a
-file outside the catalog. The repair re-checks the path before replacing it
-through a same-directory rename.
+name the rejected field and require a manual edit. The scan stays confined to each
+configured catalog directory (which may itself be a link): links below it and special
+files such as FIFOs are reported rather than followed or read.
 
 `orbit doctor --fix-stale-artifacts` retires only deprecated artifacts whose
 digest still proves Orbit wrote them, preserving locally modified ones under

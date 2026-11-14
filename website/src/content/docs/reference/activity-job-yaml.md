@@ -91,8 +91,8 @@ for the corresponding workspace settings.
 ### Retired agent fields
 
 Agent execution uses the CLI path only. `backend: cli` still parses and is
-ignored; `backend: http` and `backend: auto` fail catalog load, and
-`orbit doctor --fix-retired-activity-backends` removes them. See
+ignored; `backend: http` and `backend: auto` fail catalog load. Remove
+these retired fields manually. See
 [Retired backend selection](../config/#retired-backend-selection).
 `max_iterations` is accepted and has no effect: only
 `wall_clock_timeout_seconds` bounds an invocation.

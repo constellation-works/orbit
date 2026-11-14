@@ -70,10 +70,6 @@ pub struct DoctorRepairFlags {
     #[arg(long)]
     pub fix_stale_artifacts: bool,
 
-    /// Remove known retired `spec.backend` values (`http`, `auto`) from schemaVersion 2 agent-loop activities. Unknown backends and unrelated parse failures are left untouched.
-    #[arg(long)]
-    pub fix_retired_activity_backends: bool,
-
     /// Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles). Unowned or unreachable populated partitions are never touched. Requires --confirm.
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
@@ -268,27 +264,6 @@ impl Execute for DoctorCommand {
                 WorkspaceDoctorStatus::Ok,
                 format!("Retired {removed} deprecated definition artifact(s)."),
             );
-        }
-        if self.repairs.fix_retired_activity_backends {
-            let started = std::time::Instant::now();
-            let report = runtime.repair_retired_activity_backends()?;
-            push_repair_result(
-                &mut results,
-                "fix-retired-activity-backends",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                format!(
-                    "Removed retired spec.backend from {} activity file(s).",
-                    report.repaired.len()
-                ),
-            );
-            for skipped in &report.skipped {
-                eprintln!(
-                    "Left untouched {}: {}",
-                    skipped.path.display(),
-                    skipped.reason
-                );
-            }
         }
         if self.repairs.fix_orphan_task_stores {
             let started = std::time::Instant::now();

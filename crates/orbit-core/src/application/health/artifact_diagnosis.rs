@@ -529,8 +529,6 @@ fn finish_catalog_health(
                 "Review the residual skill directory at `{}` and remove it manually if it is no longer needed.",
                 fault.path.display()
             )
-        } else if let Some(command) = fault.repair_command {
-            format!("Run `{command}`.")
         } else if stale_shipped_default {
             format!("Run `{}`.", init_command(kind))
         } else if provenance == ArtifactProvenance::OrbitWritten {
@@ -572,7 +570,6 @@ struct LoadFault {
     path: PathBuf,
     condition: ArtifactCondition,
     detail: String,
-    repair_command: Option<&'static str>,
 }
 
 impl From<ActivityCatalogFault> for LoadFault {
@@ -582,7 +579,6 @@ impl From<ActivityCatalogFault> for LoadFault {
             path: fault.path,
             condition: ArtifactCondition::Faulty,
             detail: fault.detail,
-            repair_command: fault.repair_command,
         }
     }
 }
@@ -607,7 +603,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                     path: catalog.dir.clone(),
                     condition: ArtifactCondition::Faulty,
                     detail: format!("cannot enumerate skills: {error}"),
-                    repair_command: None,
                 });
                 return (0, faults);
             }
@@ -622,7 +617,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                         path: row.path,
                         condition: ArtifactCondition::Residual,
                         detail: row.message,
-                        repair_command: None,
                     });
                 }
                 crate::skill_catalog::SkillCatalogDoctorStatus::Error => {
@@ -631,7 +625,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                         path: row.path.join("SKILL.md"),
                         condition: ArtifactCondition::Faulty,
                         detail: row.message,
-                        repair_command: None,
                     });
                 }
             }
@@ -657,7 +650,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                 path,
                 condition: ArtifactCondition::Faulty,
                 detail: error.message,
-                repair_command: None,
             });
         }
         return (scanned, faults);
@@ -692,7 +684,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                 path,
                 condition: ArtifactCondition::Faulty,
                 detail: "file is unreadable".to_string(),
-                repair_command: None,
             });
             continue;
         };
@@ -709,7 +700,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                 path,
                 condition: ArtifactCondition::Faulty,
                 detail,
-                repair_command: None,
             });
         }
     }

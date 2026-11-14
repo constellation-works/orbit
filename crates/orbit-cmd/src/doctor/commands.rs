@@ -290,11 +290,6 @@ pub trait DoctorCommands {
     /// catalog. Faulty and user-authored artifacts are never touched.
     fn remove_stale_definition_artifacts(&self) -> Result<usize, OrbitError>;
 
-    /// Remove known retired `spec.backend` values from schemaVersion 2
-    /// agent-loop activities. Unknown backends and unrelated malformed
-    /// files are left untouched.
-    fn repair_retired_activity_backends(&self) -> Result<RetiredActivityBackendRepair, OrbitError>;
-
     /// Delete task-store partitions under `<global_root>/tasks/workspaces/`
     /// whose workspace id is no longer present in the registry — left behind
     /// by a `workspace teardown` run on an older binary, or by removing a
@@ -344,10 +339,6 @@ impl DoctorCommands for OrbitRuntime {
 
     fn remove_stale_definition_artifacts(&self) -> Result<usize, OrbitError> {
         OrbitRuntime::remove_stale_definition_artifacts(self)
-    }
-
-    fn repair_retired_activity_backends(&self) -> Result<RetiredActivityBackendRepair, OrbitError> {
-        OrbitRuntime::repair_retired_activity_backends(self)
     }
 
     fn remove_orphan_task_stores(&self) -> Result<OrphanTaskStoreRemoval, OrbitError> {

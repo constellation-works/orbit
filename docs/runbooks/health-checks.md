@@ -122,7 +122,6 @@ Do not run a repair merely to collect health evidence.
 | `fix-state-directory-permissions` | `ok`, number of writable Orbit state directories restricted to owner-only access |
 | `remove-graph` | `ok`, number of retired graph locations removed |
 | `fix-stale-artifacts` | `ok`, number of deprecated Orbit-written artifacts retired |
-| `fix-retired-activity-backends` | `ok`, number of activity files repaired; skipped files are reported on stderr |
 | `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
 | `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, assessed, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
 | `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed, their translated values written under the replacement keys in the same layer, and the original backup written beside each edited `config.toml`. Explicit modern values win. A run that finds none writes nothing; any legacy after-landing policy refuses before either config is changed or backed up |
@@ -346,26 +345,15 @@ paths; rename one activity or remove the unintended definition. The same name in
 precedence roots remains a legal override, and retired schemaVersion 1 definitions are
 skipped as they are during catalog loading. A schemaVersion 2 `agent_loop` activity that
 still declares `spec.backend: http` or
-`spec.backend: auto` is a warning that names the file, the rejected field/value, the catalog
-parse error, and one opt-in repair:
-
-```sh
-orbit doctor --fix-retired-activity-backends
-```
-
-The repair deletes only that obsolete `spec.backend` key, leaves unknown backend values and
-unrelated malformed activities untouched (and reports them for a manual edit), and is
-idempotent across every activity catalog directory in the workspace. Each configured catalog
-directory is a root even when it is a link, but nothing below it is followed: a linked `.yaml`
-file, a linked directory, or a special file such as a FIFO is reported by doctor and listed as
-skipped by the repair, and its target is never read or rewritten. To have such an activity
-checked and repaired, replace the link with a regular file inside the catalog.
+`spec.backend: auto` is a warning that names the file, the rejected field/value, and the catalog
+parse error. Remove the obsolete key manually, then rerun `orbit doctor`. Each configured
+catalog directory is a root even when it is a link, but links and special files below it are
+reported rather than followed or read. Replace a link with a regular file to inspect it.
 
 If a catalog directory cannot be listed, or a directory entry cannot be read or
 its type inspected, doctor reports the affected directory or entry path and the I/O error.
 Check permissions and availability at that path, then rerun `orbit doctor`.
-The retired-backend repair lists these paths as skipped. Genuinely absent catalog
-directories remain optional and do not produce findings.
+Genuinely absent catalog directories remain optional and do not produce findings.
 
 ### Release leaked automation attempt pins
 
