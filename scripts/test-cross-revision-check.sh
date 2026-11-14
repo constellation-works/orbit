@@ -68,15 +68,22 @@ snapshot() {
   )
 }
 
+# Match the Git routing policy in orbit_common::test_env on each command,
+# including init and read-only controls: -C alone cannot override these locators.
+fixture_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+    -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES git "$@"
+}
+
 git_fixture() {
-  git -c user.name=orbit-test -c user.email=orbit-test@example.invalid \
+  fixture_git -c user.name=orbit-test -c user.email=orbit-test@example.invalid \
     -c init.defaultBranch=main -C "$SRC" "$@"
 }
 
 # --- fixture repository -------------------------------------------------------
 
 mkdir -p "$SRC"
-git -c init.defaultBranch=main init -q "$SRC"
+git_fixture init -q
 
 cat >"$SRC/probe.sh" <<'EOF'
 #!/bin/sh
@@ -88,6 +95,12 @@ printf 'wrapper=[%s]\n' "${RUSTC_WRAPPER-unset}"
 printf 'build_wrapper=[%s]\n' "${CARGO_BUILD_RUSTC_WRAPPER-unset}"
 printf 'incremental=%s\n' "${CARGO_INCREMENTAL-unset}"
 printf 'source_mtime=%s\n' "$(stat -c '%Y' marker.txt 2>/dev/null || stat -f '%m' marker.txt)"
+# Extracts have no Git repository. Ambient locators must not bypass the helper's
+# discovery ceiling and describe the caller's repository as this arm's source.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  printf 'unexpected Git repository in extracted source\n' >&2
+  exit 1
+fi
 i=0
 while [ "$i" -lt "${PROBE_NOISE_LINES:-0}" ]; do
   printf 'noise %s\n' "$i"
@@ -142,7 +155,7 @@ run_helper_revisions() {
 # against a fixture that was never stale to begin with.
 
 mkdir -p "$TMP/raw-archive"
-git -C "$SRC" archive "$BASELINE_SHA" | tar -x -C "$TMP/raw-archive"
+git_fixture archive "$BASELINE_SHA" | tar -x -C "$TMP/raw-archive"
 assert_eq "$(file_mtime "$TMP/raw-archive/marker.txt")" "$ARCHIVE_EPOCH" \
   "plain git-archive extraction should preserve the ancient commit mtime"
 
@@ -307,7 +320,7 @@ host="$TMP/scratch-host"
 managed="$host/.orbit/state/worktrees/managed"
 scratch="$managed/.orbit/tmp"
 mkdir -p "$scratch" "$managed/.orbit/state" "$SRC/.orbit/tmp" "$SRC/subdir"
-git -c init.defaultBranch=main init -q "$managed"
+fixture_git -c init.defaultBranch=main init -q "$managed"
 
 out="$TMP/authorized-scratch.out"
 work="$scratch/explicit"
@@ -447,5 +460,91 @@ status=0
 "$HELPER" --repo "$SRC" --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" \
   --expect-baseline maybe -- ./probe.sh >"$TMP/bad-expect.out" 2>&1 || status=$?
 assert_eq "$status" "1" "an unknown expectation must be rejected"
+
+# Re-run the public fixture boundary with Git authority aimed at an independent
+# sentinel. The child runs every ordinary helper case, including managed
+# scratch validation, but does not recursively launch this containment check.
+if [[ "${1:-}" != "--git-isolation-child" ]]; then
+  python3 - "$TMP" "$ROOT/scripts" "${BASH_SOURCE[0]}" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+sys.path.insert(0, sys.argv[2])
+import self_test_hang
+
+root = Path(sys.argv[1]) / "git-isolation"
+sentinel = root / "sentinel"
+sentinel.mkdir(parents=True)
+home = root / "home"
+home.mkdir()
+temporary = root / "tmp"
+temporary.mkdir()
+locators = {
+    "GIT_DIR": str(sentinel / ".git"),
+    "GIT_WORK_TREE": str(sentinel),
+    "GIT_COMMON_DIR": str(sentinel / ".git"),
+    "GIT_INDEX_FILE": str(sentinel / ".git/index"),
+    "GIT_OBJECT_DIRECTORY": str(sentinel / ".git/objects"),
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(sentinel / ".git/objects"),
+}
+environment = {key: value for key, value in os.environ.items() if key not in locators}
+environment.update(HOME=str(home), TMPDIR=str(temporary),
+                   GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+
+def sentinel_git(*args):
+    return self_test_hang.run(
+        ["git", "-C", str(sentinel), "-c", "user.name=sentinel",
+         "-c", "user.email=sentinel@example.invalid", *args],
+        step="prepare Git isolation sentinel", env=environment,
+        check=True, capture_output=True, text=True)
+
+sentinel_git("init", "-q", "-b", "sentinel-main")
+(sentinel / "tracked.txt").write_text("committed sentinel\n")
+sentinel_git("add", "tracked.txt")
+sentinel_git("commit", "-q", "-m", "sentinel baseline")
+sentinel_git("tag", "sentinel-tag")
+(sentinel / "tracked.txt").write_text("staged sentinel\n")
+sentinel_git("add", "tracked.txt")
+(sentinel / "tracked.txt").write_text("unstaged sentinel\n")
+(sentinel / "untracked.txt").write_text("untracked sentinel\n")
+
+def snapshot_sentinel():
+    # Compare bytes and modes of the whole checkout, including HEAD, every ref,
+    # the index, config, object database and dirty/untracked worktree contents.
+    return {
+        str(path.relative_to(sentinel)): (
+            stat.S_IMODE(path.lstat().st_mode),
+            os.readlink(path) if path.is_symlink()
+            else path.read_bytes() if path.is_file() else None)
+        for path in sentinel.rglob("*")
+    }
+
+failures = []
+for case, overrides in [
+    ("GIT_DIR", {"GIT_DIR": locators["GIT_DIR"]}),
+    ("GIT_COMMON_DIR", {"GIT_COMMON_DIR": locators["GIT_COMMON_DIR"]}),
+    ("GIT_WORK_TREE", {"GIT_WORK_TREE": locators["GIT_WORK_TREE"]}),
+    ("GIT_INDEX_FILE", {"GIT_INDEX_FILE": locators["GIT_INDEX_FILE"]}),
+    ("all Git locators", locators),
+]:
+    before = snapshot_sentinel()
+    result = self_test_hang.run(
+        ["bash", str(Path(sys.argv[3]).resolve()), "--git-isolation-child"],
+        step=f"cross-revision fixture under {case}",
+        env=dict(environment, **overrides), capture_output=True, text=True)
+    after = snapshot_sentinel()
+    changed = sorted(key for key in before.keys() | after.keys()
+                     if before.get(key) != after.get(key))
+    print(f"Git isolation ({case}): exit={result.returncode}; changed={changed}", flush=True)
+    if result.returncode or changed:
+        failures.append(f"{case}: exit={result.returncode}; changed={changed}\n"
+                        f"{result.stdout}{result.stderr}")
+if failures:
+    raise AssertionError("public cross-revision boundary violated Git isolation:\n"
+                         + "\n".join(failures))
+PY
+fi
 
 printf 'test-cross-revision-check: ok\n'
