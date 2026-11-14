@@ -1400,6 +1400,131 @@ impl Drop for StdioClient {
     }
 }
 
+fn routed_tool_run_carries_the_declared_model_to_the_owner() {
+    let routed = Routed::new();
+    let selector = routed.bravo_selector();
+    // Run a routed `orbit.task.add` on host A addressed to bravo and return
+    // `(answer, remote argv)`. `parse` needs the argv slice, so keep it owned.
+    let run_add = |title: &str, extra: &[&str], env: &[(&str, &str)]| -> (Value, Vec<String>) {
+        let input =
+            json!({ "workspace": selector, "title": title, "description": "routed model regression", "complexity": "low" }).to_string();
+        let mut args: Vec<String> = vec![
+            "tool".into(),
+            "run".into(),
+            "orbit.task.add".into(),
+            "--input".into(),
+            input,
+        ];
+        args.extend(extra.iter().map(|arg| arg.to_string()));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        routed.take_remote_argv();
+        let mut command = routed.fleet.orbit_in(
+            &routed.fleet.local.home,
+            &routed.fleet.local_repo,
+            &arg_refs,
+        );
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let output = command.output().expect("spawn routed tool run");
+        assert!(
+            output.status.success(),
+            "{arg_refs:?} failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (parse(&output.stdout, &arg_refs), routed.take_remote_argv())
+    };
+    let owner_task = |added: &Value| {
+        let id = added["id"].as_str().expect("routed task id");
+        routed
+            .remote_runtime
+            .get_task(id)
+            .expect("task on the owning host")
+    };
+
+    // Flag: the same attribution the owner records for a local `--model`.
+    let (added, dialed) = run_add(
+        "routed model flag",
+        &["--model", "claude-fable-5-2"],
+        &[("ORBIT_OPERATOR", "1")],
+    );
+    assert!(
+        dialed.iter().all(|line| !line.contains("--operator")),
+        "a call declaring a model never asks for operator authority: {dialed:?}"
+    );
+    let task = owner_task(&added);
+    assert_eq!(task.created_by.as_deref(), Some("claude"), "{added}");
+    assert_eq!(
+        task.created_by_model.as_deref(),
+        Some("claude-fable-5-2"),
+        "{added}"
+    );
+
+    // Environment: `ORBIT_AGENT_MODEL` with no flag attributes the same way.
+    let (added, _) = run_add(
+        "routed model env",
+        &[],
+        &[("ORBIT_AGENT_MODEL", "claude-fable-5-2")],
+    );
+    let task = owner_task(&added);
+    assert_eq!(task.created_by.as_deref(), Some("claude"), "{added}");
+    assert_eq!(
+        task.created_by_model.as_deref(),
+        Some("claude-fable-5-2"),
+        "{added}"
+    );
+
+    // An input `model` keeps its precedence over the flag: only it is sent.
+    let input_model = json!({
+        "workspace": selector,
+        "title": "routed input model",
+        "description": "routed model regression",
+        "complexity": "low",
+        "model": "claude-opus-5-5",
+    })
+    .to_string();
+    let (added, _) = {
+        let args = [
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--model",
+            "gpt-5.6-terra",
+            "--input",
+            &input_model,
+        ];
+        let output = routed
+            .fleet
+            .orbit_in(&routed.fleet.local.home, &routed.fleet.local_repo, &args)
+            .output()
+            .expect("spawn routed tool run");
+        assert!(
+            output.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (parse(&output.stdout, &args), routed.take_remote_argv())
+    };
+    let task = owner_task(&added);
+    assert_eq!(task.created_by.as_deref(), Some("claude"), "{added}");
+    assert_eq!(
+        task.created_by_model.as_deref(),
+        Some("claude-opus-5-5"),
+        "{added}"
+    );
+
+    // No declared model: today's operator routing is unchanged.
+    let (added, dialed) = run_add("routed no model", &[], &[("ORBIT_OPERATOR", "1")]);
+    assert!(
+        dialed.iter().any(|line| line.contains("--operator")),
+        "a call declaring no model keeps operator authority: {dialed:?}"
+    );
+    let task = owner_task(&added);
+    assert_eq!(task.created_by_model, None, "{added}");
+    assert_ne!(task.created_by.as_deref(), Some("claude"), "{added}");
+}
+
 #[test]
 fn host_routing_contracts_0() {
     if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_0") {
@@ -1473,6 +1598,10 @@ fn host_routing_contracts_2() {
         (
             "routed_artifact_export_writes_the_same_bytes_as_the_holders_export",
             routed_artifact_export_writes_the_same_bytes_as_the_holders_export as fn(),
+        ),
+        (
+            "routed_tool_run_carries_the_declared_model_to_the_owner",
+            routed_tool_run_carries_the_declared_model_to_the_owner as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
