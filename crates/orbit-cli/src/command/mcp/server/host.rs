@@ -40,6 +40,9 @@ pub(super) struct ServerMcpHost {
     workspace_runtimes: WorkspaceRuntimeCache,
     pub(super) plugin_surface: HostPluginMcpCache,
     definitions: Mutex<Option<CachedMcpDefinitions>>,
+    /// Owner-route SSH sessions parked between a claimed worker's calls. The
+    /// probe is rebuilt per call, so the pool lives here to outlast it.
+    owner_route_sessions: federated::RoutedSessionPool,
 }
 
 /// The combined tool surface and the plugin snapshot it was built from.
@@ -63,6 +66,7 @@ impl ServerMcpHost {
             workspace_runtimes: WorkspaceRuntimeCache::default(),
             plugin_surface: HostPluginMcpCache::default(),
             definitions: Mutex::new(None),
+            owner_route_sessions: federated::RoutedSessionPool::default(),
         }
     }
 
@@ -548,7 +552,8 @@ impl ServerMcpHost {
                 federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
                 context.orchestrator.clone(),
                 McpSessionAuthority::Agent,
-            );
+            )
+            .with_session_pool(self.owner_route_sessions.clone());
             return federated::FederatedMcpHost::new(destinations, Arc::new(probe))
                 .call_tool(name, input, context);
         }
