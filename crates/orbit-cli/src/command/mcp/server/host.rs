@@ -407,8 +407,15 @@ impl ServerMcpHost {
         &self,
         selected: &ResolvedWorkspaceSelection,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-        self.workspace_runtimes
-            .resolve_observation(&self.global_root, selected, || {
+        let host_plugins = self
+            .plugin_surface
+            .host_installed_plugin_rows(&self.global_root)
+            .unwrap_or_default();
+        self.workspace_runtimes.resolve_observation(
+            &self.global_root,
+            selected,
+            host_plugins,
+            || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_observational(
                     &self.global_root,
                     &selected.workspace,
@@ -421,7 +428,8 @@ impl ServerMcpHost {
                     "{OPENED_WORKSPACE_RUNTIME_LOG}"
                 );
                 Ok(runtime)
-            })
+            },
+        )
     }
 
     /// The shared long-lived runtime for one resolved checkout.
@@ -432,8 +440,12 @@ impl ServerMcpHost {
         &self,
         selected: &ResolvedWorkspaceSelection,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        let host_plugins = self
+            .plugin_surface
+            .host_installed_plugin_rows(&self.global_root)
+            .unwrap_or_default();
         self.workspace_runtimes
-            .resolve(&self.global_root, selected, || {
+            .resolve(&self.global_root, selected, host_plugins, || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
                     &self.global_root,
                     &selected.workspace,
