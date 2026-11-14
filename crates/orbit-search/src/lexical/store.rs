@@ -246,7 +246,10 @@ impl LexicalStore {
     }
     /// The task ids whose chunks carry sidecar coverage (comment bodies
     /// and artifact paths): the tasks a substring search may answer from
-    /// this index without reading bundle documents. Tasks indexed before
+    /// this index without reading bundle documents. Coverage also claims
+    /// freshness: every write that changes searchable text replaces the
+    /// task's chunks (recording coverage anew) before it returns, so a
+    /// covered id's chunks hold its current text. Tasks indexed before
     /// coverage was recorded, or only ever through [`Self::index_task`], are
     /// absent until a sidecar-aware reindex or task write covers them.
     pub fn sidecar_indexed_task_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
