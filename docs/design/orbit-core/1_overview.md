@@ -139,7 +139,7 @@ source scan, enforces the runtime direction.
 | Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `evolution/operations.rs` | [ORB-23018] |
 | Task-owned corpus appends and digest | `crates/orbit-core/src/application/task/corpus_port.rs` (`TaskCorpusPort`), implemented in `agent_corpus.rs` | [ORB-23421] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
-| Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `task/mod.rs` keeps a two-line re-export shim | [ORB-22287] |
+| Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `BacklogForecastHistory` at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` | [ORB-22287], [ORB-24548] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
@@ -345,7 +345,8 @@ moved the backlog forecast out of `task` to its own place in the order:
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`,
-  `workspace_auto`, `experiment`, `search`, `notice`, `evolution` or `agent_corpus` by path, grouped tree or `super::` chain,
+  `workspace_auto`, `backlog_forecast`, `experiment`, `search`, `notice`,
+  `evolution` or `agent_corpus` by path, grouped tree or `super::` chain,
   when `job` names `distributed`, `pull_drain`, `admission`, `automation`,
   `review`, `sweep_filing`, `workspace_auto` or `experiment` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
@@ -355,11 +356,11 @@ moved the backlog forecast out of `task` to its own place in the order:
   caller), so a new inherent method is covered as soon as it exists, and port
   methods must use distinct names.
   Same-named methods on other types are exact-line allowances (store reads
-  through `stores().jobs()` and `stores().tasks()`). `task` has no exempt path.
-  It names `backlog_forecast` only in the two exact-line `task/mod.rs`
-  re-exports of `BacklogForecastHistory` and `COMPUTE_BUDGET_ENV`, a
-  compatibility shim for `lib.rs` and `orbit-web` whose retirement is a
-  follow-up [ORB-22287]. The guard also fails when a module above job names a
+  through `stores().jobs()` and `stores().tasks()`). `task` has no exempt path
+  and names no higher module, including `backlog_forecast` [ORB-24548].
+  `BacklogForecastHistory` is exported at the crate root and the budget override
+  in `test_support`, both directly from `backlog_forecast` [ORB-24548]. The
+  guard also fails when a module above job names a
   module above it in the order below by path, grouped tree or `super::`
   chain, or calls the inherent methods and functions the [ORB-17939] ports
   and reused reads wrap, when `contracts` imports any of the ten modules,
@@ -412,7 +413,7 @@ lowest of the ten modules above `contracts`.
 
 `backlog_forecast` sits above `workspace_auto` [ORB-22287] and reads `task`,
 `job`, `admission` and `workspace_auto` directly. No module below it may name
-it or call its inherent methods, apart from the `task/mod.rs` shim above. Two
+it or call its inherent methods [ORB-24548]. Two
 edges leave or enter it from outside the order:
 
 - **Forecast → `codebase` (authorized).** `assembly.rs` calls
