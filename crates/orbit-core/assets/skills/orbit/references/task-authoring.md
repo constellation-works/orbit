@@ -471,7 +471,7 @@ declare. When a plan adds, removes or renames a builtin MCP tool, changes its
 advertised placement, or changes its id route, locate these companions at the
 revision being scoped (`rg -l` on the named test or table, `rg --files` for a
 named golden file) and declare each as a `file:` selector in a workspace that
-keeps them. Three kinds apply:
+keeps them. Four kinds apply:
 
 - The handwritten exact advertised-name list, asserted by the test
   `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, changes
@@ -488,9 +488,17 @@ keeps them. Three kinds apply:
   registry in the same test module, must be inspected for each such plan. Declare
   its file only when the table must change: a placement change, or a governed
   tool operation added, removed or renamed.
+- The claimed-worker routing match in `worker_tools.rs`
+  (`src/adapter/tool_host/worker_tools.rs` in the `orbit-core` crate; declare
+  it as the workspace-relative `file:` selector for that path), routed by the
+  exhaustive `worker_route` match (`worker_tools.rs:51-150`; the file header
+  notes a new tool family or verb must be placed there before the crate
+  compiles). Declare its `file:` selector when the plan adds, removes or
+  renames a builtin orbit.* tool or verb. A placement or id-route change alone
+  does not change it.
 
-A body-only tool edit that keeps the name, placement and id route declares none
-of these.
+A body-only tool edit that keeps the name, verbs, placement and id route
+declares none of these.
 
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
