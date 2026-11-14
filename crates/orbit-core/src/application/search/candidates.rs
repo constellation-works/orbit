@@ -120,8 +120,9 @@ impl OrbitRuntime {
     /// behind the BM25 hits [DANI-10445], the tasks BM25's token semantics
     /// cannot see — a query inside a token, in comments, `external_refs` or
     /// artifact manifest paths. For a task whose chunks carry sidecar
-    /// coverage the supplement reads the trigram substring index over
-    /// those chunks; only tasks without that coverage (not yet indexed, or
+    /// coverage the supplement reads the substring index over the raw
+    /// chunk text (trigram, or a chunk scan for short or non-ASCII
+    /// needles); only tasks without that coverage (not yet indexed, or
     /// indexed before it was recorded) still go through the bundle matcher,
     /// so a fully covered store performs no bundle-document reads and one
     /// index freshness pass for the whole search. When the status
