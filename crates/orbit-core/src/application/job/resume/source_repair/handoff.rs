@@ -173,7 +173,7 @@ impl OrbitRuntime {
             .and_then(Value::as_bool)
             .ok_or_else(|| refuse("failure-handoff preservation decision missing"))?;
         for sha in [head, base_sha, field(worktree, "base_sha")?] {
-            if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if !observation::is_exact_sha(sha) {
                 return Err(refuse(
                     "failure-handoff candidate/base identity is not exact",
                 ));
@@ -241,26 +241,8 @@ impl OrbitRuntime {
                     || field(prepared, "base_sha")? != base_sha
                     || field(sync, "base_sha")? != base_sha
                     || field(prepared, "head_sha")? != field(sync, "head_sha_before")?
-                    || !run_git(
-                        repo,
-                        &[
-                            "merge-base",
-                            "--is-ancestor",
-                            committed,
-                            field(prepared, "head_sha")?,
-                        ],
-                    )?
-                    .success
-                    || !run_git(
-                        repo,
-                        &[
-                            "merge-base",
-                            "--is-ancestor",
-                            base_sha,
-                            field(sync, "head_sha")?,
-                        ],
-                    )?
-                    .success
+                    || !observation::is_git_ancestor(repo, committed, field(prepared, "head_sha")?)?
+                    || !observation::is_git_ancestor(repo, base_sha, field(sync, "head_sha")?)?
                     || sync.get("rewritten").and_then(Value::as_bool)
                         != Some(field(sync, "head_sha_before")? != field(sync, "head_sha")?)
                 {
@@ -294,18 +276,7 @@ impl OrbitRuntime {
             Some(_) => allowed.last() == Some(&parent),
             None => allowed.contains(&parent),
         };
-        if !contiguous
-            || !run_git(
-                repo,
-                &[
-                    "merge-base",
-                    "--is-ancestor",
-                    field(worktree, "base_sha")?,
-                    head,
-                ],
-            )?
-            .success
-        {
+        if !contiguous || !observation::is_git_ancestor(repo, field(worktree, "base_sha")?, head)? {
             return Err(refuse(
                 "failure-handoff candidate lacks an authenticated preservation parent",
             ));
@@ -315,16 +286,7 @@ impl OrbitRuntime {
                 let published = authenticated_checkpoint(definition, state, id, "git_push")?;
                 if field(published, "phase")? != "push"
                     || field(published, "branch")? != branch
-                    || !run_git(
-                        repo,
-                        &[
-                            "merge-base",
-                            "--is-ancestor",
-                            field(published, "local_sha")?,
-                            head,
-                        ],
-                    )?
-                    .success
+                    || !observation::is_git_ancestor(repo, field(published, "local_sha")?, head)?
                 {
                     return Err(refuse(
                         "failure-handoff contradicts preceding host publication",

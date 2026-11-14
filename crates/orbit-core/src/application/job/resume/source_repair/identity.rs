@@ -32,26 +32,8 @@ impl OrbitRuntime {
             certified_tip,
         } = identity;
         let repo = &self.paths().repo_root;
-        let git = |args: &[&str]| -> Result<String, OrbitError> {
-            let result = orbit_common::fs::git::run_git_within(
-                repo,
-                args,
-                if args.first() == Some(&"ls-remote") {
-                    orbit_common::fs::git::GIT_REMOTE_TIMEOUT
-                } else {
-                    orbit_common::fs::git::GIT_LOCAL_TIMEOUT
-                },
-            )?;
-            if !result.success {
-                return Err(refuse(format!("Git observation failed: {}", result.stderr)));
-            }
-            Ok(result.stdout.trim().into())
-        };
         for sha in [head, base_sha] {
-            if sha.len() != 40
-                || !sha.bytes().all(|b| b.is_ascii_hexdigit())
-                || git(&["rev-parse", "--verify", &format!("{sha}^{{commit}}")])? != sha
-            {
+            if !observation::is_exact_sha(sha) || !observation::resolves_to_commit(repo, sha)? {
                 return Err(refuse("candidate/base object unavailable or inexact"));
             }
         }
@@ -71,21 +53,21 @@ impl OrbitRuntime {
             _ => return Err(refuse("retained local branch moved")),
         };
         if let Some(tip) = candidate_head
-            && (git(&["rev-parse", "--verify", &format!("{}^{{commit}}", tip.head)])? != tip.head
-                || !run_git(
-                    repo,
-                    &["merge-base", "--is-ancestor", &tip.target_base, &tip.head],
-                )?
-                .success)
+            && (!observation::resolves_to_commit(repo, &tip.head)?
+                || !observation::is_git_ancestor(repo, &tip.target_base, &tip.head)?)
         {
             return Err(refuse("retained local branch moved"));
         }
-        if git(&[
-            "ls-remote",
-            "--exit-code",
-            "origin",
-            &format!("refs/heads/{branch}"),
-        ])?
+        if observation::read_git_observation(
+            repo,
+            &[
+                "ls-remote",
+                "--exit-code",
+                "origin",
+                &format!("refs/heads/{branch}"),
+            ],
+            false,
+        )?
         .split_whitespace()
         .next()
             != Some(head)
