@@ -293,6 +293,8 @@ held because the host manager stopped the worker; pipeline worker for run '…' 
 
 That example is a host-manager stop: the run is `held` with `operator_stopped`. Resume it with `orbit job resume`.
 
+Before a stopped worker's run is finalized on either path — the supervisor for a worker it reaped with a terminating signal, reconciliation for a dead owner it found — it keeps the worker's candidate: `HEAD` plus any uncommitted changes, committed detached under `refs/orbit/rescue/<run-id>` in the worktree's repository. The run's diagnostic and its `rescue_candidate` pipeline record name that ref and commit, and `orbit run show` prints them, so the candidate survives the worktree's later removal; check it out from the ref to resume or salvage it. A clean worktree keeps just its `HEAD` under the same ref. When nothing could be kept, the diagnostic says so instead of naming a ref.
+
 Look the pid up in `journalctl --user` or `journalctl -b` around the exit time to find
 the unit or tool behind it. A signalled exit with no captured sender reads `sender
 unknown: the worker captured none`; nothing is guessed. That covers SIGKILL, which no

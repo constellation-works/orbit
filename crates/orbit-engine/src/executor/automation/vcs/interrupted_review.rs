@@ -77,6 +77,66 @@ pub struct PreservedReviewRepair {
     pub commit: Option<String>,
 }
 
+/// The pipeline-state key under which the host that stopped a run records
+/// what [`preserve_rescue_candidate`] kept: `run_id`, `rescue_ref` and
+/// `rescue_commit` (null when nothing was kept), `partial_commit` when
+/// uncommitted changes were committed, and `failure` when keeping failed.
+pub const RESCUE_CANDIDATE_KEY: &str = "rescue_candidate";
+
+/// What [`preserve_rescue_candidate`] kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreservedRescueCandidate {
+    /// The ref that names the kept candidate commit.
+    pub rescue_ref: String,
+    /// The kept commit: the partial commit when the worktree was dirty,
+    /// otherwise the worktree's `HEAD`.
+    pub commit: String,
+    /// The commit of uncommitted changes, when the worktree was dirty.
+    pub partial_commit: Option<String>,
+}
+
+/// The ref a stopped run's candidate is kept under, for `run_id`.
+pub fn rescue_candidate_ref(run_id: &str) -> Result<String, OrbitError> {
+    let plain = !run_id.is_empty()
+        && !run_id.starts_with('.')
+        && !run_id.ends_with(".lock")
+        && !run_id.contains("..")
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !plain {
+        return Err(OrbitError::InvalidInput(format!(
+            "rescue candidate: run '{run_id}' does not name a plain ref"
+        )));
+    }
+    Ok(format!("refs/orbit/rescue/{run_id}"))
+}
+
+/// Keep `workspace_path`'s candidate — its `HEAD` plus every uncommitted
+/// change, as one detached commit when dirty — under
+/// [`rescue_candidate_ref`] in the local repository, before the worktree
+/// is torn down. The candidate's branch, index and files are left as they
+/// were. The ref keeps the commit reachable after the run branch and
+/// worktree are removed.
+pub fn preserve_rescue_candidate(
+    workspace_path: &Path,
+    run_id: &str,
+) -> Result<PreservedRescueCandidate, OrbitError> {
+    let rescue_ref = rescue_candidate_ref(run_id)?;
+    let head = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let message = format!(
+        "rescue: candidate preserved when its worker stopped\n\nOrbit-Rescue-Run: {run_id}"
+    );
+    let partial_commit = commit_worktree_detached(workspace_path, None, &message)?;
+    let commit = partial_commit.clone().unwrap_or(head);
+    git_output(workspace_path, &["update-ref", &rescue_ref, &commit])?;
+    Ok(PreservedRescueCandidate {
+        rescue_ref,
+        commit,
+        partial_commit,
+    })
+}
+
 /// The latest review gate in `pipeline` (a run's pipeline state) whose
 /// admission applied and whose settlement has not run.
 pub fn review_in_flight(pipeline: &Value) -> Option<ReviewInFlight> {

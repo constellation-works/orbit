@@ -9,11 +9,13 @@ use std::time::Duration as StdDuration;
 
 use orbit_common::process::output_capture::OUTPUT_TRUNCATED_MARKER;
 use orbit_common::process::run_bounded_capped;
+use orbit_engine::review_gate::RESCUE_CANDIDATE_KEY;
 use orbit_engine::run_worktree_paths;
 use orbit_types::task::Task;
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 
+use super::TaskJobPort;
 use crate::OrbitRuntime;
 
 /// Changed paths of a retained candidate listed in the agent input and in an
@@ -162,7 +164,25 @@ impl OrbitRuntime {
             Err(error) => return absent(format!("run {run_id} names no worktree: {error}")),
         };
         let Some(path) = paths.into_iter().find(|path| path.is_dir()) else {
-            return absent(format!("run {run_id}'s worktree no longer exists"));
+            let rescue = self
+                .stored_run_state(run_id)
+                .ok()
+                .flatten()
+                .and_then(|state| state.pipeline.get(RESCUE_CANDIDATE_KEY).cloned())
+                .filter(|record| record["run_id"].as_str() == Some(run_id));
+            return absent(match rescue {
+                Some(record) => match (
+                    record["rescue_ref"].as_str(),
+                    record["rescue_commit"].as_str(),
+                ) {
+                    (Some(reference), Some(commit)) => format!(
+                        "run {run_id}'s worktree no longer exists; rescue candidate kept at \
+                         {reference} (commit {commit})"
+                    ),
+                    _ => format!("run {run_id}'s worktree no longer exists"),
+                },
+                None => format!("run {run_id}'s worktree no longer exists"),
+            });
         };
         let mut omitted_paths = 0;
         let mut changed_paths_truncated = false;

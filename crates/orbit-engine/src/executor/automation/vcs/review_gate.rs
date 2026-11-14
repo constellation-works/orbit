@@ -25,8 +25,9 @@ use super::git::{
 };
 pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
 pub use super::interrupted_review::{
-    INTERRUPTED_REVIEW_KEY, PreservedReviewRepair, ReviewInFlight, carry_interrupted_review,
-    interrupted_review_ref, preserve_interrupted_review, review_in_flight,
+    INTERRUPTED_REVIEW_KEY, PreservedRescueCandidate, PreservedReviewRepair, RESCUE_CANDIDATE_KEY,
+    ReviewInFlight, carry_interrupted_review, interrupted_review_ref, preserve_interrupted_review,
+    preserve_rescue_candidate, rescue_candidate_ref, review_in_flight,
 };
 pub use super::scratch_target::{
     ScratchHostTarget, ScratchHostTargetLease, lease_scratch_host_target,
