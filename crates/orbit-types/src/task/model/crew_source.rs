@@ -29,7 +29,7 @@ pub enum RedrawReason {
     Allowlist,
     /// Usage pressure re-drew the pool.
     UsagePressure,
-    /// The draw needed an image-capable implementer.
+    /// A legacy draw required image support.
     ImageCapable,
     /// A pool draw.
     Pool,

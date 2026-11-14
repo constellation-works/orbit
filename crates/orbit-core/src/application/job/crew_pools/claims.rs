@@ -29,7 +29,7 @@ impl OrbitRuntime {
             return Ok(task.clone());
         }
         let pools = self.auto_crew_pools_for_input(&Value::Null)?;
-        let (candidates, source) = self.auto_task_crew_candidates(task, &pools, None, None)?;
+        let (candidates, source, _) = self.auto_task_crew_candidates(task, &pools, None, None)?;
         let runnable = candidates
             .iter()
             .filter(|candidate| {

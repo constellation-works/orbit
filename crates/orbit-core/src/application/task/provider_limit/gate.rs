@@ -36,7 +36,7 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitThreshold};
 use orbit_types::identity::Crew;
-use orbit_types::task::{CrewSource, Task};
+use orbit_types::task::{CrewSource, RedrawReason, Task};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_account_label};
 
@@ -243,8 +243,8 @@ impl ProviderLimitGate {
 pub(crate) enum LimitedDraw {
     /// No crew the task would be drawn from is limited.
     Unlimited,
-    /// Draw from these unlimited crews, with the provenance naming the limit.
-    Narrowed(Vec<CrewCandidate>, String),
+    /// Draw from these unlimited crews; the flag says the original source was retained.
+    Narrowed(Vec<CrewCandidate>, String, bool),
     /// Every crew the task may run as is limited; the detail says why.
     Wait(String),
 }
@@ -346,6 +346,7 @@ impl OrbitRuntime {
             return Ok(LimitedDraw::Narrowed(
                 unlimited,
                 format!("{source}; provider limit: {}", gate.skipped(&skipped)),
+                true,
             ));
         }
         // A collapsed `purpose:` or `type:` assignment names only the chosen
@@ -375,6 +376,7 @@ impl OrbitRuntime {
                 return Ok(LimitedDraw::Narrowed(
                     unlimited,
                     format!("{pool_source}; provider limit: {}", gate.skipped(&skipped)),
+                    false,
                 ));
             }
         }
@@ -406,6 +408,7 @@ impl OrbitRuntime {
                 return Ok(LimitedDraw::Narrowed(
                     unlimited,
                     format!("{pool_source}; provider limit: {}", gate.skipped(&skipped)),
+                    false,
                 ));
             }
         }
@@ -421,7 +424,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         pools: &CrewPools,
-    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
         self.admissible_crew_candidates_for(task, pools, false)
     }
 
@@ -432,7 +435,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         pools: &CrewPools,
-    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
         self.admissible_crew_candidates_for(task, pools, true)
     }
 
@@ -441,8 +444,8 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CrewPools,
         claimed_leaf: bool,
-    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        let (candidates, source, hold) = if claimed_leaf {
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
+        let (candidates, source, hold, hold_reason) = if claimed_leaf {
             self.held_claimed_leaf_crew_candidates(task, pools)?
         } else {
             self.held_crew_candidates(task, pools)?
@@ -457,8 +460,16 @@ impl OrbitRuntime {
                 &candidates,
                 &source,
             )? {
-                LimitedDraw::Narrowed(candidates, source) => (candidates, source),
-                LimitedDraw::Unlimited | LimitedDraw::Wait(_) => (candidates, source),
+                LimitedDraw::Narrowed(candidates, source, retains_hold) => (
+                    candidates,
+                    source,
+                    Some(if retains_hold {
+                        hold_reason.unwrap_or(RedrawReason::ProviderLimit)
+                    } else {
+                        RedrawReason::ProviderLimit
+                    }),
+                ),
+                LimitedDraw::Unlimited | LimitedDraw::Wait(_) => (candidates, source, hold_reason),
             },
         )
     }
@@ -474,7 +485,7 @@ impl OrbitRuntime {
         if gate.is_empty() {
             return Ok(None);
         }
-        let (candidates, source, hold) = self.held_crew_candidates(task, pools)?;
+        let (candidates, source, hold, _) = self.held_crew_candidates(task, pools)?;
         Ok(
             match self.provider_limited_candidates(
                 task,

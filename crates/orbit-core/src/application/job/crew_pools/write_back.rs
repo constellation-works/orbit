@@ -82,28 +82,8 @@ impl AdmittedCrewSource {
         }
     }
 
-    /// Admission drew another crew than the recorded one; `selection` is the
-    /// draw's provenance as its `crew_selection` records it.
-    pub(crate) fn redraw(selection: &str, explicit_run_crew: bool) -> Self {
-        let reason = if explicit_run_crew {
-            RedrawReason::RunCrew
-        } else if selection.contains("provider hold excludes") {
-            RedrawReason::ProviderHold
-        } else if selection.contains("; provider limit:") {
-            RedrawReason::ProviderLimit
-        } else if selection.contains("allowlist redraw") {
-            RedrawReason::Allowlist
-        } else if selection.contains("usage pressure") {
-            RedrawReason::UsagePressure
-        } else if selection.contains("image-capable implementer") {
-            RedrawReason::ImageCapable
-        } else {
-            RedrawReason::Pool
-        };
-        Self::redraw_reason(reason)
-    }
-
-    fn redraw_reason(reason: RedrawReason) -> Self {
+    /// Admission drew another crew than the recorded one.
+    pub(crate) fn redraw_reason(reason: RedrawReason) -> Self {
         Self {
             cause: format!("at admission ({reason})"),
             source: CrewSource::Redraw(reason),
