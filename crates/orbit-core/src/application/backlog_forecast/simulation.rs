@@ -3,11 +3,12 @@
 use super::correction::{self, Correction};
 use super::dependencies::DependencyPlan;
 use super::model::Delivery;
-use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Rng, Script};
+use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Script};
 use super::outcomes::{Episode, MAX_ATTEMPTS};
 use super::rework::{self, ForecastArrivalStream, MAX_GENERATED, RegressionRework};
 use super::schedule::{self, DrainStop, HORIZON_HOURS, Scenario, ScheduleState};
 use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
+use crate::application::statistics::SplitMix64;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -482,7 +483,7 @@ pub(super) fn simulate_backlog_forecast(
     let initial_admission =
         frozen.with_forecast_generated_nodes(&(0..items.len()).collect::<Vec<_>>(), items.len());
     let admission = &initial_admission;
-    let mut rng = Rng(FORECAST_SEED);
+    let mut rng = SplitMix64::seeded(FORECAST_SEED);
     let has_proposed = items.iter().any(|item| item.proposed);
     let in_progress: Vec<bool> = items.iter().map(|item| item.in_progress).collect();
     let age_hours: Vec<f64> = items.iter().map(|item| item.age_hours).collect();

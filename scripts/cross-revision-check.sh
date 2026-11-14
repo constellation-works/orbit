@@ -117,21 +117,30 @@ done
 [[ -d "$REPO" ]] || die "--repo is not a directory: $REPO"
 REPO="$(cd "$REPO" && pwd -P)"
 
-# All Git access is read-only. GIT_OPTIONAL_LOCKS=0 keeps a managed read-only
-# .git mount from failing on an index refresh it never needed.
-git_ro() {
-  GIT_OPTIONAL_LOCKS=0 git -C "$REPO" "$@"
+# Git's repository, index and object locators outrank -C and bypass discovery
+# ceilings. Scrub them on each Git command and producer, so explicit source and
+# scratch paths determine authority (matching orbit_common::test_env's policy).
+without_git_location_overrides() (
+  unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+    GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+  "$@"
+)
+
+# All helper Git access is read-only. GIT_OPTIONAL_LOCKS=0 keeps a managed
+# read-only .git mount from failing on an index refresh it never needed.
+git_read() {
+  without_git_location_overrides env GIT_OPTIONAL_LOCKS=0 git "$@"
 }
 
-git_ro rev-parse --git-dir >/dev/null 2>&1 || die "not a Git repository: $REPO"
+git_read -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || die "not a Git repository: $REPO"
 # --repo may name a subdirectory. Protect the entire source checkout before
 # considering scratch authority, rather than only that caller-selected prefix.
-repo_root="$(git_ro rev-parse --show-toplevel)" || die "--repo must be a Git checkout: $REPO"
+repo_root="$(git_read -C "$REPO" rev-parse --show-toplevel)" || die "--repo must be a Git checkout: $REPO"
 REPO="$(cd "$repo_root" && pwd -P)"
 
 resolve_rev() {
   local rev="$1"
-  git_ro rev-parse --verify --quiet "${rev}^{commit}" \
+  git_read -C "$REPO" rev-parse --verify --quiet "${rev}^{commit}" \
     || die "cannot resolve revision '$rev' in $REPO"
 }
 
@@ -176,7 +185,7 @@ validate_workdir() {
         */.orbit/tmp) checkout="${scratch%/.orbit/tmp}" ;;
         *) die "ORBIT_SCRATCH_DIR must resolve to a checkout's .orbit/tmp: $scratch" ;;
       esac
-      git_root="$(GIT_OPTIONAL_LOCKS=0 git -C "$checkout" rev-parse --show-toplevel 2>/dev/null)" \
+      git_root="$(git_read -C "$checkout" rev-parse --show-toplevel 2>/dev/null)" \
         || die "ORBIT_SCRATCH_DIR must belong to a Git checkout: $scratch"
       [[ "$(cd "$git_root" && pwd -P)" == "$checkout" ]] \
         || die "ORBIT_SCRATCH_DIR must belong to a Git checkout: $scratch"
@@ -222,7 +231,7 @@ trap cleanup EXIT
 extract_revision() {
   local sha="$1" tree="$2"
   mkdir -p "$tree"
-  git_ro archive "$sha" | tar -x -C "$tree"
+  git_read -C "$REPO" archive "$sha" | tar -x -C "$tree"
   find "$tree" \( -type f -o -type d \) -exec touch {} +
 }
 
@@ -271,7 +280,7 @@ run_arm() {
   ARM_STATUS=0
   (
     cd "$ARM_TREE"
-    env "${arm_env[@]}" "${COMMAND[@]}"
+    without_git_location_overrides env "${arm_env[@]}" "${COMMAND[@]}"
   ) >"$ARM_LOG" 2>&1 || ARM_STATUS=$?
 }
 

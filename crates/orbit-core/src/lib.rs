@@ -128,6 +128,12 @@ pub mod test_support {
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    /// Canonical (artifact-hashing) task-bundle reads on this thread.
+    pub use orbit_store::test_support::canonical_bundle_reads;
+    /// Lightweight task-bundle reads on this thread, listing or by id.
+    pub use orbit_store::test_support::lightweight_bundle_reads;
+    /// Listing-path task-bundle reads on this thread.
+    pub use orbit_store::test_support::listing_bundle_reads;
     /// Treat every pending landing repair's owner fallback window as passed
     /// on this thread, for tests of the owner drain taking a repair.
     pub use orbit_store::test_support::with_repair_owner_fallback_elapsed;

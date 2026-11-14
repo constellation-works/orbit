@@ -615,7 +615,7 @@
       },
       {
         "name": "layer",
-        "description": "For show, analytics: Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "description": "For show, analytics: Count only regressions whose fix sits in this layer: a name from the workspace's `workflow.regression_layers`, `other` or `unknown`.",
         "param_type": "string",
         "required": false
       },
@@ -3389,7 +3389,7 @@
       },
       {
         "name": "request_id",
-        "description": "Retry-safe write identity; selects guarded update (as do expected_revision, verdict, complete), which accepts only its mode's fields: 'verdict', 'complete'; 'comment'; or 'status' and the add fields. Omit guarded keys for an ordinary update.",
+        "description": "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update.",
         "param_type": "string",
         "required": false
       },

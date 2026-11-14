@@ -269,6 +269,11 @@ impl RuntimeKernel {
             limit: MAX_PROVIDER_PROCESSES,
             // Children spawned before the window may exist unseen.
             truncated: dropped || !windows.structural_complete,
+            steps_complete: windows.steps_complete,
+            complete: windows.steps_complete
+                && windows.structural_complete
+                && windows.samples_complete
+                && ancestry_complete,
         };
         Ok(ProgressProjection {
             progress,
