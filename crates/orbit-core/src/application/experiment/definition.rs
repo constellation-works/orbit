@@ -11,55 +11,154 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Metric names an experiment may read its verdict or guardrails on.
-pub const EXPERIMENT_METRICS: &[&str] = &[
-    "implement_tokens",
-    "total_tokens",
-    "cost_usd",
-    "lead_time",
-    "implement_duration",
-    "turns_before_first_edit",
-    "result_bytes_before_first_edit",
-    "first_pass_acceptance",
-    "review_repairs",
-    "step_recoveries",
-    "final_recoveries",
-    "failed_checks",
-    "merge_conflicts",
-    "delivery_done_rate",
-    "escaped_regressions",
-    "lines_changed",
-    "cost_per_line",
-    "lead_time_per_line",
+/// Whether an arm does better with a lower or a higher value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Better {
+    Lower,
+    Higher,
+}
+
+/// How a metric is summarised: a mean of per-task values, a rate of
+/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Mean,
+    Rate,
+    /// Arm total numerator divided by arm total reviewable lines.
+    Ratio,
+}
+
+/// One experiment metric: the single declaration every name list, predicate
+/// and readout row is derived from.
+pub(crate) struct MetricSpec {
+    pub(crate) name: &'static str,
+    pub(crate) kind: Kind,
+    pub(crate) better: Better,
+    pub(crate) unit: &'static str,
+    /// Confined to an implementation step; exploratory, so it cannot be a
+    /// primary.
+    pub(crate) step_local: bool,
+    /// Read from a task's review gate settlements.
+    pub(crate) review_derived: bool,
+    /// For a per-line ratio, the whole-task metric its arm total divides by
+    /// reviewable lines.
+    pub(crate) line_numerator: Option<&'static str>,
+}
+
+const fn spec(name: &'static str, kind: Kind, better: Better, unit: &'static str) -> MetricSpec {
+    MetricSpec {
+        name,
+        kind,
+        better,
+        unit,
+        step_local: false,
+        review_derived: false,
+        line_numerator: None,
+    }
+}
+
+impl MetricSpec {
+    const fn step_local(mut self) -> Self {
+        self.step_local = true;
+        self
+    }
+
+    const fn review_derived(mut self) -> Self {
+        self.review_derived = true;
+        self
+    }
+
+    const fn per_line(mut self, numerator: &'static str) -> Self {
+        self.line_numerator = Some(numerator);
+        self
+    }
+}
+
+/// Every metric an experiment may name, in the order the readout and the
+/// refusal texts list them.
+pub(crate) const METRIC_SPECS: &[MetricSpec] = &[
+    spec(
+        "implement_tokens",
+        Kind::Mean,
+        Better::Lower,
+        "normalized_tokens",
+    )
+    .step_local(),
+    spec(
+        "total_tokens",
+        Kind::Mean,
+        Better::Lower,
+        "normalized_tokens",
+    ),
+    spec("cost_usd", Kind::Mean, Better::Lower, "usd"),
+    spec("lead_time", Kind::Mean, Better::Lower, "hours"),
+    spec("implement_duration", Kind::Mean, Better::Lower, "minutes").step_local(),
+    spec(
+        "turns_before_first_edit",
+        Kind::Mean,
+        Better::Lower,
+        "turns",
+    )
+    .step_local(),
+    spec(
+        "result_bytes_before_first_edit",
+        Kind::Mean,
+        Better::Lower,
+        "bytes",
+    )
+    .step_local(),
+    spec("first_pass_acceptance", Kind::Rate, Better::Higher, "rate").review_derived(),
+    spec("review_repairs", Kind::Mean, Better::Lower, "count").review_derived(),
+    spec("step_recoveries", Kind::Mean, Better::Lower, "count"),
+    spec("final_recoveries", Kind::Mean, Better::Lower, "count"),
+    spec("failed_checks", Kind::Mean, Better::Lower, "count"),
+    spec("merge_conflicts", Kind::Mean, Better::Lower, "count"),
+    spec("delivery_done_rate", Kind::Rate, Better::Higher, "rate"),
+    spec("escaped_regressions", Kind::Mean, Better::Lower, "count"),
+    spec("lines_changed", Kind::Mean, Better::Lower, "lines"),
+    spec("cost_per_line", Kind::Ratio, Better::Lower, "usd_per_line").per_line("cost_usd"),
+    spec(
+        "lead_time_per_line",
+        Kind::Ratio,
+        Better::Lower,
+        "hours_per_line",
+    )
+    .per_line("lead_time"),
 ];
 
-/// Metrics confined to an implementation step; these are exploratory.
-pub const STEP_LOCAL_METRICS: &[&str] = &[
-    "implement_tokens",
-    "implement_duration",
-    "turns_before_first_edit",
-    "result_bytes_before_first_edit",
-];
+/// The metric registered under `name`.
+pub(crate) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
+    METRIC_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// Metric names an experiment may read its verdict or guardrails on, in
+/// table order.
+pub fn experiment_metric_names() -> impl Iterator<Item = &'static str> {
+    METRIC_SPECS.iter().map(|spec| spec.name)
+}
+
+/// Metrics confined to an implementation step, in table order; these are
+/// exploratory.
+pub fn step_local_metric_names() -> impl Iterator<Item = &'static str> {
+    METRIC_SPECS
+        .iter()
+        .filter(|spec| spec.step_local)
+        .map(|spec| spec.name)
+}
 
 /// Whether a registered metric measures only part of a task.
 pub fn experiment_metric_is_step_local(metric: &str) -> bool {
-    STEP_LOCAL_METRICS.contains(&metric)
+    metric_spec(metric).is_some_and(|spec| spec.step_local)
 }
-
-/// Metrics read from a task's review gate settlements.
-pub const REVIEW_DERIVED_METRICS: &[&str] = &["first_pass_acceptance", "review_repairs"];
 
 /// Whether a registered metric is derived from review gate settlements.
 pub fn experiment_metric_is_review_derived(metric: &str) -> bool {
-    REVIEW_DERIVED_METRICS.contains(&metric)
+    metric_spec(metric).is_some_and(|spec| spec.review_derived)
 }
 
-/// Whole-task metrics that divide a total by reviewable lines.
-pub const PER_LINE_METRICS: &[&str] = &["cost_per_line", "lead_time_per_line"];
-
 /// Whether a registered metric is a ratio over reviewable lines.
-pub fn experiment_metric_is_per_line(metric: &str) -> bool {
-    PER_LINE_METRICS.contains(&metric)
+fn experiment_metric_is_per_line(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.line_numerator.is_some())
 }
 
 /// A per-line primary needs a `lines_changed` guardrail so an arm cannot
@@ -543,12 +642,12 @@ fn valid_threshold(threshold: &str) -> bool {
 
 /// Refuse a metric name Orbit does not measure.
 pub(crate) fn validate_metric(field: &str, metric: &str) -> Result<(), OrbitError> {
-    if EXPERIMENT_METRICS.contains(&metric) {
+    if metric_spec(metric).is_some() {
         return Ok(());
     }
     Err(OrbitError::InvalidInput(format!(
         "`{field}` names unknown metric `{metric}`; expected one of {}",
-        EXPERIMENT_METRICS.join(", ")
+        experiment_metric_names().collect::<Vec<_>>().join(", ")
     )))
 }
 
