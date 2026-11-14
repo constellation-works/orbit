@@ -29,6 +29,7 @@ use orbit_common::{StorageLayer, fs::generation::LedgerCompatibility};
 use rusqlite::Connection;
 
 use super::baseline::apply_registry_baseline;
+use super::decision_snapshots_schema::apply_decision_snapshots;
 use super::index_task_type::apply_index_task_type;
 use crate::contracts::{MigrationCompatibility, StateComponent};
 use crate::driver::sqlite::migration::{LedgeredDatabase, Migration};
@@ -60,6 +61,12 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "index_task_type",
         compat: MigrationCompatibility::Additive,
         apply: apply_index_task_type,
+    },
+    Migration {
+        version: 3,
+        name: "decision_snapshots",
+        compat: MigrationCompatibility::Additive,
+        apply: apply_decision_snapshots,
     },
 ];
 

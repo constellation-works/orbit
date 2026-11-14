@@ -20,6 +20,18 @@ impl OrbitRuntime {
         task_id: &str,
         receipt: CommentReceipt<'_>,
     ) -> Result<Value, OrbitError> {
+        self.task_pilot_audit_with_reader(task_id, receipt, &|path| {
+            self.get_task_artifact(task_id, path)
+        })
+    }
+
+    /// Resolve a receipt using an aggregate's already loaded manifest.
+    pub(crate) fn task_pilot_audit_with_reader(
+        &self,
+        task_id: &str,
+        receipt: CommentReceipt<'_>,
+        artifact: &dyn Fn(&str) -> Result<Option<TaskArtifact>, OrbitError>,
+    ) -> Result<Value, OrbitError> {
         let decode = |bytes: &[u8]| {
             serde_json::from_slice::<Value>(bytes)
                 .map_err(|error| OrbitError::Execution(format!("decode pilot assessment: {error}")))
@@ -34,7 +46,7 @@ impl OrbitRuntime {
             OrbitError::Execution("pilot assessment artifact path must be a string".into())
         })?;
         orbit_types::task::validate_relative_artifact_path(path)?;
-        let artifact = self.get_task_artifact(task_id, path)?.ok_or_else(|| {
+        let artifact = artifact(path)?.ok_or_else(|| {
             OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
         })?;
         artifact.validate_inline_size(task_id)?;

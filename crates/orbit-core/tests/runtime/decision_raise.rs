@@ -15,6 +15,8 @@ use tempfile::TempDir;
 
 use crate::git_test_support;
 
+mod listing;
+
 const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n\
      [crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n\
      [crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n";
