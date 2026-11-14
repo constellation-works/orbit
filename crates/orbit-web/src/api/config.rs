@@ -23,9 +23,7 @@ use orbit_core::application::config::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::routines::{
-    action_capability, authorization_denied, authorized_caller, record_operation_audit,
-};
+use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
 use super::{bad_request, blocking, map_runtime_error, server_error, workspace_label};
 use crate::state::{ConfigFileWs, DashboardState, Ws};
 
@@ -247,22 +245,17 @@ where
     F: FnOnce(&OrbitRuntime) -> Result<ConfigWriteOutcome, orbit_core::OrbitError> + Send + 'static,
 {
     let workspace = workspace_label(&runtime).await;
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        CONFIG_AUDIT_OPERATION,
+        target.as_str(),
+        arguments.clone(),
+    );
     let caller = match authorized_caller(&DASHBOARD_CONFIG_SET, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                CONFIG_AUDIT_OPERATION,
-                &target,
-                "",
-                &arguments,
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -278,19 +271,7 @@ where
         Ok(Ok(outcome)) => outcome,
         Ok(Err(error)) => {
             let failure = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                CONFIG_AUDIT_OPERATION,
-                &target,
-                "",
-                &arguments,
-                Some(&caller),
-                None,
-                Some(&failure),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &failure, started).await;
             return map_runtime_error(error);
         }
         Err(join_error) => {
@@ -304,19 +285,10 @@ where
         object.insert("old_value".to_string(), outcome.old_value.clone());
         object.insert("new_value".to_string(), outcome.new_value.clone());
     }
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        CONFIG_AUDIT_OPERATION,
-        &target,
-        "",
-        &applied,
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit
+        .with_arguments(applied)
+        .succeeded(&caller, started)
+        .await;
     Json(json!({
         "key": target,
         "scope": outcome.scope,

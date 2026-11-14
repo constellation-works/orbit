@@ -16,9 +16,7 @@ use orbit_common::governance::authorization::DASHBOARD_SCRIPT_GRANT;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::routines::{
-    action_capability, authorization_denied, authorized_caller, record_operation_audit,
-};
+use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
 use super::tasks::human_comment_author;
 use super::{bad_request, blocking, non_empty_string, workspace_label};
 use crate::state::{DashboardState, Ws};
@@ -58,22 +56,17 @@ pub(super) async fn grant_script(
     let started = Instant::now();
     let workspace = workspace_label(&runtime).await;
     let arguments = json!({"digest": body.digest});
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        DASHBOARD_SCRIPT_GRANT.id,
+        name.as_str(),
+        arguments.clone(),
+    );
     let caller = match authorized_caller(&DASHBOARD_SCRIPT_GRANT, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                DASHBOARD_SCRIPT_GRANT.id,
-                &name,
-                "",
-                &arguments,
-                None,
-                Some(&denial),
-                None,
-                started,
-            )
-            .await;
+            audit.denied(&denial, started).await;
             return authorization_denied(denial);
         }
     };
@@ -88,19 +81,7 @@ pub(super) async fn grant_script(
     })
     .await;
     let failure = result.as_ref().err().map(|_| "script grant refused");
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        DASHBOARD_SCRIPT_GRANT.id,
-        &name,
-        "",
-        &arguments,
-        Some(&caller),
-        None,
-        failure,
-        started,
-    )
-    .await;
+    audit.settled(&caller, failure, started).await;
     match result {
         Ok(grant) => Json(json!({"grant": serde_json::to_value(&grant).unwrap_or(Value::Null)}))
             .into_response(),

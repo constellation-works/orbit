@@ -25,9 +25,8 @@ use serde_json::{Value, json};
 use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
-    OperationsQuery, action_capability, authorization_denied, authorized_caller,
-    explicit_workspace, host_cron_zone, named_entity_not_found, record_operation_audit,
-    selection_conflict,
+    OperationAudit, OperationsQuery, action_capability, authorization_denied, authorized_caller,
+    explicit_workspace, host_cron_zone, named_entity_not_found, selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -119,22 +118,17 @@ pub(super) async fn toggle_auto_task(
         Ok(runtime) => runtime,
         Err(response) => return *response,
     };
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        "auto_task.toggle",
+        body.name.as_str(),
+        json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
+    );
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.toggle",
-                &body.name,
-                "",
-                &json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -184,35 +178,11 @@ pub(super) async fn toggle_auto_task(
         Err(AutoTaskToggleError::Read(error)) => return map_runtime_error(error),
         Err(AutoTaskToggleError::Write(error)) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.toggle",
-                &body.name,
-                "",
-                &json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &error_message, started).await;
             return auto_task_control_error(error);
         }
     };
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        "auto_task.toggle",
-        &body.name,
-        "",
-        &json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": updated.name,
         "enabled": updated.enabled,
@@ -246,22 +216,17 @@ pub(super) async fn mint_auto_task(
         )
             .into_response();
     }
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        "auto_task.mint",
+        body.name.as_str(),
+        json!({"acknowledge_unconditional": body.acknowledge_unconditional}),
+    );
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.mint",
-                &body.name,
-                "",
-                &json!({"acknowledge_unconditional": body.acknowledge_unconditional}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -276,39 +241,21 @@ pub(super) async fn mint_auto_task(
         Ok(Ok(task)) => task,
         Ok(Err(error)) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.mint",
-                &body.name,
-                "",
-                &json!({"acknowledge_unconditional": true}),
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit
+                .with_arguments(json!({"acknowledge_unconditional": true}))
+                .failed(&caller, &error_message, started)
+                .await;
             return auto_task_control_error(error);
         }
         Err(response) => return *response,
     };
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        "auto_task.mint",
-        &body.name,
-        "",
-        &json!({
+    audit
+        .with_arguments(json!({
             "acknowledge_unconditional": true,
             "task_id": minted.id.to_string(),
-        }),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+        }))
+        .succeeded(&caller, started)
+        .await;
     Json(json!({
         "name": body.name,
         "task_id": minted.id.to_string(),
@@ -339,22 +286,17 @@ pub(super) async fn delete_auto_task(
     };
     let reason = trimmed_delete_reason(body.reason.as_deref());
     let arguments = json!({"reason": reason, "force": body.force});
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        "auto_task.delete",
+        body.name.as_str(),
+        arguments.clone(),
+    );
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_DELETE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.delete",
-                &body.name,
-                "",
-                &arguments,
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -377,36 +319,15 @@ pub(super) async fn delete_auto_task(
         Ok(Ok(report)) => report,
         Ok(Err(error)) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.delete",
-                &body.name,
-                "",
-                &arguments,
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &error_message, started).await;
             return delete_refusal(&body.name, error);
         }
         Err(response) => return *response,
     };
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        "auto_task.delete",
-        &report.name,
-        "",
-        &arguments,
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit
+        .with_target(report.name.clone())
+        .succeeded(&caller, started)
+        .await;
     match delete::project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Http) {
         Ok(receipt) => Json(receipt).into_response(),
         Err(error) => map_runtime_error(error),

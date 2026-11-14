@@ -56,8 +56,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::routines::{
-    OperationsQuery, action_capability, authorization_denied, authorized_caller,
-    explicit_workspace, record_operation_audit,
+    OperationAudit, OperationsQuery, action_capability, authorization_denied, authorized_caller,
+    explicit_workspace,
 };
 use super::{bad_request, blocking, server_error, validate_id};
 use crate::state::{DashboardState, Ws};
@@ -444,22 +444,11 @@ where
         Err(rejection) => return rejection.into_response(),
     };
     let started = Instant::now();
+    let audit = OperationAudit::new(&runtime, &workspace, audit_name, target.as_str(), arguments);
     let caller = match authorized_caller(operation, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                audit_name,
-                &target,
-                "",
-                &arguments,
-                None,
-                Some(&denial),
-                None,
-                started,
-            )
-            .await;
+            audit.denied(&denial, started).await;
             return authorization_denied(denial);
         }
     };
@@ -467,36 +456,12 @@ where
     let outcome = tokio::task::spawn_blocking(move || action(&acting)).await;
     match outcome {
         Ok(Ok(value)) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                audit_name,
-                &target,
-                "",
-                &arguments,
-                Some(&caller),
-                None,
-                None,
-                started,
-            )
-            .await;
+            audit.succeeded(&caller, started).await;
             Json(json!({ "ok": true, "result": value })).into_response()
         }
         Ok(Err(error)) => {
             let response = refusal_response(&runtime, &error);
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                audit_name,
-                &target,
-                "",
-                &arguments,
-                Some(&caller),
-                None,
-                Some(&error.to_string()),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &error.to_string(), started).await;
             response
         }
         Err(join_err) => server_error(OrbitError::Execution(format!(

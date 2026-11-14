@@ -1,5 +1,6 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -248,22 +249,18 @@ pub(super) async fn toggle_routine(
         Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
+    let audit = OperationAudit::new(
+        &runtime,
+        workspace,
+        "routine.toggle",
+        body.name.as_str(),
+        json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
+    )
+    .with_machine_name(&body.machine_name);
     let caller = match authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                workspace,
-                "routine.toggle",
-                &body.name,
-                &body.machine_name,
-                &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -299,40 +296,15 @@ pub(super) async fn toggle_routine(
         // Every other refusal (owner authority, workspace, stale state,
         // retargeted definition) wrote nothing; audit it and answer 409.
         Ok(Err(refusal)) => {
-            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, &refusal)
-                .await;
+            return refuse_routine_toggle(&audit, &caller, started, &refusal).await;
         }
         Err(error) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                workspace,
-                "routine.toggle",
-                &body.name,
-                &body.machine_name,
-                &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &error_message, started).await;
             return map_runtime_error(error);
         }
     };
-    record_operation_audit(
-        &runtime,
-        workspace,
-        "routine.toggle",
-        &body.name,
-        &body.machine_name,
-        &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": body.name,
         "source": body.source,
@@ -364,27 +336,13 @@ pub(super) fn routine_edit_refusal_reason(refusal: &RoutineEditRefusal) -> Strin
 /// Audit an authorized toggle that was refused without writing, then answer
 /// with the refusal.
 async fn refuse_routine_toggle(
-    runtime: &Arc<OrbitRuntime>,
-    workspace: &str,
-    body: &RoutineToggleRequest,
+    audit: &OperationAudit<'_>,
     caller: &CallerCapabilities,
     started: Instant,
     refusal: &RoutineEditRefusal,
 ) -> Response {
     let reason = routine_edit_refusal_reason(refusal);
-    record_operation_audit(
-        runtime,
-        workspace,
-        "routine.toggle",
-        &body.name,
-        &body.machine_name,
-        &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-        Some(caller),
-        None,
-        Some(&reason),
-        started,
-    )
-    .await;
+    audit.failed(caller, &reason, started).await;
     routine_edit_refused(refusal)
 }
 
@@ -404,22 +362,18 @@ pub(super) async fn control_clock(
         ClockAction::SetCadence => &DASHBOARD_CLOCK_CADENCE,
     };
     let operation = governed.id;
+    let audit = OperationAudit::new(
+        &runtime,
+        workspace,
+        operation,
+        "clock",
+        json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
+    )
+    .with_machine_name(&body.machine_name);
     let caller = match authorized_caller(governed, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                workspace,
-                operation,
-                "clock",
-                &body.machine_name,
-                &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -492,34 +446,10 @@ pub(super) async fn control_clock(
     };
     if let Err(error) = mutation {
         let error_message = error.to_string();
-        record_operation_audit(
-            &runtime,
-            workspace,
-            operation,
-            "clock",
-            &body.machine_name,
-            &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
-            Some(&caller),
-            None,
-            Some(&error_message),
-            started,
-        )
-        .await;
+        audit.failed(&caller, &error_message, started).await;
         return map_runtime_error(error);
     }
-    record_operation_audit(
-        &runtime,
-        workspace,
-        operation,
-        "clock",
-        &body.machine_name,
-        &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit.succeeded(&caller, started).await;
     let state_after = state.clone();
     let after = tokio::task::spawn_blocking(move || state_after.clock_status()).await;
     let (clock, changed) = match after {
@@ -802,79 +732,152 @@ pub(super) fn selection_conflict(code: &'static str, message: String) -> Respons
         .into_response()
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn record_operation_audit(
-    runtime: &Arc<OrbitRuntime>,
-    workspace: &str,
-    operation: &str,
-    target: &str,
-    machine_name: &str,
-    arguments: &Value,
-    caller: Option<&CallerCapabilities>,
-    denial: Option<&AuthorizationDenial>,
-    failure: Option<&str>,
-    started: Instant,
-) {
-    let status = if denial.is_some() {
-        AuditEventStatus::Denied
-    } else if failure.is_some() {
-        AuditEventStatus::Failure
-    } else {
-        AuditEventStatus::Success
-    };
-    let capabilities = caller
-        .map(|caller| caller.grants().clone())
-        .unwrap_or_default();
-    let provenance = caller
-        .map(|caller| caller.provenance().to_string())
-        .or_else(|| denial.map(|denial| denial.provenance.to_string()));
-    let params = AuditEventInsertParams {
-        execution_id: audit_execution_id("dashboard-operations"),
-        command: "dashboard.operations".to_string(),
-        subcommand: provenance,
-        tool_name: None,
-        target_type: Some(operation.to_string()),
-        target_id: Some(target.to_string()),
-        role: "operator".to_string(),
-        status,
-        exit_code: i32::from(status != AuditEventStatus::Success),
-        duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
-        working_directory: runtime
-            .workspace_runtime_binding()
-            .map(|binding| binding.repo_root.display().to_string())
-            .unwrap_or_else(|| runtime.shared_root().display().to_string()),
-        arguments_json: serde_json::to_string(arguments).ok(),
-        stdout_truncated: None,
-        stderr_truncated: None,
-        error_message: denial
-            .map(ToString::to_string)
-            .or_else(|| failure.map(str::to_string)),
-        host: std::env::var("HOSTNAME").ok(),
-        pid: std::process::id(),
-        session_id: None,
-        workspace_id: Some(workspace.to_string()),
-        caller_machine_id: None,
-        caller_machine_name: Some(machine_name.to_string()),
-        process_machine_id: None,
-        process_machine_name: Some(machine_name.to_string()),
-        transport: None,
-        effective_capabilities: capabilities,
-        origin_session_id: None,
-        mcp_call_id: None,
-        lease_id: None,
-        task_id: None,
-        job_run_id: None,
-        activity_id: None,
-        step_index: None,
-    };
-    // A SQLite insert can wait out the busy timeout; keep it off the async
-    // worker like every other store access in this crate.
-    let writer = Arc::clone(runtime);
-    let result = tokio::task::spawn_blocking(move || writer.record_audit_event(&params)).await;
-    let error = match result {
-        Ok(Ok(())) => return,
-        Ok(Err(error)) => error.to_string(),
-        Err(join_error) => join_error.to_string(),
-    };
-    tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
+/// One governed dashboard operation, ready to audit any of its outcomes.
+///
+/// The invariant part (runtime, workspace, operation, target, machine and
+/// arguments) is carried once; each method records exactly one outcome, so
+/// a caller and a denial can never be recorded together or both be absent.
+/// `machine_name` defaults to empty.
+pub(super) struct OperationAudit<'a> {
+    runtime: &'a Arc<OrbitRuntime>,
+    workspace: &'a str,
+    operation: &'a str,
+    target: Cow<'a, str>,
+    machine_name: &'a str,
+    arguments: Value,
+}
+
+impl<'a> OperationAudit<'a> {
+    pub(super) fn new(
+        runtime: &'a Arc<OrbitRuntime>,
+        workspace: &'a str,
+        operation: &'a str,
+        target: impl Into<Cow<'a, str>>,
+        arguments: Value,
+    ) -> Self {
+        Self {
+            runtime,
+            workspace,
+            operation,
+            target: target.into(),
+            machine_name: "",
+            arguments,
+        }
+    }
+
+    pub(super) fn with_machine_name(mut self, machine_name: &'a str) -> Self {
+        self.machine_name = machine_name;
+        self
+    }
+
+    pub(super) fn with_target(mut self, target: impl Into<Cow<'a, str>>) -> Self {
+        self.target = target.into();
+        self
+    }
+
+    pub(super) fn with_arguments(mut self, arguments: Value) -> Self {
+        self.arguments = arguments;
+        self
+    }
+
+    pub(super) async fn denied(&self, denial: &AuthorizationDenial, started: Instant) {
+        self.record(None, Some(denial), None, started).await;
+    }
+
+    pub(super) async fn failed(
+        &self,
+        caller: &CallerCapabilities,
+        failure: &str,
+        started: Instant,
+    ) {
+        self.record(Some(caller), None, Some(failure), started)
+            .await;
+    }
+
+    pub(super) async fn succeeded(&self, caller: &CallerCapabilities, started: Instant) {
+        self.record(Some(caller), None, None, started).await;
+    }
+
+    pub(super) async fn settled(
+        &self,
+        caller: &CallerCapabilities,
+        failure: Option<&str>,
+        started: Instant,
+    ) {
+        self.record(Some(caller), None, failure, started).await;
+    }
+
+    async fn record(
+        &self,
+        caller: Option<&CallerCapabilities>,
+        denial: Option<&AuthorizationDenial>,
+        failure: Option<&str>,
+        started: Instant,
+    ) {
+        let operation = self.operation;
+        let target = &*self.target;
+        let status = if denial.is_some() {
+            AuditEventStatus::Denied
+        } else if failure.is_some() {
+            AuditEventStatus::Failure
+        } else {
+            AuditEventStatus::Success
+        };
+        let capabilities = caller
+            .map(|caller| caller.grants().clone())
+            .unwrap_or_default();
+        let provenance = caller
+            .map(|caller| caller.provenance().to_string())
+            .or_else(|| denial.map(|denial| denial.provenance.to_string()));
+        let params = AuditEventInsertParams {
+            execution_id: audit_execution_id("dashboard-operations"),
+            command: "dashboard.operations".to_string(),
+            subcommand: provenance,
+            tool_name: None,
+            target_type: Some(operation.to_string()),
+            target_id: Some(target.to_string()),
+            role: "operator".to_string(),
+            status,
+            exit_code: i32::from(status != AuditEventStatus::Success),
+            duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+            working_directory: self
+                .runtime
+                .workspace_runtime_binding()
+                .map(|binding| binding.repo_root.display().to_string())
+                .unwrap_or_else(|| self.runtime.shared_root().display().to_string()),
+            arguments_json: serde_json::to_string(&self.arguments).ok(),
+            stdout_truncated: None,
+            stderr_truncated: None,
+            error_message: denial
+                .map(ToString::to_string)
+                .or_else(|| failure.map(str::to_string)),
+            host: std::env::var("HOSTNAME").ok(),
+            pid: std::process::id(),
+            session_id: None,
+            workspace_id: Some(self.workspace.to_string()),
+            caller_machine_id: None,
+            caller_machine_name: Some(self.machine_name.to_string()),
+            process_machine_id: None,
+            process_machine_name: Some(self.machine_name.to_string()),
+            transport: None,
+            effective_capabilities: capabilities,
+            origin_session_id: None,
+            mcp_call_id: None,
+            lease_id: None,
+            task_id: None,
+            job_run_id: None,
+            activity_id: None,
+            step_index: None,
+        };
+        // A SQLite insert can wait out the busy timeout; keep it off the async
+        // worker like every other store access in this crate.
+        let writer = Arc::clone(self.runtime);
+        let result = tokio::task::spawn_blocking(move || writer.record_audit_event(&params)).await;
+        let error = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error.to_string(),
+            Err(join_error) => join_error.to_string(),
+        };
+        tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
+    }
 }
