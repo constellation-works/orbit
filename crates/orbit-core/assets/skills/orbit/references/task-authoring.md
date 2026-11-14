@@ -494,6 +494,36 @@ containment and file/directory kind are still checked, and comments, plans or
 agent proposals never grant intent. When task-pilot reports a missing selector
 that carries no such record, re-declare it through that update path.
 
+### Split, migration and other tasks that create files
+
+This rule binds every filer — an operator, an orchestrator, a review, QA or
+health sweep, and any other auto-task template — not only the implementer who
+later creates the file. Before calling `orbit.task.add` for a split, a move or
+migration, a deduplication that unifies copies into a new module, or any other
+task whose outcome creates a file:
+
+1. Scan the draft title, description, scope and acceptance criteria for every
+   path the task names as new, moved-to, split-out or to-be-created. Naming a
+   new file only in prose grants nothing.
+2. List each such path exactly once as its canonical `file:` selector (or
+   `dir:` for a new directory) in `context_files`, alongside the verified
+   existing targets, and file with `allow_missing_context: true`. That call —
+   not a later update, comment or plan — records `context_creation_authorized`
+   for each exact missing selector at filing time.
+3. If an exact destination cannot be named yet, do not file the task. Record
+   the unnamed destination as an evidence gap in your own execution summary or
+   artifact instead; never file first and leave task-pilot to hold promotion
+   for an operator to authorize a footprint the filer could have granted.
+4. Read the filed task back with `orbit.task.show` and confirm its history
+   carries the creation grant for each new path before recording the task as
+   filed. A filed task naming a new file with no such grant is a filing
+   defect: reauthorize it immediately through `orbit.task.update` with the
+   full `context_files` list plus `allow_missing_context: true`, and say so
+   in your summary.
+
+Omitting `allow_missing_context` is correct only when the task creates
+nothing: every `context_files` selector then names an existing target.
+
 A worker updating its own task through `orbit.task.update` or `orbit task
 update` from its run's linked worktree gets the existence relaxation
 automatically for that task, without recording creation intent, and the

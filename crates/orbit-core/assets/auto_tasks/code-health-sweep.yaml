@@ -36,6 +36,12 @@ template:
     `code-health` per the installed `orbit` skill's task-authoring reference
     and does not count toward the cap. File it with
     `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with file:line evidence>","acceptance_criteria":["<observable outcome>"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"complexity":"medium","tags":["code-health"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    When the matching test file (or any other file the defect fix creates)
+    does not exist yet, list its exact path as that `file:` selector and add
+    `"allow_missing_context":true` to the same call, so the filing records
+    `context_creation_authorized` for it; naming the new file only in the
+    description grants nothing. If its exact path cannot be named, do not
+    file the defect: record it as an evidence gap in the artifact instead.
 
     ## Rules and command surfaces
 
@@ -300,8 +306,21 @@ template:
     filing, read the installed `orbit` skill's task-authoring reference and
     follow it for task shape. File each (tool-created tasks start `proposed`) with
     `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["code-health","tech-debt","<dead-code|dedup|simplify|architecture|compat-retire>"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Before filing, scan the draft description, scope and criteria for every
+    file the finding creates — a new module a split or deduplication moves
+    code into, a new test file, a migration or any other new destination.
+    List each exact path as a `file:` selector in that same `context_files`
+    list and add `"allow_missing_context":true` to the filing call, so it
+    records `context_creation_authorized` for each new path at filing time;
+    omit the flag only when the task creates nothing. Naming a new file only
+    in prose grants nothing, and a missing selector filed without the flag is
+    refused by `orbit.task.add`. If an exact destination cannot be named, do
+    not file the finding: record it in the artifact as an evidence gap
+    deferred to the next pass.
     Read each filed task back with `orbit.task.show` before recording it as
-    delivered. Never file a finding without verified `context_files`.
+    delivered, and confirm its history carries the creation grant for every
+    new path it names. Never file a finding without verified `context_files`
+    (existing targets, or new targets granted as above).
 
     - **Type and tags.** `type: refactor`; tags `code-health`, `tech-debt`, and
       the lens tag from the payload.
@@ -313,7 +332,11 @@ template:
       call site that changes, plus the tests that cover them:
       `symbol:<path>#<name>:<kind>` for each existing function or type that
       changes, `file:`/`dir:` when the change is file-wide (deletion of a
-      whole file, a move, more than about five symbols in one file).
+      whole file, a move, more than about five symbols in one file). Every
+      file the task creates is listed as its exact `file:` destination here
+      and granted at filing with `allow_missing_context: true` (see Filing
+      above); an existing declaration file a new module needs (`mod.rs` and
+      its peers) is listed as a verified existing `file:` selector.
     - **Description.** It contains **Outcome**; **Evidence** (paths with line
       numbers at the pinned SHA, reference counts, the copies side by side or
       the rule cited, and the routes checked for a dead-code candidate); **Scope
@@ -413,6 +436,7 @@ template:
   - Every filed finding clears its lens bar; duplication findings list each behavioural difference between copies with a resolution.
   - Open and rejected `code-health` coverage was checked first; findings touching in-flight tasks were deferred, not filed or chained.
   - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria; a change to a documented-stable surface records either the owner's approval or a pending owner decision, and no filed criterion asks the implementer to obtain sign-off.
+  - Every filed task that names a new module, test or other created file lists that exact path in `context_files` and was filed with `allow_missing_context: true`, and reading it back with `orbit.task.show` showed a `context_creation_authorized` grant for that exact path; a finding whose exact creation destination could not be named was recorded as an evidence gap instead of filed.
   - The artifact `code-health.json` is attached to this task and the execution summary maps every candidate and finding to a disposition; a run with no findings above the bars succeeds with that evidence.
   task_type: chore
   tags:
