@@ -125,10 +125,22 @@ pub(super) fn pre_push_remote_branch(
     let args: Vec<&str> = owned.iter().map(String::as_str).collect();
     let probe = remote_ref_output(repo_root, &args, "git_push pre-push")?;
     Ok(RemoteBranchProbe {
-        sha: probe.stdout.split_whitespace().next().map(str::to_owned),
+        sha: exact_remote_branch_sha(&probe.stdout, branch),
         attempts: probe.attempts,
         elapsed_ms: probe.elapsed_ms,
         waited_ms: probe.waited_ms,
+    })
+}
+
+/// The SHA named by the exact `refs/heads/<branch>` line in `ls-remote`
+/// output. Git's pattern matches slash-delimited tails, so an unrelated
+/// `refs/heads/aaa/refs/heads/<branch>` line must not stand in for it.
+pub(super) fn exact_remote_branch_sha(stdout: &str, branch: &str) -> Option<String> {
+    let wanted = format!("refs/heads/{branch}");
+    stdout.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let sha = fields.next()?;
+        (fields.next() == Some(wanted.as_str())).then(|| sha.to_owned())
     })
 }
 

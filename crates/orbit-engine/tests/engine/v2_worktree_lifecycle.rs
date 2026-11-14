@@ -519,6 +519,44 @@ fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
     );
 }
 
+/// A tag sharing the base branch's name must not shadow it: local setup
+/// starts from the branch, and remote setup from the remote-tracking branch
+/// rather than a tag named `origin/<branch>`.
+fn worktree_setup_uses_the_branch_not_a_same_named_tag() {
+    let (fixture, host) = Fixture::hosted();
+    let tag_sha = commit_file(&fixture.repo, "tagged.txt", "tagged\n");
+    git(&fixture.repo, &["tag", BASE, &tag_sha]);
+    let branch_sha = commit_file(&fixture.repo, "branched.txt", "branched\n");
+    git(
+        &fixture.repo,
+        &[
+            "push",
+            "origin",
+            &format!("refs/heads/{BASE}:refs/heads/{BASE}"),
+        ],
+    );
+
+    host.add_task("T-TAG-LOCAL", TaskStatus::Backlog);
+    let setup = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-TAG-LOCAL"], "jrun-tag-local"),
+    )
+    .expect("local worktree setup");
+    assert_eq!(setup["base_sha"], branch_sha, "{setup}");
+    let checkout = Checkout::from_setup(&setup);
+    assert_eq!(head(&checkout.path), branch_sha);
+
+    git(&fixture.repo, &["tag", &format!("origin/{BASE}"), &tag_sha]);
+    host.add_task("T-TAG-REMOTE", TaskStatus::Backlog);
+    let mut remote_input = setup_input(&["T-TAG-REMOTE"], "jrun-tag-remote");
+    remote_input["base_sync"] = json!("remote");
+    let setup = action(&host, "worktree_setup", &remote_input).expect("remote worktree setup");
+    assert_eq!(setup["base_sha"], branch_sha, "{setup}");
+    let checkout = Checkout::from_setup(&setup);
+    assert_eq!(head(&checkout.path), branch_sha);
+}
+
 // ---------------------------------------------------------------------------
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------
@@ -4709,6 +4747,7 @@ worktree_families! {
         worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing,
     ],
     worktree_contracts_2: [
+        worktree_setup_uses_the_branch_not_a_same_named_tag,
         worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
         worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render,
         worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,

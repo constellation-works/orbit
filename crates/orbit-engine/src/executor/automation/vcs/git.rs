@@ -994,11 +994,14 @@ pub(in crate::executor::automation) fn normalize_base_branch(
 }
 
 fn resolve_local_base_ref(repo_root: &Path, branch: &str) -> Result<String, OrbitError> {
+    // Fully qualified: an unqualified name resolves to a same-named tag
+    // before the branch, so the returned ref must name the branch exactly.
+    let local_base = format!("refs/heads/{branch}");
     if git_command_success(
         repo_root,
-        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
+        &["rev-parse", "--verify", &format!("{local_base}^{{commit}}")],
     )? {
-        return Ok(branch.to_string());
+        return Ok(local_base);
     }
 
     Err(OrbitError::Execution(format!(
@@ -1007,7 +1010,9 @@ fn resolve_local_base_ref(repo_root: &Path, branch: &str) -> Result<String, Orbi
 }
 
 fn resolve_remote_base_ref(repo_root: &Path, branch: &str) -> Result<String, OrbitError> {
-    let remote_base = format!("origin/{branch}");
+    // Fully qualified: the short `origin/<branch>` can resolve to a tag
+    // named `origin/<branch>` before the remote-tracking branch.
+    let remote_base = format!("refs/remotes/origin/{branch}");
     if git_command_success(
         repo_root,
         &[
