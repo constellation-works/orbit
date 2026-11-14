@@ -758,10 +758,11 @@ hold:
 
 - `require_response_envelope: true`, so something reads the reply.
 - `fsProfile: reviewer`, the read-only [filesystem profile](../policy-format/).
-- The activity's own tool declaration grants no built-in mutating Orbit tool.
-  With `tools`, a mutating tool is granted when it is listed there, including
-  through a wildcard entry. With `tool_disallow_list`, a mutating tool is
-  granted unless it is listed.
+- The activity's own `tools` allowlist grants no built-in mutating Orbit tool:
+  a mutating tool is refused when it is listed there, including through a
+  wildcard entry. A `tool_disallow_list` is admitted whatever it names. Dispatch
+  denies every built-in mutating tool to each invocation, so a tool a later
+  release adds cannot make an existing copy invalid.
   Mutating tools include `orbit.task.update`, `orbit.task.artifact` action `put`,
   `orbit.friction` action `add` and `orbit.command.exec`. See
   [agent tool lists](#agent-tool-lists).
