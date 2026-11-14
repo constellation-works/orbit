@@ -314,6 +314,9 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         error @ orbit_core::OrbitError::ShipRunInFlight { .. } => {
             ship_run_in_flight_conflict(error)
         }
+        error @ orbit_core::OrbitError::ResumeRunInFlight { .. } => {
+            resume_run_in_flight_conflict(error)
+        }
         // A well-formed ship the workspace's remotes cannot deliver as a PR:
         // the caller rebinds the ship mode or tags the task, then retries.
         error @ orbit_core::OrbitError::PrForgeRemoteMissing { .. } => (
@@ -371,6 +374,24 @@ fn ship_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
             "code": "ship_run_in_flight",
             "run_id": run_id,
             "task_id": task_id,
+        })),
+    )
+        .into_response()
+}
+
+fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
+    let (source_run_id, run_id) = error
+        .resume_run_in_flight()
+        .map_or_else(Default::default, |(source_run_id, run_id)| {
+            (source_run_id.to_string(), run_id.to_string())
+        });
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": error.to_string(),
+            "code": "resume_run_in_flight",
+            "run_id": run_id,
+            "source_run_id": source_run_id,
         })),
     )
         .into_response()
@@ -575,13 +596,25 @@ where
     F: FnOnce() -> Result<T, orbit_core::OrbitError> + Send + 'static,
     T: Send + 'static,
 {
-    match tokio::task::spawn_blocking(op).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => Err(Box::new(map_runtime_error(e))),
-        Err(join_err) => Err(Box::new(server_error(orbit_core::OrbitError::Execution(
-            format!("{label} panicked: {join_err}"),
-        )))),
-    }
+    blocking_join(label, op)
+        .await?
+        .map_err(|error| Box::new(map_runtime_error(error)))
+}
+
+/// Run an operation on the blocking pool, mapping only join failures to HTTP.
+///
+/// The operation's result stays intact so callers can audit typed failures or
+/// apply their own HTTP mapping. `label` names the operation in the panic error.
+pub(super) async fn blocking_join<T, F>(label: &str, op: F) -> Result<T, Box<Response>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(op).await.map_err(|join_err| {
+        Box::new(server_error(orbit_core::OrbitError::Execution(format!(
+            "{label} panicked: {join_err}"
+        ))))
+    })
 }
 
 /// Workspace identity for audit records, resolved on the blocking pool.

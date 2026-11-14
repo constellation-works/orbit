@@ -38,6 +38,7 @@
 //! no arbitrary pipeline inputs. Recovery is here because there is no heartbeat, so the
 //! decision that an attempt is over belongs to a human.
 
+use crate::api::helpers;
 use std::time::Instant;
 
 use axum::extract::{Path, Query, State};
@@ -450,7 +451,7 @@ where
         }
     };
     let acting = runtime.clone();
-    let outcome = tokio::task::spawn_blocking(move || action(&acting)).await;
+    let outcome = helpers::blocking_join(audit_name, move || action(&acting)).await;
     match outcome {
         Ok(Ok(value)) => {
             audit.succeeded(&caller, started).await;
@@ -461,9 +462,7 @@ where
             audit.failed(&caller, &error.to_string(), started).await;
             response
         }
-        Err(join_err) => server_error(OrbitError::Execution(format!(
-            "{audit_name} panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 

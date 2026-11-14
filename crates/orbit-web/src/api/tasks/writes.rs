@@ -3,6 +3,7 @@
 use super::request::{
     CommentBody, CreateTaskBody, UpdateTaskBody, reject_unsupported_task_body_fields,
 };
+use crate::api::helpers;
 use crate::api::{bad_request, map_runtime_error, non_empty_string, server_error, validate_id};
 use crate::state::Ws;
 use axum::extract::Path;
@@ -49,7 +50,7 @@ pub(super) async fn task_mutation_response<F>(
 where
     F: FnOnce(&OrbitRuntime) -> Result<ScreenedTaskWrite, orbit_core::OrbitError> + Send + 'static,
 {
-    let rendered = tokio::task::spawn_blocking(move || {
+    let rendered = helpers::blocking_join(label, move || {
         let written = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
         let mut value = screened_task_write_response_json(
             &runtime,
@@ -69,9 +70,7 @@ where
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(TaskMutationFailure::Mutation(e))) => map_runtime_error(e),
         Ok(Err(TaskMutationFailure::Render(e))) => server_error(e),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "{label} panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 

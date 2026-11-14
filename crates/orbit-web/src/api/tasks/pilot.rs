@@ -1,11 +1,12 @@
 //! `POST /tasks/:id/pilot`: the details panel's "Run pilot" action.
 
+use crate::api::helpers;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
 
 use crate::api::routines::{authorization_denied, authorized_caller};
-use crate::api::{bad_request, map_runtime_error, server_error, validate_id};
+use crate::api::{bad_request, map_runtime_error, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Submit `task_pilot_pipeline` in explicit mode for this one task, through the
@@ -29,7 +30,7 @@ pub(in crate::api) async fn pilot_task_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let submitted = tokio::task::spawn_blocking(move || {
+    let submitted = helpers::blocking_join("task pilot submission", move || {
         runtime.submit_explicit_task_pilot(
             &id,
             Some("dashboard"),
@@ -40,8 +41,6 @@ pub(in crate::api) async fn pilot_task_action(
     match submitted {
         Ok(Ok(submission)) => Json(submission.dashboard_view()).into_response(),
         Ok(Err(error)) => map_runtime_error(error.into()),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task pilot submission panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
