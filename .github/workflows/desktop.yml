@@ -63,13 +63,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_STATE: ${{ github.event.pull_request.state }}
+          EVENT_MERGED: ${{ github.event.pull_request.merged }}
+          RETRY_DELAY_SECONDS: "5"
         shell: bash
         run: |
-          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
-            if .merged == true then "state=merged"
-            elif .state == "open" or .state == "closed" then "state=" + .state
-            else error("Unexpected pull request state") end
-          ' >> "$GITHUB_OUTPUT"
+          # Fail-soft: see ci.yml Live PR state. Retry bounded times, then
+          # fall back to the pull_request event payload; only validated
+          # key=value lines are appended to $GITHUB_OUTPUT, and an
+          # unusable event payload yields state=unknown (not open).
+          state=""
+          attempt=1
+          while [ "$attempt" -le 3 ] && [ -z "$state" ]; do
+            if response="$(gh api --method GET "repos/{owner}/{repo}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
+              if parsed="$(jq -er 'if .merged == true then "merged" elif .state == "open" or .state == "closed" then .state else error("Unexpected pull request state") end' <<<"$response" 2>/dev/null)" && [ -n "$parsed" ]; then
+                state="$parsed"
+              fi
+            fi
+            if [ -z "$state" ] && [ "$attempt" -lt 3 ]; then
+              sleep "$((RETRY_DELAY_SECONDS * attempt))" || true
+            fi
+            attempt=$((attempt + 1))
+          done
+          if [ -z "$state" ]; then
+            if [ "${EVENT_MERGED:-}" = "true" ]; then
+              state="merged"
+            elif [ "${EVENT_STATE:-}" = "open" ] || [ "${EVENT_STATE:-}" = "closed" ]; then
+              state="$EVENT_STATE"
+            else
+              state="unknown"
+            fi
+            echo "::warning title=Live PR state::gh api failed after 3 attempts; falling back to the pull_request event payload (state=$state)"
+          fi
+          printf 'state=%s\n' "$state" >> "$GITHUB_OUTPUT"
 
   advisories:
     needs: pr-state
