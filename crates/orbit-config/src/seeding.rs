@@ -250,15 +250,9 @@ pub fn load_workspace_seeding_policies(
     let mut auto_tasks: Option<RawSeedingPolicy> = None;
     let mut sources = [None, None];
     for path in &layers {
-        let Some(raw) = crate::config_io::read_config_file(path)? else {
+        let Some(document) = crate::config_toml::read_config_toml(path)? else {
             continue;
         };
-        let document: toml::Value = toml::from_str(&raw).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': {error}",
-                orbit_common::security::redaction::redact_home_dir(&path.display().to_string())
-            ))
-        })?;
         if let Some(value) =
             config_document::read_typed_config_value(&document, SEEDING_ROUTINES_KEY, path)?
         {

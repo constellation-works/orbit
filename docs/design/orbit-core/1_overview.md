@@ -1,8 +1,8 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-14
+last_validated: 2026-11-14
 status: Implemented
 stage: shipped
 next: "—"
@@ -153,7 +153,7 @@ source scan, enforces the runtime direction.
 | Config loading and runtime assembly | `crates/orbit-core/src/composition/runtime.rs` | [ORB-10886] |
 | Context assembly | `crates/orbit-runtime/src/context/state.rs` | — |
 | Resolved-config consumption | `crates/orbit-runtime/src/builder.rs` | [ORB-10885], [ORB-10886] |
-| Config layering and admission (owning crate); pure TOML path access and the typed dotted-path read are in its private `config_document` leaf below aliases, seeding, operation policy and the key registry; the key registry sits above the domain admission modules (`aliases`, `attention`, `crew`, `operation`, `provider_limit`, `seeding`), which may not name it, and its snapshot projections live beside `ConfigSnapshot`; no-follow file reads and path admission are in its private `config_io` leaf below loading, diagnostics and the mutable `ConfigStore`; the built-in crew registry is in its private `crew_defaults` leaf below snapshot admission, resolved config and seeding, and the registry may not name resolved config (guarded by `scripts/check-dependency-direction.sh`) | `crates/orbit-config/src/` | [ORB-10885] |
+| Config layering and admission (owning crate); pure TOML path access and the typed dotted-path read are in its private `config_document` leaf below aliases, seeding, operation policy and the key registry; the key registry sits above the domain admission modules (`aliases`, `attention`, `crew`, `operation`, `provider_limit`, `seeding`), which may not name it, and its snapshot projections live beside `ConfigSnapshot`; no-follow file reads and path admission are in its private `config_io` leaf below loading, diagnostics and the mutable `ConfigStore`, and that leaf stays free of TOML; the shared parse of an admitted file into one document is in its private `config_toml` leaf, which calls `config_io` and admits no policy; the built-in crew registry is in its private `crew_defaults` leaf below snapshot admission, resolved config and seeding, and the registry may not name resolved config (guarded by `scripts/check-dependency-direction.sh`) | `crates/orbit-config/src/` | [ORB-10885] |
 | Registered runtime + routine composition | `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-cmd/src/registry/routines.rs` | — |
 | Host identity + local workspace catalog | `crates/orbit-registry/src/` | — |
 | Tool dispatch and command-audit boundary | `crates/orbit-core/src/adapter/command/dispatch/` | [ORB-10886] |
