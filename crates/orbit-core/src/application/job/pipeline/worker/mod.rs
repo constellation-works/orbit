@@ -4,9 +4,9 @@
 //!   lands.
 //! - `supervisor` — the parent-side [`PipelineWorkerSupervisor`] that spawns a
 //!   worker, watches its startup, and settles a run whose worker died.
-//! - `record` — the store writes both sides share.
-//! - `exit` — the durable record of how a worker process ended, which the
-//!   supervisor writes and stale-run reconciliation reads.
+//! - `exit` — how a worker process's exit is observed and written, and a late
+//!   exit amended into reconciliation's diagnostic. The persisted record's
+//!   format and its readers belong to `job/run` (`worker_exit`).
 //!
 //! What stays on [`OrbitRuntime`] here is the *child* process's own work:
 //! executing the run it was handed (`execute`), its startup checks (`start`),
@@ -34,7 +34,6 @@ mod delivery_class;
 mod execute;
 pub(super) mod exit;
 pub(super) mod log;
-mod record;
 pub(super) mod scope;
 mod start;
 pub(super) mod supervisor;

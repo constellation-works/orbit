@@ -1,6 +1,7 @@
 //! Diagnostic, resource-limit and cancellation records for a worker's run.
 
 use super::*;
+use crate::application::job::run::worker_scope::WorkerScopeCgroup;
 
 impl OrbitRuntime {
     /// The bounded process snapshot captured when this run's watchdog tripped.
@@ -35,7 +36,7 @@ impl OrbitRuntime {
             Err(error) => error.to_string(),
         };
         let Some(breach) =
-            scope::WorkerScopeCgroup::of_current_process().and_then(|scope| scope.limit_breach())
+            WorkerScopeCgroup::of_current_process().and_then(|scope| scope.limit_breach())
         else {
             return;
         };
@@ -53,28 +54,6 @@ impl OrbitRuntime {
                 JobRunState::Failed,
             ),
         );
-    }
-
-    /// [ORB-10002] Record a terminal diagnostic step with an explicit state
-    /// (`failed` for job errors, `interrupted` for orphan reconciliation).
-    pub(crate) fn record_pipeline_diagnostic_step(
-        &self,
-        run: &JobRun,
-        started_at: chrono::DateTime<Utc>,
-        finished_at: chrono::DateTime<Utc>,
-        error_code: Option<&str>,
-        message: &str,
-        state: JobRunState,
-    ) -> Result<(), OrbitError> {
-        record::diagnostic_step(
-            self.stores().jobs(),
-            run,
-            started_at,
-            finished_at,
-            error_code,
-            message,
-            state,
-        )
     }
 
     /// [ORB-12038] Read a run's own `<run_id>.worker.log`, for a caller (`orbit
@@ -104,28 +83,5 @@ impl OrbitRuntime {
         })?;
         let content = read_pipeline_worker_log_tail(&mut file);
         Ok(Some(PipelineWorkerLogSnapshot { path, content }))
-    }
-
-    pub(crate) fn record_pipeline_audit(
-        &self,
-        tool_name: &str,
-        target_id: Option<&str>,
-        actor: Option<&str>,
-        status: AuditEventStatus,
-        arguments: Value,
-        error_message: Option<String>,
-    ) -> Result<(), OrbitError> {
-        record::pipeline_audit(
-            self.stores().audit_events(),
-            &self.paths().repo_root,
-            record::PipelineAuditRow {
-                tool_name,
-                target_id,
-                actor,
-                status,
-                arguments,
-                error_message,
-            },
-        )
     }
 }

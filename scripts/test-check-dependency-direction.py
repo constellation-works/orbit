@@ -51,6 +51,7 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-core/src/application/contracts",
             "crates/orbit-core/src/application/task",
             "crates/orbit-core/src/application/job",
+            "crates/orbit-core/src/application/job/run",
             "crates/orbit-core/src/application/automation",
             "crates/orbit-core/src/application/auto_tasks",
             "crates/orbit-core/src/application/review",
@@ -702,6 +703,48 @@ class RelativeImportTests(unittest.TestCase):
                 "        self.job_experiment_crew_pool();\n    }\n}\n",
             "experiment/assignment.rs":
                 "use crate::application::task::TaskRecords;\n",
+        }, rejected=False)
+
+    def test_run_cannot_reach_pipeline(self):
+        # [ORB-24781] `job::run` sat on top of `job::pipeline` for its audit
+        # writer, worker-exit evidence and definition reads, closing a direct
+        # two-module cycle; run is the lower module. One batch per detector:
+        # the guard's chains stop at the first hit.
+        method = {
+            "job/pipeline/state.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_pipeline_method(&self) {}\n}\n",
+        }
+        self.check_rows([
+            ("job/run/audit.rs", "use crate::application::job::pipeline::Probe;\n"),
+            ("job/run/delivery/observe.rs", "use super::super::pipeline::Probe;\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("job/run/audit.rs", "use crate::application::job::{pipeline::Probe, run::Other};\n"),
+            ("job/run/delivery/observe.rs", "use super::super::{pipeline::Probe};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("job/run/audit.rs", "use crate::application::{job::pipeline::Probe};\n"),
+            ("job/run/reconcile.rs", "use crate::application::{job::{pipeline::Probe}};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("job/run/reconcile.rs",
+             "impl OrbitRuntime {\n    fn settle(&self) {\n"
+             "        self.fresh_pipeline_method();\n    }\n}\n"),
+        ], rejected=True, shared=method)
+        self.check_files({
+            "job/run/audit_record.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_run_method(&self) {}\n}\n",
+            "job/run/reconcile.rs":
+                "impl OrbitRuntime {\n    fn settle(&self) {\n"
+                "        self.fresh_run_method();\n    }\n}\n",
+            "job/pipeline/worker.rs":
+                "use crate::application::job::run::audit_record;\n"
+                "impl OrbitRuntime {\n    fn drive(&self) {\n"
+                "        self.fresh_run_method();\n    }\n}\n",
+            "job/run/tests/reconcile.rs":
+                "use crate::application::job::pipeline::Probe;\n",
+            "job/run/definition.rs":
+                "/// Written by the pipeline's submission.\nfn pipeline_note() {}\n",
         }, rejected=False)
 
     def test_lower_modules_reach_landing_only_through_owned_port(self):

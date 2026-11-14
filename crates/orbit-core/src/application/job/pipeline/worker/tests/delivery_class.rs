@@ -223,7 +223,7 @@ fn worker_without_a_scope_records_nothing_and_logs_nothing() {
     )) {
         return;
     }
-    use crate::application::job::pipeline::worker::scope::WorkerScopeCgroup;
+    use crate::application::job::run::worker_scope::WorkerScopeCgroup;
 
     let (root, runtime) = runtime();
     let task = runtime

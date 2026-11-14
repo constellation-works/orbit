@@ -22,15 +22,25 @@
 //!   run-failure observation query run views share.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `state_write` — the one create-or-update run-state write and terminal-run refusal the run controls share.
+//! - `audit_record` — the job-run audit writers (`record_pipeline_audit`,
+//!   `record_pipeline_diagnostic_step`) every module that audits a run shares.
+//! - `worker_exit` — the persisted worker-exit record format and the reads reconciliation makes of it.
+//! - `worker_scope` — the read side of a worker's containment scope, which `worker_exit` reads.
+//! - `definition` — the definition snapshot a run pinned, and the reads that resolve it.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
+// `run` sits below `pipeline`: pipeline imports the four `pub(super)` modules
+// below (audit writer, definition reads, worker-exit evidence and scope reads),
+// and `scripts/check-dependency-direction.sh` refuses the reverse edge.
 mod actions;
 mod admissions_stop;
+pub(super) mod audit_record;
 mod build_budget;
 mod child_timeout;
 mod completion_audit;
 mod conflict;
 mod deferral;
+pub(super) mod definition;
 mod delivery;
 mod display_steps;
 mod drain_cancel;
@@ -50,7 +60,9 @@ mod state_write;
 mod step_recovery;
 mod types;
 mod window_extension;
+pub(super) mod worker_exit;
 mod worker_limit;
+pub(super) mod worker_scope;
 
 /// A claimed worker conclusively exited without a recorded cancellation.
 /// The reconciler cannot reap its exit signal once the process is gone; it

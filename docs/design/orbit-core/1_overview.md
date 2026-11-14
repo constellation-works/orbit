@@ -13,7 +13,7 @@ summary: Directional runtime, application, adapter, bootstrap, and composition b
 tags: [orbit-core, orbit-cmd, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-cmd/**", "crates/orbit-registry/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17939, ORB-17943, ORB-17972, ORB-22005]
+related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17939, ORB-17943, ORB-17972, ORB-22005, ORB-24781]
 ---
 
 # Orbit Core — Overview
@@ -143,6 +143,7 @@ source scan, enforces the runtime direction.
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
+| Run-owned audit writer, worker-exit evidence and definition reads, below `job/pipeline` | `crates/orbit-core/src/application/job/run/{audit_record,worker_exit,worker_scope,definition}.rs`; pipeline imports them | [ORB-24781] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
 | Tag-instruction-owned experiment overlay port | `crates/orbit-core/src/application/tag_instructions.rs` (`TagInstructionExperimentPort`), implemented in `experiment/tag_instruction_port.rs` | [ORB-23019] |
@@ -501,6 +502,29 @@ stay a legal `experiment -> tag_instructions` edge [ORB-23019]. Executor
 host-OS wait that resolves the draw's candidates is
 `job::crew_pools::host_os_wait`.
 
+Within `job`, `run` sits below `pipeline` [ORB-24781]. `job/run` owns the run
+record's lifecycle and the evidence about it: the job-run audit writer
+(`audit_record.rs`: `PipelineAuditRow`, `pipeline_audit`, `diagnostic_step` and
+the `record_pipeline_audit` and `record_pipeline_diagnostic_step` methods that
+`gc`, `review`, `job/exec`, orphan adoption, upgrade resume and composition
+call), the persisted worker-exit record format and its readers
+(`worker_exit.rs`), the read side of a worker's containment scope
+(`worker_scope.rs`: `WorkerScopeCgroup::from_recorded`, `counters` and
+`unit_result`) and the run-definition reads (`definition.rs`:
+`read_run_definition_snapshot`, `resolve_run_definition`,
+`run_definition_snapshot_path`). `job/pipeline` (submission, admission and
+worker execution) imports those and keeps what writes or changes state: the
+supervisor's exit observation and amendment, signal-sender capture, scope
+creation, placement and teardown, and the definition snapshot writer. The
+guard refuses a path, grouped tree or `super::` chain from production code
+under `job/run` into `job::pipeline`, and any call to an inherent method an
+`impl OrbitRuntime` block under `job/pipeline` defines. Row shapes, audit tool
+names, the exit-record JSON and the snapshot layout are unchanged;
+`job::pipeline::run_definition_snapshot_path` stays as a test-only re-export
+shim until its remaining callers import `job::run::definition`, a follow-up.
+This cuts the direct `run` ↔ `pipeline` cycle, not the larger strongly
+connected component both modules still sit in.
+
 `codebase/diff_stats.rs` owns landed task line aggregation over landed diff
 rows, shared by agent facts and experiment readout. Experiment reads agent
 facts, while the dependency guard rejects agents paths, grouped imports,
@@ -608,5 +632,6 @@ the lower modules’ direct edges into `landing`.
 - [ORB-23334] — cut automation's catalog, history, dedupe and mint reads into `auto_tasks` through `automation::AutomationAutoTaskPort`, implemented by `auto_tasks`, and guarded automation paths and inherent calls into `auto_tasks`.
 - [ORB-23421] — cut task's corpus back-edge through `task::TaskCorpusPort`, implemented by `agent_corpus`, re-pointed its blob reads at `task::base_revision`, and added `agent_corpus` to the guarded `task` upper modules.
 - [ORB-24042] — gave the delivery-leaf job ids one owner in `orbit-types`.
+- [ORB-24781] — moved the job-run audit writer, worker-exit evidence reads and run-definition reads from `job/pipeline` into `job/run`, so `run` sits below `pipeline`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

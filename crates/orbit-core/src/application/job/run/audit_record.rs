@@ -1,15 +1,28 @@
-//! Store-level writers for the two rows worker supervision persists: a run's
-//! terminal diagnostic step and a pipeline audit event.
+//! The job-run audit trail's writers: a run's terminal diagnostic step and a
+//! pipeline audit event.
 //!
-//! Both are plain store writes, so they take the backend they write through
-//! rather than a runtime. [`OrbitRuntime`](crate::OrbitRuntime) and
-//! [`PipelineWorkerSupervisor`](super::supervisor::PipelineWorkerSupervisor)
-//! share these implementations instead of keeping two copies of the row shape.
+//! Both are plain store writes, so the free functions take the backend they
+//! write through rather than a runtime. [`OrbitRuntime`] and the pipeline's
+//! worker supervisor share these implementations instead of keeping two
+//! copies of the row shape. The run owns the audit trail, so `job/run` sits
+//! below `job/pipeline`: the pipeline imports these writers, never the
+//! reverse. The two [`OrbitRuntime`] methods forward to them for the callers
+//! that already hold a runtime (`gc`, `review`, `job/exec`, orphan adoption,
+//! upgrade resume, composition and the run controls).
 
-use chrono::DateTime;
-use orbit_store::contracts::{AuditEventStoreBackend, JobRunStoreBackend};
+use std::path::Path;
 
-use super::*;
+use chrono::{DateTime, Utc};
+use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_store::contracts::{
+    AuditEventInsertParams, AuditEventStoreBackend, JobRunStepParams, JobRunStoreBackend,
+};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
+use serde_json::Value;
+
+use crate::OrbitRuntime;
 
 /// One pipeline audit row, as its callers describe it.
 pub(crate) struct PipelineAuditRow<'a> {
@@ -178,4 +191,52 @@ fn write_diagnostic_step(
     };
     let _ = runs.complete_job_run_step(&current.run_id, &params)?;
     Ok(())
+}
+
+impl OrbitRuntime {
+    /// [ORB-10002] Record a terminal diagnostic step with an explicit state
+    /// (`failed` for job errors, `interrupted` for orphan reconciliation).
+    pub(crate) fn record_pipeline_diagnostic_step(
+        &self,
+        run: &JobRun,
+        started_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        error_code: Option<&str>,
+        message: &str,
+        state: JobRunState,
+    ) -> Result<(), OrbitError> {
+        diagnostic_step(
+            self.stores().jobs(),
+            run,
+            started_at,
+            finished_at,
+            error_code,
+            message,
+            state,
+        )
+    }
+
+    /// Record one pipeline audit event for a job run.
+    pub(crate) fn record_pipeline_audit(
+        &self,
+        tool_name: &str,
+        target_id: Option<&str>,
+        actor: Option<&str>,
+        status: AuditEventStatus,
+        arguments: Value,
+        error_message: Option<String>,
+    ) -> Result<(), OrbitError> {
+        pipeline_audit(
+            self.stores().audit_events(),
+            &self.paths().repo_root,
+            PipelineAuditRow {
+                tool_name,
+                target_id,
+                actor,
+                status,
+                arguments,
+                error_message,
+            },
+        )
+    }
 }
