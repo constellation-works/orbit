@@ -160,9 +160,9 @@ fn guarded_required_string(input: &Value, field: &str, create: bool) -> Result<S
         "guarded update"
     };
     let remedy = if create {
-        "drop 'request_id' for an ordinary create"
+        format!("drop {} for an ordinary create", quote_list(&selectors))
     } else {
-        "read 'expected_revision' from orbit.task.show with snapshot: true; drop 'request_id', 'expected_revision', 'verdict', 'complete' for an ordinary update"
+        "read 'expected_revision' from orbit.task.show with snapshot: true; drop 'request_id', 'expected_revision', 'verdict', 'complete' for an ordinary update".to_string()
     };
     let previous = orbit_common::protocol::tool_input::missing_tool_field(input, field);
     let suggestions = previous

@@ -388,23 +388,21 @@ fn guarded_missing_envelope_names_selector_and_remedy() {
         return;
     }
     let fixture = Fixture::new();
-    let input = json!({"workspace": fixture.repo, "id": "T", "verdict": {}});
-    let output = fixture
-        .command(&[
-            "tool",
-            "run",
-            "orbit.task.update",
-            "--input",
-            &input.to_string(),
-            "--json",
-        ])
-        .assert()
-        .code(1)
-        .get_output()
-        .clone();
-    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["code"], "invalid_input");
-    let message = error["error"].as_str().unwrap();
+    let refuse = |tool: &str, input: Value| -> String {
+        let output = fixture
+            .command(&["tool", "run", tool, "--input", &input.to_string(), "--json"])
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "invalid_input");
+        error["error"].as_str().unwrap().to_string()
+    };
+    let update = refuse(
+        "orbit.task.update",
+        json!({"workspace": fixture.repo, "id": "T", "verdict": {}}),
+    );
     for expected in [
         "missing `request_id`",
         "'verdict' selects guarded update",
@@ -412,6 +410,21 @@ fn guarded_missing_envelope_names_selector_and_remedy() {
         "snapshot",
         "ordinary update",
     ] {
-        assert!(message.contains(expected), "missing {expected}: {message}");
+        assert!(update.contains(expected), "missing {expected}: {update}");
+    }
+    // The remedy names the selector the caller sent, not `request_id`, which it did not send.
+    let create = refuse(
+        "orbit.task.add",
+        json!({
+            "workspace": fixture.repo, "title": "T", "description": "D",
+            "acceptance_criteria": ["A"], "complexity": "low", "verdict": {},
+        }),
+    );
+    for expected in [
+        "missing `request_id`",
+        "'verdict' selects guarded creation",
+        "drop 'verdict' for an ordinary create",
+    ] {
+        assert!(create.contains(expected), "missing {expected}: {create}");
     }
 }
