@@ -46,15 +46,50 @@ const cancelRequestsInFlight = new Set();
 // Pipeline groups the operator has opened, by group key. Groups start folded.
 const expandedRunGroups = new Set();
 const replayRequestsInFlight = new Set();
-let runFilter = (() => {
-  const value = new URL(window.location.href).searchParams.get("run_state") || "all";
-  return RUN_FILTERS.has(value) ? value : "all";
-})();
+// The address owns these three filters: the query string names the state
+// (`run_state`) and the task or job id, so a reload, a copied link, Back and
+// Forward all read them from there (adoptRunFiltersFromAddress).
+const initialRunFilters = runFiltersFromAddress();
+let runFilter = initialRunFilters.state;
 // A hand-built URL may set both. The search field edits one of them and
 // clears the other; until that edit, the API applies them together.
-let runTaskId = (new URL(window.location.href).searchParams.get("task_id") || "").trim();
-let runJobId = (new URL(window.location.href).searchParams.get("job_id") || "").trim();
+let runTaskId = initialRunFilters.taskId;
+let runJobId = initialRunFilters.jobId;
 let runQueryTimer = null;
+
+// Ids in an address are untrusted input: keep only id-shaped values.
+function parseRunIdParam(value) {
+  const id = String(value || "").trim();
+  return /^[\w.:@/-]{1,128}$/.test(id) ? id : "";
+}
+
+function runFiltersFromAddress() {
+  const params = new URLSearchParams(window.location.search);
+  const state = params.get("run_state") || "all";
+  return {
+    state: RUN_FILTERS.has(state) ? state : "all",
+    taskId: parseRunIdParam(params.get("task_id")),
+    jobId: parseRunIdParam(params.get("job_id")),
+  };
+}
+
+/// Take the state filter and the task or job id filter from the address, for
+/// a load, Back or Forward onto Jobs › History. The chips, search field, list
+/// and address then agree: a change reloads the list, and an address that
+/// named something unusable is rewritten in place to what is shown.
+export function adoptRunFiltersFromAddress() {
+  const { state, taskId, jobId } = runFiltersFromAddress();
+  const changed = state !== runFilter || taskId !== runTaskId || jobId !== runJobId;
+  runFilter = state;
+  runTaskId = taskId;
+  runJobId = jobId;
+  persistRunFilters();
+  if (!changed) return;
+  clearRunsFetchTimer();
+  const input = document.querySelector(".runs-toolbar .runs-query");
+  if (input && input.value !== (runTaskId || runJobId)) input.value = runTaskId || runJobId;
+  if (hasCtx("markRunsLoading")) showRunsLoading();
+}
 
 // Task ids are PREFIX-digits with a 2-5 letter prefix outside the ADR, L,
 // and F artifact namespaces. Anything else in the search field is a job id.
@@ -804,7 +839,7 @@ function persistRunFilters() {
   else url.searchParams.delete("task_id");
   if (runJobId) url.searchParams.set("job_id", runJobId);
   else url.searchParams.delete("job_id");
-  if (url.href !== window.location.href) history.replaceState(null, "", url);
+  if (url.href !== window.location.href) history.replaceState(history.state, "", url);
 }
 
 function clearRunsFetchTimer() {
