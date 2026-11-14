@@ -328,6 +328,43 @@ class VisualFixtureServerTest(unittest.TestCase):
             self.assertIn("source/API compatibility not established", result.stderr)
             self.assertNotIn("ORBIT_VISUAL_URL=", result.stdout)
 
+    def test_front_rejects_untrusted_authority_before_all_routes(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            tmp_path = Path(tmp)
+            repo = self._mini_checkout(tmp_path / "repo")
+            wrapper, record = self._stale_backend(tmp_path, "present")
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["experiments"], repo,
+                self._fixture_env(tmp, wrapper, record, "present"),
+            )
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                host = urllib.parse.urlsplit(url).netloc
+                before = record.read_text()
+                bad_headers = [
+                    "Host: attacker.invalid\r\nOrigin: https://attacker.invalid\r\n",
+                    "", "Host: attacker.invalid\r\n", "Host: localhost:bad\r\n",
+                    f"Host: {host}\r\nHost: {host}\r\n",
+                    f"Host: {host}\r\nOrigin: http://attacker.invalid\r\n",
+                    f"Host: {host}\r\nOrigin: {url}\r\nOrigin: {url}\r\n",
+                    f"Host: {host}\r\nSec-Fetch-Site: cross-site\r\n",
+                ]
+                for route in ("/", "/static/app.js", "/api/diagnostics/experiments/exp-visual-fixture", "/api/hosts", "/api/probe"):
+                    for headers in bad_headers:
+                        status, _ = self._raw_request(url, route, headers=headers)
+                        self.assertIn(status, (400, 403), (route, headers, status))
+                for headers in (f"Host: {host}\r\n", f"Host: {host}\r\nOrigin: http://attacker.invalid\r\n"):
+                    status, _ = self._raw_request(url, "/api/probe", method="POST", headers=headers)
+                    self.assertEqual(status, 403)
+                self.assertEqual(record.read_text(), before)
+                status, _ = self._raw_request(url, "/api/probe", method="POST", headers=f"Host: {host}\r\nOrigin: {url}\r\n")
+                self.assertEqual(status, 200)
+                self.assertIn("POST /api/probe\n", record.read_text())
+            finally:
+                self._stop(server)
+
     def test_proxied_requests_stay_on_validated_upstream_origin(self):
         # AC2: binding the front to 127.0.0.1 does not confine its outbound
         # proxy. A network-path or absolute-form request target used to
@@ -652,11 +689,13 @@ class VisualFixtureServerTest(unittest.TestCase):
                 values[key] = value
         return values
 
-    def _raw_request(self, url, request_target):
+    def _raw_request(self, url, request_target, method="GET", headers=None):
         parsed = urllib.parse.urlsplit(url)
+        if headers is None:
+            headers = f"Host: {parsed.hostname}:{parsed.port}\r\n"
         payload = (
-            f"GET {request_target} HTTP/1.1\r\n"
-            f"Host: {parsed.hostname}:{parsed.port}\r\n"
+            f"{method} {request_target} HTTP/1.1\r\n"
+            f"{headers}"
             "Connection: close\r\n"
             "\r\n"
         ).encode("ascii")

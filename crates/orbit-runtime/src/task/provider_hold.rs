@@ -119,6 +119,17 @@ impl RuntimeKernel {
             .on_machine(machine)
     }
 
+    /// [`Self::provider_hold_on`] from history the caller already read, so
+    /// an admission pass that has the task's bundle does not read it again.
+    pub fn provider_hold_on_from_history(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        machine: Option<&str>,
+    ) -> Option<ProviderFailureHold> {
+        standing_provider_hold_from_history(task, history, Utc::now())?.on_machine(machine)
+    }
+
     /// The hold a run that failed with `class` places on `task`.
     ///
     /// The failing provider is the one the failure names, else the run

@@ -336,7 +336,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "request_id",
                 ParamType::String,
-                "Retry-safe creation identity; selects guarded creation, which accepts fewer fields.",
+                "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'.",
             ),
             ADD_MODEL_PARAM,
             cli_only(
@@ -681,7 +681,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             mcp_only(
                 "request_id",
                 ParamType::String,
-                "Retry-safe write identity; selects a guarded update, which accepts fewer fields.",
+                "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update.",
             ),
             mcp_only(
                 "expected_revision",

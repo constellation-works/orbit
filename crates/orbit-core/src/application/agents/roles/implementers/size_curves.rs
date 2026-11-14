@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use super::performance::{counted, tier};
 use crate::application::agents::facts::{Attempt, TaskFacts};
 use crate::application::agents::{AgentFacts, CREW_UNKNOWN, ExecutionScope, WindowBounds};
+use crate::application::statistics;
 
 /// Days after completion a regression link is looked for, and the follow-up
 /// a task needs before it counts.
@@ -28,8 +29,6 @@ const MIN_BUCKET_TASKS: usize = 10;
 const MIN_SERIES_TASKS: usize = 30;
 /// Outcomes under which a drawn bucket is marked sparse.
 const SPARSE_OUTCOMES: usize = 5;
-/// The two-sided 95% normal quantile.
-const Z95: f64 = 1.959_963_984_540_054;
 
 /// The tiers a cohort can be narrowed to.
 pub(in crate::application::agents) const TIERS: &[&str] =
@@ -49,17 +48,6 @@ fn bucket(lines: u64) -> u32 {
 /// A share to four decimals, a hundredth of a percentage point.
 fn share(value: f64) -> Value {
     json!((value * 10_000.0).round() / 10_000.0)
-}
-
-/// The Wilson score interval of `k` successes in `n` trials.
-fn wilson(k: usize, n: usize) -> (f64, f64) {
-    let (k, n) = (k as f64, n as f64);
-    let p = k / n;
-    let z2 = Z95 * Z95;
-    let denominator = 1.0 + z2 / n;
-    let centre = (p + z2 / (2.0 * n)) / denominator;
-    let half = Z95 * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt() / denominator;
-    ((centre - half).max(0.0), (centre + half).min(1.0))
 }
 
 /// The size curves for the window, narrowed to one tier when `complexity`
@@ -122,9 +110,10 @@ pub(in crate::application::agents) fn size_curves(
             let buckets: Vec<Value> = series
                 .buckets
                 .iter()
-                .map(|(&index, &(n, k))| {
-                    let (low, high) = wilson(k, n);
-                    json!({
+                .filter_map(|(&index, &(n, k))| {
+                    // A bucket exists only once a task landed in it, so `n >= 1`.
+                    let [low, high] = statistics::wilson_95(k, n)?;
+                    Some(json!({
                         "bucket": index,
                         "lines_from": (1_u64 << index) - 1,
                         "lines_to": (1_u64 << (index + 1)) - 2,
@@ -135,7 +124,7 @@ pub(in crate::application::agents) fn size_curves(
                         "high": share(high),
                         "drawn": n >= MIN_BUCKET_TASKS,
                         "sparse": k < SPARSE_OUTCOMES,
-                    })
+                    }))
                 })
                 .collect();
             json!({

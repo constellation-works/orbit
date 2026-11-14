@@ -12,12 +12,13 @@ use crate::application::experiment::assignment::{
     EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION,
 };
 use crate::application::experiment::definition::{
-    ExperimentOverlay, experiment_metric_is_review_derived, validate_metric,
+    ExperimentOverlay, Kind, METRIC_SPECS, experiment_metric_is_review_derived, metric_spec,
+    validate_metric,
 };
 use crate::application::experiment::memory_arm_names;
 use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
-    Kind, METRIC_SPECS, Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome, metric_spec,
+    Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome,
 };
 
 use super::model::{
@@ -211,20 +212,7 @@ fn build_readout(
         .primary_metric
         .as_deref()
         .and_then(|name| all_metrics.iter().find(|metric| metric.metric == name));
-    if let Some(primary) = primary
-        && !primary.measured
-    {
-        warnings.push(ReadoutWarning {
-            kind: "primary_unmeasured",
-            message: format!(
-                "the primary metric `{}` has no source series yet, so no verdict can be read on it",
-                primary.metric
-            ),
-        });
-    }
-    if let Some(primary) = primary
-        && primary.measured
-    {
+    if let Some(primary) = primary {
         let active_arms: Vec<&str> = record
             .arms
             .iter()
