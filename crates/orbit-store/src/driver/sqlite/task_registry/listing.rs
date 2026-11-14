@@ -169,6 +169,16 @@ impl TaskRegistryStore {
     /// dependency and relation labels resolve across workspaces without
     /// projecting the whole registry.
     ///
+    /// When `targets` is small (non-empty and at most `ID_CHUNK` ids) the
+    /// workspace step selects only those ids
+    /// (`WHERE workspace_id = ?1 AND task_id IN (...)`, chunked) instead of
+    /// every indexed task of the workspace, so a lookup for `k` targets
+    /// returns at most `k` rows in total: the workspace hits, the
+    /// cross-workspace hits for the remainder, and at most one
+    /// representative per still-missing prefix. An empty target set and a
+    /// large set keep the whole-workspace query, whose callers rely on the
+    /// full workspace projection.
+    ///
     /// Prefix knowledge is derived from a projection's keys
     /// (`TaskReferenceIndex`), so a missing target under a prefix this
     /// workspace does not use is represented by one arbitrary indexed task of
@@ -183,13 +193,31 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut statuses = BTreeMap::new();
 
-        let mut stmt = conn
-            .prepare("SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ?1")
-            .map_err(sqlite_store_error)?;
-        let rows = stmt
-            .query_map([&partition_id], decode_status_row)
-            .map_err(sqlite_store_error)?;
-        collect_statuses(rows, &mut statuses)?;
+        if targets.is_empty() || targets.len() > ID_CHUNK {
+            let mut stmt = conn
+                .prepare("SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ?1")
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map([&partition_id], decode_status_row)
+                .map_err(sqlite_store_error)?;
+            collect_statuses(rows, &mut statuses)?;
+        } else {
+            let target_ids = targets.iter().cloned().collect::<Vec<_>>();
+            for chunk in target_ids.chunks(ID_CHUNK) {
+                let mut sql = String::from(
+                    "SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ? AND task_id IN (",
+                );
+                push_placeholders(&mut sql, chunk.len());
+                sql.push(')');
+                let mut values = vec![partition_id.clone()];
+                values.extend(chunk.iter().cloned());
+                let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
+                let rows = stmt
+                    .query_map(params_from_iter(values.iter()), decode_status_row)
+                    .map_err(sqlite_store_error)?;
+                collect_statuses(rows, &mut statuses)?;
+            }
+        }
 
         let missing = targets
             .iter()

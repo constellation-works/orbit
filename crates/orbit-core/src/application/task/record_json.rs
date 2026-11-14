@@ -212,53 +212,128 @@ pub fn task_show_field_json(
     field: &str,
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
+    task_show_field_json_with_row(runtime, task, None, field, status_by_id)
+}
+
+/// [`task_show_field_json`] over sidecars the caller already hydrated in
+/// `row`: history, comments and artifacts answer from the row instead of
+/// re-reading the store. `row` must belong to `task`. Fields that carry no
+/// sidecar, and every field when `row` is `None`, behave exactly as
+/// [`task_show_field_json`].
+pub(crate) fn task_show_field_json_with_row(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    row: Option<&TaskRow>,
+    field: &str,
+    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
+) -> Result<Value, OrbitError> {
     match field {
         "scheduled_hold" => {
             let held = if task.status == TaskStatus::Backlog
                 && let Some(at) = task.scheduled_after(chrono::Utc::now())
             {
-                !orbit_types::task::schedule_overridden(&runtime.get_task_history(&task.id)?, at)
+                let history_owned;
+                let history: &[orbit_types::task::TaskHistoryEntry] = match row {
+                    Some(row) => &row.history,
+                    None => {
+                        history_owned = runtime.get_task_history(&task.id)?;
+                        &history_owned
+                    }
+                };
+                !orbit_types::task::schedule_overridden(history, at)
             } else {
                 false
             };
             Ok(serde_json::json!(held))
         }
-        "started_at" => Ok(serde_json::json!(orbit_types::task::task_started_at(
-            &runtime.get_task_history(&task.id)?
-        ))),
+        "started_at" => {
+            let history_owned;
+            let history: &[orbit_types::task::TaskHistoryEntry] = match row {
+                Some(row) => &row.history,
+                None => {
+                    history_owned = runtime.get_task_history(&task.id)?;
+                    &history_owned
+                }
+            };
+            Ok(serde_json::json!(orbit_types::task::task_started_at(
+                history
+            )))
+        }
         "experiments" => {
             serde_json::to_value(runtime.task_experiment_assignment_readout(&task.id)?)
                 .map_err(serialize_error("experiments"))
         }
-        "pilot_warnings" => Ok(serde_json::json!(runtime.task_pilot_warning_findings(
-            task,
-            &runtime.get_task_comments(&task.id)?,
-            &|id: &str| task_is_done(runtime, status_by_id, id),
-        ))),
+        "pilot_warnings" => {
+            let comments_owned;
+            let comments: &[orbit_types::task::TaskComment] = match row {
+                Some(row) => &row.comments,
+                None => {
+                    comments_owned = runtime.get_task_comments(&task.id)?;
+                    &comments_owned
+                }
+            };
+            Ok(serde_json::json!(runtime.task_pilot_warning_findings(
+                task,
+                comments,
+                &|id: &str| task_is_done(runtime, status_by_id, id),
+            )))
+        }
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "placement_wait" => Ok(TaskOsReadout::new(runtime)?
             .placement_wait(task)
             .map_or(Value::Null, Value::String)),
+        // Not hydrated: the store read is what surfaces a bundle whose
+        // decision evidence is unreadable (a dangling pilot artifact), which
+        // a list projection must mark unknown rather than answer from the
+        // sidecars alone. `task_show_json` uses the `_in` form separately.
         "open_decisions" => runtime.open_decisions_json(&task.id),
-        "final_recovery" => Ok(super::FinalRecoveryRecord::last(
-            &runtime.get_task_history(&task.id)?,
-            &runtime.get_task_comments(&task.id)?,
-        )
-        .map_or(Value::Null, |record| final_recovery_json(&record))),
+        "final_recovery" => {
+            let history_owned;
+            let comments_owned;
+            let (history, comments): (
+                &[orbit_types::task::TaskHistoryEntry],
+                &[orbit_types::task::TaskComment],
+            ) = match row {
+                Some(row) => (&row.history, &row.comments),
+                None => {
+                    history_owned = runtime.get_task_history(&task.id)?;
+                    comments_owned = runtime.get_task_comments(&task.id)?;
+                    (&history_owned, &comments_owned)
+                }
+            };
+            Ok(super::FinalRecoveryRecord::last(history, comments)
+                .map_or(Value::Null, |record| final_recovery_json(&record)))
+        }
         "completion_hold" => {
-            let history = runtime.get_task_history(&task.id)?;
-            orbit_types::workflow::current_completion_hold(task.status, &history)
+            let history_owned;
+            let history: &[orbit_types::task::TaskHistoryEntry] = match row {
+                Some(row) => &row.history,
+                None => {
+                    history_owned = runtime.get_task_history(&task.id)?;
+                    &history_owned
+                }
+            };
+            orbit_types::workflow::current_completion_hold(task.status, history)
                 .map_or(Ok(Value::Null), |hold| {
                     serde_json::to_value(hold).map_err(serialize_error("completion_hold"))
                 })
         }
-        "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
-            .map_err(serialize_error("comments")),
-        "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)
-            .map_err(serialize_error("history")),
-        "artifacts" => Ok(serialize_task_artifacts(
-            &runtime.get_task_artifact_manifest(&task.id)?,
-        )),
+        "comments" => match row {
+            Some(row) => serde_json::to_value(&row.comments).map_err(serialize_error("comments")),
+            None => serde_json::to_value(runtime.get_task_comments(&task.id)?)
+                .map_err(serialize_error("comments")),
+        },
+        "history" => match row {
+            Some(row) => serde_json::to_value(&row.history).map_err(serialize_error("history")),
+            None => serde_json::to_value(runtime.get_task_history(&task.id)?)
+                .map_err(serialize_error("history")),
+        },
+        "artifacts" => match row {
+            Some(row) => Ok(serialize_task_artifacts(&row.artifacts)),
+            None => Ok(serialize_task_artifacts(
+                &runtime.get_task_artifact_manifest(&task.id)?,
+            )),
+        },
         "resolved_dependencies" | "relations" => {
             let status_by_id = status_by_id.ok_or_else(|| {
                 OrbitError::Execution(format!("missing task status index for {field}"))
@@ -293,13 +368,25 @@ fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> Orb
 
 /// A list projection preserves the row and marks unreadable fields as unknown,
 /// with a warning, rather than discarding every healthy task in the page.
+///
+/// The row and the page status index are the ones `query_task_rows` already
+/// hydrated for this page, so no field re-reads the store and no per-row
+/// status-index query runs.
 pub(crate) fn task_listing_field_json(
     runtime: &OrbitRuntime,
-    task: &Task,
+    row: &TaskRow,
     field: &str,
+    status_by_id: &BTreeMap<String, TaskStatus>,
     warnings: &mut Vec<String>,
 ) -> Result<Value, OrbitError> {
-    let result = super::task_fields_response_json(runtime, task, &[field.to_string()]);
+    let result = super::write_response::task_fields_response_json_projected_hydrated(
+        runtime,
+        &row.task,
+        Some(row),
+        &[field.to_string()],
+        false,
+        Some(status_by_id),
+    );
     Ok(super::listing::task_bundle_scan_result(result, warnings)?.unwrap_or(Value::Null))
 }
 

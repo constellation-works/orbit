@@ -335,9 +335,12 @@ pub struct TaskPage {
     pub total: usize,
     /// Matches ignoring `scan_before`. Equals [`Self::total`] when no cursor.
     pub total_without_cursor: usize,
-    /// Dependency statuses captured after index freshness/rebuild work: every
-    /// task in the listed workspace plus each relation target the hydrated
-    /// rows name, wherever that target is registered.
+    /// Dependency statuses captured after index freshness/rebuild work.
+    /// For a small relation-target set this is the bounded projection of
+    /// those targets (wherever registered, plus one representative per
+    /// still-missing prefix, as `task_status_index_for` returns it); for a
+    /// large or empty set it is every task in the listed workspace plus each
+    /// relation target the hydrated rows name, wherever registered.
     pub status_by_id: std::collections::BTreeMap<String, TaskStatus>,
 }
 
