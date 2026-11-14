@@ -88,24 +88,24 @@ pub(in crate::api) async fn ship_workflow_action(
             Err(e) => return bad_request(e.to_string()),
         };
     match blocking("ship workflow", move || {
-        let invoke = runtime.submit_ship_run_with_containment(
+        let invoke = runtime.submit_ship_run(orbit_core::ShipRunRequest {
             mode,
-            body.base.as_deref(),
-            &body.task_ids,
+            base_branch: body.base.as_deref(),
+            task_ids: &body.task_ids,
             // [ORB-11187] Completion authority is granted per invocation at the CLI
             // (`orbit run ship --complete`); the dashboard does not offer it, so
             // this endpoint always ends successful work at `review`.
-            orbit_core::CompletionPolicy::Review,
-            &[],
-            Some("dashboard"),
-            body.claim_token.as_deref(),
-            JobRunTrigger::dashboard(),
+            completion: orbit_core::CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("dashboard"),
+            claim_token: body.claim_token.as_deref(),
+            trigger: JobRunTrigger::dashboard(),
             // Strict worker containment is a CLI-only flag.
-            false,
-            body.review,
+            strict_containment: false,
+            review: body.review,
             // The schedule override is a CLI-only operator flag.
-            false,
-        )?;
+            ignore_schedule: false,
+        })?;
         let mut shipped = json!({
             "workflow": "ship",
             "job_id": invoke.job_name,
@@ -372,21 +372,21 @@ pub(in crate::api) async fn auto_drain_workflow_action(
         return authorization_denied(denial);
     }
     start_blocking("auto-drain workflow", move || {
-        let invoke = runtime.submit_workspace_auto_run_with_mode(
+        let invoke = runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
             for_seconds,
-            body.concurrency,
+            max_active_leaf_runs: body.concurrency,
             completion,
-            &body.allow_crew,
-            &body.complexity_crews(),
-            Some("dashboard"),
-            body.claim_token.as_deref(),
-            JobRunTrigger::dashboard(),
-            body.strict_worker_containment,
+            allowed_crews: &body.allow_crew,
+            complexity_crews: body.complexity_crews(),
+            actor: Some("dashboard"),
+            claim_token: body.claim_token.as_deref(),
+            trigger: JobRunTrigger::dashboard(),
+            strict_containment: body.strict_worker_containment,
             approve_proposed,
             auto_fix,
-            body.auto_concurrency,
-            body.review,
-        )?;
+            auto_concurrency: body.auto_concurrency,
+            review: body.review,
+        })?;
         Ok(runtime
             .auto_drain_submission_receipt(
                 &invoke,

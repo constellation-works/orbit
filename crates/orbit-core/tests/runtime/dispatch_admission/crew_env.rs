@@ -410,21 +410,21 @@ env = ["OPENAI_API_KEY={SOURCE}"]
                     JobRunTrigger::cli(),
                 )
             } else {
-                runtime.submit_workspace_auto_run_with_mode(
-                    Some(60),
-                    Some(1),
-                    CompletionPolicy::Review,
-                    names,
-                    &Default::default(),
-                    None,
-                    None,
-                    JobRunTrigger::cli(),
-                    false,
-                    false,
-                    false,
-                    None,
-                    None,
-                )
+                runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+                    for_seconds: Some(60),
+                    max_active_leaf_runs: Some(1),
+                    completion: CompletionPolicy::Review,
+                    allowed_crews: names,
+                    complexity_crews: Default::default(),
+                    actor: None,
+                    claim_token: None,
+                    trigger: JobRunTrigger::cli(),
+                    strict_containment: false,
+                    approve_proposed: false,
+                    auto_fix: false,
+                    auto_concurrency: None,
+                    review: None,
+                })
             }
         };
         for (runtime, pull) in [(&owner, false), (&follower, true)] {

@@ -97,19 +97,19 @@ fn ship(
     task: &str,
     ignore_schedule: bool,
 ) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_ship_run_with_containment(
-        ShipMode::Local,
-        Some("main"),
-        &[task.to_string()],
-        CompletionPolicy::Review,
-        &[],
-        Some("operator:fixture"),
-        None,
-        JobRunTrigger::cli(),
-        false,
-        None,
+    runtime.submit_ship_run(orbit_core::ShipRunRequest {
+        mode: ShipMode::Local,
+        base_branch: Some("main"),
+        task_ids: &[task.to_string()],
+        completion: CompletionPolicy::Review,
+        allowed_crews: &[],
+        actor: Some("operator:fixture"),
+        claim_token: None,
+        trigger: JobRunTrigger::cli(),
+        strict_containment: false,
+        review: None,
         ignore_schedule,
-    )
+    })
 }
 
 /// `orbit.workflow.ship` as an operator session calls it.
@@ -291,19 +291,19 @@ fn a_fractional_schedule_retains_its_instant_through_show_and_override() {
 fn the_override_needs_named_tasks() {
     let (_root, runtime) = super::review_run_option::open(ShipMode::Local, CONFIG, true);
     let refused = runtime
-        .submit_ship_run_with_containment(
-            ShipMode::Local,
-            Some("main"),
-            &[],
-            CompletionPolicy::Review,
-            &[],
-            Some("operator:fixture"),
-            None,
-            JobRunTrigger::cli(),
-            false,
-            None,
-            true,
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: &[],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("operator:fixture"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            strict_containment: false,
+            review: None,
+            ignore_schedule: true,
+        })
         .expect_err("an auto ship has no task to override");
     assert!(
         matches!(&refused, OrbitError::InvalidInput(message) if message.contains("--ignore-schedule")),

@@ -121,6 +121,101 @@ pub enum ShipModeResolutionProfile {
     BoundRuntimeOnly,
 }
 
+/// One `ship` submission: what to ship and the authority this run carries.
+///
+/// Named fields replace the former positional list, where three adjacent
+/// `bool`s granted different authority. Fill the options a surface does not
+/// offer with `..ShipRunRequest::default()`.
+#[derive(Debug, Clone)]
+pub struct ShipRunRequest<'a> {
+    pub mode: crate::application::workflow::ShipMode,
+    /// Base branch override; `None` uses the workspace's `[workflow] base_branch`.
+    pub base_branch: Option<&'a str>,
+    /// Explicit task selection; empty selects auto (backlog-discovery) mode.
+    pub task_ids: &'a [String],
+    pub completion: crate::application::workflow::CompletionPolicy,
+    /// Run-scoped crew restriction; empty means unrestricted.
+    pub allowed_crews: &'a [String],
+    pub actor: Option<&'a str>,
+    pub claim_token: Option<&'a str>,
+    /// The submitting surface's provenance [ORB-13016].
+    pub trigger: JobRunTrigger,
+    /// CLI-only strict worker containment override.
+    pub strict_containment: bool,
+    /// Run-scoped `--review` request [ORB-16572].
+    pub review: Option<orbit_types::workflow::ReviewLayer>,
+    /// CLI-only `--ignore-schedule` operator override.
+    pub ignore_schedule: bool,
+}
+
+impl Default for ShipRunRequest<'_> {
+    fn default() -> Self {
+        Self {
+            mode: crate::application::workflow::ShipMode::Pr,
+            base_branch: None,
+            task_ids: &[],
+            completion: crate::application::workflow::CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: None,
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            strict_containment: false,
+            review: None,
+            ignore_schedule: false,
+        }
+    }
+}
+
+/// One workspace auto-drain submission: the window and the authority this
+/// drain carries for every pass.
+///
+/// Named fields replace the former positional list, where three adjacent
+/// `bool`s granted different authority. Fill the options a surface does not
+/// offer with `..AutoDrainRequest::default()`.
+#[derive(Debug, Clone)]
+pub struct AutoDrainRequest<'a> {
+    /// Drain window [ORB-10819]; `None` (or zero) means one tick.
+    pub for_seconds: Option<u64>,
+    /// Concurrency ceiling override; omitted uses the job's own default.
+    pub max_active_leaf_runs: Option<u32>,
+    pub completion: crate::application::workflow::CompletionPolicy,
+    /// Run-scoped crew restriction [ORB-11242]; empty means unrestricted.
+    pub allowed_crews: &'a [String],
+    pub complexity_crews: orbit_config::ComplexityCrewPools,
+    pub actor: Option<&'a str>,
+    pub claim_token: Option<&'a str>,
+    /// The submitting surface's provenance [ORB-13016].
+    pub trigger: JobRunTrigger,
+    pub strict_containment: bool,
+    /// Approval authority over qualifying `proposed` tasks [ORB-14117].
+    pub approve_proposed: bool,
+    /// Repair authority over the PRs this drain opens; never merge authority.
+    pub auto_fix: bool,
+    pub auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
+    /// Run-scoped `--review` request [ORB-16572].
+    pub review: Option<orbit_types::workflow::ReviewLayer>,
+}
+
+impl Default for AutoDrainRequest<'_> {
+    fn default() -> Self {
+        Self {
+            for_seconds: None,
+            max_active_leaf_runs: None,
+            completion: crate::application::workflow::CompletionPolicy::Review,
+            allowed_crews: &[],
+            complexity_crews: orbit_config::ComplexityCrewPools::default(),
+            actor: None,
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            strict_containment: false,
+            approve_proposed: false,
+            auto_fix: false,
+            auto_concurrency: None,
+            review: None,
+        }
+    }
+}
+
 impl OrbitRuntime {
     /// Resolve the effective ship mode for a `ship` invocation.
     ///
@@ -217,20 +312,23 @@ impl OrbitRuntime {
     ///
     /// [ORB-13016] `trigger` is the submitting surface's provenance, recorded
     /// on the run so dashboard and MCP launches are not reported as `cli`.
-    // Existing public positional API; keep callers stable while submission is composed internally.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `strict_containment` is a CLI-only override: the marker is persisted
+    /// with this run's input and its worker passes the policy through the
+    /// environment to any child workers it starts. [ORB-16572] `review` is
+    /// the run's `--review` request, refused here, before any run exists,
+    /// on the local route, against the other workspace layer, or without a
+    /// reviewer crew. A named `backlog` task whose `not_before` is still
+    /// ahead is refused with [`OrbitError::TaskScheduled`];
+    /// `ignore_schedule` is the CLI-only operator override: once every
+    /// other check passes, it records a `schedule_overridden` history
+    /// event for each such task before the run is submitted. The tool and
+    /// dashboard surfaces always pass `false` for both CLI-only flags.
     pub fn submit_ship_run(
         &self,
-        mode: crate::application::workflow::ShipMode,
-        base_branch: Option<&str>,
-        task_ids: &[String],
-        completion: crate::application::workflow::CompletionPolicy,
-        allowed_crews: &[String],
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-        trigger: JobRunTrigger,
+        request: ShipRunRequest<'_>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        self.submit_ship_run_with_containment(
+        let ShipRunRequest {
             mode,
             base_branch,
             task_ids,
@@ -239,45 +337,10 @@ impl OrbitRuntime {
             actor,
             claim_token,
             trigger,
-            false,
-            None,
-            false,
-        )
-    }
-
-    /// Submit a ship run with a CLI-only strict containment override.
-    /// The marker is persisted with this run's input; its worker passes the
-    /// policy through the environment to any child workers it starts.
-    ///
-    /// [ORB-16572] `review` is the run's `--review` request: a review layer
-    /// before landing this run adds where workspace policy applies none. It is
-    /// refused here, before any run exists, on the local route, against the
-    /// other workspace layer, or without a reviewer crew; the layer workspace
-    /// policy already applies is accepted unchanged.
-    ///
-    /// A named `backlog` task whose `not_before` is still ahead is refused
-    /// with [`OrbitError::TaskScheduled`]. `ignore_schedule` is the CLI-only
-    /// operator override (`orbit run ship --ignore-schedule`): once every
-    /// other check passes, it records a `schedule_overridden` history event
-    /// for each such task before the run is submitted, which lifts the hold
-    /// on every admission route for that scheduled time. The tool and
-    /// dashboard surfaces always pass `false`.
-    // Public API: orbit-cli, orbit-web and the tool host pass these 11 positional arguments; a struct changes the signature.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_ship_run_with_containment(
-        &self,
-        mode: crate::application::workflow::ShipMode,
-        base_branch: Option<&str>,
-        task_ids: &[String],
-        completion: crate::application::workflow::CompletionPolicy,
-        allowed_crews: &[String],
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-        trigger: JobRunTrigger,
-        strict_containment: bool,
-        review: Option<orbit_types::workflow::ReviewLayer>,
-        ignore_schedule: bool,
-    ) -> Result<PipelineInvokeResult, OrbitError> {
+            strict_containment,
+            review,
+            ignore_schedule,
+        } = request;
         if ignore_schedule && task_ids.is_empty() {
             return Err(OrbitError::InvalidInput(
                 "`--ignore-schedule` starts named scheduled tasks; pass the task ids to ship"
@@ -440,27 +503,13 @@ impl OrbitRuntime {
     /// the window where workspace policy applies none; every child it admits
     /// inherits the captured layer. It is refused before submission when the
     /// workspace delivers locally, and as on ship otherwise.
-    // Public API: orbit-cli, orbit-web and the desktop drain pass these 13 positional arguments; a struct changes the signature.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_workspace_auto_run_with_mode(
+    pub fn submit_workspace_auto_run(
         &self,
-        for_seconds: Option<u64>,
-        max_active_leaf_runs: Option<u32>,
-        completion: crate::application::workflow::CompletionPolicy,
-        allowed_crews: &[String],
-        complexity_crews: &orbit_config::ComplexityCrewPools,
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-        trigger: JobRunTrigger,
-        strict_containment: bool,
-        approve_proposed: bool,
-        auto_fix: bool,
-        auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
-        review: Option<orbit_types::workflow::ReviewLayer>,
+        request: AutoDrainRequest<'_>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        crate::application::workflow::validate_drain_window(for_seconds)?;
-        self.validate_strict_worker_containment(strict_containment)?;
-        self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
+        crate::application::workflow::validate_drain_window(request.for_seconds)?;
+        self.validate_strict_worker_containment(request.strict_containment)?;
+        self.require_workspace_claim("orbit.workflow.auto", request.claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
         // replica executes through pull instead of running one locally.
         self.admit_explicit_drain_entry(
@@ -468,29 +517,29 @@ impl OrbitRuntime {
             &[],
         )?;
         self.drain_git_protection_preflight()?;
-        let crews = self.drain_crews_runnable_here(self.canonical_allowed_crews(allowed_crews)?)?;
+        let crews =
+            self.drain_crews_runnable_here(self.canonical_allowed_crews(request.allowed_crews)?)?;
         let workflow_job_id = orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB;
-        let mut input = workspace_auto_run_input(
-            for_seconds,
-            max_active_leaf_runs,
-            completion,
-            &crews,
-            approve_proposed,
-            auto_fix,
-        )?;
-        if let Some(mode) = auto_concurrency {
+        let mut input = workspace_auto_run_input(&request, &crews)?;
+        if let Some(mode) = request.auto_concurrency {
             input["auto_concurrency"] = json!(mode);
         }
-        Self::set_auto_crew_overrides(&mut input, complexity_crews);
-        if strict_containment {
+        Self::set_auto_crew_overrides(&mut input, &request.complexity_crews);
+        if request.strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
         self.admit_review_request(
             &mut input,
-            review,
+            request.review,
             self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
         )?;
-        self.submit_pipeline_run_with_trigger(workflow_job_id, input, None, actor, trigger)
+        self.submit_pipeline_run_with_trigger(
+            workflow_job_id,
+            input,
+            None,
+            request.actor,
+            request.trigger,
+        )
     }
 
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {

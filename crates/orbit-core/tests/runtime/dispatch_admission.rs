@@ -956,16 +956,17 @@ fn as_operator(runtime: &OrbitRuntime, tool: &str, input: Value) -> Value {
 /// submission that passes the claim gate fails next on the missing asset.
 fn ship(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
     runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            &[],
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: &[],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
             claim_token,
-            JobRunTrigger::cli(),
-        )
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("a fixture without job assets never submits a run")
 }
 
@@ -1625,16 +1626,17 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         "explicit selection carries the throttle warning"
     );
     let explicit_submission = runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            std::slice::from_ref(&queued.id),
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: std::slice::from_ref(&queued.id),
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("the fixture has no delivery job asset");
     assert!(matches!(explicit_submission, OrbitError::NotFound { .. }));
 

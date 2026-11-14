@@ -5,7 +5,7 @@ use crate::application::job::{
     DrainWorkerLimitRequest,
 };
 use crate::application::workflow::drain_window_input_error;
-use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
+use crate::{AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, optional_string_list_alias, required_string,
@@ -107,19 +107,19 @@ pub(in crate::adapter::tool_host) fn control(
                 .transpose()?
                 .unwrap_or(false);
             let review = super::super::workflow_tools::review_layer(&input)?;
-            let run = runtime.submit_workspace_auto_run_with_mode(
-                Some(seconds),
-                concurrency,
+            let run = runtime.submit_workspace_auto_run(AutoDrainRequest {
+                for_seconds: Some(seconds),
+                max_active_leaf_runs: concurrency,
                 completion,
-                &[],
-                &Default::default(),
-                Some("desktop"),
-                claim.as_deref(),
+                allowed_crews: &[],
+                complexity_crews: Default::default(),
+                actor: Some("desktop"),
+                claim_token: claim.as_deref(),
                 trigger,
-                false,
+                strict_containment: false,
                 approve_proposed,
-                false,
-                input
+                auto_fix: false,
+                auto_concurrency: input
                     .get("auto_concurrency")
                     .map(|value| {
                         serde_json::from_value(value.clone())
@@ -127,7 +127,7 @@ pub(in crate::adapter::tool_host) fn control(
                     })
                     .transpose()?,
                 review,
-            )?;
+            })?;
             runtime
                 .auto_drain_submission_receipt(
                     &run,

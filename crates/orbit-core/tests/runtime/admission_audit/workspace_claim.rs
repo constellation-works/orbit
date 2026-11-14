@@ -53,16 +53,17 @@ fn a_refused_dispatch_is_recorded_as_denied_without_the_holders_token() {
     let token = acquire_claim(&runtime, "claude");
     let task_id = add_backlog_task(&runtime);
 
-    let _ = runtime.submit_ship_run(
-        ShipMode::Local,
-        Some("main"),
-        std::slice::from_ref(&task_id),
-        CompletionPolicy::Review,
-        &[],
-        Some("test"),
-        None,
-        orbit_types::workflow::JobRunTrigger::cli(),
-    );
+    let _ = runtime.submit_ship_run(orbit_core::ShipRunRequest {
+        mode: ShipMode::Local,
+        base_branch: Some("main"),
+        task_ids: std::slice::from_ref(&task_id),
+        completion: CompletionPolicy::Review,
+        allowed_crews: &[],
+        actor: Some("test"),
+        claim_token: None,
+        trigger: orbit_types::workflow::JobRunTrigger::cli(),
+        ..Default::default()
+    });
 
     let events = runtime
         .list_audit_events(None, None, None, None, 200)

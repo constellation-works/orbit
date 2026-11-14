@@ -80,9 +80,10 @@ pub use pilot_submit::{
     TaskPilotRefusal, TaskPilotSubmission, TaskPilotSubmissionDashboardView, TaskPilotSubmitError,
 };
 pub use pipeline::{
-    AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt, AutoDrainSubmissionSource,
-    PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
-    PipelineWorkerLogSnapshot, ShipModeResolutionProfile, SubmissionKind, SubmissionNotices,
+    AutoDrainRequest, AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt,
+    AutoDrainSubmissionSource, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult,
+    PipelineWaitStatus, PipelineWorkerLogSnapshot, ShipModeResolutionProfile, ShipRunRequest,
+    SubmissionKind, SubmissionNotices,
 };
 pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;

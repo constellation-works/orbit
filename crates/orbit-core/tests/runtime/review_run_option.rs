@@ -95,40 +95,40 @@ fn ship(
     mode: ShipMode,
     review: Option<ReviewLayer>,
 ) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_ship_run_with_containment(
+    runtime.submit_ship_run(orbit_core::ShipRunRequest {
         mode,
-        Some("main"),
-        &[],
-        CompletionPolicy::Review,
-        &[],
-        Some("test"),
-        None,
-        JobRunTrigger::cli(),
-        false,
+        base_branch: Some("main"),
+        task_ids: &[],
+        completion: CompletionPolicy::Review,
+        allowed_crews: &[],
+        actor: Some("test"),
+        claim_token: None,
+        trigger: JobRunTrigger::cli(),
+        strict_containment: false,
         review,
-        false,
-    )
+        ignore_schedule: false,
+    })
 }
 
 fn drain(
     runtime: &OrbitRuntime,
     review: Option<ReviewLayer>,
 ) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_workspace_auto_run_with_mode(
-        Some(600),
-        Some(1),
-        CompletionPolicy::Review,
-        &[],
-        &Default::default(),
-        Some("test"),
-        None,
-        JobRunTrigger::cli(),
-        false,
-        false,
-        false,
-        None,
+    runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+        for_seconds: Some(600),
+        max_active_leaf_runs: Some(1),
+        completion: CompletionPolicy::Review,
+        allowed_crews: &[],
+        complexity_crews: Default::default(),
+        actor: Some("test"),
+        claim_token: None,
+        trigger: JobRunTrigger::cli(),
+        strict_containment: false,
+        approve_proposed: false,
+        auto_fix: false,
+        auto_concurrency: None,
         review,
-    )
+    })
 }
 
 fn refusal(result: Result<orbit_core::PipelineInvokeResult, OrbitError>) -> String {

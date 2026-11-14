@@ -101,16 +101,17 @@ fn seed(runtime: &OrbitRuntime, title: &str, tags: &[&str]) -> String {
 /// task admission lets through fails next, on the missing asset.
 fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
     runtime
-        .submit_ship_run(
-            ShipMode::Pr,
-            Some("main"),
-            &[task.to_string()],
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Pr,
+            base_branch: Some("main"),
+            task_ids: &[task.to_string()],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("a fixture without job assets never submits a run")
 }
 
@@ -582,16 +583,17 @@ fn bundled_pr_submission_refuses_before_any_delivery_effect() {
     // Ship selects several tasks for separate singleton leaves; its coordinator
     // remains admissible and does not bind either task during submission.
     let ship_error = runtime
-        .submit_ship_run(
-            ShipMode::Pr,
-            Some("main"),
-            &ids,
-            CompletionPolicy::Review,
-            &[],
-            None,
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Pr,
+            base_branch: Some("main"),
+            task_ids: &ids,
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: None,
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .unwrap_err();
     assert!(
         ship_error.to_string().contains("spawn pipeline worker"),

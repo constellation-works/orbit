@@ -132,13 +132,14 @@ pub(crate) fn run_definition_snapshot_path(
 /// that predated it. Pure, so the durable contract this shape represents can
 /// be asserted without submitting a run.
 pub(crate) fn workspace_auto_run_input(
-    for_seconds: Option<u64>,
-    max_active_leaf_runs: Option<u32>,
-    completion: crate::application::workflow::CompletionPolicy,
+    request: &crate::application::job::AutoDrainRequest<'_>,
     allowed_crews: &[String],
-    approve_proposed: bool,
-    auto_fix: bool,
 ) -> Result<Value, OrbitError> {
+    let for_seconds = request.for_seconds;
+    let max_active_leaf_runs = request.max_active_leaf_runs;
+    let completion = request.completion;
+    let approve_proposed = request.approve_proposed;
+    let auto_fix = request.auto_fix;
     if max_active_leaf_runs == Some(0) {
         return Err(OrbitError::InvalidInput(
             "concurrency must be at least 1".to_string(),
