@@ -177,7 +177,8 @@ without a PR. A changed base or evidence requires fresh validation.
 The report-free alternative is the `already_resolved` outcome. When the tests that
 show the base resolves the task run only outside the agent sandbox, the
 implementer may return `already_resolved`
-`{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` with its
+`{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` or
+`{"selectors": ["cargo test -p <crate> --lib [<filter>]"]}` with its
 execution summary and no `no_diff_artifacts`. Commit settles that as
 `verified_already_resolved`, embedding the selectors and summary, when neither
 clean-tree report artifact exists, and the leaf hands off `NoDiff` without a PR.

@@ -990,7 +990,8 @@ fn a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason()
 
 /// A held host test runs only from its allowlist. A shell metacharacter, any
 /// other program and any argument outside `cargo test -p <crate> --test
-/// <target> [<filter>]` are refused with a typed reason before any host
+/// <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]` are refused
+/// with a typed reason before any host
 /// gate, so nothing runs even where namespaces are unavailable.
 #[test]
 fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {

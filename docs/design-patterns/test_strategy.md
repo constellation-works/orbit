@@ -889,6 +889,19 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-core`'s
+  `application/review/tests/evidence.rs::a_package_wide_deferral_is_covered_by_the_same_lib_filter`
+  is a criterion 1 regression for ORB-24325. It drives `covers_deferral`, the
+  selector match the review gate uses, across the package-wide record shapes
+  and the close non-matches (another package, a `--test` requirement, a
+  `--lib` requirement against a `--test` record, a record that already names
+  a target selector, a module-only filter). The function is `pub(super)` and
+  takes the requirement, the validation record and one notice. A crate-root
+  integration test would have to settle a full review to observe the same
+  match, and the integration `--test` shape already has that settlement
+  coverage. This case failed before `--lib` was a recorded package scope and
+  passes after.
+
 - `orbit-engine`'s `executor/automation/vcs/operations/tests/push_retry.rs` cases
   `timed_out_evidence_push_lands_when_the_ref_names_the_commit`,
   `timed_out_evidence_push_fails_when_the_ref_is_absent`,

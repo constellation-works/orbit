@@ -663,7 +663,8 @@ machine stays a `utility_warnings` finding for an operator to arrange.
 
 A claimed leaf that finds its base already resolves such a task hands off
 `NoDiff` with an `already_resolved` outcome naming `cargo test -p <crate>
---test <target> [<filter>]` selectors. Its claim host replays each on the base
+--test <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]`
+selectors. Its claim host replays each on the base
 outside the agent sandbox and pins the passing logs for the owner, so the task
 settles without a PR; a failing replay fails the claim with its output, and an
 empty list or a selector that runs no test is refused.

@@ -200,6 +200,157 @@ fn a_skipped_deferred_or_empty_run_is_missing_evidence_never_a_pass() {
     );
 }
 
+/// [ORB-24325] `cargo test -p <crate> --lib [<filter>]` is admitted and the
+/// host replays that argv with `-- --nocapture`. A run of that shape that
+/// skips, defers or passes no test is not evidence.
+#[test]
+fn a_lib_unit_test_target_is_admitted_and_replayed() {
+    let command = "cargo test -p orbit-runtime --lib plugin::broker::tests::sandbox";
+    let admitted = HostSandboxCommand::admit(command, &[])
+        .unwrap_or_else(|refusal| panic!("lib unit target is admitted: {refusal:?}"));
+    assert!(
+        matches!(
+            admitted,
+            HostSandboxCommand::CargoLibTest {
+                ref package,
+                filter: Some(ref filter),
+            } if package == "orbit-runtime" && filter == "plugin::broker::tests::sandbox"
+        ),
+        "{admitted:?}"
+    );
+    let host = "cargo test -p orbit-runtime --lib plugin::broker::tests::sandbox -- --nocapture";
+    assert_eq!(admitted.host_command(), host);
+    assert_eq!(
+        HostSandboxCommand::admit(
+            "cargo test --lib plugin::broker::tests::sandbox -p orbit-runtime",
+            &[]
+        )
+        .map(|command| command.host_command()),
+        Ok(host.to_string())
+    );
+    assert_eq!(
+        HostSandboxCommand::admit(
+            "cargo test -p orbit-runtime --lib -- plugin::broker::tests::sandbox",
+            &[]
+        )
+        .map(|command| command.host_command()),
+        Ok(host.to_string())
+    );
+    assert_eq!(
+        HostSandboxCommand::admit(
+            "cargo test --package orbit-runtime --lib plugin::broker::tests::sandbox",
+            &[]
+        )
+        .map(|command| command.host_command()),
+        Ok(host.to_string())
+    );
+    assert_eq!(
+        HostSandboxCommand::admit("cargo test -p orbit-runtime --lib", &[])
+            .map(|command| command.host_command()),
+        Ok("cargo test -p orbit-runtime --lib -- --nocapture".to_string())
+    );
+
+    let passed = "running 1 test\ntest probe ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n";
+    assert_eq!(
+        judge_host_test_output(&admitted, true, false, passed),
+        Ok(1)
+    );
+    let reason = |output: &str| {
+        judge_host_test_output(&admitted, true, false, output)
+            .expect_err(output)
+            .reason
+    };
+    assert_eq!(
+        reason(
+            "  DEFERRED: bubblewrap unavailable: plugin::broker::tests::sandbox: denied\ntest result: ok. 1 passed; 0 failed"
+        ),
+        HostEvidenceReason::SelfSkipped
+    );
+    assert_eq!(
+        reason(
+            "DEFERRED: bubblewrap unavailable: plugin::broker::tests::sandbox: No permissions to create a new namespace\ntest result: ok. 1 passed"
+        ),
+        HostEvidenceReason::SandboxUnavailable
+    );
+    assert_eq!(
+        reason("SKIP: recovery agent kernel launch\ntest result: ok. 1 passed; 0 failed"),
+        HostEvidenceReason::SelfSkipped
+    );
+    // The seatbelt wording is also a sandbox-unavailable marker, so it is
+    // refused before the skip prefix, as an integration target is.
+    assert_eq!(
+        reason(
+            "SKIP: sandbox-exec cannot apply a profile: plugin::broker::tests::sandbox: denied\ntest result: ok. 1 passed"
+        ),
+        HostEvidenceReason::SandboxUnavailable
+    );
+    assert_eq!(
+        reason(
+            "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out"
+        ),
+        HostEvidenceReason::NoTestsRan
+    );
+}
+
+/// Neighbouring `--lib` shapes stay outside the allowlist. An OS mismatch is
+/// not an admit decision: `host_evidence_satisfies_only_the_os_its_requirement_names`
+/// still refuses evidence from the other host.
+#[test]
+fn a_lib_unit_shape_refuses_its_neighbours() {
+    let refused = |command: &str| {
+        HostSandboxCommand::admit(command, &[])
+            .expect_err(command)
+            .reason
+    };
+    for command in [
+        "cargo test -p orbit-runtime --lib filter; true",
+        "cargo test -p orbit-runtime --lib filter && true",
+        "cargo test -p orbit-runtime --lib $(whoami)",
+        "cargo test -p 'orbit-runtime' --lib filter",
+    ] {
+        assert_eq!(
+            refused(command),
+            HostEvidenceReason::ShellMetacharacter,
+            "{command}"
+        );
+    }
+    for command in [
+        "make test",
+        "cargo build -p orbit-runtime --lib",
+        "sh -c true",
+    ] {
+        assert_eq!(
+            refused(command),
+            HostEvidenceReason::CommandNotAllowed,
+            "{command}"
+        );
+    }
+    for command in [
+        "cargo test -p orbit-runtime --lib --bins",
+        "cargo test -p orbit-runtime --lib --all-targets",
+        "cargo test -p orbit-runtime --lib --workspace",
+        "cargo test -p orbit-runtime --lib --features=x",
+        "cargo test -p orbit-runtime --lib --release",
+        "cargo test -p orbit-runtime --lib -Z",
+        "cargo test -p orbit-runtime --lib --test sandbox",
+        "cargo test -p orbit-runtime --test sandbox --lib",
+        "cargo test --lib plugin::broker::tests::sandbox",
+        "cargo test --lib",
+        "cargo test -p orbit-runtime -p orbit-core --lib filter",
+        "cargo test -p orbit-runtime --lib --lib filter",
+        "cargo test -p orbit-runtime --lib one two",
+        "cargo test -p orbit-runtime --lib -filter",
+        "cargo test -p orbit-runtime --lib -- -filter",
+        "cargo test -p orbit-runtime --lib -- one two",
+    ] {
+        assert_eq!(
+            refused(command),
+            HostEvidenceReason::ArgumentNotAllowed,
+            "{command}"
+        );
+    }
+}
+
 /// One requirement shape serves both hosts: a result counts only for the OS
 /// its requirement names, so a Linux run never satisfies a macOS requirement
 /// and the reverse.

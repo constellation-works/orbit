@@ -583,6 +583,12 @@ When a broader run, such as `cargo test -p <crate> --test <target> <module>`,
 defers some of its tests, name each one as a `host_sandbox_test` requirement
 whose command is `cargo test -p <crate> --test <target> <test>`. Use the same
 package and target, and the full test path the notice prints as the filter.
+A package-wide run, `cargo test -p <crate>` with no target selector, that
+defers a library unit test is named the same way with
+`cargo test -p <crate> --lib <test>`: the same package and that exact filter.
+A `--test` requirement does not cover the package-wide run, and a `--lib`
+requirement does not cover a `--test` run. A broader command that itself
+carries `--lib` or another target selector stays uncovered.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
@@ -702,8 +708,9 @@ claimed leaf's host could not run it — is fulfilled by a Linux owner whose
 host can create Bubblewrap namespaces. The owner's clock sweep dispatches
 `review_evidence_fulfilment_pipeline` for it, one run at a time, and stands
 down on a follower, a worker, another platform or a host without namespaces.
-The run admits only an exact owner-required validation command or
-`cargo test -p <crate> --test <target> [<filter>]`, written in
+The run admits only an exact owner-required validation command,
+`cargo test -p <crate> --test <target> [<filter>]`, or
+`cargo test -p <crate> --lib [<filter>]`, written in
 `[A-Za-z0-9._/:@+=-]` and spaces. A single `--` immediately before the
 one filter is also admitted and normalized to the same host command;
 a bare `--`, further arguments and test-harness options remain refused.

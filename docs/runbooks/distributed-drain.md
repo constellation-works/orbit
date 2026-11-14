@@ -949,7 +949,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   The report-free route [ORB-22407]: when the tests that show the base already
   resolves the task run only outside the agent sandbox, the implementer returns
   `already_resolved`
-  `{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` with its
+  `{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` or
+  `{"selectors": ["cargo test -p <crate> --lib [<filter>]"]}` with its
   execution summary and no `no_diff_artifacts`. Commit settles that as
   `verified_already_resolved`, embedding the selectors and summary, when neither
   clean-tree report artifact exists. `claim_validate` then runs the required

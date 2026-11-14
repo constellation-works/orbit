@@ -130,6 +130,13 @@ pub enum HostSandboxCommand {
         target: String,
         filter: Option<String>,
     },
+    /// `cargo test -p <crate> --lib [<filter>]`: the crate's library unit
+    /// tests, optionally filtered to one test. A single `--` may precede the
+    /// filter. Not combined with `--test` or any other cargo option.
+    CargoLibTest {
+        package: String,
+        filter: Option<String>,
+    },
     /// One of the owner's captured required validation commands, verbatim.
     /// The leaf's own validation step runs the same command on the host.
     RequiredValidation(String),
@@ -137,7 +144,8 @@ pub enum HostSandboxCommand {
 
 impl HostSandboxCommand {
     /// Admit `command` or refuse it with a typed reason. The allowlist is
-    /// closed: the `cargo test` shape above, or an exact entry of
+    /// closed: `cargo test -p <crate> --test <target> [<filter>]`,
+    /// `cargo test -p <crate> --lib [<filter>]`, or an exact entry of
     /// `required_validation_commands` (the owner's captured list).
     pub fn admit(
         command: &str,
@@ -171,33 +179,80 @@ impl HostSandboxCommand {
             return Err(HostEvidenceRefusal::new(
                 R::CommandNotAllowed,
                 format!(
-                    "`{canonical}` is neither `cargo test -p <crate> --test <target> [<filter>]` \
-                     nor one of the owner's required validation commands"
+                    "`{canonical}` is neither `cargo test -p <crate> --test <target> [<filter>]`, \
+                     `cargo test -p <crate> --lib [<filter>]`, nor one of the owner's required \
+                     validation commands"
                 ),
             ));
         }
         let mut package = None;
         let mut target = None;
+        let mut lib = false;
         let mut filter = None;
         let mut rest = words[2..].iter();
         while let Some(word) = rest.next() {
-            let slot = match *word {
-                "-p" | "--package" => &mut package,
-                "--test" => &mut target,
+            match *word {
+                "-p" | "--package" => {
+                    let Some(value) = rest.next().filter(|value| !value.starts_with('-')) else {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            format!("`{word}` needs a value"),
+                        ));
+                    };
+                    if package.replace(value.to_string()).is_some() {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            format!("`{word}` is given twice"),
+                        ));
+                    }
+                }
+                "--test" => {
+                    let Some(value) = rest.next().filter(|value| !value.starts_with('-')) else {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            "`--test` needs a value",
+                        ));
+                    };
+                    if lib {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            "`--lib` cannot be combined with `--test`",
+                        ));
+                    }
+                    if target.replace(value.to_string()).is_some() {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            "`--test` is given twice",
+                        ));
+                    }
+                }
+                "--lib" => {
+                    if lib {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            "`--lib` is given twice",
+                        ));
+                    }
+                    if target.is_some() {
+                        return Err(HostEvidenceRefusal::new(
+                            R::ArgumentNotAllowed,
+                            "`--lib` cannot be combined with `--test`",
+                        ));
+                    }
+                    lib = true;
+                }
                 "--" => {
+                    let selector_ready =
+                        package.is_some() && filter.is_none() && (target.is_some() != lib);
                     match rest.as_slice() {
-                        [value]
-                            if !value.starts_with('-')
-                                && package.is_some()
-                                && target.is_some()
-                                && filter.is_none() =>
-                        {
+                        [value] if !value.starts_with('-') && selector_ready => {
                             filter = Some(value.to_string());
                         }
                         _ => {
                             return Err(HostEvidenceRefusal::new(
                                 R::ArgumentNotAllowed,
-                                "`--` must follow the package and target and precede the only test filter",
+                                "`--` must follow `-p <crate>` and exactly one of `--test <target>` \
+                                 or `--lib`, and precede the only test filter",
                             ));
                         }
                     }
@@ -216,31 +271,23 @@ impl HostSandboxCommand {
                             "only one test filter is admitted",
                         ));
                     }
-                    continue;
                 }
-            };
-            let Some(value) = rest.next().filter(|value| !value.starts_with('-')) else {
-                return Err(HostEvidenceRefusal::new(
-                    R::ArgumentNotAllowed,
-                    format!("`{word}` needs a value"),
-                ));
-            };
-            if slot.replace(value.to_string()).is_some() {
-                return Err(HostEvidenceRefusal::new(
-                    R::ArgumentNotAllowed,
-                    format!("`{word}` is given twice"),
-                ));
             }
         }
-        match (package, target) {
-            (Some(package), Some(target)) => Ok(Self::CargoTest {
+        match (package, target, lib) {
+            (Some(package), Some(target), false) => Ok(Self::CargoTest {
                 package,
                 target,
                 filter,
             }),
+            (Some(package), None, true) => Ok(Self::CargoLibTest { package, filter }),
+            (None, _, true) => Err(HostEvidenceRefusal::new(
+                R::ArgumentNotAllowed,
+                "`cargo test --lib` needs `-p <crate>`",
+            )),
             _ => Err(HostEvidenceRefusal::new(
                 R::ArgumentNotAllowed,
-                "`cargo test` needs both `-p <crate>` and `--test <target>`",
+                "`cargo test` needs `-p <crate>` and either `--test <target>` or `--lib`",
             )),
         }
     }
@@ -255,6 +302,12 @@ impl HostSandboxCommand {
                 filter,
             } => {
                 let mut words = vec!["cargo", "test", "-p", package, "--test", target];
+                words.extend(filter.as_deref());
+                words.extend(["--", "--nocapture"]);
+                words.join(" ")
+            }
+            Self::CargoLibTest { package, filter } => {
+                let mut words = vec!["cargo", "test", "-p", package, "--lib"];
                 words.extend(filter.as_deref());
                 words.extend(["--", "--nocapture"]);
                 words.join(" ")
@@ -337,8 +390,8 @@ const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:"
 
 /// Judge one host run from its full output. Returns the number of tests the
 /// libtest summaries report passed, or why the run is not passing evidence.
-/// A `cargo test` run must report at least one passed test; a required
-/// validation command need not run libtest at all. Neither may report a
+/// A `cargo test` run (`--test` or `--lib`) must report at least one passed
+/// test; a required validation command need not run libtest at all. Neither may report a
 /// skipped or deferred test, or a sandbox the host could not apply.
 pub fn judge_host_test_output(
     command: &HostSandboxCommand,
@@ -382,7 +435,12 @@ pub fn judge_host_test_output(
         .filter_map(|line| line.trim().strip_prefix("test result: ok. "))
         .filter_map(|rest| rest.split(' ').next()?.parse::<u64>().ok())
         .sum::<u64>();
-    if passed == 0 && matches!(command, HostSandboxCommand::CargoTest { .. }) {
+    if passed == 0
+        && matches!(
+            command,
+            HostSandboxCommand::CargoTest { .. } | HostSandboxCommand::CargoLibTest { .. }
+        )
+    {
         return Err(HostEvidenceRefusal::new(
             R::NoTestsRan,
             "no libtest summary reports a passed test",
