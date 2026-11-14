@@ -3,17 +3,10 @@
 // the formatting and card builders the rest of the page shares. Pure rendering
 // from the readout payload: every node is built with DOM calls.
 
-import { el as makeEl, formatDate, formatDateTime, formatClock, pinnedInfoHint, detailsPanel } from './common.js';
+import { el, formatDate, formatDateTime, formatClock, pinnedInfoHint, detailsPanel } from './common.js';
 import { svg, linePath } from './sparkline.js';
 
-// `el` from common.js, also applying the table and link attributes it leaves out.
-export function el(tag, opts = {}, children = []) {
-  const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex", "href", "datetime"]) {
-    if (opts[name] != null) node.setAttribute(name, String(opts[name]));
-  }
-  return node;
-}
+export { el };
 
 // Arms take the shared categorical palette in definition order, so an arm
 // keeps its color on every chart of the page; past seven they fold into one.
