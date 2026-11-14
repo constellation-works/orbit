@@ -1,78 +1,64 @@
 ---
 title: Configuration
-description: "config.toml locations, the host registry, crews, and the settable configuration keys."
-sidebar:
-  order: 5
+description: "Where Orbit reads configuration, how to define crews and crew pools, and every settable key."
 ---
+
+Orbit reads a global `config.toml` and one per workspace. Use this page to
+look up a key's type and default, define crews and their pools, and give
+agents the credentials they need.
 
 ## File locations
 
 | Path | Scope |
 |---|---|
 | `~/.orbit/config.toml` | Global |
-| `~/.orbit/clock.env` | Global, machine only — credentials for clock-started runs; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv) |
+| `~/.orbit/clock.env` | Global, machine only. Credentials for clock-started runs; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv) |
+| `~/.orbit/hosts.toml` | Global, machine only. Remote hosts; see [Host registry](#host-registry) |
 | `.orbit/config.toml` | Workspace, per user (gitignored) |
 
-Each key resolves on its own. A workspace value overrides the global value, a
-global value fills a workspace omission, and built-in defaults fill the rest.
-Tables merge setting by setting; scalars and arrays replace the global value
-whole. Named crews merge by crew name and field, so a workspace can override
-one crew's `model` without restating the crew.
+Each key resolves on its own: the workspace value wins, then the global value,
+then the built-in default. Tables merge setting by setting; scalars and arrays
+replace the global value whole. Crews merge by name and field, so a workspace
+can override one crew's `model` without restating the crew.
 
 Three security keys never inherit from global once a workspace file exists:
-`execution.codex.sandbox`, `execution.codex.approval_policy`, and
-`execution.env.pass`. A workspace file that omits one gets its built-in
-default. `orbit config show` labels every value with its source.
-
-`orbit init` seeds the global file. `orbit init --force` resets the global root
-first, including the machine identity. A reset creates a new machine ID;
-non-interactive resets require both `--machine-name` and `--task-prefix`.
-Missing non-interactive inputs or invalid supplied identity flags are refused
-before deleting the existing root.
+`execution.codex.sandbox`, `execution.codex.approval_policy` and
+`execution.env.pass`. A workspace file that omits one gets the built-in
+default.
 
 ```bash
 orbit config path              # the config.toml in effect
 orbit config show              # values with their source
-orbit config show --all        # also Paths, Crew purposes and Review
+orbit config show --all        # every key, plus summaries
 orbit config get workflow.default_crew
 orbit config set workflow.default_crew opus
 orbit config keys              # every settable key, with type, allowed values and description
 ```
 
-`orbit config show` hides unconfigured **Advanced** keys and counts them in each
-section heading. A key set in any layer remains visible, even if that layer is
-shadowed or its security value is not inherited. Use `--all` (alias `--advanced`)
-to list every key, expand unset sections, and append Paths, Crew purposes and
-Review. Those three blocks restate rows the sections already print, so the
-default view omits them. `--json` always includes `crew_purposes` and `review`.
-`machine.id` and `machine.task_prefix` render under Identity, not as Machine
-keys; `machine.name` stays a Machine key. `--scope global|workspace` applies
-the same filter to that file. JSON always includes all keys; each provenance
-record has `tier: "standard"` or `tier: "advanced"`. Tiers affect display only;
-loading, `config get`, and `config set` keep their existing behavior. Row
-descriptions are one sentence; the tables below keep the defaults and ranges.
+- `orbit config show` hides **Advanced** keys that no file sets; `--all`
+  lists them. `--scope global|workspace` resolves one file alone. `--json`
+  always includes every key.
+- `orbit config set` writes the workspace file, or the global one with
+  `--global`. When the workspace file does not exist yet, add `--fresh` to
+  start it empty or `--seed-from-global` to start from a copy of the global
+  file.
+- `orbit init` writes the global file when it is absent and never rewrites an
+  existing one. `orbit init --force` resets the global root, including the
+  machine identity; a non-interactive reset requires `--machine-name` and
+  `--task-prefix`.
 
-`orbit config set` writes the workspace file; `--global` writes the global one.
-If the workspace file does not exist yet, add `--fresh` to start it empty or
-`--seed-from-global` to start from a copy of the global file.
-
-For extra agent instructions selected by a task's tags, edit the
-[Tag instructions](#tag-instructions) tables directly.
+Workspace state lives in the repository's `.orbit/` directory and global state
+under `~/.orbit/`; see [Scoping](/reference/scoping/).
 
 ### What orbit init seeds
 
-`orbit init` writes a new global `config.toml` that sets the values below
-explicitly. Several differ from the built-in defaults in
-[Settable keys](#settable-keys), whose Default column stays the built-in
-value. Init writes the file only when it is absent, or after
-`orbit init --force` resets the global root. An existing config is never
-rewritten.
+A new global `config.toml` sets these values explicitly. Several differ from
+the built-in defaults listed under [Settable keys](#settable-keys).
 
-- **Crews.** Every built-in crew. A crew is enabled when its provider CLI is
-  detected and disabled otherwise. `default_crew` is the default crew of the
-  first detected provider family in preference order.
-- **Complexity pools.** `low`, `medium`, `hard` and `xhard` start from the
-  detected families:
+- **Crews.** Every built-in crew, enabled when its provider CLI is detected
+  and disabled otherwise, plus a [human crew](#human-crews). `default_crew`
+  is the default crew of the first detected provider family.
+- **Complexity pools.** From the detected families:
 
   | Detected | `low` | `medium` | `hard` | `xhard` |
   |---|---|---|---|---|
@@ -80,16 +66,14 @@ rewritten.
   | Codex only | `luna` | `terra` | `sol` | `astra` |
   | Claude only | `haiku` | `sonnet` | `opus` | `fable` |
 
-  Other detected providers add to these pools. Grok appends `grok` to
-  `medium`, even when neither Codex nor Claude is detected. Antigravity (`agy`)
-  appends `gemini-flash` to `low` and `argon` to `hard`. Muse appends
-  `muse-spark` to `low`, `muse-wonder` to `medium` and `muse-wonder-full` to
-  `hard`. Copilot adds nothing, and an empty pool routes to `default_crew`.
-- **Purpose pools.** Init seeds these
-  [purpose pools](#purpose-pools). The members below are the full lists, and
-  init keeps only those whose crew it seeds enabled. A pool left empty is
-  omitted, so its purpose takes the built-in route. The exception is
-  `final_recovery`, which is written as `[]` and turns final recovery off.
+  Other providers add to these pools. Grok appends `grok` to `medium`.
+  Antigravity (`agy`) appends `gemini-flash` to `low` and `argon` to `hard`.
+  Muse appends `muse-spark` to `low`, `muse-wonder` to `medium` and
+  `muse-wonder-full` to `hard`. Copilot adds nothing.
+- **Purpose pools.** Init keeps only the members whose crew it seeds enabled
+  and omits a pool left empty, except `final_recovery`, which it writes as
+  `[]` (final recovery off). It does not write `sweep_tasks` or
+  `pilot_warning_triage`.
 
   | Purpose | Members |
   |---|---|
@@ -101,22 +85,22 @@ rewritten.
   | `baseline_red_repair` | `terra`, `sonnet`, `muse-wonder`, `grok` |
   | `pre_landing_review` | `luna`, `haiku`, `muse-spark` |
 
-  Init does not write `sweep_tasks` or `pilot_warning_triage`.
-- **Experiments and steering.** `experiments.enabled = true`, so experiments
-  can start without setting the key, and `workflow.mid_run_steering.enabled =
-  true`, so operator comments written during a run reach its later prompts.
-- **Workflow.** `workflow.crew_selection = "static"`, the built-in value.
-  `workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md",
-  "**/mod.rs", "**/*.toml"]`, where the built-in default is `["**/*.md"]`.
-  `workflow.task_pilot_freshness.material_fields = ["description",
-  "criteria"]`, where the built-in default also checks `title`, `plan` and
-  `selectors`.
-- **Machine.** When init creates this machine's identity, it sets
-  `machine.auto_concurrency.mode = "enforce"`, where the built-in default is
-  `off`. An existing machine keeps its mode.
+- **Other keys.**
 
-To use any of these values in a config that already exists, set the key
-yourself. For example:
+  | Key | Seeded value | Built-in default |
+  |---|---|---|
+  | `experiments.enabled` | `true` | `false` |
+  | `workflow.mid_run_steering.enabled` | `true` | `false` |
+  | `workflow.unlocked_context_paths` | `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]` | `["**/*.md"]` |
+  | `workflow.task_pilot_freshness.material_fields` | `["description", "criteria"]` | also `title`, `plan`, `selectors` |
+  | `execution.codex.sandbox` | `"danger-full-access"` | `workspace-write` |
+  | `machine.auto_concurrency.mode` | `"enforce"`, when init creates this machine's identity | `off` |
+
+- **Review-skip profiles** for the shipped auto-tasks' `auto-task:<name>`
+  tags, limited to documentation and CI paths. See
+  [Review-skip tags](#review-skip-tags).
+
+To use a seeded value in a config that already exists, set the key yourself:
 
 ```bash
 orbit config set --global experiments.enabled true
@@ -124,10 +108,9 @@ orbit config set --global experiments.enabled true
 
 ## Provider credentials
 
-Provider credentials are opt-in. Neither the shipped config nor the built-in
-`execution.env.pass` default includes `CLAUDE_CODE_OAUTH_TOKEN`,
-`ANTHROPIC_API_KEY` or `CODEX_API_KEY`. Configure only the authentication route
-you intend to use.
+No provider credential reaches an agent by default: neither the seeded config
+nor the built-in `execution.env.pass` includes one. Configure the one
+authentication route you intend to use.
 
 | Authentication route | Agent variable |
 |---|---|
@@ -135,38 +118,31 @@ you intend to use.
 | Claude API key | `ANTHROPIC_API_KEY` |
 | Codex noninteractive API-key override (`codex exec`) | `CODEX_API_KEY` |
 
-`CODEX_API_KEY` is Codex's documented per-run API-key override;
-`OPENAI_API_KEY` alone is not that override. See
+`CODEX_API_KEY` is Codex's per-run API-key override; `OPENAI_API_KEY` alone is
+not. See
 [OpenAI's noninteractive authentication guidance](https://developers.openai.com/codex/noninteractive#use-api-key-auth).
 
-Choose the credential's scope:
+Give the credential to every crew or to one:
 
-- **Shared:** add the chosen name to the workspace's effective
-  `execution.env.pass`, preserving existing entries. The list replaces the
-  default and is shared by every crew. A workspace file that omits this
-  security key gets the built-in default, not the global list.
-- **Per crew:** map a separate source name through the crew's global `env`.
-  For example, add to the existing `sol` crew in `~/.orbit/config.toml`:
+- **Shared.** Add the name to the workspace's `execution.env.pass`, keeping
+  the existing entries. Your list replaces the default, and a workspace file
+  that omits this key gets the built-in default, not the global list.
+- **Per crew.** Map a source in the crew's `env`, in the global config:
 
   ```toml
   [crews.sol]
   env = ["CODEX_API_KEY=CODEX_CREDITS_API_KEY_1"]
   ```
 
-  The right-hand side names a variable in the launching environment, never
-  a literal key. Only that crew receives the mapped credential; neither name
-  needs adding to `pass`. For Claude API credits, use
-  `ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1`. An owner-only
-  `file:` source avoids shell or service exports; see
-  [Scheduled credentials](#scheduled-credentials-clockenv).
+  The right-hand side names a variable in the launching environment, never a
+  literal key. Only that crew's agents receive `CODEX_API_KEY`, and neither
+  name needs adding to `pass`. `NAME=file:PATH` (absolute, or `~/…`) reads the
+  value from an owner-only file (mode `600`, not a symlink) instead. When a
+  crew entry sets one Claude credential (`ANTHROPIC_API_KEY` or
+  `CLAUDE_CODE_OAUTH_TOKEN`), the other is removed from that crew's agents.
 
-An unset or empty name added to shared `pass` produces a warning and reaches
-no agent; this warning alone does not refuse the start, and the provider may
-use a saved login. A missing per-crew source excludes that crew from drains
-and refuses its activities. The separate Claude-on-macOS credential check
-described below can also refuse an activity without a credential.
-
-Check the execution host with:
+Check the execution host, using your crew's name in place of `sol`. Orbit
+reports credentials by name and never prints a value.
 
 ```bash
 orbit config get execution.env.pass
@@ -174,34 +150,34 @@ orbit config get crews.sol.env
 orbit doctor --check env-pass --json
 ```
 
-Use the intended crew's name in place of `sol`. Dashboard runs inherit the
-web service's environment. A service launched with `bash -lc` reads login
-exports when it starts, but does not receive later profile edits: restart
-that service before starting a new drain. Inspect its effective unit and
-start time, and verify credential presence by name only in the live service
-or worker. Never print key values. Codex's stored `login status` alone does
-not prove which credential a worker uses with a per-run override.
-For timer-started runs, use [clock.env](#scheduled-credentials-clockenv);
-that file does not supply the web service.
+**If a variable is missing.** A `pass` name the launching shell does not set
+reaches no agent. The run still starts, with a warning, and the provider may
+fall back to a saved login. A missing per-crew source, or an unusable `file:`
+source, excludes that crew from drains and refuses its activities.
+
+**Where the value comes from.** Terminal runs read your shell, so start drains
+from a login shell. Dashboard runs inherit the web service's environment:
+restart the service after you change its exports. Timer-started runs read
+[clock.env](#scheduled-credentials-clockenv).
+
+:::caution
+On macOS, a Claude activity with neither `CLAUDE_CODE_OAUTH_TOKEN` nor
+`ANTHROPIC_API_KEY` in its environment is refused before `claude` starts,
+because the Claude Desktop login it would fall back to is revoked mid-run.
+Create a token with `claude setup-token` and admit `CLAUDE_CODE_OAUTH_TOKEN`
+through `pass` or a crew's `env`.
+:::
 
 ## Scheduled credentials: clock.env
 
-`~/.orbit/clock.env` holds the credentials for runs no login shell starts.
-launchd (macOS) or a systemd user timer (Linux) starts `orbit clock tick`
-with no login environment, so the tick reads this file and supplies its
-values as defaults to the child runs it starts; its own process environment
-is never changed, and the installed unit files never contain a secret. It is
-machine-global, beside the global `config.toml`: there is no workspace
-`clock.env`, and no checkout or sync carries it. For the setup procedure,
-see [Schedule recurring work](../../how-to/recurring-work/#scheduled-credentials).
+`~/.orbit/clock.env` supplies credentials to the runs the clock starts.
+launchd (macOS) or a systemd user timer (Linux) starts `orbit clock tick` with
+no login environment, so the tick reads this file and passes its values to the
+runs it starts. For setup, see
+[Schedule recurring work](/how-to/recurring-work/#scheduled-credentials).
 
-`orbit routine init --install-clock` creates the file comment-only with
-owner-only permissions when it is absent, and never rewrites an existing
-file. Keep it that way:
-
-```bash
-chmod 600 ~/.orbit/clock.env
-```
+`orbit routine init --install-clock` creates the file, comment-only and
+owner-only, when it is absent.
 
 ```ini
 # ~/.orbit/clock.env — placeholders; put real values only in the file
@@ -210,85 +186,66 @@ ANTHROPIC_CREDITS_API_KEY_1=<api-key-for-the-credits-crew>
 GITHUB_TOKEN=<github-token>
 ```
 
-Loading rules:
-
-- One `NAME=value` per line. Blank lines and `#` comments are skipped, a
-  leading `export ` is accepted, and one pair of surrounding single or
-  double quotes is stripped. Nothing is expanded. An empty value, a name
-  starting with `ORBIT_`, and a name nobody admits are dropped; a repeated
-  name keeps its last value.
-- A name is admitted only when a discovered workspace's effective
+- **Format.** One `NAME=value` per line. Blank lines, `#` comments, a leading
+  `export ` and one pair of surrounding quotes are accepted. Nothing is
+  expanded.
+- **Admission.** A name loads only when a workspace's effective
   `execution.env.pass` lists it, or a crew's `env` entry reads it as its
-  source (below). Each workspace's runs receive the names that workspace's
-  own effective `pass` admits; `pass` is a security key, so a workspace
-  file's list replaces the global one for that workspace.
-- A non-empty value already in the tick's environment wins; an empty or
-  absent one is filled from the file. A dry run (`orbit clock tick
-  --dry-run`) loads nothing.
-- The file must be a regular file, not a symlink, owned by the user running
-  the tick, and readable by its owner alone. A symlink, another owner's
-  file, or a group- or world-readable mode is refused as a load error
-  naming the `chmod 600` fix; the tick still runs and loads nothing from
-  it. Sandboxed agents cannot read the file itself.
+  source. Each workspace's runs receive only the names its own `pass` admits.
+  Empty values and names starting with `ORBIT_` are dropped.
+- **Precedence.** A non-empty value already in the tick's environment wins.
+- **Permissions.** The file must be a regular file, not a symlink, owned by
+  the user running the tick, with mode `600`. Otherwise the tick still runs
+  but loads nothing and reports a load error naming the fix:
 
-Per-crew sources work the same way. A crew's `env` entry
-`NAME=SOURCE` (global config only; see [Crews](#crews)) makes that crew's
-agents receive `NAME` with the value of `SOURCE`, read from the launching
-process or, for clock-started runs, from `clock.env`. Keep the source under
-a name no CLI reads, such as `ANTHROPIC_CREDITS_API_KEY_1`, so other crews
-and interactive shells are unaffected; the agent never receives `SOURCE`
-itself. `NAME=file:PATH` (absolute, or `~/…`) reads the value from an owner-only
-file (mode `600`, not a symlink) the host opens when it starts the agent, so no
-shell, service or `clock.env` has to export it; an unusable file makes the crew
-unavailable like an unset source. When a crew entry sets a Claude credential (`ANTHROPIC_API_KEY` or
-`CLAUDE_CODE_OAUTH_TOKEN`), the other Claude credential is removed from that
-crew's agents. An unset or empty source excludes that crew from drains and
-is reported by name — never by value — on the run and by `orbit doctor`.
+  ```bash
+  chmod 600 ~/.orbit/clock.env
+  ```
 
-Verification reports names only. `orbit clock tick --json` lists what the
-file supplied as `clock_env_loaded`, `orbit doctor`'s `env-pass` row names
-`pass` variables unset in doctor's own environment, and on macOS its
-`claude-worker-token` row names the `pass` list or `clock.env` lacking a
-Claude credential, or a crew source `clock.env` lacks. No command, run
-record, or log prints a value.
+- **Scope.** There is no workspace `clock.env`, the web service does not
+  read the file, and `orbit clock tick --dry-run` loads nothing.
 
-On macOS, a Claude activity with neither `CLAUDE_CODE_OAUTH_TOKEN` nor
-`ANTHROPIC_API_KEY` in its composed environment is refused before `claude`
-starts, rather than fall back to the Claude Desktop login, which the
-Desktop revokes mid-run. Create a dedicated token with `claude setup-token`,
-store it as `CLAUDE_CODE_OAUTH_TOKEN` above, and admit that name in
-`execution.env.pass`; an admitted `ANTHROPIC_API_KEY`, or a per-crew `env`
-mapping supplying either name, also satisfies the check. A token stored
-under a name `pass` omits counts as lacking.
+To confirm what loaded, `orbit clock tick --json` lists the names as
+`clock_env_loaded`. `orbit doctor` names `pass` variables unset in its own
+environment in the `env-pass` row and, on macOS, a missing Claude credential
+or crew source in the `claude-worker-token` row.
 
 ## Unknown settings
 
-Unknown keys and tables load with a warning naming their file and path, plus a
-nearby known key when available. Each file and path warns once per process.
-Unknown tables, including empty ones, are reported as a whole. Known section
-headers, plugin settings and registered table-valued settings stay under their
-own validation. Unknown `[operation]` and `[review]` fields also warn; known
-values still validate normally.
+An unknown key or table loads with a warning that names its file and path and,
+when one is close, a known key. `orbit doctor` lists unknown settings beside
+retired ones.
 
-`orbit doctor` lists unknown settings alongside retired keys.
-`orbit doctor --fix-retired-config-keys` backs up each affected file and removes
-those entries, preserving known settings and translated review preferences.
-Check the list first when sharing config with a newer binary: that version
-may still use an entry this version does not recognise.
+### Retired settings
+
+A retired key still loads, with a deprecation warning that names its
+replacement or the value now fixed. `orbit config get` and `set` refuse it.
+Delete it, or run `orbit doctor --fix-retired-config-keys`, which backs up
+each affected file, writes renamed values under their replacement and removes
+the rest. Most ignored keys stop being recognised on 2026-12-07 or
+2026-12-08, as their warning says, and then count as unknown settings.
+
+| Retired | Now |
+|---|---|
+| `operation.review_policy`, `review.before_pr`, `review.before_landing` | `review.timing`. A legacy `after-landing` policy turns on the `delivery-code-review` auto-task until you toggle it yourself. |
+| `operation.review_minutes`, `operation.review_crew` | `review.minutes`, `workflow.purpose_crews.review` |
+| `workflow.final_recovery_crews` | `workflow.purpose_crews.final_recovery` |
+| The `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools | `workflow.purpose_crews.sweep_tasks`. A file whose old pools differ fails to load until you merge them. |
+| `machine.worker_containment_strict`, a boolean `machine.worker_containment` | `machine.worker_containment` set to `off`, `warn` or `strict` |
+| `workflow.crew_performance_types` | `workflow.task_types` |
+| `workflow.system_crew`, `crew: system` in a template or job | Ignored. System work routes through the [pools](#system-work). |
+| `[visual_review]`, `[ux_rules]`, `[lease]`, `[assistance]`, `[workflow.crew_ladder]`, `[workflow.regression_risk]`, `[workflow.explore_brief]`, `[review.selective_before_landing]`, `[machine.web_terminal]`, `[machine.web_session]`, `workflow.explore.*`, `workflow.crew_performance*`, `workflow.auto_ship`, `review.verify_findings`, `publication.routine_*`, the `explorer` and `visual_review` purpose pools | Ignored. The feature was removed. |
+| `[attention]`, `[notice]`, `[resident.evolution]`, the `[runtime]` log keys, and any other key under `pr`, `commit`, `workflow`, `machine`, `execution`, `experiments`, `retention`, `automation`, `ci_failure`, `jobs`, `security_alert_sweep` or `worktree` that warns as deprecated | Ignored. The value is fixed, and the warning states it. |
 
 ## Host registry
 
-`~/.orbit/hosts.toml` registers the remote Orbit installations this machine
-can reach over SSH. It is machine-global, beside `workspaces.json`; workspace
-configuration does not override or merge it. The local host's identity stays
-in `[machine]` in the global `config.toml`, outside this file.
+`~/.orbit/hosts.toml` lists the remote Orbit installations this machine
+reaches over SSH. Manage it with `orbit host add`, `rename` and `remove`, or
+the dashboard's [Settings › Hosts](/how-to/dashboard/#hosts). For setup and
+prefix routing, see [Run Orbit across hosts](/how-to/multi-host/).
 
-Manage entries with `orbit host add`, `rename`, and `remove`, or the
-dashboard's [Settings › Hosts](../../how-to/dashboard/#hosts). For setup and
-prefix routing, see [Run Orbit across hosts](../../how-to/multi-host/).
-
-The following illustrates the schema written by `orbit host add`; use the
-command to discover the remote identity rather than inventing its values:
+`orbit host add` reads the remote's identity and writes an entry like this
+one:
 
 ```toml
 schema_version = 1
@@ -303,30 +260,23 @@ task_prefix = "BOX"
 | Field | Meaning and validation |
 |---|---|
 | `schema_version` | Required integer. This build accepts only `1`. |
-| `hosts` | Array of remote entries (`[[hosts]]`); omission means no remote hosts. |
-| `name` | Required host name, defaulting to the remote's `machine.name`. Non-empty, at most 128 bytes, with no surrounding whitespace, control characters, or path separators. Unique ignoring case, including against this machine's name. |
-| `machine_id` | Required remote identity: `hm_` followed by ASCII letters, digits, `_`, or `-`, at most 128 bytes overall. Unique and different from this machine's ID. |
-| `ssh` | Required SSH alias or `user@host`. No leading `-`, whitespace, control characters, or shell metacharacters. |
-| `task_prefix` | Required task namespace. Two to five uppercase ASCII letters, unique across registered hosts and this machine. Stored legacy `ORB` remains valid; fresh initialization reserves `ORB`, `ADR`, `L`, and `F`. |
+| `hosts` | Array of remote entries (`[[hosts]]`). Omitted means no remote hosts. |
+| `name` | Required. Defaults to the remote's `machine.name`. At most 128 bytes, no surrounding whitespace, control characters or path separators. Unique ignoring case, including against this machine's name. |
+| `machine_id` | Required. `hm_` followed by ASCII letters, digits, `_` or `-`, at most 128 bytes. Unique, and different from this machine's ID. |
+| `ssh` | Required SSH alias or `user@host`. No leading `-`, whitespace, control characters or shell metacharacters. |
+| `task_prefix` | Required task namespace: two to five uppercase ASCII letters, unique across registered hosts and this machine. |
 
-Unknown keys, malformed entries, unsupported schema versions, and duplicate
-identities or prefixes fail loading. Orbit keeps the file's bytes intact on
-a load failure. Mutations validate the resulting entries, sort them by name,
-and replace the file atomically. A refused mutation preserves the prior file.
-
-Reachability, Orbit version, protocol, and workspaces are read live by
-`orbit host list` and `show`; none is persisted in this file. Registration is
-one-way and stores no SSH credentials.
+Workspace configuration does not override this file, and it stores no SSH
+credentials. An unknown key, a malformed entry, an unsupported schema
+version or a duplicate identity or prefix fails the load and leaves the file
+untouched.
 
 ### Legacy migration
 
-`~/.orbit/mcp-destinations.toml` is no longer read. Its presence, alone or
-beside `hosts.toml`, fails every host-registry load with `host_file_conflict`;
-`orbit doctor` reports an error. Move it aside, run `orbit host add <ssh-target>`
-for each `ssh` row to register the hosts in `hosts.toml`, then delete the moved
-file. Automatic migration is no longer available.
-
-The older singular `host.toml` identity file is unrelated to this retirement.
+`~/.orbit/mcp-destinations.toml` is no longer read. While it exists, every
+host-registry load fails with `host_file_conflict` and `orbit doctor` reports
+an error. Move it aside, run `orbit host add <ssh-target>` for each of its
+`ssh` rows, then delete it.
 
 ## Crews
 
@@ -341,80 +291,67 @@ effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]
 
-[crews.opus]
-provider = "claude"
-model = "opus"
-
 [crews.argon]
 enabled = false
 provider = "antigravity"
 model = "gemini-4-argon-high"
 
 [workflow]
-base_branch = "main"
 default_crew = "sol"
 ```
 
 | Field | Purpose |
 |---|---|
-| `provider` | Required. Agent CLI family: `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, or `muse`. |
+| `provider` | Required. Agent CLI family: `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot` or `muse`. |
 | `model` | Required. Model ID passed to the provider CLI. |
 | `enabled` | Default `true`. `false` keeps the crew listed but refuses to run it. See [Disabled crews](#disabled-crews). |
 | `effort` | Reasoning effort. See [Reasoning effort](#reasoning-effort). |
+| `vision` | Default `true`: the crew may be given images when its executor declares `image_input`. `false` opts a text-only model out. |
 | `description` | Short summary for people. |
 | `tags` | Discovery labels. |
-| `env` | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only. For clock-started runs the source is read from `clock.env`; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv). |
+| `env` | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only. See [Provider credentials](#provider-credentials). |
+| `kind` | `agent` (default) or `human`. See [Human crews](#human-crews). |
 
-`ollama` and `openai_compat` are recognized provider IDs with no shipped
-executor: a crew naming either one loads, then fails at dispatch. See
-[Providers](../../concepts/agents/#providers). `gemini` is the legacy Google
-CLI lane; `orbit init` seeds Antigravity's `gemini-flash` and `argon` crews when `agy` is installed. For deprecated
-provider aliases and a starter crew per executor, see
-[Set up an executor](../../concepts/agents/#set-up-an-executor).
+Set a field with `orbit config set crews.<name>.<field> <value>`, for example
+`orbit config set crews.sol.effort high`; `env` requires `--global`. The
+command cannot create a crew: add a `[crews.<name>]` table with `provider` and
+`model` first. Crew names cannot contain `@` or `:`.
 
-At dispatch, the first crew that is set wins: an explicit crew on the run or
-activity input, then the task's `crew`, then `[workflow] default_crew`.
+At dispatch the first crew that is set wins: an explicit crew on the run or
+activity input, then the task's `crew`, then `default_crew`. `default_crew`
+must name a defined crew. If you define crews and leave it unset, Orbit uses
+an `opus` (or legacy `claude`) crew, and otherwise refuses to load.
 
-`default_crew` must name a defined crew. If you define crews and leave it
-unset, Orbit falls back to an `opus` (or legacy `claude`) crew, and otherwise
-refuses to load.
+`gemini` is the legacy Google CLI lane. `ollama` and `openai_compat` are
+recognized provider IDs with no shipped executor, so a crew naming one loads
+and then fails at dispatch. See [Providers](/concepts/agents/#providers) and
+[Set up an executor](/concepts/agents/#set-up-an-executor).
 
 ### Disabled crews
 
-`orbit init` writes every built-in crew. It sets `enabled = true` on the crews
-whose provider CLI it detects and `enabled = false` on the rest. To turn a
-provider on later:
+`orbit init` writes every built-in crew and disables those whose provider CLI
+it does not detect. Turn one on later:
 
 ```bash
 orbit config set crews.argon.enabled true
 ```
 
-A crew table without `enabled` is enabled. A disabled crew:
+A disabled crew:
 
-- stays listed: `orbit config show` (`ENABLED` column), `orbit config get
-  crews.<name>.enabled`, `orbit.workspace.list` with `include: ["crews"]`
-  (`enabled` per crew, schema version 3), and the dashboard all show it;
-- is never drawn from a complexity pool. A pool whose members are all disabled
-  acts as an empty pool, so the task gets `default_crew`;
-- is refused, never substituted, when a task's `crew`, an explicit crew, or
-  `default_crew` selects it. The error names the crew and the
-  `orbit config set … enabled true` command;
-- is reported by `orbit doctor` when `default_crew` names it. Config still
-  loads.
+- stays listed in `orbit config show`, `orbit.workspace.list` and the
+  dashboard;
+- is never drawn from a pool. A pool whose members are all disabled acts as an
+  empty pool, so the task gets `default_crew`;
+- is refused, never substituted, when a task's `crew`, an explicit crew or
+  `default_crew` selects it. The error names the command that enables it.
 
 With no supported agent CLI detected, every crew is seeded disabled and
-`default_crew` stays unset, so nothing dispatches until you
-enable a crew.
-
-`orbit init` also seeds the complexity pools and the purpose pools, and sets
-several workflow and experiment keys. [What `orbit init` seeds](#what-orbit-init-seeds)
-lists each seeded value, with the pool members for every detected provider.
+`default_crew` stays unset, so nothing dispatches until you enable a crew.
 
 ### Human crews
 
-A human crew holds operator work: tasks you do yourself, such as approving a
-contract or renewing a domain. You track them in Orbit beside agent work, and
-nothing dispatches them.
+A human crew holds work you do yourself, such as renewing a domain. You track
+it in Orbit beside agent work, and nothing dispatches it.
 
 ```toml
 [crews.dk]
@@ -422,52 +359,29 @@ kind = "human"
 description = "My own work"
 ```
 
-`kind` is `"agent"` by default. A human crew takes only `description` and
-`tags`. Setting `provider`, `model`, `effort` or `env` on it fails load, and
-so does giving it the name of an agent crew. A human crew:
+A human crew takes only `description` and `tags`; any agent field fails the
+load. `orbit init` adds one named after your OS user when the global config
+has none, or after `--human-name <name>`.
 
-- is never admitted. Drains and pull followers skip its tasks, even under
-  `--allow-crew` naming it, and `orbit run readiness` reports each one with
-  reason `human_crew`;
-- is never assessed by the task pilot, which records nothing on its tasks.
-  A task-pilot run that includes one still runs on an agent crew and leaves
-  the task out, and an approve-proposed drain does not select it;
-- is never drawn. `default_crew`, the crew pools, `purpose_crews` and
-  experiment arms may not name it, and a redraw never picks it;
-- is closed only by you. An agent's `orbit.task.update` cannot move its task
-  to `done`, and agents keep the normal lifecycle on the task;
-- is left out of crew analytics, performance rankings and provider usage.
+- **Never run by agents.** Drains, pull followers and the task pilot skip its
+  tasks, even under `--allow-crew`, and `orbit run readiness` reports each
+  with reason `human_crew`.
+- **Never drawn.** `default_crew`, crew pools, purpose pools and experiment
+  arms may not name it.
+- **Closed only by you.** An agent's `orbit.task.update` cannot move its task
+  to `done`; agents otherwise keep the normal lifecycle on it.
+- **Left out** of crew analytics, performance rankings and provider usage.
 
-The dashboard tags these tasks `for <name>`. The **My work** chip, under
-**More** on the Tasks page, shows only your human crew's open tasks.
+You can move a human-crew task from any status to any other with
+`orbit task update <id> --status <status>` or the dashboard's status control.
+No plan, review or completion evidence is needed. Leaving `done` or `archived`
+still needs `--force`, and a run that still owns the task refuses the move.
+The dashboard tags these tasks `for <name>` and lists your open ones under
+the **My work** chip on the Tasks page.
 
-`orbit init` adds a human crew named after your OS user when the global config
-has none. At a terminal it asks you to confirm or change the name. Without a
-terminal, or with `--non-interactive`, it uses the OS user name. Pass
-`--human-name <name>` to choose the name. If the name is already an agent
-crew, init asks again at a terminal and otherwise fails without writing
-anything. Running init again keeps the existing human crew.
-
-**Moving the task.** You can move a human-crew task from any status to any other
-with `orbit task update <id> --status <status>`, or with the status control on
-its dashboard detail. The dashboard offers every status for such a task. No plan,
-review, completion evidence or `--force` is needed, and a note stays optional.
-Each move is recorded in task history as a `forced` status change whose note
-names the human-crew bypass. Leaving `done` or `archived` still needs `--force`.
-A local run that still owns the task and has not finished refuses the move.
-
-Agents and MCP do not get this bypass. Their `orbit.task.update` calls on the same
-task follow the normal lifecycle.
-
-**Task body.** The person who does a human task reads the body to copy and run
-each step, so keep it to a short card:
-
-1. A one- or two-line summary as the first paragraph. The dashboard shows that
-   paragraph as the panel's summary.
-2. Numbered steps, written `1.` and `2.`.
-3. Each runnable command in its own fenced shell block. The dashboard gives each
-   block its own copy button.
-4. A `Verify:` line followed by one fenced command that shows the result.
+Write the task body as a short card, because the person doing it copies each
+step: a one- or two-line summary, numbered steps, each command in its own
+fenced shell block, and a `Verify:` line followed by one fenced command.
 
 ````markdown
 Renew the domain before it lapses.
@@ -482,14 +396,12 @@ whois example.com | grep -i "registry expiry"
 ```
 ````
 
-Filing warns, and does not refuse, when the body has no numbered steps, no fenced
-shell block, no `Verify:` line followed by a fenced command, or runs past 2000
-characters. Put long evidence in a task artifact instead.
+Filing warns, and does not refuse, when the body lacks one of those parts or
+runs past 2000 characters.
 
 ### Reasoning effort
 
-`effort` is unset by default, which keeps the provider's own default. A
-supported value is passed through the provider's documented flag.
+`effort` is unset by default, which keeps the provider's own default.
 
 | Provider | Accepted values | Rendered as |
 |---|---|---|
@@ -499,50 +411,32 @@ supported value is passed through the provider's documented flag.
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
 | `grok` with `grok-4.6` or `grok-4.7` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` with `grok-4.5` | `low`, `medium`, `high` | `--reasoning-effort` |
-| others | None | — |
+| `grok` with another model, and other providers | None | — |
 
-An invalid or unsupported `effort` is **ignored for that crew**, as if unset,
-so a slip such as `effort = "hard"` (a task-complexity word) cannot stop every
-command. Loading logs a warning with the config path, crew, value, and accepted
-values, and `orbit doctor` lists each ignored value with the fix. Orbit never
-remaps an unsupported value onto a nearby one. `orbit config set` refuses to
-write a value that loading would drop. A missing `provider` or `model`, a
-retired backend, or an unknown pool reference still fails config loading.
-
-The narrower sets follow Orbit's validation policy for each provider. For Antigravity, Orbit accepts `low`, `medium` or `high` only, even though `agy --effort` advertises `xhigh` and `max`.
-Grok effort is verified only for `grok-4.5`, `grok-4.6`, and
-`grok-4.7`; on any other Grok model it is ignored with a warning. The provider
-can still reject a value for a particular model.
-
-Choose capability with the model first, then use `effort` to tune the reasoning
-budget within it.
+A crew table's `effort` that its provider does not accept is ignored for that
+crew, as if unset. Loading warns with the accepted values, `orbit doctor`
+lists it with the fix, and `orbit config set` refuses to write it. The
+provider can still reject a value for a particular model.
 
 #### Effort per reference
 
-Any place that names a crew can also pick its effort with `<crew>@<effort>`:
-complexity, type and purpose pools, review pools, `workflow.default_crew`,
-a task's `crew` and `--crew`. In a pool the weight
-still follows: `hard_complexity_crews = ["opus@medium:100", "opus:100"]`.
+Anywhere you name a crew, you can pick its effort with `<crew>@<effort>`:
+pools, `workflow.default_crew`, a task's `crew` and `--crew`. In a weighted
+pool the weight follows: `["opus@medium:100", "opus:100"]`.
 
-- The reference effort wins over the crew's own `effort` and the activity's
-  inline setting; a reference without `@` behaves exactly as before.
-- `opus@medium` and `opus` are separate pool members, with their own weights,
-  and runs, scorecards and experiments record them separately.
-  They share the crew's account, limits and holds: a provider failure hold,
-  including a capacity or unavailability one, or a pull drain's exclusion on
-  either one covers the crew and all of its effort references.
-- An effort the provider or model does not accept, such as `grok@max`, is
-  refused when the config loads and by `orbit config set`, naming the accepted
-  values. Unlike a crew table's `effort`, it is never silently ignored.
-- Crew names cannot contain `@` or `:`.
+- The reference effort wins over the crew's own `effort`.
+- `opus@medium` and `opus` are separate pool members, recorded separately in
+  runs, scorecards and experiments. They share the crew's account, usage
+  limits and holds.
+- An effort the provider or model does not accept, such as `grok@max`, fails
+  the config load and is refused by `orbit config set`.
 
 #### Effort chosen per draw (`@auto`)
 
-A pool entry can leave the effort to each draw: `opus@auto`, or `opus@auto:100`
-in a weighted pool. Only the complexity and type pools, the task-pilot purpose
-pool and the two review pools accept it, and only for a crew with bands in
-`workflow.auto_effort.bands`. Anywhere else, including `--crew` and a task's
-`crew`, it is refused.
+A pool entry can leave the effort to each draw: `opus@auto`, or
+`opus@auto:100` in a weighted pool. Complexity pools, type pools, the
+task-pilot pool and the two review pools accept it, for a crew that has bands.
+Anywhere else it is refused.
 
 ```toml
 [workflow.auto_effort]
@@ -553,54 +447,38 @@ bands.opus = [
 ]
 ```
 
-The first band whose every condition matches chooses the effort. A band sets an
-`effort` and at least one of `complexity` (tiers), `below_files` and
-`below_lines`. Each role matches with the signal it has when it is admitted:
+A band sets an `effort` and at least one of `complexity`, `below_files` and
+`below_lines`. The first band whose every condition matches wins; with no
+match, the crew's own `effort` runs. Each role matches on what is known when
+it is admitted:
 
-- **Implementers:** the task's complexity and the number of files its
-  `context_files` declare. The final diff never feeds it, so `below_lines`
-  never matches an implementer.
-- **Task pilots:** the filed complexity only.
-- **Reviewers:** the candidate's reviewable lines, its changed files and the
-  reviewed tasks' highest complexity.
+| Role | Signal |
+|---|---|
+| Implementer | The task's complexity and the number of files its `context_files` declare. `below_lines` never matches. |
+| Task pilot | The filed complexity. |
+| Reviewer | The candidate's reviewable lines, its changed files and the reviewed tasks' highest complexity. |
 
-No signal, or no matching band, runs the crew's own `effort`. Runs, the
-Implementers, Pilots and Reviewers analytics tables and experiment readouts
-record the resolved `<crew>@<effort>`, never `@auto`, and the run's crew
-selection or draw records which band chose it.
-
-A fixed 10% of draws goes to
-another effort the crew can run at, so both sides of each cutover keep getting
-data. Those draws are recorded with `explored: true` and the effort the bands
-would have chosen.
-
-**Pilot escalation.** A pilot run splits its partitions so each runs at one
-effort. When a pilot that ran at an `@auto` effort raises the task to a tier
-whose band maps to a higher effort, or reports confidence `medium` or `low`,
-Orbit re-pilots that task once at the higher effort and applies that
-assessment instead.
+Runs, analytics and experiment readouts record the resolved `<crew>@<effort>`,
+never `@auto`. A fixed 10% of draws goes to another effort the crew accepts,
+recorded with `explored: true`. When an `@auto` pilot raises the task into a
+higher-effort band, or reports `medium` or `low` confidence, Orbit re-pilots
+the task once at the higher effort.
 
 ### System work
 
-Orbit's own work draws its crew from the complexity pools, like a task with no
-crew, until you give a purpose a pool of its own (see
-[purpose pools](#purpose-pools)). Shipped auto-task templates name no crew, so
-each minted task draws from the pool for its complexity; a `template.crew`
-setting, an explicit template crew, and `workflow.purpose_crews.review` for
-`delivery-code-review` still win. While their purpose pools are unset, the
-task pilot draws from `low`, step-failure and PR conflict recovery from
-`medium`, and repairs authorized by `orbit run auto --auto-fix`, conflict
-repairs included, from `low`. Repairs are narrowed only by `--allow-crew`, and a
-pool the run cannot use stops the repair rather than escalating. A run draws
-once per pool, keeping the pool's weights and skipping disabled and
-usage-limited crews, and records the draw in its state. An empty pool falls
-back to `default_crew`, and the recorded draw says so. Recovery never inherits
-a failed task's crew.
+Orbit's own work draws a crew from the complexity pools, like a task with no
+crew, until you give its purpose a [pool of its own](#purpose-pools). Shipped
+auto-task templates name no crew, so each task they mint draws from the pool
+for its complexity; a crew set on a template still wins.
+
+A run draws once per pool, by weight, skipping disabled and usage-limited
+crews. An empty pool falls back to `default_crew`. Recovery never inherits a
+failed task's crew, and a repair whose pool the run cannot use stops instead
+of escalating.
 
 ### Purpose pools
 
-Each purpose of work can name a weighted pool of its own under
-`[workflow.purpose_crews]`, written like the complexity pools:
+Give a purpose of work its own weighted pool under `[workflow.purpose_crews]`:
 
 ```toml
 [workflow.purpose_crews]
@@ -609,43 +487,34 @@ failure_recovery = ["sol"]
 baseline_red_repair = ["opus"]
 ```
 
-The purposes are `task_pilot`, `failure_recovery`, `auto_fix`,
-`baseline_red_repair` and `sweep_tasks` (every task the CI failure,
-Dependabot, code-scanning and merged-head repair sweeps file),
-`pilot_warning_triage` (the triager of each held task-pilot assessment:
-drawn from its pool when set and inspection-capable, else from
-`workflow.hard_complexity_crews` as before, recorded as
-`purpose:pilot_warning_triage`), plus
-`final_recovery` and `review`, which keep their own rules: final recovery
-draws only from its pool, and `[]` turns it off; automatic review needs its
-pool set and avoids the crew that implemented the reviewed work. For the
-first five, a crew is chosen in this order:
+| Purpose | Covers | While unset, draws from |
+|---|---|---|
+| `task_pilot` | The task pilot | `low` |
+| `failure_recovery` | Step-failure and PR conflict recovery | `medium` |
+| `auto_fix` | Repairs under `orbit run auto --auto-fix` | `low` |
+| `baseline_red_repair` | Tasks the red-base re-check files | A matching [type pool](#type-pools), then the complexity pool |
+| `sweep_tasks` | Tasks filed by the CI failure, Dependabot, code-scanning and merged-head repair sweeps | A matching type pool, then the complexity pool |
+| `pilot_warning_triage` | The triager of each held task-pilot assessment | `hard` |
+| `final_recovery` | Final recovery | Its default pool; `[]` turns it off |
+| `review`, `pre_landing_review` | Automatic review | See each key under [Settable keys](#settable-keys) |
 
-1. An explicit crew on the task, auto-task template or activity input, used as
-   it is.
-2. The purpose's pool, when it has an enabled member. A provider usage limit
-   or failure hold on the assigned member redraws from the pool's other
-   enabled members, keeping their weights, before the route below.
-3. The earlier route. The tasks the red-base re-check and the sweeps file
-   (`baseline_red_repair` and `sweep_tasks`) draw from a matching
-   [type pool](#type-pools) when one exists, then from the complexity pool
-   named above, else `default_crew`. The activity purposes (`task_pilot`,
-   `failure_recovery` and `auto_fix`) go straight to the complexity pool.
+For the first five, Orbit picks a crew in this order:
 
-`--allow-crew` narrows a purpose draw the same way it narrows a complexity
-draw. A task's purpose comes from the tag it was filed with
-(`baseline-red-repair`, `ci-failure-sweep`, the Dependabot and code-scanning
-tags, a merged-head follow-up tag), or from a `crew-purpose:<purpose>` tag an
-auto-task template adds. `orbit config show --all` lists each purpose's resolved
-pool and where it comes from (the default view already prints the purpose
-keys; `--json` includes `crew_purposes`), and `orbit run show` names the rule behind each
-activity crew a run drew.
+1. An explicit crew on the task, auto-task template or activity input.
+2. The purpose's pool, when it has an enabled member. A usage limit or
+   failure hold on the drawn member redraws from the pool's other members.
+3. The pool in the last column, then `default_crew`.
+
+A task's purpose comes from the tag it was filed with, such as
+`baseline-red-repair` or `ci-failure-sweep`, or from a
+`crew-purpose:<purpose>` tag an auto-task template adds.
+`orbit config show --all` lists each purpose's resolved pool, and
+`orbit run show` names the rule behind each crew a run drew.
 
 ### Type pools
 
-A task type from `workflow.task_types` can give any complexity tier
-a pool of its own under `[workflow.type_complexity_crews.<type>]`, written like
-the complexity pools:
+A task type from `workflow.task_types` can give a complexity tier its own
+pool:
 
 ```toml
 [workflow.type_complexity_crews.ui]
@@ -655,304 +524,151 @@ hard = ["opus"]
 hard = ["fable:3", "opus:1"]
 ```
 
-A task's type is the first `task_types` entry its tags or context
-files match (the type the implementer scorecard groups it under); `other`
-never has a pool. A typed task with no crew draws from its type's pool for its
-complexity instead of `workflow.<tier>_complexity_crews`, and records the
-source `type:<type>/<tier>`. A task whose type has no pool for its tier draws
-from the complexity pool as before. The order is an explicit crew, then a
-purpose pool, then the type pool, then the complexity pool, then
-`default_crew`. Executor OS filtering and usage pressure apply as they do to
-complexity pools.
+A task's type is the first `task_types` entry its tags or context files
+match; `other` never has a pool. A typed task with no crew draws from its
+type's pool for its tier and records the source `type:<type>/<tier>`. The
+full order is an explicit crew, a purpose pool, the type pool, the complexity
+pool, then `default_crew`.
 
-Orbit draws at creation, when the crew is cleared, when the complexity changes
-and when a tag or context-file edit moves the task to another type pool, or
-out of one. At dispatch it keeps a type-pool crew while that crew is still an
-enabled member and the task still classifies to that type and tier. A
-provider hold or usage limit redraws from the pool's other members, then
-from the complexity pool, then from `default_crew`.
+Orbit draws at creation, and again when the crew is cleared, the complexity
+changes, or a tag or context-file edit moves the task to another type. A
+provider hold or usage limit redraws from the pool's other members, then the
+complexity pool, then `default_crew`.
 
-The load refuses a type `task_types` does not define, an unknown
-tier, an empty pool, an unknown or disabled crew and a zero weight, and the
-error names the key. Each `<type>.<tier>` pool layers separately, so a
-workspace pool replaces only the same type and tier from global. Settings ›
-Crews lists each pool under the crews it uses.
-
-`[workflow] system_crew` is deprecated: it still loads for one release with a
-warning, but is ignored. Orbit no longer defines a built-in `system` crew, so a
-template or job still naming `crew: system` routes through the pools with a
-warning. A `[crews.system]` table you define is an ordinary crew.
-
-Visual review has been removed. Existing `[visual_review]` keys
-(`manifests`, `default_width`, `mode`, `block_at`, `file_at`, `reviewer`,
-`max_mocks`, `max_images`, `max_image_tokens`, `max_findings` and
-`require_established`) and `workflow.purpose_crews.visual_review` load with a
-deprecation warning and have no effect. They are recognised until 2026-12-07,
-after which they are reported as unknown settings; delete the `[visual_review]`
-table and that pool from the `config.toml` that sets them. A `verify-mock-ui`
-tag is an ordinary tag, and `mocks/` and `visual/` are ordinary artifact names.
-
-The evolution pass, ux-rules and finding-verification routines have been
-removed. `resident.evolution.min_occurrences`, `min_distinct_cycles`,
-`min_distinct_mandates`, `min_cost_minutes` and `max_proposals`, every
-`[ux_rules]` key (`surfaces`, `runner`, `ui_base_url`, `max_new_tasks`,
-`file_at`, `disabled`) and `review.verify_findings` load with a deprecation
-warning and have no effect. They are recognised until 2026-12-07, after which
-they are reported as unknown settings; delete them from the `config.toml` that
-sets them. The evolution ledger keeps its fixed 14-day window and 30-day
-decline, and a review-filed bug is approved and promoted like any other task.
-
-Fleet notice limits are fixed. Every `[notice]` key (the expiry defaults and
-caps, size, open-count and rate limits, `retention_days`, `agent_posting`,
-`brief_delivery` and the `brief_*` bounds) loads with a deprecation warning and
-has no effect. They are recognised until 2026-12-08, after which they are
-reported as unknown settings; delete the `[notice]` table. See
-[fleet notices](../../how-to/fleet-notices/) for the fixed values.
-
-Thirty-one tuning keys now have fixed values. They load with a deprecation
-warning, have no effect, and are recognised until 2026-12-08; delete them from
-the `config.toml` that sets them:
-
-- every `[attention]` key: cursors last 24 hours, failed runs are read over 48
-  hours, runs count as stuck after 120 minutes, the CI reading is cached 60
-  seconds, each source read has 10 seconds and a cross-host call 20, each
-  workspace contributes at most 200 candidates, and severity steps up at 24 and
-  72 hours;
-- `machine.auto_concurrency.admit_memory_percent` (75), `profile_window` (50),
-  `horizon_cap_minutes` (120), `head_max_wait_minutes` (30) and
-  `head_stuck_passes` (20); `mode`, `admit_cpu_percent` and
-  `min_profile_deliveries` stay settable;
-- `machine.host_shutdown_hold_minutes` (180) and
-  `machine.application_consent_max_days` (30);
-- `execution.agent_stall_minutes` (30) and
-  `execution.proc_spawn_max_timeout_minutes` (45);
-- `experiments.max_running` (3) and `experiments.min_delivered_rate` (0.9);
-- `resident.evolution.window_days` (14) and `decline_suppress_days` (30);
-- `retention.journal_days` (14) and `retention.store_warn_bytes` (1 GiB);
-  `retention.audit_days` and `runs_days` stay settable;
-- every `[runtime]` log key: the operational log rolls past 100 MiB, keeps a
-  500 MiB archive budget and deletes archives older than 7 days;
-- `automation.stall_window_minutes` (60), `ci_failure.operator_suppression_hours`
-  (6), `jobs.failure_streak_warn` (5), `security_alert_sweep.min_severity`
-  (`moderate`; a sweep run's `min_severity` input still overrides it) and
-  `worktree.parked_reclaim_after_hours` (336).
-
-Explorer delegation has been removed. Existing `workflow.explore.*` and
-`workflow.purpose_crews.explorer` settings load with a deprecation warning
-and have no effect; remove them with `orbit doctor --fix-retired-config-keys`,
-which backs up each affected file first, or delete the lines by hand from the
-`config.toml` that sets them. Historical run answers and concluded experiment
-readouts remain readable.
-
-The crew ladder (with `orbit agents ladder`), crew-performance weighting,
-regression-risk prompt marks and the task pilot's explore brief have been
-removed. Every `[workflow.crew_ladder]`, `[workflow.regression_risk]` and
-`[workflow.explore_brief]` key, and `workflow.crew_performance`,
-`crew_performance_strength`, `crew_performance_cap` and
-`crew_performance_window_days`, load with a deprecation warning and have no
-effect. They are recognised until 2026-12-07, after which they are reported as
-unknown settings; delete them from the `config.toml` that sets them. Route each
-tier with `workflow.<tier>_complexity_crews` and compare crews with
-experiments.
-
-Several former tuning keys are now fixed at their old defaults. These load
-with a deprecation warning and have no effect until 2026-12-08, after which
-they are reported as unknown settings; delete them from the `config.toml` that
-sets them:
-
-- `pr.close_on_terminal`, `pr.draft`, `pr.freshness_section`,
-  `pr.orchestration_trailer`, `pr.screenshot_section`, `pr.signature`,
-  `commit.orchestrated_by_trailer` and `commit.regression_trailers`: Orbit
-  closes a task's open pull requests when it ends, opens pull requests ready
-  for review (a draft only for a required-section gap), adds the Screenshots
-  table for `ui`-tagged tasks, the Branch Freshness section, the model
-  signature and the `Orchestrated-By` line, and adds the `Orchestrated-By` and
-  regression trailers to commits.
-- `workflow.admission_affinity`, `workflow.auto_effort.explore_share`,
-  `workflow.provider_limit_max_used_pct`, `workflow.usage_pressure_cap` and
-  `workflow.usage_pressure_strength`: admission affinity reaches across the
-  band, 10% of `@auto` draws explore, the provider-limit threshold is 90%
-  (`workflow.provider_limit_overrides` still changes it per provider), and the
-  usage-pressure multiplier is clamped to `[1/8, 8]`.
-- `workflow.resource_throttle.cpu_light_leaves`, `io_full_high_percent` and
-  `io_full_resume_percent`: two CPU-light leaves, and a disk I/O stall mark of
-  20% resuming below 10%.
-- `workflow.validation_env.shell_probe`, `path_mode` and `cargo_incremental`,
-  and the older `login_shell` and `interactive`: validation always probes the
-  interactive login shell, prepends `workflow.validation_env.path`, and sets
-  `CARGO_INCREMENTAL=0` for bound host validation.
+The load refuses an undefined type, an unknown tier, an empty pool, an unknown
+or disabled crew and a zero weight. A workspace pool replaces only the same
+type and tier from global.
 
 ## Settable keys
 
-`orbit config set` accepts these keys, except the two read-only `machine.*` identity keys. `orbit config keys` prints the same list, and the docs test suite fails when this table and that list diverge.
+`orbit config set` accepts every key below except the read-only `machine.id`
+and `machine.task_prefix`. `orbit config keys` prints the same list.
+**Advanced** keys are hidden from `orbit config show` until a file sets them.
 
 | Key | Type, default and purpose |
 |---|---|
-| `workflow.base_branch` | **Advanced.** string · **Default:** `main`<br>Base branch for ship, auto, and the task pilot when the registered workspace has none. |
+| `workflow.base_branch` | **Advanced.** string · **Default:** `main`<br>Base branch for ship, auto and the task pilot when the registered workspace has none. |
 | `workflow.default_crew` | string · **Default:** See [Crews](#crews)<br>Crew for a task that names none and gets no override. |
-| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew, and for the task pilot and PR auto-fix while their purpose pools are unset. |
-| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery while their purpose pool is unset. |
+| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew. See [System work](#system-work) for what else draws from it. |
+| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for xhard-complexity tasks with no crew. |
-| `workflow.type_complexity_crews` | table&lt;string,table&lt;string,array&lt;string&gt;&gt;&gt; · **Default:** `{}`<br>Per task type and complexity tier, a weighted crew pool that replaces that tier's complexity pool for tasks of the type. See [type pools](#type-pools). |
-| `workflow.purpose_crews.auto_fix` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for repairs authorized by `orbit run auto --auto-fix`. Unset or `[]`, they draw from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.baseline_red_repair` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the red-base re-check files. Unset or `[]`, they draw from their matching type pool, then their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.failure_recovery` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for step-failure and PR conflict recovery. Unset or `[]`, they draw from `workflow.medium_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.final_recovery` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. Replaces the deprecated `workflow.final_recovery_crews`. |
-| `workflow.purpose_crews.pilot_warning_triage` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the triager of each held task-pilot assessment. Only crews whose executor declares `inspection_args` are drawn, seeded by task; the crew that wrote the held assessment is passed over while the pool offers another. Unset or `[]`, or with no such crew, it draws from `workflow.hard_complexity_crews` as before. The recorded draw names its source as `purpose:pilot_warning_triage`. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.pre_landing_review` | string or array · **Default:** Unset<br>Crew for before-PR and before-landing review, including the reviewer a claim from a `review.before_landing_hosts` machine captures. Written and admitted like `workflow.purpose_crews.review`, and drawn by the same rules. Unset or `[]`, that reviewer comes from `workflow.purpose_crews.review`, so after-landing review can keep a different pool. A review layer that resolves no crew from either key refuses to start, naming both. |
-| `workflow.purpose_crews.review` | string or array · **Default:** Unset<br>Crew for automatic review: every review task the after-landing auto-task mints, and the reviewer `review.timing` runs while `workflow.purpose_crews.pre_landing_review` is unset. Unset, after-landing review uses that auto-task's template crew. An array is a pool written like the complexity pools (`["sol", "grok"]` or `["sol:3", "grok:1"]`, all bare or all weighted): each review draws one crew by weight, skipping crews that are disabled or at a provider usage limit and then preferring one that did not implement the reviewed work, each step falling back to the pool when it would leave none. A distributed owner resolves its pool to one crew per claim. `[]` unsets it; a crew the registry does not define fails the load. Replaces the deprecated `operation.review_crew`. |
-| `workflow.purpose_crews.sweep_tasks` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for every task a sweep files: the CI failure sweep, the Dependabot and code-scanning sweeps, and the merged-head repairs a review reconciliation files. Unset or `[]`, they draw from their matching type pool, then their complexity pool. Replaces the deprecated `ci_failure_sweep`, `dependabot` and `merged_head_repair` pools, which still load into it; a file whose old pools differ fails to load until you merge them here. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.task_pilot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the task pilot. Unset or `[]`, it draws from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above 90%. Each entry replaces that threshold for one provider, `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`; `100` skips only on exhaustion. |
+| `workflow.type_complexity_crews` | table&lt;string,table&lt;string,array&lt;string&gt;&gt;&gt; · **Default:** `{}`<br>Per task type and tier, a weighted pool that replaces the tier's complexity pool. See [Type pools](#type-pools). |
+| `workflow.purpose_crews.auto_fix` | array&lt;string&gt; · **Default:** `[]`<br>Pool for repairs under `orbit run auto --auto-fix`. Unset, they draw from `workflow.low_complexity_crews`. See [Purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.baseline_red_repair` | array&lt;string&gt; · **Default:** `[]`<br>Pool for the tasks the red-base re-check files. Unset, they draw from their type pool, then their complexity pool. |
+| `workflow.purpose_crews.failure_recovery` | array&lt;string&gt; · **Default:** `[]`<br>Pool for step-failure and PR conflict recovery. Unset, they draw from `workflow.medium_complexity_crews`. |
+| `workflow.purpose_crews.final_recovery` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define. `[]` disables final recovery. |
+| `workflow.purpose_crews.pilot_warning_triage` | array&lt;string&gt; · **Default:** `[]`<br>Pool for the triager of each held task-pilot assessment. Only crews whose executor declares `inspection_args` are drawn; with none, it draws from `workflow.hard_complexity_crews`. |
+| `workflow.purpose_crews.pre_landing_review` | string or array · **Default:** Unset<br>Crew or pool for before-PR and before-landing review, written and drawn like `workflow.purpose_crews.review`. Unset, that key supplies the reviewer. A review layer that resolves no crew from either key refuses to start. |
+| `workflow.purpose_crews.review` | string or array · **Default:** Unset<br>Crew or pool for after-landing review tasks, and for review before landing while `pre_landing_review` is unset. Each review draws one crew by weight, skips disabled and usage-limited crews, and prefers one that did not implement the work. Unset, after-landing review uses its auto-task's template crew. |
+| `workflow.purpose_crews.sweep_tasks` | array&lt;string&gt; · **Default:** `[]`<br>Pool for every task a sweep files: CI failure, Dependabot, code-scanning and merged-head repairs. Unset, they draw from their type pool, then their complexity pool. |
+| `workflow.purpose_crews.task_pilot` | array&lt;string&gt; · **Default:** `[]`<br>Pool for the task pilot. Unset, it draws from `workflow.low_complexity_crews`. |
+| `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Admission skips a crew while a live usage window of its provider or model is exhausted or at least 90% used. Each entry replaces that threshold for one provider, or for one crew that sets `env`: `name:percent`, or `name:off` to record readings without gating, such as `["claude:80", "codex:off"]`. `100` skips only on exhaustion. |
 | `workflow.provider_limit_budgets` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>`, such as `["grok:30usd/5h"]`. Counts this host's Orbit runs only. |
-| `workflow.provider_limit_explicit_crews` | **Advanced.** string · **Default:** `wait`<br>A task whose explicit crew is limited waits in the backlog (`wait`), or is drawn from the unlimited members of its complexity pool (`pool`). A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
-| `workflow.crew_selection` | **Advanced.** string · **Default:** `static`<br>How task creation, complexity re-rate and admission draws weigh pool members. `static` uses the configured weights. `usage_pressure` scales each member's weight by its crew's weekly usage pressure, clamped to `[1/8, 8]`, and at admission draws a crew the system chose again from its whole pool, keeping the task's automatic crew source. Explicit crews are never re-drawn. The `crew_selection` object a run records is the draw itself, not this key. |
-| `workflow.task_types` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered task types that `workflow.type_complexity_crews` routes by and the implementer scorecard's by-type matrix splits by. Each `[[workflow.task_types]]` entry has a unique non-empty `name` (never `other`) and at least one of `tags` or `paths`; a task takes the first type whose tags it carries or whose path globs match its context files, else `other`. Empty means every task is `other`. Read with `orbit agents scorecard --role implementers --by-type`. The former name `workflow.crew_performance_types` still loads into it with a deprecation warning until 2026-12-07. |
-| `workflow.activity_timeouts` | **Advanced.** table&lt;string,integer&gt; · **Default:** `{}`<br>CLI agent wall-clock seconds by exact activity name, inclusive range 1–43200 (12 hours). An `agent_implement = 28800` entry overrides the shipped 21600-second (6-hour) budget. Unmapped activities retain their declaration. A workspace table replaces the global table. Continuations and response corrections share one resolved budget; enclosing waits and reservation TTLs must cover it. Restart long-running processes after editing. |
-| `workflow.auto_effort.bands` | **Advanced.** table · **Default:** `{}`<br>Per crew, the ordered bands a `<crew>@auto` pool entry resolves through. Each band has an `effort` the crew accepts and at least one of `complexity`, `below_files`, `below_lines`. See [effort chosen per draw](#effort-chosen-per-draw-auto). |
-| `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
-| `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
-| `workflow.unlocked_context_paths` | array&lt;string&gt; · **Default:** `["**/*.md"]`<br>Path globs (`*` within a component, `**` across components) whose `context_files` entries take no context lock. The agent still receives them as context; admission, readiness and lock reservations skip them. A task whose every entry matches still locks them all. `[]` locks every entry. |
-| `workflow.lock_modes` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[workflow.lock_modes]]` entries, each a `pattern` (a Rust regex searched for in the workspace-relative path; anchor it with `^` and `$`) and a `mode` of `exclusive` (default) or `shared`. The first matching entry wins. Two tasks whose context overlaps only at a shared path, judged at the narrower selector's path, run together, and a conflict between them is resolved when the second lands. `module:` and `command:` selectors stay exclusive. Empty locks every overlap. |
-| `workflow.unlocked_path_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands a repaired candidate runs instead of `workflow.required_validation_commands` when its tree differs from the last tree its run passed the full list on only in paths matching `workflow.unlocked_context_paths`, such as `["make ci-fast"]`. Any other change runs the full list. Each validation records which list ran and why as `validation_scope`. Empty always runs the full list. |
-| `workflow.generated_paths` | table&lt;string,string&gt; · **Default:** `{}`<br>Generated files, as path glob = regenerate command, such as `"docs/INDEX.md" = "make docs-index"`. When a stopped rebase conflicts on a match, conflict recovery takes one side, runs the command in the checkout and stages its output instead of merging it. A command that fails or leaves conflict markers fails the repair. |
-| `workflow.light_delivery_paths` | array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]`<br>Path globs (`*` within a component, `**` across components; a leading `!` excludes) a candidate must change only within for a task tagged `skip-review` or `skip-validation` to skip agent review or local validation. Any other changed path ignores both tags, and the task's history records why. `[]` disables both tags. |
-| `workflow.test_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]`<br>Path globs (`*` within a component, `**` across components; a leading `!` excludes) whose changed lines count as tests in each landed delivery's diff stats, charted under Analytics › Metrics › Lines changed. Checked before `workflow.non_code_paths`. Changes apply to deliveries recorded afterwards. |
-| `workflow.non_code_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]`<br>Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats. A path matching neither this nor `workflow.test_paths` counts as code. |
-| `workflow.regression_layers` | **Advanced.** array&lt;table&gt; · **Default:** a `ci_tests` row (`.github/`; `tests`, `testdata` and `fixtures` directories) and a `docs_skills` row (`docs/`; `.md` files)<br>Ordered layers that `orbit codebase analytics` and `show` classify a regression fix into, by its landed paths, else its declared footprint. Each `[[workflow.regression_layers]]` entry has a unique non-empty `name` (never `other` or `unknown`) and at least one of `prefixes`, `dirs` (single path components) or `suffixes`; a path takes the first layer with a matching rule, else `other`. Setting the list replaces the defaults; `[]` puts every path in `other`. Breakdowns list the layers in order, and `--layer` accepts exactly these names plus `other` and `unknown`. |
-| `workflow.non_reviewable_paths` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Path globs left out of the reviewable-lines denominator (`cost_per_line` and `lead_time_per_line`). Docs and config stay reviewable. List lockfiles, goldens, snapshots and generated files here; empty counts every line that is not a pure rename. Distinct from `workflow.non_code_paths`. Changes apply to deliveries recorded afterwards. |
-| `workflow.task_pilot_freshness.material_fields` | **Advanced.** array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. A new `orbit init` seeds only `description` and `criteria`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
-| `workflow.task_pilot_freshness.source_sensitivity` | **Advanced.** string · **Default:** `ignore`<br>Whether branch-head changes are checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Values: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
-| `workflow.mid_run_steering.enabled` | bool · **Default:** `false`<br>Record in each run's state the newest task comment every agent prompt with task context included, the run's steering watermark, and lead the run's later prompts with the operator comments written after it. The shipped delivery pipelines do not commit while one is undelivered. Claimed leaves read steering from their owner and fail closed before commit when it cannot answer. A new `orbit init` seeds `true`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
-| `workflow.mid_run_steering.max_rounds` | **Advanced.** integer · **Default:** `2`<br>Steering rounds a run may spend at the promotion gate before it holds as `steering_unconsumed` (`1`–`10`). |
-| `workflow.ci_infrastructure_signatures` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Log-line prefixes a failed CI job prints when infrastructure, not the change, failed. A match uses the bounded infrastructure retry policy below, with no repair agent and no CI sweep task. The sweep itself reruns nothing, so a failed landing-branch run stays red until a rerun or a newer push. Empty declares none. |
-| `workflow.ci_infrastructure_retry.max_attempts` | **Advanced.** integer · **Default:** `3`<br>Total failed-jobs reruns on one PR head for authenticated logged infrastructure/transient failures (0..=10; `0` disables this recovery). Reservations survive restarts and unknown replies. Candidate failures never use this path. Exhaustion records `ci_infrastructure_retry_exhausted` with the transient classification and attempt count in task history. Conclusion-only cancellations/timeouts, a failure whose log is only a ci-await timeout, and flaky failures retain one rerun. |
-| `workflow.ci_infrastructure_retry.backoff_seconds` | **Advanced.** integer · **Default:** `60`<br>Initial delay between infrastructure reruns (1..=3600 seconds), doubled after each reservation. The first rerun is immediate; default waits are 60 and 120 seconds. Completion, landing and review watchers share the durable budget and preserve their merge authority. The existing completion deadline still applies. Backoff avoids repeated completed-log reads; throttled log reads use the recorded GitHub read deferral without spending a rerun attempt. |
-| `workflow.ci_infrastructure_retry.handoff_steps` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Failed-step name patterns of CI dependency handoffs, steps that await or download another job's output. Each matches the whole step name, case-sensitively; `*` matches any characters. When every failed job's one failed step matches, the set uses the infrastructure retry above from the step names alone, without reading logs, so a truncated log cannot leave it unclassified. A failed job in any other step keeps the usual classification. Empty declares none. |
-| `workflow.resource_throttle.enabled` | **Advanced.** bool · **Default:** `true`<br>Hold new task admission while host CPU, memory, disk space, or (on Linux) disk I/O pressure stays at or above its high mark. While CPU alone is held, a local drain may still admit up to two eligible CPU-light auto-tasks. On Linux, disk I/O stall (`full avg60` in `/proc/pressure/io`) holds at 20% and resumes below 10%; hosts without pressure stall information are not gated. Memory, disk and I/O holds stop those tasks; pull drains do not use this budget and request no new claims while their executor is throttled. Disabled, pressure is still reported. |
-| `workflow.resource_throttle.cpu_source` | string · **Default:** `"load"`<br>`load` or `utilization`. Linux utilization uses busy CPU tick deltas excluding idle and I/O wait; macOS uses Mach utilization for either choice. Both use the existing ten-second sustain window; I/O pressure remains independently gated. The active source appears in readiness and doctor. |
-| `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. With the default `cpu_source = "load"`, Linux uses load average divided by online CPUs, includes the run queue and I/O wait, and can exceed 100%; this differs from `machine.auto_concurrency.admit_cpu_percent`, which measures forecast utilization. |
+| `workflow.provider_limit_explicit_crews` | **Advanced.** string · **Default:** `wait`<br>A task whose explicit crew is usage-limited waits in the backlog (`wait`) or redraws from the unlimited members of its complexity pool (`pool`). |
+| `workflow.crew_selection` | **Advanced.** string · **Default:** `static`<br>How pool draws weigh members. `static` uses the configured weights. `usage_pressure` scales each weight by the crew's weekly usage pressure and redraws system-chosen crews at admission. Explicit crews are never redrawn. |
+| `workflow.task_types` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered task types for [type pools](#type-pools) and `orbit agents scorecard --role implementers --by-type`. Each `[[workflow.task_types]]` entry has a unique `name` (never `other`) and at least one of `tags` or `paths`. A task takes the first type whose tags it carries or whose globs match its context files, else `other`. |
+| `workflow.activity_timeouts` | **Advanced.** table&lt;string,integer&gt; · **Default:** `{}`<br>Wall-clock seconds per CLI agent activity name (1–43200). For example, `agent_implement = 28800` overrides the shipped 6-hour budget. A workspace table replaces the global table. |
+| `workflow.auto_effort.bands` | **Advanced.** table · **Default:** `{}`<br>Per crew, the ordered bands a `<crew>@auto` pool entry resolves through. See [Effort chosen per draw](#effort-chosen-per-draw-auto). |
+| `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass before push, merge or acceptance of a distributed handoff. Empty runs no required check. |
+| `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it, as `orbit run auto --complete` does. |
+| `workflow.unlocked_context_paths` | array&lt;string&gt; · **Default:** `["**/*.md"]`<br>Path globs whose `context_files` entries take no context lock. The agent still receives them as context. A task whose every entry matches still locks them all. `[]` locks every entry. |
+| `workflow.lock_modes` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[workflow.lock_modes]]` entries: a `pattern` (a Rust regex searched for in the workspace-relative path) and a `mode`, `exclusive` (default) or `shared`. The first match wins. Tasks that overlap only at shared paths run together; a conflict is resolved when the second lands. |
+| `workflow.unlocked_path_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands a repaired candidate runs instead of the full required list when its changes since the last full pass touch only `workflow.unlocked_context_paths`, such as `["make ci-fast"]`. Empty always runs the full list. |
+| `workflow.generated_paths` | table&lt;string,string&gt; · **Default:** `{}`<br>Generated files, as path glob = regenerate command, such as `"docs/INDEX.md" = "make docs-index"`. When a rebase conflicts on a match, conflict recovery runs the command and stages its output instead of merging. |
+| `workflow.light_delivery_paths` | array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]`<br>Path globs (a leading `!` excludes) a candidate must stay within for a `skip-review` or `skip-validation` tag to apply. `[]` disables both tags. |
+| `workflow.test_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]`<br>Path globs whose changed lines count as tests in landed-delivery diff stats. Checked before `workflow.non_code_paths`. |
+| `workflow.non_code_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]`<br>Path globs whose changed lines count as other (docs, config, data, assets). A path matching neither list counts as code. |
+| `workflow.regression_layers` | **Advanced.** array&lt;table&gt; · **Default:** a `ci_tests` row (`.github/`; `tests`, `testdata` and `fixtures` directories) and a `docs_skills` row (`docs/`; `.md` files)<br>Ordered layers that `orbit codebase analytics` and `show` classify a regression fix into, by path. Each `[[workflow.regression_layers]]` entry has a unique `name` and at least one of `prefixes`, `dirs` or `suffixes`. Setting the list replaces the defaults. |
+| `workflow.non_reviewable_paths` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Path globs left out of the reviewable-lines denominator (`cost_per_line`, `lead_time_per_line`). List lockfiles, goldens, snapshots and generated files. |
+| `workflow.task_pilot_freshness.material_fields` | **Advanced.** array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields checked for drift between task-pilot preparation and apply. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies` and `instructions`. |
+| `workflow.task_pilot_freshness.source_sensitivity` | **Advanced.** string · **Default:** `ignore`<br>Whether a branch-head change counts as that drift: `ignore`, `context_files` (only when a path the task's selectors name changed) or `any`. |
+| `workflow.mid_run_steering.enabled` | bool · **Default:** `false`<br>Lead a run's later prompts with the operator comments written on its task since the run last read them. The shipped pipelines do not commit while one is undelivered. |
+| `workflow.mid_run_steering.max_rounds` | **Advanced.** integer · **Default:** `2`<br>Steering rounds a run may spend at the promotion gate before it holds as `steering_unconsumed` (1–10). |
+| `workflow.ci_infrastructure_signatures` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Log-line prefixes a failed CI job prints when infrastructure, not the change, failed. A match reruns the failed jobs under the retry keys below, with no repair agent and no CI sweep task. |
+| `workflow.ci_infrastructure_retry.max_attempts` | **Advanced.** integer · **Default:** `3`<br>Total failed-job reruns on one PR head for infrastructure failures (0–10; `0` disables). Exhaustion records `ci_infrastructure_retry_exhausted` in task history. |
+| `workflow.ci_infrastructure_retry.backoff_seconds` | **Advanced.** integer · **Default:** `60`<br>Initial delay between infrastructure reruns (1–3600), doubled after each. The first rerun is immediate. |
+| `workflow.ci_infrastructure_retry.handoff_steps` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Names of CI steps that await or download another job's output. Each pattern matches the whole step name, case-sensitively; `*` matches any characters. When every failed job failed only in such a step, the failure is retried as infrastructure without reading logs. |
+| `workflow.resource_throttle.enabled` | **Advanced.** bool · **Default:** `true`<br>Hold new task admission while host CPU, memory, disk space or, on Linux, disk I/O pressure is at or above its high mark. |
+| `workflow.resource_throttle.cpu_source` | string · **Default:** `"load"`<br>CPU signal: `load` or `utilization`. macOS measures utilization for either. Readiness and doctor show the active source. |
+| `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. With `load` on Linux this is load average divided by online CPUs, which can exceed 100%. |
 | `workflow.resource_throttle.cpu_resume_percent` | integer · **Default:** `85`<br>Resume below this CPU percentage. |
-| `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. It and auto-concurrency's fixed 75% memory limit measure non-reclaimable memory; this global high mark must stay above 75. |
+| `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. Must stay above 75, auto-concurrency's fixed memory limit. |
 | `workflow.resource_throttle.memory_resume_percent` | integer · **Default:** `85`<br>Resume below this memory percentage. |
 | `workflow.resource_throttle.disk_high_percent` | integer · **Default:** `90`<br>Disk high-water mark, per observed filesystem. |
 | `workflow.resource_throttle.disk_resume_percent` | integer · **Default:** `85`<br>Resume below this disk percentage. |
-| `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, put ahead of the resolved `PATH`, which comes from the owner's interactive login shell (falling back to a login shell). A leading `~/` expands to `HOME`. Empty adds nothing. |
-| `workflow.validation_env.build_output_env` | array&lt;string&gt; · **Default:** `[]`<br>Environment variable names bound to managed host output for required validation and host evidence. Configured bindings replace inherited values; commands must honor them. Empty allocates nothing. See [Workspace build output](#workspace-build-output). |
-| `machine.name` | string · **Default:** Set by `orbit init`<br>Global only. This machine's display name, and the one `[machine]` value you can change. |
-| `machine.labels` | array of strings · **Default:** `[]`<br>Global only. Capability labels this machine carries (`["gpu", "xcode"]`) for tasks whose `requires_labels` name them; a host may start such a task only when it carries every label. Its OS (`linux`, `macos` or `windows`) is an implicit label. Labels are trimmed and lowercased, and use ASCII letters, digits, `-`, `_`, `.`, `:` and `/`, up to 64 bytes. `orbit doctor` prints the effective set. |
-| `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
-| `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
-| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded: on Linux, `warn` runs each in its own systemd user scope, bounded by the `machine.worker_*` limits; without a user manager, it runs uncontained with a warning. On macOS, `warn` starts an in-worker watchdog that stops a run past `worker_memory_max` or `worker_tasks_max`, without kernel enforcement. `strict` refuses a launch without kernel containment, including every macOS launch; `off` uses neither a scope nor a watchdog. Systemd scopes need Linux with a user manager. A boolean still loads with a warning (`true` is `warn`, `false` is `off`), as does the deprecated `machine.worker_containment_strict` (`true` is `strict`). |
-| `machine.worker_memory_high` | **Advanced.** string · **Default:** `40%`<br>Global only. Linux worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. The macOS watchdog does not apply this throttle. |
-| `machine.worker_memory_max` | **Advanced.** string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. On macOS, the `warn`-mode watchdog uses it as the memory ceiling; exceeding it stops the run without kernel enforcement. |
-| `machine.worker_tasks_max` | **Advanced.** integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=` (processes plus threads). On macOS, the `warn`-mode watchdog counts processes only. |
-| `machine.mcp.toolsets` | array&lt;string&gt; · **Default:** `[]`<br>Global only. MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role, or beside the default surface without one, such as `experiments`, `analytics`, `decision-channel`, `notice`, `resident`, `tasks-write` or `all`. A server's `--toolset` replaces this list. A toolset changes only what MCP lists and dispatches; `orbit tool run`, activities and plugin callbacks reach every tool. See [MCP toolsets](../../how-to/mcp-integration/#toolsets). |
-| `machine.mcp.role` | string · **Default:** unset<br>Global only. The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it, and `machine.mcp.toolsets` adds to it. A role limits what MCP lists and dispatches; it grants no authority. See [MCP roles](../../how-to/mcp-integration/#roles). |
-| `machine.worker_cpu_quota` | **Advanced.** integer · **Default:** unset<br>Global only. Worker scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` or unset sets no CPU limit. Linux only. |
-| `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission mode: `off`, `shadow`, or `enforce`. `off` leaves admission unchanged. `shadow` records what gap fit would admit in each local drain pass and admits as `off`. `enforce` admits local candidates whose profile fits under the forecast. Under `orbit run auto --pull`, `enforce` sends the fit list with each pull request and requests nothing while nothing fits; `shadow` records that list and requests as with `off`. A new machine's `orbit init` seeds `enforce`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
-| `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Forecast CPU utilization as a percentage of host cores (1–100); distinct from the default Linux load-based throttle signal (`workflow.resource_throttle.cpu_source = "load"`). |
-| `machine.auto_concurrency.min_profile_deliveries` | integer · **Default:** `10`<br>Global only. Minimum completed deliveries before using a profile key rather than falling back. |
+| `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries put ahead of the resolved `PATH` for required validation and `local_shell` steps. A leading `~/` expands to `HOME`. |
+| `workflow.validation_env.build_output_env` | array&lt;string&gt; · **Default:** `[]`<br>Environment variable names bound to a managed host output directory for required validation. See [Workspace build output](#workspace-build-output). |
+| `machine.name` | string · **Default:** Set by `orbit init`<br>Global only. This machine's display name. |
+| `machine.labels` | array of strings · **Default:** `[]`<br>Global only. Capability labels, such as `["gpu", "xcode"]`. A host starts a task only when it carries every label in the task's `requires_labels`. Its OS (`linux`, `macos` or `windows`) is an implicit label. |
+| `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's generated identity (`hm_…`), written once by `orbit init`. |
+| `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. Namespace for task IDs minted on this machine (2–5 uppercase ASCII letters), chosen once at `orbit init`. |
+| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded. `warn`: on Linux each runs in a systemd user scope under the `machine.worker_*` limits (uncontained, with a warning, without a user manager); on macOS a watchdog stops a run past `worker_memory_max` or `worker_tasks_max`. `strict` refuses a launch without kernel containment, including every macOS launch. `off` uses neither. |
+| `machine.worker_memory_high` | **Advanced.** string · **Default:** `40%`<br>Global only. Linux worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. Not applied on macOS. |
+| `machine.worker_memory_max` | **Advanced.** string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. The macOS watchdog uses it as its memory ceiling. |
+| `machine.worker_tasks_max` | **Advanced.** integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=` (processes plus threads). The macOS watchdog counts processes only. |
+| `machine.mcp.toolsets` | array&lt;string&gt; · **Default:** `[]`<br>Global only. MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role or the default surface. A server's `--toolset` replaces this list. See [MCP toolsets](/how-to/mcp-integration/#toolsets). |
+| `machine.mcp.role` | string · **Default:** unset<br>Global only. MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles](/how-to/mcp-integration/#roles). |
+| `machine.worker_cpu_quota` | **Advanced.** integer · **Default:** unset<br>Global only, Linux only. Worker scope `CPUQuota=` as a percentage of one core (`400` is four cores). `0` or unset sets no limit. |
+| `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission: `off`; `shadow` records what it would admit and admits as `off`; `enforce` admits the candidates whose profile fits under the forecast. |
+| `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Maximum forecast CPU utilization as a percentage of host cores (1–100). Distinct from the throttle's `cpu_high_percent`. |
+| `machine.auto_concurrency.min_profile_deliveries` | integer · **Default:** `10`<br>Global only. Completed deliveries needed before a profile is used without fallback. |
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
-| `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
-| `crew_memory.enabled` | bool · **Default:** `false`<br>Experimental. Allow crew memory in this workspace. While false, `orbit memory write`, `reset` and `copy` are refused with an error naming this key (`show`, `history` and `export` still work), `orbit experiment start` refuses an experiment with a `memory` arm, and running memory arms deliver nothing. See [Give models a memory](../../how-to/crew-memory/). |
-| `seeding.routines` | string or array&lt;string&gt; · **Default:** `all`<br>Which of Orbit's shipped default routines this workspace seeds: `"all"`, `"none"`, or a list of their file stems (`["worktree_gc", "store_gc"]`). A list seeds exactly those names, so a default a later release adds is not seeded. An unknown name fails config load with the name. `orbit workspace init`, `--force` re-init, `orbit workspace sync` and the seeding `orbit init` runs after an upgrade all honour it. Narrowing it retires a left-out default Orbit seeded and you never edited; an edited copy moves to `.orbit/.retired-managed/`. Widening it seeds the default again on the next sync. |
-| `seeding.auto_tasks` | string or array&lt;string&gt; · **Default:** `all`<br>The same policy for shipped default auto-tasks, by auto-task name (`["doc-duties", "qa-sweep"]`). An opt-out you recorded with `orbit auto-task delete` is kept while the policy leaves the default out. |
+| `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused; drafts can still be defined and edited. |
+| `crew_memory.enabled` | bool · **Default:** `false`<br>Experimental. Allow crew memory in this workspace. While false, `orbit memory write`, `reset` and `copy` are refused and memory arms deliver nothing. See [Give models a memory](/how-to/crew-memory/). |
+| `seeding.routines` | string or array&lt;string&gt; · **Default:** `all`<br>Which shipped default routines this workspace seeds: `"all"`, `"none"` or a list of file stems, such as `["worktree_gc", "store_gc"]`. Narrowing it retires a left-out default you never edited; an edited copy moves to `.orbit/.retired-managed/`. |
+| `seeding.auto_tasks` | string or array&lt;string&gt; · **Default:** `all`<br>The same policy for shipped default auto-tasks, by name, such as `["doc-duties", "qa-sweep"]`. |
 | `experiments.config_keys` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Config keys an experiment arm's `config` overlay may set. Starting an experiment whose arm sets any other key is refused. |
-| `pr.delivery_authors` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for closing a task's open pull requests when it lands, is rejected or is archived, and for settling a task to done from its delivery pull request merged outside Orbit. Empty means the login the forge CLI is authenticated as on this machine. |
-| `pr.title_template` | **Advanced.** string · **Default:** Unset<br>Template for a single-task pull request title, using the [delivery template placeholders](#delivery-templates). Unset uses the task title. |
-| `pr.body_template` | **Advanced.** string · **Default:** Unset<br>Pull request body template: `"repo"` (the repository's `pull_request_template.md`) or a repository-relative path, read at the delivery's base revision. Unset uses Orbit's own layout. |
+| `pr.delivery_authors` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored. Empty means the login the forge CLI is authenticated as on this machine. |
+| `pr.title_template` | **Advanced.** string · **Default:** Unset<br>Template for a single-task pull request title. Unset uses the task title. See [Delivery templates](#delivery-templates). |
+| `pr.body_template` | **Advanced.** string · **Default:** Unset<br>Pull request body template: `"repo"` (the repository's `pull_request_template.md`) or a repository-relative path. Unset uses Orbit's layout. |
 | `pr.agent_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer may fill through the `pr-sections.json` task artifact. |
-| `pr.required_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer must fill. An unfilled one is handled by `pr.missing_required_section` and recorded in task history. |
-| `pr.missing_required_section` | **Advanced.** string · **Default:** `draft`<br>What happens when a required section is unfilled: `draft` opens the pull request as a draft with a note under the heading; `refuse` opens no pull request. |
+| `pr.required_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer must fill. |
+| `pr.missing_required_section` | **Advanced.** string · **Default:** `draft`<br>When a required section is unfilled: `draft` opens the pull request as a draft; `refuse` opens none. |
 | `pr.labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Labels applied to each pull request Orbit opens. |
-| `pr.task_tag_labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Exact, case-sensitive allowlist of task tags mirrored as PR labels after creation or reuse. |
-| `pr.task_type_labels` | **Advanced.** table&lt;string,string&gt; · **Default:** `{}`<br>Map `feature`, `bug`, `refactor` or `chore` to label names, e.g. `{ bug = "bug", feature = "enhancement" }`. Unknown types are refused. Task labels are unioned across the delivery; missing labels are created and existing labels accepted. Names must be non-empty and cannot start with `-`. Failures warn and are recorded as `task_labels.applied` / `.failed` in the PR step output without failing the step. Empty settings add no commands. Later task edits do not sync or remove labels. |
+| `pr.task_tag_labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Exact, case-sensitive allowlist of task tags mirrored as pull request labels. |
+| `pr.task_type_labels` | **Advanced.** table&lt;string,string&gt; · **Default:** `{}`<br>Map `feature`, `bug`, `refactor` or `chore` to a label name, such as `{ bug = "bug", feature = "enhancement" }`. Applied best-effort after the pull request is created or reused; missing labels are created. |
 | `pr.reviewers` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Reviewers (logins or `org/team`) requested on each pull request Orbit opens. |
-| `commit.subject_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit subjects; must contain `[{{task_id}}]`. Subjects keep a 72-character budget: the title is shortened first, with an ellipsis, and kept whole in the body. |
+| `commit.subject_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit subjects; must contain `[{{task_id}}]`. |
 | `commit.body_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit bodies, before the trailers. |
-| `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. A name containing `..` or starting with `-` is refused. |
-| `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in PR descriptions. |
-| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. A name you add that the launching shell does not set reaches no agent: drains, `orbit run ship` and `orbit run job` warn on stderr and record it on the run, and `orbit doctor` reports it (start drains from a login shell). Clock-started runs read admitted names from `~/.orbit/clock.env`; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv). |
-| `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
-| `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
-| `completion.hold` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[completion.hold]]` rules that keep a `--complete` run's task in `review` instead of `done`. Each rule sets at least one of `paths` (globs matched against the files the pull request changes; a leading `!` excludes), `complexity_at_least` (`low`, `medium`, `hard` or `xhard`), `types` (`feature`, `bug`, `refactor`, `chore`) and `tags`, plus an optional `name`. A rule holds when any field matches, and the first matching rule is recorded on the task (`orbit task show` prints it as `Completion Hold:`). A held run leaves the pull request open and unmerged. A rule never grants completion, and a run without `--complete` is unchanged. An unknown key, a bad glob or an unknown complexity or type fails config load. Approve a held task with `orbit task update <id> --approve` once its pull request is merged. |
-| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command-audit rows, this workspace's run-audit rows, and run-audit rows whose workspace id is no longer registered become reclaimable, along with audit blobs no remaining row names. Another registered workspace keeps its own window. Health > Events, Incidents, Denials, `orbit audit` and diagnostics friction lose older raw history, with no rollups. Durable lock-denial facts preserve Lock contention. Nothing is deleted until you run `orbit gc audit --confirm` or enable the `store-gc` routine. |
-| `retention.runs_days` | integer · **Default:** `60`<br>Days after a run finishes before `orbit gc runs` may drop its pipeline state (30–36500). Run rows, steps, summaries and commit outcomes stay, preserving succeeded implement_one durations. Unregistered workspace ids are included. Consider 30 days on a large store; smaller values, including command overrides, are refused because Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares need 30 days of run state. Older raw checkpoints are lost. Resource minutes and admission forecasts older than 30 days are pruned separately, except rows kept at any age by count: each workspace, work class and complexity's newest 200 deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward. Auto-concurrency profiles and forecast accuracy keep working on those rows; older raw samples outside them are lost. |
-| `worktree.reclaim` | **Advanced.** array&lt;string&gt; · **Default:** `["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]`<br>Rebuildable paths in kept terminal run worktrees. Relative globs use `*` within a component and whole-component `**` across components. An explicit list replaces earlier layers; `[]` disables reclamation. Absolute, parent and root-matching patterns fail config load. Only ignored or untracked paths without tracked content are deleted, after registration, confinement, symlink and worker checks. Inspect with `orbit gc worktrees --reclaim`, apply with `--confirm`. |
-| `worktree.reclaim_below_free_mib` | **Advanced.** integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this threshold, oldest terminal worktrees first. Active runs and live or undecidable workers stay protected. |
-| `review.timing` | string · **Default:** `off`<br>When automatic review runs before landing, by a fresh reviewer that fixes what it finds: `off`; `before_pr` holds PR creation for the review; `before_landing` opens the PR first, reviews it while hosted CI runs, and merges only the head the review settled, leaving the PR open with the task in `review` on any outcome but an approve. Refused for local-only delivery. A run keeps the value it was submitted with. Replaces the deprecated `review.before_pr` and `review.before_landing` booleans, which still load (both `true` fails the load: there is one review layer before landing). |
-| `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Owner policy for the distributed drain: machine ids (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries do not. The owner resolves it for the caller's machine when a follower probes or pulls, and the claim captures the result. Orbit fails to load config while `review.timing` is `before_pr` and the list is non-empty. The machine label is chosen by the caller, so this is policy, not a security boundary. |
-| `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR or before-landing review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
-| `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. The list is captured when a delivery or claim is admitted. |
-
-Agent stdout/stderr relay uses `~/.orbit/state/logs/orbit-agent.jsonl` with a separate 200 MiB archive budget and 50 MiB file limit. Its output cannot evict operational events from `orbit.jsonl`. A full agent queue blocks the relay instead of dropping lines; the operational feed can still drop a line when its own queue is full. The dashboard log dock, `/api/log`, `/api/log/stream`, and `orbit log tail` merge the two active feeds; per-run captures remain available separately. The fixed 7-day archive age applies to both feeds. Size limits still take precedence over age when either feed's own budget is exhausted; seven days of operational history requires its non-relay volume to fit the operational budget.
-
-Log snapshots retain the numeric operational `offset` and add `agent_offset`. Resume SSE with `from` and `agent_from`; split-feed event IDs carry both byte cursors as `operational:agent`. Custom log paths with a filename other than `orbit.jsonl` read that file alone.
+| `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. |
+| `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in pull request descriptions. |
+| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Your list replaces the default. macOS also passes `__CF_USER_TEXT_ENCODING` by default. See [Provider credentials](#provider-credentials). |
+| `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. |
+| `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request` or `never`. |
+| `completion.hold` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[completion.hold]]` rules that keep a `--complete` run's task in `review`, with its pull request open. A rule sets at least one of `paths` (globs on the changed files), `complexity_at_least`, `types` and `tags`, and holds when any field matches. Approve a held task with `orbit task update <id> --approve` once its pull request is merged. |
+| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Nothing is deleted until you run `orbit gc audit --confirm` or enable the `store-gc` routine. |
+| `retention.runs_days` | integer · **Default:** `60`<br>Days after a run finishes before `orbit gc runs` may drop its pipeline state (30–36500). Run rows, steps, summaries and commit outcomes stay. |
+| `worktree.reclaim` | **Advanced.** array&lt;string&gt; · **Default:** `["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]`<br>Relative globs of rebuildable paths reclaimed in kept terminal run worktrees. Only ignored or untracked paths are deleted. `[]` disables reclamation. Inspect with `orbit gc worktrees --reclaim`; apply with `--confirm`. |
+| `worktree.reclaim_below_free_mib` | **Advanced.** integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this, oldest terminal worktrees first. |
+| `review.timing` | string · **Default:** `off`<br>When a fresh reviewer, who fixes what it finds, runs before landing. `off`: never. `before_pr`: holds PR creation for the review. `before_landing`: opens the PR, reviews it while hosted CI runs, and merges only the reviewed head. Refused for local-only delivery. |
+| `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Machine IDs (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries do not. Config fails to load when this is non-empty and `review.timing` is `before_pr`. This is policy, not a security boundary. |
+| `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR or before-landing review (1–1440). |
+| `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun to confirm that a failed check also fails on the base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes. |
 
 Notes:
 
-- Pool entries are `crew[@effort]` or `crew[@effort]:weight`, all bare or all weighted. An empty
-  pool sends that tier to `default_crew`.
+- Pool entries are `crew[@effort]` or `crew[@effort]:weight`, all bare or all
+  weighted. An empty pool sends that tier to `default_crew`. An explicit crew
+  wins over any pool, and `--allow-crew` narrows every draw.
+- Path globs use `*` within a path component and `**` across components.
 - Each resource-throttle percentage is 1–100, and each resume mark must be
   lower than its high-water mark.
 - `orbit run ship --strict-worker-containment` and
   `orbit run auto --strict-worker-containment` turn on strict containment for
   one run, whatever `machine.worker_containment` says.
 - After-landing review is not a config key. Turn it on with
-  `orbit auto-task toggle delivery-code-review on`; it reviews landed
-  deliveries in batches, observing `origin/<branch>` when that remote exists.
-  `orbit config show --all` and `orbit doctor` report both review switches, and
-  doctor is not ok while the observed commit trails the remote-tracking head
-  past the batch's maximum wait.
-- `operation.review_policy` and `operation.review_minutes` are deprecated and
-  still load with a warning: `before-pr` becomes `review.timing = "before_pr"`,
-  `after-landing` turns on the `delivery-code-review` auto-task until you
-  toggle it yourself, and `none` turns neither on. A later release rejects
-  them.
-- `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
-  unknown settings. Loading ignores them with the generic unknown-key warning;
-  delete them.
-- The keys these consolidate still load with a deprecation warning:
-  `operation.review_crew`, `workflow.final_recovery_crews`, the
-  `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools,
-  `review.before_pr`, `review.before_landing`, a boolean
-  `machine.worker_containment` and `machine.worker_containment_strict`. A file that also
-  sets the replacement keeps the replacement's value. `orbit doctor
-  --fix-retired-config-keys` writes each value under its replacement and then
-  deletes the old key. A later release rejects them.
-
-Crew fields are settable as `crews.<name>.<field>`, where the field is
-`model`, `provider`, `enabled`, `effort`, `description`, `tags`, or `env`
-(`env` requires `--global`); for
-example, `orbit config set crews.sol.effort high`. `orbit config set` cannot
-create a crew: first add a `[crews.<name>]` table with `model` and `provider`.
-An installed plugin's declared settings are settable as `plugins.<ns>.<key>`.
-
-The scheduled worktree GC also reclaims declared output in every kept terminal
-worktree. Candidate commits, branches, tracked files and unmatched `.orbit/tmp`
-evidence remain; resumed runs rebuild reclaimed output. Collection never runs a
-cleanup command: checkout-authored Cargo configuration can redirect `cargo clean`
-outside the worktree, and Make or npm scripts can execute code with host authority.
-Declare only rebuildable paths; evidence matching a declared pattern is reclaimable.
-
-Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
-across audit, run and journal pruning. Upgrade backfills retained denial and commit
-facts once before pruning; history deleted before upgrade cannot be recovered.
+  `orbit auto-task toggle delivery-code-review on`.
+- An installed plugin's declared settings are settable as
+  `plugins.<ns>.<key>`, and crew fields as `crews.<name>.<field>`.
 
 ## Tag instructions
 
-Use `[workflow.tag_instructions.<tag>]` when a class of tasks needs extra
-implementation, review or recovery guidance. For example, a custom
-`data-migration` tag can select your repository's migration checklist without
-copying it into every task. A tag selects instructions; task descriptions,
-comments and tags never supply the instruction text itself.
-
-Edit `.orbit/config.toml` for workspace mappings, or `~/.orbit/config.toml`
-for global mappings. `orbit config set` does not write these dynamic keys.
-This example names files you supply in your own repository:
+Use `[workflow.tag_instructions.<tag>]` to give every task carrying a tag
+extra implementation, review or recovery guidance from a file in your
+repository. Edit `config.toml` directly: `orbit config set` does not write
+these tables.
 
 ```toml
 [workflow.tag_instructions.data-migration]
@@ -964,102 +680,50 @@ recovery = "agent-guidance/migration-recovery.md"
 review = false # Disable the shipped reviewer instruction for this tag.
 ```
 
-For example, `agent-guidance/migration-implement.md` could contain:
+| Role | Activities that receive the file |
+|---|---|
+| `implement` | `agent_implement`, including QA sweeps tagged `qa-sweep` |
+| `review` | `agent_review_repair` and `review_reconciliation_review` |
+| `recovery` | `step_failure_recovery`, `final_recovery` and `pr_conflict_recovery` |
 
-```markdown
-For a data migration, identify the affected records and compatibility needs.
-Use the repository's migration checks and record their results.
-Describe rollback steps and any operator action needed before rollout.
-```
+Commit the mapped files to the base branch before you use the tag. Orbit
+reads each file from the delivery's base revision, never the working copy, so
+a delivery cannot change the instructions it runs under.
 
-Create the review and recovery files too: the review checklist can ask for
-compatibility and rollback evidence; recovery guidance can ask the agent to
-preserve failure logs before making a repair. Commit all mapped files to the
-delivery's base branch before using the tag on a task.
-
-The role determines which activities receive the file:
-
-- `implement`: `agent_implement`, including QA sweeps tagged `qa-sweep`.
-- `review`: `agent_review_repair` and `review_reconciliation_review`.
-- `recovery`: `step_failure_recovery`, `final_recovery` and
-  `pr_conflict_recovery`.
-
-### Scope, layering and defaults
-
-Each value must be a repository-relative file path using `/` separators,
-without absolute paths, empty path segments or `..`. A leading `./` is
-accepted; other `.` segments are refused. `false` supplies no instruction
-for that tag and role, including any shipped default. `true` is invalid.
-
-Mappings layer per tag and role: a workspace `review` entry replaces the
-global `review` entry for that tag, while its other roles and other global
-tags remain inherited. An omitted role uses the inherited mapping, then
-Orbit's shipped default if one exists. A mapped file replaces that default
-for the same tag and role.
+- **Values.** A repository-relative path with `/` separators and no `..`, or
+  `false` to supply nothing for that tag and role, shipped default included.
+- **Layering.** Mappings layer per tag and role. A workspace `review` entry
+  replaces the global one for that tag; its other roles and other tags stay
+  inherited. An omitted role falls back to Orbit's shipped default, if any.
+- **Matching.** Tags match trimmed and lowercased, so `DATA-MIGRATION`
+  selects `data-migration`. You can map at most 32 tags.
+- **Limits.** Instructions only add prompt text. Built-in safety, sandbox,
+  gate and handoff rules still win, and a mapping grants no skip; see
+  [Review-skip tags](#review-skip-tags).
 
 Orbit ships these defaults:
 
-- `no-diff-expected`, for `implement`: read-only handoff, with no workspace
-  gates or `no-diff.json`.
-- `skip-validation`, for `implement`: no local validation while every
-  changed path matches `workflow.light_delivery_paths`.
-- `ui`, for `implement` and `review`: route implementers to a host with a
-  verified browser kit and select the optional PR screenshots section.
-  Visual task artifact evidence follows the workspace guide and the actual
-  diff, not the tag.
+| Tag | Role | Instruction |
+|---|---|---|
+| `no-diff-expected` | `implement` | Read-only handoff, with no workspace gates or `no-diff.json`. |
+| `skip-validation` | `implement` | No local validation while every changed path matches `workflow.light_delivery_paths`. |
+| `ui` | `implement`, `review` | Route implementers to a host with a verified browser kit and select the optional PR screenshots section. |
 
-Replacing or disabling a tag instruction changes the added prompt text.
-Built-in safety, sandbox, gate and handoff rules still win over it. The full
-screenshot rule also remains in the task-execution and task-review
-references: it follows a visible change, even without the `ui` tag. An empty
-optional PR screenshots section shows `No screenshots attached.` and never
-blocks opening.
-Instruction mappings do not themselves grant a validation or review skip;
-see [Review-skip tags](#review-skip-tags) for review policy.
+### If an instruction is refused
 
-Tags are trimmed and lowercased for matching, deduplicated and applied in
-sorted order. `DATA-MIGRATION` selects `data-migration`. Config validation
-refuses blank tags, duplicate normalized tags, unknown roles, invalid values
-or paths, and more than 32 mapped tags.
+A refused mapping fails the activity before its provider starts, and only for
+tasks carrying that tag.
 
-### Committed text and refusals
+| Error | Cause |
+|---|---|
+| `tag_instruction_unreadable` | The file is missing at the base revision, is not a file, is not UTF-8, or is empty. |
+| `tag_instruction_too_large` | One file exceeds 8 KiB. |
+| `tag_instructions_too_large` | The combined instructions for one prompt exceed 16 KiB. |
 
-Orbit reads each file from the delivery's recorded `base_sha`, or from the
-checkout's `HEAD` when no worktree base was recorded. It never reads the
-working copy. Changes committed or left uncommitted by that delivery cannot
-alter the instructions it runs under.
-
-The activity receives one **Tag instructions** section after its built-in
-instruction and any steering or inspection text. Each entry identifies its
-tag and source. An untagged task, or a tag with no mapping or shipped
-default for that role, adds nothing.
-
-A refused mapping fails the activity before its provider starts; Orbit
-does not silently omit or truncate it. File refusals affect only tasks
-carrying the relevant tag:
-
-- `tag_instruction_unreadable`: the file is missing at the base revision,
-  is not a file, is not UTF-8, or is empty/whitespace-only.
-- `tag_instruction_too_large`: a file exceeds 8 KiB.
-- `tag_instructions_too_large`: the combined tag instruction text for one
-  prompt exceeds 16 KiB.
-
-File errors identify the tag, role and path; the combined-size error names
-the role and byte count.
-
-For a distributed claim, the owner captures instructions and refusals in
-the claim receipt. It reads files from its last-fetched `origin/<base>` for
-PR delivery, or the local base ref for local delivery; capture does not
-fetch. An unavailable authoritative ref is captured as a refusal, without
-falling back to another branch or `HEAD`. The leaf uses that capture rather
-than its replica's mappings or files, including any applicable refusal.
-The receipt holds at most 64 KiB of instruction text; entries beyond that
-limit are captured as refusals. A claim from an older owner with no capture
-falls back to the replica's mappings and files, with a warning.
+For a distributed claim, the owner captures the instructions and any refusal
+in the claim, and the follower uses that capture instead of its own files.
 
 ### Inspect applied instructions
-
-Use your run ID to inspect what each activity actually received:
 
 ```bash
 orbit run show "$RUN_ID"
@@ -1067,22 +731,13 @@ orbit run show "$RUN_ID" --json
 ```
 
 The text view prints a `Tag instructions:` line per dispatch that received
-instructions. JSON, including the `orbit.run` action `show` tool, exposes
-`tag_instructions` with state `observed`, `none` (audit evidence exists but
-no dispatch received instructions), or `unavailable` (no audit evidence).
-The projection lists up to 32 dispatches and reports `truncated` when more
-exist.
-
-Each `activity.tag_instructions_applied` audit event records the step,
-activity, task, tag, role, source, SHA-256 and byte size, without the text.
-The source is `default` or `workspace`; `workspace` records the repository
-path and revision, including for a mapping inherited from global config.
+any. JSON exposes `tag_instructions` with state `observed`, `none` or
+`unavailable` (no audit evidence).
 
 ## Agent corpus
 
-Use `[workflow.agent_corpus]` when an activity should receive workspace
-knowledge with its prompt. The table maps exact activity names to one
-repository-relative corpus index:
+Use `[workflow.agent_corpus]` to send an activity workspace knowledge with its
+prompt. Map exact activity names to one repository-relative corpus index:
 
 ```toml
 [workflow.agent_corpus]
@@ -1090,33 +745,22 @@ agent_implement = "agent-guidance/corpus/INDEX.md"
 final_recovery = "agent-guidance/corpus/INDEX.md"
 ```
 
-Unset by default: with no mapping, no activity receives a corpus. Map at
-most 32 activities, every entry naming the same index. Absolute paths and
-`..` are refused.
+Unset by default, so no activity receives a corpus. You can map at most 32
+activities, and every entry must name the same index. Absolute paths and `..`
+are refused.
 
-The host reads the index's generated rows at the run's base revision,
-keeps only rows whose `applies_to` matches the activity, and omits
-resolved issues. It injects at most 8 KiB into the prompt, with a note
-when rows are omitted. An activity with no mapping receives nothing.
-
-A claimed run uses the rows the owner captured. Each
-`activity.agent_corpus_applied` audit event records the paths, revision,
-digest and truncation.
-
-Human decision answers and typed engine recovery matches append proposals
-to task history. Turning a proposal into a corpus edit is an ordinary
-reviewed change: Orbit never commits or merges one by itself.
+Orbit reads the index at the run's base revision, keeps the rows whose
+`applies_to` matches the activity, omits resolved issues, and injects at most
+8 KiB, with a note when rows are left out. A claimed run uses the rows its
+owner captured.
 
 ## Review-skip tags
 
-Use `workflow.review_skip_tags` to let a workspace tag skip agent review for
-a bounded class of low-risk changes, including paths outside
+Use `workflow.review_skip_tags` to let a tag skip agent review for a bounded
+class of low-risk changes, including paths outside
 `workflow.light_delivery_paths`. For example, a comment-only maintenance task
-can touch source files when a repository-specific guard verifies that the
-non-comment content is unchanged.
-
-Add a profile to `.orbit/config.toml`, or to `~/.orbit/config.toml` for a
-global policy:
+can touch source files when a guard script confirms that nothing but comments
+changed:
 
 ```toml
 [workflow.review_skip_tags.comment-hygiene]
@@ -1124,98 +768,58 @@ paths = ["src/**", "!src/generated/**"]
 guard = "scripts/check-comment-only-diff.sh"
 ```
 
-The script in this example is one you supply in your repository. Commit it
-before relying on the profile: Orbit reads the guard from the delivery's
-base revision. File a maintenance task carrying `comment-hygiene`, with
-acceptance criteria that limit it to comment changes. The profile permits
-the review skip only if the candidate meets all of these conditions:
+Review is skipped only when all of these hold:
 
-- Every task delivered by the candidate carries the mapped tag.
-- Every changed path since the candidate's synchronized base matches the
-  profile's `paths`. Deletions count; a rename checks both paths. An empty
-  diff does not qualify.
-- The optional `guard` exits 0. A missing guard at the base revision, a
-  nonzero exit or a timeout retains normal review.
+- Every task the candidate delivers carries the tag.
+- Every changed path matches `paths`. Deletions count, a rename checks both
+  paths, and an empty diff does not qualify.
+- The optional `guard` exits 0. A guard missing at the base revision, a
+  nonzero exit or a timeout keeps normal review.
 
-When a profile applies, it skips before-PR review, before-landing review
-(including host-specific review), and after-landing delivery-code-review
-sampling. **A mapped tag skips review only:** required validation, workspace
-gates and hosted CI still run.
+A profile skips before-PR review, before-landing review and after-landing
+`delivery-code-review` sampling. Required validation, workspace gates and
+hosted CI still run.
 
-### Paths and guards
+| Field | Rules |
+|---|---|
+| `paths` | Required, non-empty array of globs. `*` stays within a path component, `**` spans components and a leading `!` excludes. `["**"]` allows every path. |
+| `guard` | Optional repository-relative executable, not a shell command. It receives the candidate's base and head commits as its first two arguments and as `ORBIT_REVIEW_SKIP_BASE` and `ORBIT_REVIEW_SKIP_HEAD`, and the tag as `ORBIT_REVIEW_SKIP_TAG`. |
 
-`paths` is a required, non-empty array of globs. `*` stays within one path
-component; `**` spans components; a leading `!` excludes a match. A path
-qualifies when a positive pattern matches and no exclusion matches.
-`["**"]` allows every path; without a guard, matching paths and tags alone
-permit the skip.
+Orbit runs the base revision's copy of the guard in a throwaway checkout of
+the candidate's head, under the same rules as required validation. Commit the
+guard before you rely on the profile; a candidate cannot weaken it.
 
-`guard` is an optional repository-relative executable path, not a shell
-command. It cannot be absolute or contain `..`. Orbit supplies the
-candidate's base and head commits as its first two arguments and as
-`ORBIT_REVIEW_SKIP_BASE` and `ORBIT_REVIEW_SKIP_HEAD`; the tag is available
-as `ORBIT_REVIEW_SKIP_TAG`.
+- **Who can add the tag.** Task filing, including an auto-task definition, or
+  an operator update. An agent update that adds a mapped tag is refused;
+  removing one is always allowed.
+- **Layering.** Profiles layer per tag: a workspace value overrides the
+  global value for the same tag, and a workspace `paths` array replaces the
+  global one whole. You can map at most 32 tags, matched case-insensitively.
+- **Seeded profiles.** A new global config maps the shipped auto-tasks'
+  `auto-task:<name>` tags to documentation and CI paths. Keep finding tags
+  such as `code-review` and `security-review` unmapped, so the fixes those
+  reviews file still get reviewed.
+- **Built-in tags.** `skip-review` and `skip-validation` cannot be remapped.
+  They apply when every delivered task carries the tag and every changed path
+  matches `workflow.light_delivery_paths`. Neither skips hosted CI.
 
-Orbit runs the base revision's copy of the guard in a throwaway detached
-checkout of the candidate's head commit, using the same environment and
-sandbox rules as required validation. The guard sees the candidate's `HEAD`
-and files without changing the owner's branch or edits. A candidate cannot
-weaken its own guard by editing that executable. The guard runs only after
-all tasks and paths qualify.
+`orbit config show` lists the effective profiles under **Review skip tags**
+(`review_skip_tags` in `--json`). To see why a candidate did or did not skip,
+read its `light_delivery_applied` or `light_delivery_ignored` event:
 
-### Authority, layering and defaults
+```bash
+orbit task show "$TASK_ID" --fields history
+```
 
-Only task filing (including an auto-task definition) or an operator update
-can add a mapped tag. An agent update that adds one is refused; removal is
-always allowed. Tag names match case-insensitively. Config validation
-refuses blank or duplicate normalized tags, unknown profile fields, empty
-or malformed `paths`, invalid guard paths, and more than 32 mappings. Errors
-name the offending key.
-
-Profiles layer per tag: workspace values override global values for the
-same tag; omitted fields and other global profiles remain inherited. A
-workspace `paths` array replaces the global array whole. With no mappings
-in either file, none apply. The seeded global config includes profiles for the shipped
-default auto-tasks' `auto-task:<name>` provenance tags, restricted to
-documentation and CI paths. Existing config files are not migrated; add
-tables explicitly to opt in. Keep finding tags such as `code-review` and
-`security-review` unmapped so fixes filed by those reviews retain review.
-
-The built-in `skip-review` and `skip-validation` tags cannot be remapped.
-They use `workflow.light_delivery_paths` and require every delivered task
-to carry the relevant tag and every changed path to qualify. `skip-review`
-skips agent review; `skip-validation` skips local validation. Neither skips
-hosted CI. A custom profile does not grant `skip-validation` behavior.
-
-### Inspecting decisions and distributed claims
-
-Run `orbit config show` to inspect the effective profiles under **Review
-skip tags**; `orbit config show --json` exposes them as `review_skip_tags`.
-Use `orbit task show "$TASK_ID" --fields history` to inspect the candidate's
-`light_delivery_applied` or `light_delivery_ignored` event. Each decision is
-recorded once per candidate, naming the tag, profile key and any failed
-condition: an untagged task, an outside path, a failing guard or a guard
-missing at the base.
-
-Delivery automation dry runs defer mapped-profile decisions, including
-profiles with no guard. They run no guard and record no history. Unless a
-before-PR certificate or built-in `skip-review` rule already covers a
-landing, its preview counts it as requiring review. Real evaluation may
-therefore find less review work than the preview reports.
-
-For a distributed claim, the owner captures its profiles alongside
-`workflow.light_delivery_paths` in the claim's validation gates. The follower
-uses that captured copy, including the guard, rather than its own profiles.
-The owner evaluates the handoff again, guard included, when accepting it
-and records the decision in task history. An older owner that captures no
-profiles leaves the follower with none, so no mapped tag applies.
+For a distributed claim, the follower uses the profiles and guard its owner
+captured, and the owner evaluates the handoff again on acceptance.
 
 ## Delivery templates
 
 The `[pr]`, `[commit]` and `[branch]` templates shape what a single-task
-delivery publishes. With none set, Orbit's own titles, bodies, commit messages
-and `orbit/<task>-<hash>` branches are unchanged. A delivery that bundles
-several tasks keeps Orbit's own shapes.
+delivery publishes. With none set, and for a delivery that bundles several
+tasks, Orbit uses its own titles, bodies, commit messages and
+`orbit/<task>-<hash>` branches.
 
 ```toml
 [pr]
@@ -1234,71 +838,56 @@ subject_template = "{{type}}({{ext.jira}}): {{title}} [{{task_id}}]"
 name_template = "feature/{{ext.jira}}-{{task_id}}-{{hash}}"
 ```
 
-Placeholders are written `{{name}}`; spaces inside the braces are ignored.
-A template naming an unknown placeholder fails the configuration load with
-the key and the placeholder.
+A template naming an unknown placeholder fails the configuration load.
+`{{task_id}}` and `{{ext.<system>}}` work in every template, `{{prefix}}` and
+`{{hash}}` only in branch names, and the rest in PR titles, PR bodies and
+commits.
 
-| Placeholder | Value | Where |
-|---|---|---|
-| `{{task_id}}` | The task's ID | Everywhere |
-| `{{title}}` | The task title | PR title and body, commit |
-| `{{type}}` | `feat`, `fix`, `refactor` or `chore`, from the task type | PR title and body, commit |
-| `{{description}}` | The task description | PR title and body, commit |
-| `{{acceptance_criteria}}` | The acceptance criteria as a checklist | PR title and body, commit |
-| `{{execution_summary}}` | The implementer's execution summary | PR title and body, commit |
-| `{{validation}}` | The validation section | PR title and body, commit |
-| `{{freshness}}` | The branch's base and head and how far it is behind and ahead; empty in commits | PR title and body, commit |
-| `{{task_url}}` | The task link from `pr.task_url_template`; empty when unset | PR title and body, commit |
-| `{{ext.<system>}}` | The ID of the task's external ref for `<system>`, such as `{{ext.jira}}`; empty when the task has none | Everywhere |
-| `{{prefix}}` | The delivery's branch prefix: `orbit` unless a job sets another | Branch only |
-| `{{hash}}` | Eight hex characters derived from the run, so a retry reuses the branch | Branch only |
+| Placeholder | Value |
+|---|---|
+| `{{task_id}}` | The task's ID |
+| `{{title}}` | The task title |
+| `{{type}}` | `feat`, `fix`, `refactor` or `chore`, from the task type |
+| `{{description}}` | The task description |
+| `{{acceptance_criteria}}` | The acceptance criteria as a checklist |
+| `{{execution_summary}}` | The implementer's execution summary |
+| `{{validation}}` | The validation section |
+| `{{freshness}}` | The branch's base and head and how far it is behind and ahead; empty in commits |
+| `{{task_url}}` | The task link from `pr.task_url_template`; empty when unset |
+| `{{ext.<system>}}` | The ID of the task's external ref for `<system>`, such as `{{ext.jira}}`; empty when the task has none |
+| `{{prefix}}` | The delivery's branch prefix: `orbit` unless a job sets another |
+| `{{hash}}` | Eight hex characters derived from the run, so a retry reuses the branch |
 
-`pr.body_template = "repo"` reads the repository's pull request template
-at the delivery's base revision, never from the candidate branch. Orbit looks
-for `pull_request_template.md` (any letter case) in `.github/`, the
-repository root and `docs/`, in that order, and uses its own layout when none
-exists. A repository-relative path must exist at the base revision. When a
-template is used, Orbit appends an HTML comment naming the task
-(`<!-- orbit-delivery-task: <TASK-ID> -->`). A repository template does not
-have to contain `{{task_id}}`. Delivery still recognizes the pull request
-from its branch, an Orbit author, and that task id as a whole token in the
-body; the comment supplies the token. The template's own text is left as
-rendered.
-
-The implementer fills agent and required sections by attaching a
-`pr-sections.json` task artifact shaped
-`{"sections": {"Risk": "Low: one file."}}`. Each heading replaces the body
-under the matching Markdown heading of the template, matched without regard
-to letter case. With Orbit's own layout, filled sections are appended as
-`## <heading>`. An unfilled optional section keeps the template's text. An
-unfilled required section is never published as an empty heading: with
-`missing_required_section = "draft"` the pull request opens as a draft with a
-note under the heading, and with `"refuse"` no pull request opens. Both are
-recorded in the task's history. Orbit never merges a draft automatically.
-
-For a task tagged `ui`,
-Orbit renders the optional `## Screenshots` section with a table of Before
-and After images from the
-task's artifacts named
-`screenshots/<view>-<theme>-<width>[-before|-after].<ext>`; a name without a
-suffix is an After shot. Only PNG, JPEG, GIF and WebP images up to 1 MiB are
-published. Orbit commits them to `refs/orbit/evidence/<task-id>` on `origin`,
-a ref that is never merged or deleted, and links each image by that commit's
-sha, so a merged pull request keeps its images. A template's `## Screenshots`
-heading is filled in place; otherwise the section is added. If no screenshot
-is publishable, the section shows `No screenshots attached.`; no gap is
-recorded, and `pr.missing_required_section` does not draft or refuse the PR
-for it.
-
-Commit subjects keep a 72-character budget: the title is shortened first, with
-an ellipsis, and kept whole in the commit body. A subject template must carry
-the `[{{task_id}}]` marker Orbit uses to recognise delivered work. A branch
-template must contain `{{task_id}}` and `{{hash}}`; a branch name that would
-contain `..`, start with `-`, or break Git's ref-name rules is refused.
+- **Body template.** `pr.body_template = "repo"` reads
+  `pull_request_template.md` (any letter case) from `.github/`, the repository
+  root or `docs/`, in that order, at the delivery's base revision. With none,
+  Orbit uses its own layout. A repository-relative path must exist at the base
+  revision. The template need not contain `{{task_id}}`: Orbit appends
+  `<!-- orbit-delivery-task: <TASK-ID> -->`.
+- **Sections.** The implementer fills agent and required sections by
+  attaching a `pr-sections.json` task artifact shaped
+  `{"sections": {"Risk": "Low: one file."}}`. Each entry replaces the body
+  under the matching template heading, ignoring letter case; with Orbit's own
+  layout it is appended as `## <heading>`. An unfilled required section
+  follows `pr.missing_required_section` and is recorded in task history. Orbit
+  never merges a draft automatically.
+- **Screenshots.** For a task tagged `ui`, Orbit adds a `## Screenshots` table
+  of Before and After images from task artifacts named
+  `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`; no suffix means
+  After. It publishes PNG, JPEG, GIF and WebP images up to 1 MiB. With none,
+  the section shows `No screenshots attached.` and the pull request still
+  opens.
+- **Commits and branches.** Subjects keep to 72 characters: the title is
+  shortened first and kept whole in the body. A subject template must contain
+  `[{{task_id}}]`. A branch template must contain `{{task_id}}` and
+  `{{hash}}`; a name that contains `..`, starts with `-` or breaks Git's
+  ref-name rules is refused.
 
 ## Workspace presets
 
-`orbit workspace init --preset <file>` applies a preset, a TOML file a distribution ships to set a workspace up in one step. Pass `--force` as well to apply one to a registered workspace.
+`orbit workspace init --preset <file>` applies a preset, a TOML file a
+distribution ships to set a workspace up in one step. Add `--force` to apply
+one to a registered workspace.
 
 ```toml
 name = "graph-distro"            # required: 1-64 of A-Z a-z 0-9 . _ -
@@ -1315,51 +904,47 @@ auto_tasks = ["graph-reindex"]
 "workflow.crew_selection" = "static"
 ```
 
-Orbit checks the whole file before it writes anything. It refuses an unknown field, a `[config]` key or value `orbit config set` would refuse, and an `[enable]` name that no enabled plugin seeded into this workspace. A preset never grants plugin permissions or enables a plugin, so a grant, permission, plugin or `plugin_enablement` field is refused too; run `orbit plugin enable <plugin>` yourself first. The `[seeding]` and `[config]` keys are written to `.orbit/config.toml` before the defaults are seeded. The preset's name and the `sha256:` digest of the file are recorded in `.orbit/state/workspace-preset.json`, and `orbit workspace show` reports them along with the seeding policy.
+Orbit checks the whole file before it writes anything. It refuses:
+
+- an unknown field;
+- a `[config]` key or value that `orbit config set` would refuse;
+- an `[enable]` name that no enabled plugin seeded into this workspace;
+- any field that grants plugin permissions or enables a plugin. Run
+  `orbit plugin enable <plugin>` yourself first.
+
+The `[seeding]` and `[config]` keys are written to `.orbit/config.toml` before
+the defaults are seeded. `orbit workspace show` reports the preset's name, the
+file's `sha256:` digest and the seeding policy.
 
 ## Workspace build output
 
-Configure the output locator your workspace's build commands consume:
+Set `workflow.validation_env.build_output_env` to the variable your build
+commands read their output directory from. Orbit then points it at a
+host-owned directory, kept apart from the areas workers can write:
 
 ```toml
 [workflow.validation_env]
 build_output_env = ["CARGO_TARGET_DIR"] # Rust workspace
 ```
 
-A non-Rust workspace can use `build_output_env = ["DIST_DIR"]` and have its
-validation command invoke `cmake -S . -B "$DIST_DIR"` followed by
-`cmake --build "$DIST_DIR"`. Orbit has no toolchain-specific output default.
+A non-Rust workspace can set `["DIST_DIR"]` and have its validation command
+run `cmake -S . -B "$DIST_DIR"`. The default is empty, which allocates nothing
+and leaves inherited variables unchanged.
 
-The built-in list is empty. A workspace list replaces the global list, including
-an explicit `[]`. Empty configuration allocates no managed output and leaves
-inherited variables unchanged. Names are trimmed, deduplicated and sorted;
-they must be shell environment identifiers. Execution identity variables
-(`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TMP`, `TEMP`, `PWD`,
-`OLDPWD`) and `ORBIT_` names are reserved, ignoring case.
-
-After environment resolution, every configured variable points to the same
-absolute host-owned directory, outside worker-writable build areas:
-`<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`.
-Different source checkouts have separate output; repeated host checks for one
-source can reuse it. Commands must honor the locator to preserve that isolation.
-Bindings apply to required validation, host replay and detached evidence,
-including baseline and recovery checks, on every platform. They do not apply
-to agent sessions or ordinary `local_shell` steps. When a binding is in
-effect, those commands also receive `CARGO_INCREMENTAL=0`. Logs record the resolved
-`build_output` environment, directory, source and host context.
-
-Managed cleanup retains active, leased or ambiguous output and can reclaim
-eligible inactive output even after its checkout is gone. Existing
-`host-validation-targets` remain attributable and reclaimable when bindings
-are disabled. Enable the workspace's output locator before rolling out a
-runtime that removes implicit Cargo routing; keep active clients' output
-contexts intact. Configuration examples describe an operator rollout,
-not an automatic change to the owning workspace's file.
+- **Names** must be shell environment identifiers. `PATH`, `HOME`, `USER`,
+  `LOGNAME`, `SHELL`, `TMPDIR`, `TMP`, `TEMP`, `PWD`, `OLDPWD` and `ORBIT_`
+  names are reserved. A workspace list replaces the global list.
+- **Directory.** Every configured variable points to the same directory under
+  `<primary-repository>/.orbit/state/host-validation-targets/`, one per source
+  checkout. Your commands must honor the variable to keep that isolation.
+- **Applies to** required validation, host replay and detached evidence. Agent
+  sessions and ordinary `local_shell` steps are not bound. Bound commands also
+  receive `CARGO_INCREMENTAL=0`.
 
 ## Root override
 
-Most commands accept the global `--root` option, which overrides the Orbit root
-directory:
+Most commands accept the global `--root` option, which overrides the Orbit
+root directory:
 
 ```bash
 orbit --root /path/to/orbit-root task list
@@ -1368,16 +953,6 @@ orbit --root /path/to/orbit-root task list
 ## Retired backend selection
 
 Agent activities always run through the provider's CLI. The `--backend` flag,
-`ORBIT_BACKEND`, `[runtime] backend`, and `[crews.<name>] backend` were
-removed, since there is no backend left to select.
-
-Orbit still recognizes old declarations, so nothing is silently reinterpreted:
-`cli` is accepted and ignored, while `http` and `auto` are rejected with a
-migration message. Remove the setting.
-
-## Workspace state
-
-Workspace state lives in the repository's `.orbit/` directory, including
-routine definitions in `.orbit/routines/` and the auto-task definitions that
-`orbit auto-task` manages. Global state lives under `~/.orbit/`, created by
-`orbit init`. See [Scoping Rules](../scoping/).
+`ORBIT_BACKEND`, `[runtime] backend` and `[crews.<name>] backend` were
+removed. An old `cli` declaration is accepted and ignored; `http` and `auto`
+are rejected with a migration message. Remove the setting.

@@ -1,0 +1,108 @@
+/* Design tokens. DESIGN.md §3 is the contract; every other stylesheet reads
+   these and declares no colour, type size or spacing step of its own. */
+
+:root {
+  /* Dark is the default theme. The inline script in ThemeProvider.astro only
+     switches to `data-theme='light'` for a visitor who chose it, and a page
+     with no script still renders dark. */
+  color-scheme: dark;
+
+  /* Type scale (DESIGN.md §3.2). */
+  --orbit-text-xs: 0.75rem; /* 12px: eyebrows, badges */
+  --orbit-text-sm: 0.8125rem; /* 13px: captions, metadata */
+  --orbit-text-ui: 0.875rem; /* 14px: navigation, code, tables */
+  --orbit-text-body: 1rem; /* 16px: prose */
+  --orbit-text-lede: 1.125rem; /* 18px: h3, ledes */
+  --orbit-text-h2: 1.375rem; /* 22px */
+  --orbit-text-h1: 2rem; /* 32px */
+  --orbit-text-display: 2.75rem; /* 44px: the homepage headline only */
+
+  /* Spacing scale (DESIGN.md §3.3). */
+  --orbit-space-1: 0.25rem;
+  --orbit-space-2: 0.5rem;
+  --orbit-space-3: 0.75rem;
+  --orbit-space-4: 1rem;
+  --orbit-space-5: 1.5rem;
+  --orbit-space-6: 2rem;
+  --orbit-space-7: 3rem;
+  --orbit-space-8: 4.5rem;
+
+  --orbit-radius: 8px;
+  --orbit-radius-sm: 4px;
+
+  /* Starlight's own knobs, set from the scales above. */
+  --sl-content-width: 46rem;
+  --sl-sidebar-width: 17rem;
+  --sl-text-h1: var(--orbit-text-h1);
+  --sl-text-h2: var(--orbit-text-h2);
+  --sl-text-h3: var(--orbit-text-lede);
+  --sl-text-h4: var(--orbit-text-body);
+  --sl-text-base: var(--orbit-text-body);
+  /* Geist and Geist Mono are self-hosted from @fontsource-variable (see
+     astro.config.mjs), so the site loads no fonts from other domains. */
+  --sl-font: "Geist Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sl-font-mono: "Geist Mono Variable", "SFMono-Regular", ui-monospace, Consolas, monospace;
+
+  /* Palette (DESIGN.md §3.1). */
+  --sl-color-white: #ededf0;
+  --sl-color-gray-1: #ededf0;
+  --sl-color-gray-2: #c7c7cc;
+  --sl-color-gray-3: #9b9ba3;
+  --sl-color-gray-4: #8e8e98;
+  --sl-color-gray-5: #3b3b42;
+  --sl-color-gray-6: #26262b;
+  --sl-color-black: #0a0a0a;
+  --sl-color-accent-low: #102448;
+  --sl-color-accent: #6e9fff;
+  --sl-color-accent-high: #c9ddff;
+  --sl-color-text: #ededf0;
+  --sl-color-text-accent: #8ab3ff;
+  --sl-color-bg: #0a0a0a;
+  --sl-color-bg-nav: #0a0a0a;
+  --sl-color-bg-sidebar: #0a0a0a;
+  --sl-color-bg-inline-code: #17171a;
+  --sl-color-hairline-light: #26262b;
+  --sl-color-hairline: #26262b;
+  --sl-color-hairline-shade: #17171a;
+
+  /* Role aliases, so component rules name what a colour is for. */
+  --orbit-surface: var(--sl-color-bg-inline-code);
+  --orbit-line: var(--sl-color-hairline-light);
+  --orbit-text: var(--sl-color-text);
+  --orbit-text-2: var(--sl-color-gray-2);
+  --orbit-text-muted: var(--sl-color-gray-3);
+  --orbit-link: var(--sl-color-text-accent);
+
+  /* Caution panels (changelog breaking changes). */
+  --orbit-caution-bg: #1a140c;
+  --orbit-caution-line: #5a4225;
+  --orbit-caution-text: #f2c38b;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --sl-color-white: #0f1014;
+  --sl-color-gray-1: #15161a;
+  --sl-color-gray-2: #30313a;
+  --sl-color-gray-3: #5f606b;
+  --sl-color-gray-4: #666975;
+  --sl-color-gray-5: #d8dbe2;
+  --sl-color-gray-6: #eceef3;
+  --sl-color-black: #ffffff;
+  --sl-color-accent-low: #dce8ff;
+  --sl-color-accent: #2f67d8;
+  --sl-color-accent-high: #173b84;
+  --sl-color-text: #17171a;
+  --sl-color-text-accent: #2f67d8;
+  --sl-color-bg: #ffffff;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #ffffff;
+  --sl-color-bg-inline-code: #f4f5f8;
+  --sl-color-hairline-light: #d8dbe2;
+  --sl-color-hairline: #eceef3;
+  --sl-color-hairline-shade: #f4f5f8;
+
+  --orbit-caution-bg: #fff6ea;
+  --orbit-caution-line: #f0cf9f;
+  --orbit-caution-text: #8a4b00;
+}

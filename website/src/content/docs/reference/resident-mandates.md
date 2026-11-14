@@ -1,28 +1,39 @@
 ---
 title: Resident mandates
-description: "Prepare a resident mandate, check its fields, inspect its effective authority, widen or narrow that authority, relay a human's words to it, and pause, stop, wake or take over a resident."
+description: "Start a resident under a mandate, grant and narrow its authority, relay a human's words to it, pause, wake or stop it, and read its digest and metrics."
 ---
 
-A resident mandate is an assignment task tagged `resident` that carries a `resident/mandate.json` artifact. The artifact says what the resident works toward and which workspaces it concerns. The mandate's authority, the rights and workspaces the resident may use, is a separate record. It starts with no rights. A human widens it. Anyone who can write the assignment task can narrow it.
+A resident is an orchestrator agent that Orbit wakes in bounded cycles to work
+toward a goal. Its mandate is an assignment task tagged `resident` with a
+`resident/mandate.json` artifact. Its authority, the rights and workspaces it
+may use, is a separate record that starts empty: a human widens it, and anyone
+who can write the assignment task can narrow it.
 
-This page covers the mandate format, the authority commands, the routine that starts cycles, the manager's relay and control commands, and the digest and metrics reports in this release. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
-
-## Prepare the assignment
-
-Create the task with the `resident` tag, then attach the mandate as `resident/mandate.json`:
+## Start a resident
 
 ```bash
 orbit task add --title "Keep the release branch green" --complexity medium --tag resident
 orbit task artifact put <task id> ./mandate.json --path resident/mandate.json
+orbit resident grant <task id> --add dispatch --add-workspace orbit
+orbit routine enable resident-cycle-<workspace>
+orbit resident show <task id>
 ```
 
-Use the ID of the new task in place of `<task id>`.
+1. Create the assignment and attach the [mandate](#mandate-format).
+2. As the operator, [grant](#widen-the-authority) the rights it needs.
+3. [Enable the cycle routine](#enable-the-cycle-routine). No cycle starts while
+   it is off, and it ships off.
+4. Check the state, effective authority and latest checkpoint with `show`.
 
-The dashboard's **Automation › Residents** view does both steps in one: its **Start a resident** flow takes the mandate fields, checks them with the same rules as below, and creates nothing when a field is refused. The same flow can also grant rights and turn the cycle routine on, as up to three separate writes; if a later write is refused, the message names the step and says what already exists. See [From the dashboard](#from-the-dashboard).
+The dashboard's **Automation › Residents** view does the same in its
+[**Start a resident**](/how-to/dashboard/#residents) flow, as up to three
+writes: mandate, rights, routine. A refused mandate field creates nothing. If a
+later write is refused, the message names the step and what already exists.
 
 ## Mandate format
 
-This example is illustrative. Replace the goal, criteria, workspace and crew with your own. The crew must be a name from your `[crews]` table in [Configuration](../config/#crews).
+The crew must be a name from your `[crews]` table in
+[Configuration](/reference/config/#crews).
 
 ```json
 {
@@ -47,25 +58,22 @@ This example is illustrative. Replace the goal, criteria, workspace and crew wit
 }
 ```
 
-Orbit validates the artifact against these rules:
-
 | Field | Required | Rule |
 |---|---|---|
 | `schema` | Yes | Exactly `resident.mandate/v1`. |
-| `goal` | Yes | One line: not blank, no line breaks, at most 240 characters. |
-| `exit_criteria` | Yes | 1 to 8 entries. Each is one line, not blank, and at most 240 characters. |
-| `workspaces` | Yes | At least one workspace. Each is non-blank and unique after trimming. The authority's scope stays inside this list. |
-| `crew` | Yes | A non-blank name of a configured crew. Orbit checks it when it reads the mandate. |
+| `goal` | Yes | One line, not blank, at most 240 characters. |
+| `exit_criteria` | Yes | 1 to 8 entries, each one line of at most 240 characters. |
+| `workspaces` | Yes | At least one, unique. The authority's scope stays inside this list. |
+| `crew` | Yes | The name of a configured crew. |
 | `cadence.floor_minutes` | Yes | An integer of at least 5: the fewest minutes between two cycles. |
-| `cadence.heartbeat_minutes` | Yes | An integer at least equal to `floor_minutes`: the most minutes without a cycle. |
-| `deadline` | No | An RFC 3339 instant. When it passes, the mandate ends with reason `deadline` and its assignment moves to review — enforced by the sweep clock on the owning host, whether or not the cycle routine runs. A cycle that starts first is observe-only and only hands off. |
-| `watch` | No | `tasks` (task IDs) and `tags` lists whose changes feed the resident's wake digest. Both default to empty. |
-| `continuity` | No | `prefer` (the default) resumes a provider conversation when the adapter can. `off` starts every cycle fresh. |
-| `probe` | No | A boolean, default `false`. Whether the mandate runs interactively as a probe. |
+| `cadence.heartbeat_minutes` | Yes | An integer of at least `floor_minutes`: the most minutes without a cycle. |
+| `deadline` | No | An RFC 3339 instant. When it passes, the mandate ends with reason `deadline` and the assignment moves to review, whether or not the cycle routine runs. |
+| `watch` | No | `tasks` (task IDs) and `tags` whose changes wake the resident. Both default to empty. |
+| `continuity` | No | `prefer` (default) resumes the provider conversation when the adapter can. `off` starts every cycle fresh. |
+| `probe` | No | Boolean, default `false`: whether the mandate runs interactively as a probe. |
 
-Unknown keys are refused at the top level and inside `cadence` and `watch`.
-
-Orbit reads the artifact each time it reports or changes authority. A malformed mandate, or one that fails these rules, shows as `invalid` in `orbit resident show`, and a widening against it is refused.
+Unknown keys are refused, also inside `cadence` and `watch`. A mandate that
+fails these rules shows as `invalid` and cannot be widened.
 
 ## Inspect a mandate
 
@@ -75,24 +83,27 @@ orbit resident list --all
 orbit resident show <task id>
 ```
 
-`list` prints one row per mandate with its task ID, state (marked `(stalled)` when it is [stalled](#stalled-residents)), effective rights, effective workspaces, number of open grant requests and goal. `--json` adds each mandate's deadline, authority revision and `stalled` flag. Assignments that are done, archived, or rejected appear only with `--all`; a stopped mandate (state `ended`) whose assignment moved to review is still listed without it.
-
-`show` reports one mandate in full. Its `state` is one of:
+`list` prints each mandate's task ID, state, effective rights and workspaces,
+open grant requests and goal. Mandates whose assignment is done, archived or
+rejected appear only with `--all`. `show` reports one mandate in full.
 
 | State | Meaning |
 |---|---|
-| `active` | The task is tagged `resident`, the mandate is valid, and the assignment is open. |
-| `handed_off` | The assignment is in review. The resident has handed off. |
-| `paused` | `orbit resident control … pause` stopped new cycles until `resume`. `state_reason` names who paused it and why. |
-| `taken_over` | A person took the mandate over with `takeover`. No cycle fires until `release`. |
-| `ended` | The assignment is done, archived or rejected, or the mandate was stopped with `stop`. The mandate takes no widening and no relay. |
+| `active` | The mandate is valid and the assignment is open. Marked `(stalled)` when it is [stalled](#stalled-residents). |
+| `handed_off` | The assignment is in review. |
+| `paused` | `pause` stopped new cycles until `resume`. |
+| `taken_over` | A person took the mandate over. No cycle fires until `release`. |
+| `ended` | The assignment is done, archived or rejected, or the mandate was stopped. It takes no widening and no relay. |
 | `invalid` | The task is not tagged `resident`, or the mandate is missing or invalid. `state_reason` says which. |
 
-Add `--json` to get the full payload. Its keys are `state`, `state_reason`, `control` (the control state and its last action, caller and reason), `stalled` and `stalled_reason`, `mandate`, `effective_authority`, `authority` (with its `granted` and `narrowed` history), `open_requests`, `latest_checkpoint` and `live_cycle`, which appears only while it is unexpired. `mandate_error` or `authority_error` appears when that record cannot be read.
+`show --json` returns `state`, `state_reason`, `control`, `stalled`,
+`stalled_reason`, `mandate`, `effective_authority`, `authority`,
+`open_requests`, `latest_checkpoint` and, while a cycle is live, `live_cycle`.
+`mandate_error` or `authority_error` appears when that record cannot be read.
+`list --json` adds each mandate's deadline, authority revision and `stalled`
+flag.
 
-## Effective authority
-
-The effective authority is what the resident could act on now. It is the authority's rights, with its workspaces limited to those the mandate also covers.
+## Authority
 
 | Right | Lets the resident |
 |---|---|
@@ -101,33 +112,44 @@ The effective authority is what the resident could act on now. It is the authori
 | `merge` | Land a reviewed pull request. |
 | `plugin_upgrade` | Install or upgrade a workspace plugin. |
 
-Effective authority is empty when the mandate is `ended` or `invalid`, and when either the mandate or the authority record cannot be read. Removing a workspace from the mandate's `workspaces` drops it from effective authority, but the authority record keeps it until a narrowing drops it.
+The effective authority is what the resident can act on now: the granted
+rights, in the granted workspaces that the mandate also lists. It is empty for
+an `ended` or `invalid` mandate.
 
-## Widen the authority
+| Caller | Widen | Narrow |
+|---|---|---|
+| Operator at a terminal on this host | Applies at once | Applies at once |
+| Any other caller, including an agent or MCP session | Raises a request that a human answers | Applies at once |
 
-Widening is the human's decision. Who makes the call determines what happens.
+One call either widens or narrows. Make two calls to do both.
 
-### As the operator
+### Widen the authority
 
-The operator at a terminal on this host applies a widening at once:
+As the operator at a terminal on this host:
 
 ```bash
 orbit resident grant <task id> --add dispatch --add promote --add-workspace orbit
 ```
 
-`--add` names a right and repeats. `--add-workspace` names a workspace that the mandate lists and this host can resolve, and it repeats too. Rights and workspaces the authority already holds are skipped. If nothing new remains, the outcome is `unchanged`.
+`--add` names a right and `--add-workspace` a workspace that the mandate lists
+and this host can resolve. Both repeat. Naming only what the authority already
+holds gives the outcome `unchanged`.
 
-### From any other caller
-
-A widening from an agent, an MCP session, a shell that no terminal or declaration identifies, or any caller that is not the operator on this host changes nothing. It needs no operator override; do not set `ORBIT_OPERATOR`, which would apply the widening at once as the operator. It must carry `--quote` with the human's words, verbatim, up to 2000 characters:
+From any other caller, the call must carry `--quote` with the human's words,
+verbatim, up to 2000 characters:
 
 ```bash
 orbit resident grant <task id> --add merge --quote "Merge reviewed release pull requests in orbit."
 ```
 
-Without `--quote` the call is refused. With it, Orbit raises one `resident_authority` decision request. The request names the rights and workspaces asked for, quotes the words and records the relaying session. The call's outcome is `requested`. An identical open request is returned, not duplicated.
+This changes nothing yet. Orbit raises one `resident_authority` decision
+request with the rights and workspaces asked for, the quote and the relaying
+session, and the outcome is `requested`. An identical open request is reused.
+Without `--quote` the call is refused. Do not set `ORBIT_OPERATOR` here: it
+applies the widening at once as the operator.
 
-The human answers the request:
+The human answers the request. Agents can list and show requests but not answer
+them:
 
 ```bash
 orbit decision list --gate resident_authority
@@ -135,17 +157,18 @@ orbit decision show <request id>
 orbit decision answer <request id> grant
 ```
 
-`grant` adds exactly the requested rights and workspaces. `reject` leaves the authority unchanged. Any authority change, including a narrowing, supersedes an open request. Answering a superseded request is refused and applies nothing, so raise a new one. Agents can list and show requests but cannot answer them. See [Decision channels](../../how-to/decision-channels/) for the answer path.
+`grant` adds exactly what was requested; `reject` changes nothing. Any authority
+change, even a narrowing, supersedes an open request, which then cannot be
+answered: raise a new one. See [Decision channels](/how-to/decision-channels/).
 
-### From the dashboard
+The dashboard's Residents view widens only when the server runs with
+`--operator`, and only with a quote: it raises the same request and answers it
+`grant` in one action. Without `--operator` the dashboard cannot widen, narrow,
+control or relay, and returns `authorization_denied`.
 
-The dashboard's **Automation › Residents** view widens only when the dashboard server runs with `--operator`. Its widening is not a direct grant. It raises the same `resident_authority` request with the quote you type, naming the dashboard as the relaying session, and answers it `grant` in the same action. The authority change is then recorded `via: decision:<request id>`, with your quote, and the dashboard writes an audit row for it. A widening without a quote is refused.
+### Narrow the authority
 
-A dashboard served without `--operator` cannot widen, narrow, control or relay, and cannot answer `resident_authority` requests. It returns `authorization_denied`. Agents and MCP sessions still only raise requests.
-
-## Narrow the authority
-
-Narrowing applies at once for any caller that can write the assignment task. It raises no request and needs no quote. The change records that caller.
+Narrowing needs no quote and raises no request:
 
 ```bash
 orbit resident grant <task id> --remove merge
@@ -153,65 +176,63 @@ orbit resident grant <task id> --drop-workspace orbit
 orbit resident grant <task id> --deadline 2026-12-01T00:00:00Z
 ```
 
-- `--remove` takes a right away. It repeats.
-- `--drop-workspace` drops a workspace from the authority's scope. It repeats.
-- `--deadline` sets an RFC 3339 instant that is earlier than the current deadline, or the first deadline when the mandate has none. It rewrites the deadline in `resident/mandate.json` in the same change. A later deadline is an ordinary edit of that artifact, not a grant.
+| Flag | Effect |
+|---|---|
+| `--remove <right>` | Takes a right away. Repeats. |
+| `--drop-workspace <workspace>` | Drops a workspace from the scope. Repeats. |
+| `--deadline <instant>` | Sets an earlier deadline, or a first one, and rewrites it in `resident/mandate.json`. To move a deadline later, edit the artifact. |
 
-Rights and workspaces the authority does not hold are ignored. If nothing changes, the outcome is `unchanged`.
+Removing a workspace from the mandate's `workspaces` drops it from the
+effective authority, but the authority record keeps it until you drop it.
 
-One call either widens or narrows, never both. Make two calls to do both.
+### Audit history
 
-## Audit history
+Each applied change appends a `resident_authority_changed` event to the
+assignment's history, with its `revision`, `at`, `by`, what changed, and `via`:
+`operator`, `decision:<request id>` (with the quote and the relaying session)
+or `narrowing`. `orbit resident show` reports them as `authority.granted` and
+`authority.narrowed`. If that history is unreadable or inconsistent, `show`
+reports `authority_error` and every change is refused.
 
-Each applied change appends a `resident_authority_changed` event to the assignment task's history. The entry records:
+### Over MCP
 
-- `revision`: the change count after this change, starting at 1.
-- `at` and `by`: when it was applied, and the caller who applied it.
-- `via`: `operator` for a direct widening, `decision:<request id>` for an answered request, or `narrowing`.
-- The rights and workspaces added or removed, the deadline a narrowing set, and, for an answered request, the `quote` and the relaying session.
+The `resident` MCP role and toolset decide which tools a session lists. They
+grant no authority: an MCP session is never the operator for a widening, even
+with operator capability. See [MCP integration](/how-to/mcp-integration/#toolsets).
 
-`orbit resident show` reports this history as `authority.granted` (widenings, oldest first) and `authority.narrowed` (narrowings). If an entry cannot be read, if its recorded writer differs from its `by`, or if revisions run out of order, the authority record is unreadable. Widenings and narrowings are then refused, and `show` reports `authority_error`.
+| Tool | Arguments |
+|---|---|
+| `orbit.resident.grant` | `task_id`, `add`, `workspaces` (`--add-workspace`), `remove`, `drop_workspaces`, `deadline`, `quote` |
+| `orbit.resident.relay` | `task_id`, `quote`, `source`, `request_id`, `reverses` |
+| `orbit.resident.control` | `task_id`, `action`, `reason`, `status_request`, `by_session` |
+| `orbit.resident.list` | `include_ended` (`--all`) |
 
-## MCP roles and authority
-
-The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.relay`, `orbit.resident.control`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.resident.digest`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
-
-A widening applies directly only when the caller is the operator, and the caller's role does not decide that. An MCP session is never the operator for this purpose, even one that holds operator capability, so its widening becomes a request. Its `orchestrator` and `model` arguments record attribution on that request and never grant anything.
-
-| Caller | Widen with `add` or `workspaces` | Narrow |
-|---|---|---|
-| Operator at a terminal on this host | Applies at once | Applies at once |
-| Any other caller, including an MCP session | Raises a request. The authority changes only when a human answers `grant`. | Applies at once |
-
-Over MCP the same operations take these argument names: `task_id`, `add`, `workspaces`, `remove`, `drop_workspaces`, `deadline` and `quote` for `orbit.resident.grant`, `task_id`, `quote`, `source`, `request_id` and `reverses` for `orbit.resident.relay`, `task_id`, `action`, `reason`, `status_request` and `by_session` for `orbit.resident.control`, and `include_ended` for `orbit.resident.list`. `workspaces` and `drop_workspaces` are the CLI's `--add-workspace` and `--drop-workspace` flags.
+The toolset also carries `orbit.resident.show`, `orbit.resident.checkpoint`,
+`orbit.resident.metrics`, `orbit.resident.digest`, `orbit.evolution.add`,
+`orbit.evolution.list` and `orbit.evolution.show`.
 
 ## Enable the cycle routine
 
-A mandate runs only when its workspace's cycle routine fires. Each workspace carries a seeded `resident-cycle-<workspace>` routine, and it ships disabled. Until an operator enables it, no cycle starts for any mandate in that workspace, however complete the mandate and its authority are.
-
-Enable it from the CLI:
+Each workspace is seeded with a disabled `resident-cycle-<workspace>` routine.
+Until an operator enables it, no mandate in that workspace starts a cycle.
 
 ```bash
 orbit routine list
 orbit routine enable resident-cycle-<workspace>
 ```
 
-Use the workspace's name in place of `<workspace>`, and run the command from that workspace's checkout or add `--workspace <workspace>`: a command that selects another workspace's routine is refused and changes nothing, so the audit record always names the workspace whose definition changed. `orbit routine disable resident-cycle-<workspace>` turns it off again. Both commands change the routine definition's versioned `enabled` field, the same change the dashboard's toggle makes, and both are audited. They are operator-only: an agent or an MCP session that runs them is refused, so a manager cannot start a resident on its own.
+Run it from that workspace's checkout or add `--workspace <workspace>`.
+`orbit routine disable` turns it off again. Both are operator-only and audited,
+so an agent or MCP session cannot start a resident by itself. In the dashboard,
+press **Enable** on the routine under **Automation**; the server must run with
+`--operator`.
 
-Or in the dashboard, open **Automation**, find the `resident-cycle-<workspace>` routine and press **Enable**. The button works only on a dashboard served with `--operator`.
+If cycles still do not start, `orbit routine show resident-cycle-<workspace>`
+reports the effective state:
 
-An enabled routine can still be held by a host-local pause, which `orbit routine resume <name>` clears. A replica checkout does not schedule this routine, so enable it on the machine that owns the workspace. `orbit routine show resident-cycle-<workspace>` reports the effective state.
-
-## Record a checkpoint
-
-`orbit resident checkpoint <task id> --record '<json>'` appends one `resident.checkpoint` v1 record to the assignment task as a comment. It is a record operation for a live cycle. It does not start a cycle or make a resident run unattended.
-
-- The record's `mandate`, `cycle` and `run_id` must match the mandate's live, unexpired cycle. Orbit publishes that cycle itself. No CLI or MCP call sets it.
-- Malformed records, records for a stale cycle, and a second checkpoint for the same cycle are refused and write nothing.
-- The record's `authority` field reports the rights a cycle observed. It grants nothing.
-- A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 characters of notes. Each action key has the form `resident:<mandate>:<cycle>:<n>`, where `<n>` is a positive integer.
-
-`show` reports the latest checkpoint.
+- A host-local pause holds the routine until `orbit routine resume <name>`.
+- A replica checkout does not schedule it. Enable it on the machine that owns
+  the workspace.
 
 ## Relay a human's words
 
@@ -220,12 +241,22 @@ orbit resident relay <task id> --quote "Ship CSV first." \
   --source '{"human":"daniel","via":"chat","said_at":"2026-11-02T10:00:00Z"}'
 ```
 
-`relay` writes one `resident.answer` comment on the assignment. The quote is kept verbatim, up to 4000 characters, with its provenance: `human` (who said it), `via` (the channel), an optional `session` and `said_at`. Orbit records the relaying session as `relayed_by` from the caller, never from input. The comment wakes the resident on its next due check. It returns `{task_id, comment, answer}`: `comment` names the written comment by its 1-based `index` with `at` and `by` (task comments carry no ids), and `answer` is the `resident.answer` record as written.
+`relay` writes one `resident.answer` comment on the assignment, which wakes the
+resident on its next due check. The quote is kept verbatim, up to 4000
+characters. The reply holds the `task_id`, the `comment` (its 1-based `index`,
+`at` and `by`) and the `answer` record.
 
-- `--request-id` names the resident request or decision request the words answer. A relayed answer is a direction: the human still answers the decision request itself.
-- `--reverses` names a resident decision the direction undoes.
+| Flag | Purpose |
+|---|---|
+| `--quote` | The human's words. |
+| `--source` | Provenance JSON: `human`, `via` (the channel), `said_at` and an optional `session`. Orbit records the relaying session itself. |
+| `--request-id` | The resident request or decision request the words answer. A decision request still needs its own answer. |
+| `--reverses` | The resident decision this direction undoes. |
 
-A relay never changes authority. Input that names rights, workspaces, a status or any field not listed above is refused, inside `source` too. Widen through [`orbit resident grant`](#widen-the-authority). A quote that would need redaction, such as a secret or a home directory path, is refused instead of rewritten. A relay to an ended mandate is refused.
+A relay never changes authority: input that names rights, workspaces, a status
+or any other field is refused, inside `source` too. Also refused are a quote
+that would need redaction, such as a secret or a home directory path, and a
+relay to an ended mandate.
 
 ## Control a resident
 
@@ -242,36 +273,69 @@ orbit resident control <task id> stop --reason "Goal dropped"
 |---|---|---|---|
 | `pause` | `active` | `paused` | No new cycle starts. |
 | `resume` | `paused` | `active` | Due on the next tick. |
-| `stop` | anything but ended | `ended` | No new cycle starts. The assignment moves to review with a synthesized handoff summary once no cycle is live. |
-| `wake` | `active` | `active` | Due on the next tick despite the heartbeat, never before the cadence floor. `--status-request` makes the cycle report where the mandate stands even when it has nothing else to do. |
+| `stop` | anything but ended | `ended` | No new cycle starts. Once no cycle is live, the assignment moves to review with a synthesized handoff summary. |
+| `wake` | `active` | `active` | Due on the next tick despite the heartbeat, never before the cadence floor. `--status-request` makes the cycle report where the mandate stands even when it is idle. |
 | `takeover` | `active`, `paused` | `taken_over` | No cycle fires. Records who took over. |
-| `release` | `taken_over` | `active` | Due on the next tick. The cycle reads the comments written during the takeover as new. |
+| `release` | `taken_over` | `active` | Due on the next tick. The cycle reads comments written during the takeover as new. |
 
-An action that does not apply to the current state is refused and writes nothing. A live cycle is not interrupted: it keeps its grant, writes its checkpoint and ends at its boundary. A stopped assignment in `proposed` is moved through `in-progress` to `review`. If the lifecycle refuses a handoff, the reply says why, and you move the assignment by hand.
-
-Any caller that can write the assignment may call `control`, because every action narrows or restores firing under the existing authority. `resume` and `release` never widen it. Each action appends a `resident_control` event to the assignment's history with the action, the resulting state, the caller, the reason and any `--by-session`.
+`--reason` is required. Any caller that can write the assignment may call
+`control`, because no action widens authority. An action that does not fit the
+current state is refused. A live cycle is never interrupted: it writes its
+checkpoint and ends at its boundary. Each action appends a `resident_control`
+event to the assignment's history. If `stop` cannot hand the assignment off,
+the reply says why, and you move the assignment yourself.
 
 ## Stalled residents
 
-An `active` mandate is stalled when it has not written a checkpoint for twice its heartbeat (or, never having checkpointed, for twice its heartbeat since the task was created), when its last three checkpoints are all `incomplete`, or when its workspace's cycle routine is disabled — no cycle can fire at all then, however recently it checkpointed. A paused, taken-over, handed-off or ended mandate is not stalled.
+An `active` mandate is stalled when any of these holds:
 
-`orbit attention` lists each stalled mandate as a `resident_stalled` item. When the workspace's `resident-cycle-<workspace>` routine is enabled, the suggested next step is `orbit resident control <task id> wake --status-request`. When that routine is disabled, `wake` cannot start a cycle, so the suggested next step is instead enabling the routine (`orbit routine enable resident-cycle-<workspace>`) or stopping the mandate (`orbit resident control <task id> stop`); the stall reason names the disabled routine as the cause. The suggestion enables nothing by itself: running it is still the operator's action. `orbit resident show`, `list` and `digest` report the same flag; the digest marks the resident's line with `(stalled)`.
+- It has written no checkpoint for twice its heartbeat, counted from the task's
+  creation when it has never written one.
+- Its last three checkpoints are all `incomplete`.
+- Its workspace's cycle routine is disabled.
+
+`orbit attention` lists each one as a `resident_stalled` item, and
+`orbit resident show`, `list` and `digest` report the same flag. Next, run
+`orbit resident control <task id> wake --status-request`. With the routine
+disabled, `wake` cannot start a cycle: enable the routine or stop the mandate.
+
+## Record a checkpoint
+
+```bash
+orbit resident checkpoint <task id> --record '<json>'
+```
+
+This appends one `resident.checkpoint` v1 record to the assignment as a
+comment, for a cycle that is already live. It does not start a cycle.
+
+- The record's `mandate`, `cycle` and `run_id` must match the live cycle, which
+  only Orbit publishes. A malformed record, a stale cycle or a second
+  checkpoint for the same cycle is refused.
+- The record's `authority` field reports what the cycle observed. It grants
+  nothing.
+- A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000
+  characters of notes. Action keys have the form
+  `resident:<mandate>:<cycle>:<n>`, with `<n>` a positive integer.
 
 ## Evolution ledger
 
-The `resident` toolset also carries the evolution capability-gap ledger: `orbit.evolution.add` records an interactive cost event outside a checkpoint, and `orbit.evolution.list` and `orbit.evolution.show` inspect the resulting signatures and records.
+The ledger records capability gaps and their cost. `add` records an interactive
+cost event outside a checkpoint; `list` and `show` inspect the resulting
+signatures and records.
 
 ```bash
 orbit evolution add --event '{"kind":"manual_step","what":"Checked CI by hand","minutes":4,"retries":0,"slot_minutes":0,"wished":"Automatic CI recheck"}'
 orbit evolution list --state open
 orbit evolution show <evolution-id>
+orbit evolution decline <evolution-id> --days 30
 ```
 
-`orbit evolution decline <evolution-id> [--days <n>]` suppresses proposals for a signature. It is operator-only and CLI-only, so it is not listed over MCP.
+`decline` suppresses proposals for a signature. It is operator-only and not
+available over MCP.
 
 ## Digest and metrics
 
-`orbit resident digest` and `orbit resident metrics` report on the workspace's resident mandates. Neither command writes state. Both only read tasks, comments, history, decision requests and checkpoints; the digest also reads evolution records and the `resident.evolution` settings. Neither records anything on a task, a request or the authority, and neither starts, pauses or changes a resident.
+Both commands report on the workspace's resident mandates and write nothing.
 
 ### Digest
 
@@ -280,19 +344,21 @@ orbit resident digest
 orbit resident digest --since 7d --top 10
 ```
 
-The digest is the manager's view of the bound workspace. Read it to see what a person needs to act on: what each resident is waiting on, which escalations are open, which decisions could still be vetoed, and which costs keep recurring. Its text output has these parts, in order:
+The digest shows what a person needs to act on:
 
-- **Residents**: one line per non-ended mandate, with its title, state, last checkpoint outcome and open request count. Ended mandates are omitted. A mandate that [is stalled](#stalled-residents) is marked `(stalled)`.
-- **Open escalations**: open decision requests that residents raised, and open grant requests, oldest first.
-- **Decisions awaiting veto**: reversible decisions from checkpoints in the window that no answer has reversed yet. `--json` gives each decision's ID. To veto one, relay the human's words with `--reverses` (see [Relay a human's words](#relay-a-humans-words)).
-- **Proposals awaiting approval**: proposed tasks linked to evolution records. The digest lists them and approves none of them.
-- **Top pains**: unresolved evolution pains from the window, costliest first. Each shows its minutes plus slot minutes, and its occurrence, cycle and mandate counts. See the [Evolution ledger](#evolution-ledger).
-- **Metrics**: the workspace totals of interventions and escalations over the same window.
+| Part | Shows |
+|---|---|
+| Residents | Each mandate that has not ended: title, state, last checkpoint outcome and open request count, marked `(stalled)` when it applies. |
+| Open escalations | Open decision requests that residents raised, and open grant requests, oldest first. |
+| Decisions awaiting veto | Reversible decisions from checkpoints in the window that no answer has reversed. `--json` gives each ID. To veto one, [relay](#relay-a-humans-words) the human's words with `--reverses`. |
+| Proposals awaiting approval | Proposed tasks linked to evolution records. The digest approves none. |
+| Top pains | Unresolved evolution pains from the window, costliest first, with minutes and occurrence, cycle and mandate counts. |
+| Metrics | Workspace totals of interventions and escalations over the window. |
 
-Its flags:
-
-- `--since <window>` sets the window for the decisions, the pains and the metrics line. It takes the forms that `metrics --since` takes. The default is 14 days. Open escalations, proposals and residents are current state, so `--since` does not limit them.
-- `--top <n>` caps the pains shown, from 1 to 100. The default is 5.
+| Flag | Effect |
+|---|---|
+| `--since <window>` | The window for decisions, pains and metrics, in the forms `metrics --since` takes. Default 14 days. The other parts show current state. |
+| `--top <n>` | The most pains to show, 1 to 100. Default 5. |
 
 ### Metrics
 
@@ -302,34 +368,35 @@ orbit resident metrics --mandate <task id> --since 2w
 orbit resident metrics --baseline <task id>
 ```
 
-Its flags:
+| Flag | Effect |
+|---|---|
+| `--mandate <task id>` | Reports one mandate. Without it, the report covers every mandate in the workspace and adds `totals`. |
+| `--since <window>` | The window start: a span such as `7d`, `24h` or `2w` (units `m`, `h`, `d`, `w`), an RFC 3339 instant or a `YYYY-MM-DD` date. Default 30 days. |
+| `--baseline <task id>` | Adds the same measures for an assignment a person worked interactively, for comparison. Alone, it reports only the baseline. |
 
-- `--mandate <task id>` reports one mandate. Without it, the report covers every resident mandate in the workspace and adds a `totals` block. The text output leaves `totals` out when exactly one mandate is listed, because it would repeat that mandate.
-- `--since <window>` sets the window start. Use a span such as `7d`, `24h` or `2w` (units `m`, `h`, `d` and `w`), an RFC 3339 instant, or a `YYYY-MM-DD` date. The window ends when you run the command. The default is 30 days.
-- `--baseline <task id>` computes the same measures for an assignment task that a person worked interactively, not through a resident. Use it to compare resident work with the same kind of work done by hand. With `--baseline` alone, the report covers only the baseline.
+Each mandate, `totals` and `baseline` get the same four measures:
 
-The text output prints one block per mandate, labelled by its task ID, then `totals` and `baseline`. Each block has four measures.
+| Measure | What it counts in the window |
+|---|---|
+| Interventions | Times a person changed the course of the work: unprompted relays, plus comments, status changes and requeue, cancel, stop or takeover events a person wrote, on the assignment and the tasks it watches. Answers to escalations and grants do not count. |
+| Escalation load | Decision requests the resident raised, with the median seconds to an answer, the share answered with the recommended option, and the number that expired unanswered. |
+| Reversal rate | The share of the resident's decisions and successful actions, from checkpoints in the window, that a person undid within 7 days: by a relay with `--reverses`, by moving the action's subject to `proposed` or `rejected`, or by recording a revert. |
+| Recovery cost | For cycles that ended without a complete checkpoint: the crashed cycles, the actions that ran a second time, and the slot minutes of the recovery cycles. `--json` adds the median and maximum time to the next complete checkpoint. |
 
-**Interventions** counts the times a person changed the course of the work in the window. It counts unprompted relays (a `resident.answer` with no request ID) whoever sent them, because a relay carries a person's words. It counts other comments, status changes, and history events that name a requeue, cancel, stop or takeover only when a person wrote them. An author counts as a person when it is `human` or `operator`, or starts with `human:` or `human-`. Answers to escalations, grants and the resident's own events do not count. The count covers the assignment and the tasks it watches: its `watch` list, tasks with its watched tags, related tasks, and the subjects of its actions. The text shows the count and the count per active mandate-day.
+Reading the numbers:
 
-**Escalation load** counts the decision requests the resident raised in the window. The text also shows the rate per active mandate-day, the median seconds from raised to answered, the share answered with the recommended option, and the number that expired unanswered. The recommended share counts only answered requests that offered a recommendation. The median is blank when no request in the window has been answered, and the share is blank when no answered request offered a recommendation.
+- An author is a person when it is `human` or `operator`, or starts with
+  `human:` or `human-`.
+- Interventions and escalations also show a rate per active mandate-day. Active
+  days run from the later of the mandate's creation and the window start to
+  now, rounded up, at least one.
+- A rate is blank when there is nothing to judge. A baseline with no
+  checkpoints reports `not_derivable` for reversal rate and recovery cost.
+- A watched task in another registered workspace on this machine contributes
+  its history and decision requests, not its comments. A reference no
+  registered workspace holds is listed under `references.unreachable`.
 
-**Reversal rate** is the share of the resident's decisions and successful actions, recorded in checkpoints within the window, that a person undid within 7 days. Each counts once. A decision is undone when a `resident.answer` names its ID in `reverses`. An action is undone when a `resident.answer` names its key, when a human write moves its subject to `proposed` or `rejected`, or when a human write records a revert. The text shows `reversed/total (rate …)`, and the rate is blank when there is nothing to judge.
-
-**Recovery cost** covers cycles that ended without a complete checkpoint (an `incomplete` outcome). For each, `--json` gives the time from the dead cycle's start to the next complete checkpoint, as a median and a maximum, and the human interventions in that span. The text shows three numbers: the crashed cycles; the repeated actions, meaning successful actions that ran a second time, including a dead cycle's completed action that a recovery cycle ran again instead of skipping; and the recovery slot minutes, the minutes from each recovery cycle's start to its checkpoint.
-
-How the window and the baseline work:
-
-- Only events between the window start and now count. A mandate's active days run from the later of its creation and the window start to now, rounded up to whole days and at least one. Per-mandate-day rates divide by those days. In `totals`, they divide by the summed active days of all mandates. The per-human-day escalation rate divides by the calendar length of the window instead.
-- The baseline uses the same window and its own active days. A baseline with no checkpoints reports `not_derivable` for the reversal rate and recovery cost, never zero. Its interventions and escalation load still compute.
-- A watched task in another registered workspace on this machine contributes its history and decision requests, but not its comments, which cannot be read across workspaces. A reference that no registered workspace holds is listed under `references.unreachable` and skipped.
-
-`--json` returns the payload: `window` and `mandates`, plus `totals` and `baseline` when they apply. Each measure appears under two keys, for example `interventions` and `manual_interventions`, `escalations` and `escalation_load`, `reversals` and `reversal_rate`, `recovery` and `recovery_cost`.
-
-## Related pages
-
-- [CLI commands](../cli/) lists every `orbit resident` command.
-- [MCP integration](../../how-to/mcp-integration/) covers roles and toolsets.
-- [Decision channels](../../how-to/decision-channels/) covers answering decision requests.
-- [Dashboard](../../how-to/dashboard/#residents) covers the Residents view.
-- [Configuration](../config/) covers crews and the MCP role setting.
+`--json` returns `window` and `mandates`, plus `totals` and `baseline` when
+they apply. Each measure appears under two keys: `interventions` and
+`manual_interventions`, `escalations` and `escalation_load`, `reversals` and
+`reversal_rate`, `recovery` and `recovery_cost`.

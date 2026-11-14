@@ -222,8 +222,8 @@ function inspectLayout() {
 // The links whose only content is code, with the page that holds each.
 const codeLinks = [
   { route: '/concepts/scheduling/', text: '--complete' },
-  { route: '/contributing/local-dev/', text: 'CONTRIBUTING.md' },
-  { route: '/how-to/dashboard/', text: 'orbit web connect' },
+  { route: '/contributing/', text: 'CONTRIBUTING.md' },
+  { route: '/how-to/dashboard/', text: 'hosts.toml' },
   { route: '/privacy/', text: 'security.txt' },
 ];
 
@@ -305,21 +305,9 @@ try {
           for (const details of document.querySelectorAll('main details')) details.open = true;
         });
         assert.equal(await page.locator('html').getAttribute('data-theme'), colorScheme);
-        const result = { ...await page.evaluate(inspectLayout), providerPanels: [] };
+        const result = await page.evaluate(inspectLayout);
         evidence.viewports.push({ route, width, colorScheme, ...result });
         evidence.failures.push(...result.failures.map((failure) => ({ route, width, colorScheme, ...failure })));
-        // The provider picker hides authored inline examples using CSS. Select
-        // each provider so the same assertions cover every available panel.
-        const providers = page.locator('input[name="ose-provider"]');
-        for (let index = 0; index < await providers.count(); index++) {
-          const id = await providers.nth(index).getAttribute('id');
-          await page.locator(`label[for="${id}"]`).click();
-          const selected = await providers.nth(index).inputValue();
-          const panelResult = await page.evaluate(inspectLayout);
-          result.providerPanels.push({ selected, codes: panelResult.codes, wrappedCodes: panelResult.wrappedCodes });
-          evidence.failures.push(...panelResult.failures.map((failure) =>
-            ({ route, width, colorScheme, selected, ...failure })));
-        }
         for (const link of codeLinks.filter((entry) => entry.route === route && width === 1280)) {
           if (!await codeLinkUnderlinePainted(page, link.text)) {
             evidence.failures.push({ route, width, colorScheme, kind: 'code-link-underline-unpainted', text: link.text });

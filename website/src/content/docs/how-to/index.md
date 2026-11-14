@@ -1,114 +1,58 @@
 ---
-title: How-to Guides
-description: "Guides for running Orbit day to day: the dashboard, delivery windows, recurring work, scopes, activities, and multi-machine setups."
-sidebar:
-  order: 1
+title: Guides
+description: "One guide per job: deliver work, use the dashboard and other interfaces, improve results, run several machines, maintain state, and extend Orbit."
 ---
 
-New to Orbit? [Start Here](../getting-started/) sets it up and walks one task
-from request to merge. These guides pick up from there, one job each. Your
-agent can do most of them for you with the bundled `orbit-setup` or
-`orbit-orchestrate` skill.
+Each guide covers one job. New to Orbit? Start with the
+[Quickstart](/getting-started/). Your agent can do most of these for you with
+the bundled `orbit-setup` and `orbit-orchestrate` skills.
 
-## Day to day
+## Deliver
 
-<div class="orbit-card-grid">
-  <a class="orbit-card" href="./attention/">
-    <h3>Find What Needs Attention</h3>
-    <p>Find operator waits across workspaces and hosts, filter them, and follow changes.</p>
-  </a>
-  <a class="orbit-card" href="./dashboard/">
-    <h3>Use the Dashboard</h3>
-    <p>Approve and ship tasks, follow runs, start a drain, and reach a remote host over SSH.</p>
-  </a>
-  <a class="orbit-card" href="./claude-code/">
-    <h3>Use the Claude Code Mod</h3>
-    <p>Act on tasks from the prompt band, inspect the board, preflight ships, and track PR runs in Claude Code.</p>
-  </a>
-  <a class="orbit-card" href="./desktop/">
-    <h3>Use the Desktop App</h3>
-    <p>Supervise the dashboard server, manage the system tray, and follow fleet notifications in a native window.</p>
-  </a>
-  <a class="orbit-card" href="./mcp-apps/">
-    <h3>Open the MCP Apps Control Center</h3>
-    <p>Open the embedded control center or one task or run from an MCP client, pick a selector, and fall back when it does not render.</p>
-  </a>
-  <a class="orbit-card" href="./continuous-delivery/">
-    <h3>Run a Delivery Window</h3>
-    <p>Prepare the backlog, drain it for a set time, retune or stop the window, and recover failed runs.</p>
-  </a>
-  <a class="orbit-card" href="./recurring-work/">
-    <h3>Schedule Recurring Work</h3>
-    <p>Run jobs and file recurring chores on a schedule with the host scheduler clock, routines, and auto-tasks.</p>
-  </a>
-  <a class="orbit-card" href="./mcp-integration/">
-    <h3>Connect Your Agent</h3>
-    <p>Connect Claude Code, Codex, Cursor and other agent clients to Orbit over MCP, by hand or through the orbit-setup skill.</p>
-  </a>
-</div>
+<ul class="orbit-index">
+  <li><a href="/how-to/continuous-delivery/"><span class="orbit-index-title">Run a delivery window</span><span class="orbit-index-desc">Prepare the backlog, drain it for a set time, retune or stop the drain, and recover failed runs.</span></a></li>
+  <li><a href="/how-to/recurring-work/"><span class="orbit-index-title">Schedule recurring work</span><span class="orbit-index-desc">Install the scheduler clock, turn on routines, and define auto-tasks that file chores.</span></a></li>
+  <li><a href="/how-to/attention/"><span class="orbit-index-title">Find what needs attention</span><span class="orbit-index-desc">List what waits on you across workspaces and hosts.</span></a></li>
+  <li><a href="/how-to/decision-channels/"><span class="orbit-index-title">Decision channels</span><span class="orbit-index-desc">Have held work ask you for a decision, and answer it.</span></a></li>
+  <li><a href="/how-to/fleet-notices/"><span class="orbit-index-title">Fleet notices</span><span class="orbit-index-desc">Tell agents and operators about a temporary condition, then retire the notice.</span></a></li>
+</ul>
 
-## Shape the work
+## Interfaces
 
-<div class="orbit-card-grid">
-  <a class="orbit-card" href="./scoping-rules/">
-    <h3>Choose Scopes</h3>
-    <p>Decide where state lives and what an activity may read or modify.</p>
-  </a>
-  <a class="orbit-card" href="./write-activity/">
-    <h3>Write an Activity</h3>
-    <p>Define your own agent or deterministic step in activity YAML.</p>
-  </a>
-  <a class="orbit-card" href="./experiments/">
-    <h3>Run an Experiment</h3>
-    <p>Compare control and treatment arms, read intervals and the verdict, and conclude without changing configuration automatically.</p>
-  </a>
-  <a class="orbit-card" href="./crew-memory/">
-    <h3>Give Models a Memory</h3>
-    <p>Turn on crew memory, deliver per-model notes through a memory-arm experiment, review global proposals, and grant agents read access.</p>
-  </a>
-</div>
+<ul class="orbit-index">
+  <li><a href="/how-to/dashboard/"><span class="orbit-index-title">Dashboard</span><span class="orbit-index-desc">Approve and ship tasks, follow runs, run a drain and read analytics in a browser.</span></a></li>
+  <li><a href="/how-to/claude-code/"><span class="orbit-index-title">Claude Code mod</span><span class="orbit-index-desc">Act on tasks and follow runs inside Claude Code.</span></a></li>
+  <li><a href="/how-to/desktop/"><span class="orbit-index-title">Desktop app</span><span class="orbit-index-desc">Run the dashboard in a native window with a tray and notifications.</span></a></li>
+  <li><a href="/how-to/mcp-apps/"><span class="orbit-index-title">MCP Apps control center</span><span class="orbit-index-desc">Open the control center, a task or a run from an MCP client.</span></a></li>
+</ul>
 
-## Operate
+## Improve
 
-<div class="orbit-card-grid">
-  <a class="orbit-card" href="./fleet-notices/">
-    <h3>Post and retire fleet notices</h3>
-    <p>Share scoped operational information, inspect it, and close it when it no longer applies.</p>
-  </a>
-  <a class="orbit-card" href="./diagnostics/">
-    <h3>Investigate Failures from the Terminal</h3>
-    <p>Trace a failure through doctor, run output, host logs, audit events, and server health checks.</p>
-  </a>
-  <a class="orbit-card" href="./multi-host/">
-    <h3>Run Orbit across hosts</h3>
-    <p>Register SSH hosts, route tasks by prefix, select remote workspaces, and prepare a follower.</p>
-  </a>
-  <a class="orbit-card" href="./task-publication/">
-    <h3>Publish and Restore Tasks</h3>
-    <p>Snapshot task records to a dedicated repository, and recover them.</p>
-  </a>
-  <a class="orbit-card" href="./state-and-backup/">
-    <h3>Back Up and Move Orbit State</h3>
-    <p>Find the state you can't regenerate, take consistent SQLite backups, verify a restore, and move tasks with export and import.</p>
-  </a>
-  <a class="orbit-card" href="./workspace-maintenance/">
-    <h3>Maintain and Remove Workspaces</h3>
-    <p>Inspect bindings and ship mode, converge shipped defaults, inspect migrations, rebind remotes, and remove or tear down checkouts safely.</p>
-  </a>
-  <a class="orbit-card" href="./distributed-drain/">
-    <h3>Set Up a Distributed Drain</h3>
-    <p>Spread one backlog across machines: one owner, replica checkouts, SSH access.</p>
-  </a>
-  <a class="orbit-card" href="./friction/">
-    <h3>Report and Triage Friction</h3>
-    <p>Record what made work harder than it should have been, then search, triage, resolve, and rehome the record.</p>
-  </a>
-  <a class="orbit-card" href="./decision-channels/">
-    <h3>Decision channels</h3>
-    <p>Register a human decision channel, inspect approval digests, and connect an authenticated transport plugin.</p>
-  </a>
-  <a class="orbit-card" href="./plugins/">
-    <h3>Install and Grant Plugins</h3>
-    <p>Add a plugin to this machine, grant only the permissions it requests, enable it per workspace, and upgrade or remove it.</p>
-  </a>
-</div>
+<ul class="orbit-index">
+  <li><a href="/how-to/experiments/"><span class="orbit-index-title">Run an experiment</span><span class="orbit-index-desc">Split real tasks between agent treatments and read the result.</span></a></li>
+  <li><a href="/how-to/crew-memory/"><span class="orbit-index-title">Give models a memory</span><span class="orbit-index-desc">Turn on crew memory and review what models write to it.</span></a></li>
+  <li><a href="/how-to/friction/"><span class="orbit-index-title">Report and triage friction</span><span class="orbit-index-desc">Record what made work harder than it should have been, then triage it.</span></a></li>
+</ul>
+
+## Multiple machines
+
+<ul class="orbit-index">
+  <li><a href="/how-to/multi-host/"><span class="orbit-index-title">Run Orbit across hosts</span><span class="orbit-index-desc">Register SSH hosts, route tasks by prefix and select remote workspaces.</span></a></li>
+  <li><a href="/how-to/distributed-drain/"><span class="orbit-index-title">Set up a distributed drain</span><span class="orbit-index-desc">Let a second machine pull work from the one that owns the backlog.</span></a></li>
+</ul>
+
+## Maintain
+
+<ul class="orbit-index">
+  <li><a href="/how-to/diagnostics/"><span class="orbit-index-title">Investigate failures</span><span class="orbit-index-desc">Trace a failure through doctor, run output, host logs and audit events.</span></a></li>
+  <li><a href="/how-to/state-and-backup/"><span class="orbit-index-title">Back up and move state</span><span class="orbit-index-desc">Back up the databases, verify a restore, and move tasks between machines.</span></a></li>
+  <li><a href="/how-to/task-publication/"><span class="orbit-index-title">Publish and restore tasks</span><span class="orbit-index-desc">Snapshot task records to a Git repository you control, and restore them.</span></a></li>
+  <li><a href="/how-to/workspace-maintenance/"><span class="orbit-index-title">Maintain workspaces</span><span class="orbit-index-desc">Sync shipped defaults, apply migrations, rebind remotes and remove workspaces.</span></a></li>
+</ul>
+
+## Extend
+
+<ul class="orbit-index">
+  <li><a href="/how-to/write-activity/"><span class="orbit-index-title">Write an activity</span><span class="orbit-index-desc">Define your own agent or deterministic step in YAML.</span></a></li>
+  <li><a href="/how-to/plugins/"><span class="orbit-index-title">Install and grant plugins</span><span class="orbit-index-desc">Add a plugin, grant only the permissions it needs, and enable it per workspace.</span></a></li>
+</ul>
