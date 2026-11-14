@@ -66,9 +66,9 @@ registry sweeps, and MCP setup use this same path interpretation.
 
 `orbit workspace init` scaffolds `.orbit/resources/` plus
 `.orbit/state/{audit,job-runs,logs,worktrees}`. It does not create
-`.orbit/knowledge` or `.orbit/state/diagnostics`; leftover empty copies from
-older inits are unused and may be `rmdir`'d. Init tolerates both absence and
-presence. Path fields live on `WorkspacePaths` in
+`.orbit/knowledge` or `.orbit/state/diagnostics`; leftover copies from
+older inits are unused. Empty directories may be `rmdir`'d. Init tolerates
+both absence and presence. Path fields live on `WorkspacePaths` in
 `crates/orbit-types/src/workspace/registry.rs`.
 
 | Path | What it is | Authoritative or regenerable |

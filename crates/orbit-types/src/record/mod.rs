@@ -13,5 +13,5 @@ pub use error::RecordError;
 pub use audit::Audit;
 pub use crew_discovery::{CREW_DISCOVERY_SCHEMA_VERSION, CrewDiscoveryEntryV1, CrewDiscoveryV1};
 pub use event::OrbitEvent;
-pub use friction::{FrictionEntry, FrictionFrontmatter, FrictionRecord, FrictionStatus};
+pub use friction::{FrictionFrontmatter, FrictionRecord, FrictionStatus};
 pub use notice::*;

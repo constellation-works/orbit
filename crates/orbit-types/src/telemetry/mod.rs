@@ -3,7 +3,6 @@
 mod audit_actor;
 mod audit_event;
 mod invocation;
-mod metrics;
 mod pricing;
 mod provider_limit;
 mod self_reported_actor;
@@ -16,7 +15,6 @@ pub use invocation::{
     AgentEffortUsage, AgentExecutionIdentity, InvocationTrace, LONG_PROMPT_CAPTURE_FLOOR_TOKENS,
     TokenUsage, ToolCallTrace,
 };
-pub use metrics::MetricsEntry;
 pub use pricing::{
     InputTokenBasis, PriceRow, PromptTierRow, cost_from_rows, normalize_token_usage_from_rows,
 };
