@@ -314,7 +314,7 @@ fi
 # `TaskAutomationPort`, and `job` reaches review admission only through its
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
-app_modules='task|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
+app_modules='task|task_bundle|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
 # [ORB-22623] The clock settings and schedule display state keep contracts
 # below `routines` and `auto_tasks`.
 contracts_higher="${app_modules}|routines|auto_tasks"
@@ -725,8 +725,9 @@ fi
 # [ORB-22005] Composition is the only joiner, and `bootstrap -> application`
 # stays because bootstrap seeds through application-owned definitions, so
 # neither application nor the adapter may name bootstrap or composition or call
-# an inherent `OrbitRuntime` method either defines. They reach them only through
-# `contracts::TaskBundleMaintenancePort`.
+# an inherent `OrbitRuntime` method either defines. Request-time task bundle
+# operations live in `application::task_bundle`, which the adapter calls
+# directly [ORB-24534].
 # The names are derived from the `impl OrbitRuntime` blocks under `composition/`
 # and under `bootstrap/`. Exact lines allowed: the lexical index store's own
 # `reindex_tasks`, and the `#[cfg(test)]` fixture that opens a runtime.

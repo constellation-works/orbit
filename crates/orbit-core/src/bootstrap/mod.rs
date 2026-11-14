@@ -21,7 +21,6 @@ pub mod linux_sandbox_host {
 }
 pub(crate) mod policy;
 pub mod task_migration;
-pub mod task_publication;
 pub(crate) mod workspace_authority;
 
 #[cfg(test)]
