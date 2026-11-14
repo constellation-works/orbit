@@ -211,8 +211,8 @@ pub use external_merge::{ExternalMergeSettlement, ExternalMergeSettlementProfile
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub use lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
 pub(crate) use lifecycle::{
-    claim_recovery_targets, ensure_claim_recovery_target, ensure_completion_run_stopped,
-    ensure_post_deploy_criteria_met, ensure_task_has_execution_plan,
+    claim_recovery_targets, ensure_claim_recovery_target, ensure_completion_gates,
+    ensure_completion_run_stopped, ensure_post_deploy_criteria_met, ensure_task_has_execution_plan,
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
 pub(crate) use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};

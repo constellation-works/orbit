@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::super::helpers::{self, SYSTEM_ACTOR_LABEL};
 use super::super::legacy_decisions;
-use super::super::lifecycle::{ensure_completion_run_stopped, ensure_post_deploy_criteria_met};
+use super::super::lifecycle;
 use super::mechanical::FrictionRef;
 use super::request::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TERMINAL_REFUSAL_MARK,
@@ -142,10 +142,13 @@ impl OrbitRuntime {
                 // completion: the refusal comment and decision must still be
                 // recorded, including when a mutation proposal is unapplied.
                 if plan.status == TaskStatus::Done && task.status != TaskStatus::Done {
-                    self.ensure_resolves_are_workspace_local(&task)?;
-                    ensure_post_deploy_criteria_met(self, &task)?;
-                    self.ensure_mutation_proposals_applied(&task)?;
-                    ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
+                    lifecycle::ensure_completion_gates(self, &task)?;
+                    lifecycle::ensure_completion_run_stopped(
+                        self,
+                        &task,
+                        None,
+                        Some(&request.run_id),
+                    )?;
                 }
                 self.write_plan(&task, request, &decision, &fault, &plan)?;
                 transition = Some((task.status, plan.status, plan.note.clone()));

@@ -288,7 +288,6 @@ impl OrbitRuntime {
                         {
                             return Err(invalid(reason));
                         }
-                        self.ensure_resolves_are_workspace_local(&task)?;
                         status = Some(TaskStatus::Done);
                         // Committed with the receipt, so a replay retries
                         // targets the first call never reached.
