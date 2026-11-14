@@ -7,10 +7,13 @@
 //! exists, and writes what it found into the task description.
 //!
 //! This stage sits on the same engine-private automation boundary as
-//! `automation::vcs`: `NoSandbox`, inherited environment, engine-private
-//! labels, never advertised to agents, and outside public tool authorization
-//! and activity allowlists. No new agent-facing tool is added and no GitHub
-//! credential becomes visible from inside a sandbox. What leaves this module
+//! `automation::vcs`: `NoSandbox`, a cleared environment for each `gh` child
+//! (baseline variables plus `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
+//! `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, and
+//! `XDG_CONFIG_HOME`), engine-private labels, never advertised to agents, and
+//! outside public tool authorization and activity allowlists. No new
+//! agent-facing tool is added and no GitHub credential becomes visible from
+//! inside a sandbox. What leaves this module
 //! is one bounded, redacted JSON snapshot — no token, no host configuration,
 //! and no way to run another query.
 //!
