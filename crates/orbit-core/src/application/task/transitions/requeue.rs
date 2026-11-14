@@ -45,27 +45,19 @@ impl OrbitRuntime {
                         current.blocked_at.to_rfc3339(),
                         current.run_id.as_deref().unwrap_or("-"),
                     );
-                    self.with_mutation(|| {
-                        let task = self.stores().task_records().update(
-                            &current.task_id,
-                            StoreTaskUpdateParams {
-                                actor: SYSTEM_ACTOR_LABEL.to_string(),
-                                status_event: Some(INFRA_BLOCK_CLEARED_EVENT.to_string()),
-                                status_note: Some(note.clone()),
-                                expected_status: Some(vec![TaskStatus::Blocked]),
-                                ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                    status: Some(TaskStatus::Backlog),
-                                    ..Default::default()
-                                })
-                            },
-                        )?;
-                        Ok((
-                            task,
-                            OrbitEvent::TaskUpdated {
-                                id: current.task_id.clone(),
-                            },
-                        ))
-                    })?;
+                    self.stores().task_records().update(
+                        &current.task_id,
+                        StoreTaskUpdateParams {
+                            actor: SYSTEM_ACTOR_LABEL.to_string(),
+                            status_event: Some(INFRA_BLOCK_CLEARED_EVENT.to_string()),
+                            status_note: Some(note.clone()),
+                            expected_status: Some(vec![TaskStatus::Blocked]),
+                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                                status: Some(TaskStatus::Backlog),
+                                ..Default::default()
+                            })
+                        },
+                    )?;
                     cleared = Some(current);
                     Ok(())
                 })?;

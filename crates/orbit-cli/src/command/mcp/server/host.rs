@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSelection};
-use orbit_cmd::task_owner::{self, WorkspaceIdentity};
+use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::protocol::tool_input::required_string;
@@ -40,6 +40,12 @@ pub(super) struct ServerMcpHost {
     workspace_runtimes: WorkspaceRuntimeCache,
     pub(super) plugin_surface: HostPluginMcpCache,
     definitions: Mutex<Option<CachedMcpDefinitions>>,
+    /// Owner-route SSH sessions parked between a claimed worker's calls. The
+    /// probe is rebuilt per call, so the pool lives here to outlast it.
+    owner_route_sessions: federated::RoutedSessionPool,
+    /// One task-registry handle for id-routed owner lookups, so a warm server
+    /// does not reopen the registry on every `orbit.task.show`.
+    task_owners: TaskOwnerLookup,
 }
 
 /// The combined tool surface and the plugin snapshot it was built from.
@@ -71,6 +77,8 @@ impl ServerMcpHost {
             workspace_runtimes: WorkspaceRuntimeCache::default(),
             plugin_surface: HostPluginMcpCache::default(),
             definitions: Mutex::new(None),
+            owner_route_sessions: federated::RoutedSessionPool::default(),
+            task_owners: TaskOwnerLookup::default(),
         }
     }
 
@@ -407,8 +415,15 @@ impl ServerMcpHost {
         &self,
         selected: &ResolvedWorkspaceSelection,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-        self.workspace_runtimes
-            .resolve_observation(&self.global_root, selected, || {
+        let host_plugins = self
+            .plugin_surface
+            .host_installed_plugin_rows(&self.global_root)
+            .unwrap_or_default();
+        self.workspace_runtimes.resolve_observation(
+            &self.global_root,
+            selected,
+            host_plugins,
+            || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_observational(
                     &self.global_root,
                     &selected.workspace,
@@ -421,7 +436,8 @@ impl ServerMcpHost {
                     "{OPENED_WORKSPACE_RUNTIME_LOG}"
                 );
                 Ok(runtime)
-            })
+            },
+        )
     }
 
     /// The shared long-lived runtime for one resolved checkout.
@@ -432,8 +448,12 @@ impl ServerMcpHost {
         &self,
         selected: &ResolvedWorkspaceSelection,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        let host_plugins = self
+            .plugin_surface
+            .host_installed_plugin_rows(&self.global_root)
+            .unwrap_or_default();
         self.workspace_runtimes
-            .resolve(&self.global_root, selected, || {
+            .resolve(&self.global_root, selected, host_plugins, || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
                     &self.global_root,
                     &selected.workspace,
@@ -484,7 +504,7 @@ impl ServerMcpHost {
             if ID_RESOLVED_WORKSPACE_TOOLS.contains(&operation)
                 || Self::workspace_selector(None, context).is_none()
             {
-                return task_owner::resolve_task_owner(&self.global_root, &task_id);
+                return self.task_owners.resolve(&self.global_root, &task_id);
             }
         }
         if let Some(selector) = Self::workspace_selector(explicit, context) {
@@ -632,7 +652,8 @@ impl ServerMcpHost {
                 federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
                 context.orchestrator.clone(),
                 McpSessionAuthority::Agent,
-            );
+            )
+            .with_session_pool(self.owner_route_sessions.clone());
             return federated::FederatedMcpHost::new(destinations, Arc::new(probe))
                 .call_tool(name, input, context);
         }

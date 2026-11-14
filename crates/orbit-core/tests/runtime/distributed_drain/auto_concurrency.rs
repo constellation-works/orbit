@@ -729,10 +729,9 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                 );
                 let shown = pair
                     .follower
-                    .run_tool_with_context_and_role(
+                    .run_tool_with_context(
                         "orbit.workflow.run.show",
                         json!({"id": drain}),
-                        Role::Admin,
                         ToolContext {
                             session_context: ToolSessionContext {
                                 effective_capabilities: BTreeSet::from([McpCapability::Operator]),

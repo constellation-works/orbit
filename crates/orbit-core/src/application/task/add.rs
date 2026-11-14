@@ -2,7 +2,6 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::{Crew, all_agent_families};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
     normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
@@ -322,64 +321,56 @@ impl OrbitRuntime {
             )));
         }
 
-        let task = self.with_optional_mutation_event(|| {
-            let (task, replayed) = self.stores().task_records().create_guarded(
-                StoreTaskCreateParams {
-                    actor: create_label.clone(),
-                    parent_id: params.parent_id.clone(),
-                    title: params.title.clone(),
-                    description: params.description.clone(),
-                    acceptance_criteria: params.acceptance_criteria.clone(),
-                    dependencies: dependencies.clone(),
-                    relations: params.relations.clone(),
-                    tags: normalized_tags.clone(),
-                    required_tools: normalize_required_tools(params.required_tools.clone()),
-                    granted_tools: normalize_required_tools(params.granted_tools.clone()),
-                    requires_labels: requires_labels.clone(),
-                    not_before: params.not_before,
-                    plan: params.plan.clone(),
-                    execution_summary: String::new(),
-                    context_files,
-                    repo_root: None,
-                    created_by: Some(create_label.clone()),
-                    created_by_model: created_by_model.clone(),
-                    planned_by,
-                    implemented_by: None,
-                    status: initial_status,
-                    priority: params.priority,
-                    complexity: Some(params.complexity),
-                    task_type,
-                    external_refs: params.external_refs.clone(),
-                    source_task_id: params.source_task_id.clone(),
-                    crew: params.crew.clone(),
-                    crew_source: crew_assignment
-                        .as_ref()
-                        .map(|assignment| assignment.source.clone()),
-                    orchestrator: params.orchestrator.clone(),
-                    orchestrator_model: orchestrator_model.clone(),
-                    orchestrator_model_source,
-                    origin,
-                    rule_fingerprint: params.rule_fingerprint.clone(),
-                    comments: comments.clone(),
-                    context_creation: params.context_creation.authorize.clone(),
-                    creation_decision: params.creation_decision.clone(),
-                },
-                action_key,
-                digest,
-            )?;
-            // The insert is committed from here on, so its event is published
-            // even when the provenance write below fails.
-            let event = (!replayed).then(|| OrbitEvent::TaskAdded {
-                id: task.id.clone(),
-            });
-            let task = match &crew_assignment {
-                Some(assignment) if !replayed => {
-                    self.record_creation_crew_provenance(task, assignment, digest)
-                }
-                _ => Ok(task),
-            };
-            Ok((task, event))
-        })??;
+        let (task, replayed) = self.stores().task_records().create_guarded(
+            StoreTaskCreateParams {
+                actor: create_label.clone(),
+                parent_id: params.parent_id.clone(),
+                title: params.title.clone(),
+                description: params.description.clone(),
+                acceptance_criteria: params.acceptance_criteria.clone(),
+                dependencies: dependencies.clone(),
+                relations: params.relations.clone(),
+                tags: normalized_tags.clone(),
+                required_tools: normalize_required_tools(params.required_tools.clone()),
+                granted_tools: normalize_required_tools(params.granted_tools.clone()),
+                requires_labels: requires_labels.clone(),
+                not_before: params.not_before,
+                plan: params.plan.clone(),
+                execution_summary: String::new(),
+                context_files,
+                repo_root: None,
+                created_by: Some(create_label.clone()),
+                created_by_model: created_by_model.clone(),
+                planned_by,
+                implemented_by: None,
+                status: initial_status,
+                priority: params.priority,
+                complexity: Some(params.complexity),
+                task_type,
+                external_refs: params.external_refs.clone(),
+                source_task_id: params.source_task_id.clone(),
+                crew: params.crew.clone(),
+                crew_source: crew_assignment
+                    .as_ref()
+                    .map(|assignment| assignment.source.clone()),
+                orchestrator: params.orchestrator.clone(),
+                orchestrator_model: orchestrator_model.clone(),
+                orchestrator_model_source,
+                origin,
+                rule_fingerprint: params.rule_fingerprint.clone(),
+                comments: comments.clone(),
+                context_creation: params.context_creation.authorize.clone(),
+                creation_decision: params.creation_decision.clone(),
+            },
+            action_key,
+            digest,
+        )?;
+        let task = match &crew_assignment {
+            Some(assignment) if !replayed => {
+                self.record_creation_crew_provenance(task, assignment, digest)?
+            }
+            _ => task,
+        };
 
         Ok((task, required_tool_warnings))
     }

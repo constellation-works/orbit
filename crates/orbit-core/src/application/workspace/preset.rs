@@ -778,7 +778,7 @@ impl OrbitRuntime {
                         ))
                     })?;
                 if !routine.definition.enabled {
-                    set_routine_enabled(routine, false, true)?;
+                    let _ = set_routine_enabled(routine, false, true)?;
                     changed.push(name.clone());
                 }
             }

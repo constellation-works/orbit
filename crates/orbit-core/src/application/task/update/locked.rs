@@ -2,7 +2,6 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CREW_ASSIGNED_EVENT, CrewAssignmentState,
     CrewSource, FINAL_RECOVERY_DECIDED_EVENT, GRANTED_TOOLS_CHANGED_EVENT, RecordedCrewAssignment,
@@ -604,39 +603,26 @@ impl OrbitRuntime {
             (Some(crew), None) => Some(format!("{HUMAN_CREW_BYPASS_NOTE} '{crew}'")),
             (None, note) => note,
         };
-        let (mut updated, mut row) = self.with_mutation(|| {
-            let row = self.stores().task_records().update_returning_row(
-                id,
-                TaskRecordUpdateParams {
-                    artifact_owner_run_id: artifact_owner.clone(),
-                    artifact_writer,
-                    actor: effective_label.clone(),
-                    crew_source: crew_source.clone(),
-                    planned_by: attribution.planned_by.clone(),
-                    implemented_by: attribution.implemented_by.clone(),
-                    status_event: status_event.clone(),
-                    status_note,
-                    append_comments: append_comments.clone(),
-                    append_history: append_history.clone(),
-                    expected_status: expected_status.map(|status| vec![status]),
-                    operator_comment: comment_only && operator_write && !agent_context_declared(),
-                    ..TaskRecordUpdateParams::from(params)
-                },
-            )?;
-            let updated = row.task.clone();
-            let event = if previous_status == TaskStatus::Archived
-                && updated.status != TaskStatus::Archived
-            {
-                OrbitEvent::TaskUnarchived { id: id.to_string() }
-            } else if previous_status != TaskStatus::Archived
-                && updated.status == TaskStatus::Archived
-            {
-                OrbitEvent::TaskArchived { id: id.to_string() }
-            } else {
-                OrbitEvent::TaskUpdated { id: id.to_string() }
-            };
-            Ok(((updated, Some(row)), event))
-        })?;
+        let row = self.stores().task_records().update_returning_row(
+            id,
+            TaskRecordUpdateParams {
+                artifact_owner_run_id: artifact_owner.clone(),
+                artifact_writer,
+                actor: effective_label.clone(),
+                crew_source: crew_source.clone(),
+                planned_by: attribution.planned_by.clone(),
+                implemented_by: attribution.implemented_by.clone(),
+                status_event: status_event.clone(),
+                status_note,
+                append_comments: append_comments.clone(),
+                append_history: append_history.clone(),
+                expected_status: expected_status.map(|status| vec![status]),
+                operator_comment: comment_only && operator_write && !agent_context_declared(),
+                ..TaskRecordUpdateParams::from(params)
+            },
+        )?;
+        let mut updated = row.task.clone();
+        let mut row = Some(row);
 
         self.project_task_checkpoint_costs(&append_comments)?;
 

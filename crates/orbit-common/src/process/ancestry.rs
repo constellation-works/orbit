@@ -76,18 +76,8 @@ fn inspect_process(pid: u32) -> Option<(u64, u32)> {
 #[cfg(target_os = "linux")]
 fn linux_start_and_parent(pid: u32) -> Option<(u64, u32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, tail) = stat.rsplit_once(')')?;
-    let mut fields = tail.split_whitespace();
-    let _state = fields.next()?;
-    let ppid: u32 = fields.next()?.parse().ok()?;
-    // After `ppid`: pgrp session tty_nr tpgid flags minflt cminflt majflt
-    // cmajflt utime stime cutime cstime priority nice num_threads itrealvalue
-    // starttime. That is 17 further fields to skip, then starttime.
-    for _ in 0..17 {
-        fields.next()?;
-    }
-    let starttime: u64 = fields.next()?.parse().ok()?;
-    Some((starttime, ppid))
+    let parsed = super::identity::parse_linux_process_stat(&stat)?;
+    Some((parsed.start_ticks, parsed.parent_pid))
 }
 
 #[cfg(target_os = "macos")]

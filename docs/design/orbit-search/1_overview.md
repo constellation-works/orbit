@@ -30,7 +30,17 @@ and a rebuild restores search coverage after an import or restore.
 
 `orbit-search` owns a regenerable SQLite index of task text. Task mutations
 synchronously replace the title, description, acceptance criteria, plan, and
-execution summary chunks. Paragraph-first word chunks are bounded to 256 words;
+execution summary chunks. That includes claim-backed evidence writes: a
+committed claim mutation (a worker update, an evidence or settlement write, an
+accepted handoff, and any deferred branch observation it lands in the same
+commit) re-indexes its task from the settled row before returning, so the
+recorded sidecar coverage — comment bodies and artifact paths — vouches only
+for chunks the index currently holds. A replayed claim mutation commits
+nothing and leaves the index untouched, and tasks whose text did not change
+retain the indexed fast path with no bundle-document reads. A write that cannot
+read the settled row indexes task fields only and records that coverage even when
+its chunks are unchanged, so the fast path falls back to bundle reads until a
+sidecar-aware write covers the task again. Paragraph-first word chunks are bounded to 256 words;
 long paragraphs overlap by 32 words. SQLite triggers maintain the external-content
 `corpus_fts` table over `chunks`. Each task replacement and a complete task rebuild
 are transactional. Failed incidental writes leave the task authoritative and

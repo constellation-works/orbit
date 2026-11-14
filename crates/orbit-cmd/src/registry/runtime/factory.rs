@@ -102,12 +102,23 @@ impl RegisteredRuntimeStamp {
     /// shared_root)` in Core's composition, where a registered checkout's
     /// shared root is its own `.orbit` directory.
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
+        let host_plugins = host_plugin_rows(global_root).unwrap_or_default();
+        Self::read_with_host_plugins(global_root, checkout, host_plugins)
+    }
+
+    /// Stamp composition inputs using host plugin rows already read by a
+    /// long-lived host, avoiding a second config resolution and store open.
+    pub fn read_with_host_plugins(
+        global_root: &Path,
+        checkout: &WorkspaceCheckout,
+        host_plugins: Vec<InstalledPlugin>,
+    ) -> Self {
         Self {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
             host_registry: FileStamp::read(&orbit_registry::hosts::hosts_path(global_root)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
             config: ConfigLayerStamp::read(global_root, &checkout.orbit_dir),
-            host_plugins: host_plugin_rows(global_root).unwrap_or_default(),
+            host_plugins,
         }
     }
 }

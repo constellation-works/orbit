@@ -3,8 +3,10 @@ Drop the pipeline state of terminal runs older than `retention.runs_days`, keepi
 Usage: orbit gc runs [OPTIONS]
 
 Options:
-      --apply
+      --confirm
           Drop what the plan lists; without this flag the command only reports
+          
+          [aliases: --apply]
 
       --older-than-days <DAYS>
           Retention window in days, overriding `retention.runs_days` (default 60, minimum 30)
@@ -19,8 +21,8 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Without --apply this only reports. Only success, failed, timeout, cancelled and interrupted runs of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. A held run, which review evidence can still resume, and every non-terminal run are never touched. The run row, its steps and its summary stay, so `orbit run show` and run history keep working, and `archived_at` records when the state was dropped. The host's per-minute run and host resource history, and the admission forecasts recorded against it, older than 30 days go in the same pass, whatever the window, except rows kept at any age by count: the newest 200 deliveries per workspace, work class and complexity, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward.
+Without --confirm this only reports. Only success, failed, timeout, cancelled and interrupted runs of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. A held run, which review evidence can still resume, and every non-terminal run are never touched. The run row, its steps and its summary stay, so `orbit run show` and run history keep working, and `archived_at` records when the state was dropped. The host's per-minute run and host resource history, and the admission forecasts recorded against it, older than 30 days go in the same pass, whatever the window, except rows kept at any age by count: the newest 200 deliveries per workspace, work class and complexity, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward.
 
 Examples:
   orbit gc runs
-  orbit gc runs --apply
+  orbit gc runs --confirm

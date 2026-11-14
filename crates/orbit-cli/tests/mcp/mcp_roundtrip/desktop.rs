@@ -72,6 +72,13 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     ] {
         assert_eq!(client.call_tool_err(tool, input)["code"], "invalid_input");
     }
+    let missing_workspace =
+        client.call_tool_err("orbit_task_update", json!({"id": id, "verdict": {}}));
+    assert_eq!(missing_workspace["code"], "invalid_input");
+    assert!(
+        message_contains(&missing_workspace, "`verdict`"),
+        "{missing_workspace}"
+    );
     assert_eq!(
         client.call_tool_err(
             "orbit_run",
@@ -796,6 +803,112 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     );
 }
 
+/// Past the 512-row lifecycle window the full `orbit_run` show must not
+/// present a null `active_step` as "no open step", and a still-open child
+/// spawned before the 256-row structural window must not vanish silently:
+/// `execution_progress` carries `steps_complete`/`complete` instead.
+fn full_run_show_signals_incomplete_progress_past_the_lifecycle_window() {
+    const RUN_ID: &str = "jrun-20261011-0000-lc";
+    let workspace = McpWorkspace::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &workspace.home.join(".orbit"),
+        &workspace.work.join(".orbit"),
+    )
+    .expect("fixture runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace identity");
+
+    let mut rows = vec![
+        json!({"event_id":"start-prepare","body_kind":"step_started","step_id":"prepare"}),
+        json!({"event_id":"finish-prepare","body_kind":"step_finished","step_id":"prepare","outcome":"success"}),
+        json!({"event_id":"start-implement","body_kind":"step_started","step_id":"implement"}),
+        json!({"event_id":"act-open","body_kind":"activity_started","parent_event_id":"start-implement"}),
+        json!({"event_id":"proc-open","body_kind":"cli_invocation_process","parent_event_id":"act-open","provider":"codex","pid":4_100_000}),
+    ];
+    // 260 finished steps push the lifecycle history past the 512-row window.
+    for index in 0..260 {
+        rows.push(json!({"event_id":format!("start-s{index}"),"body_kind":"step_started","step_id":format!("s{index}")}));
+        rows.push(json!({"event_id":format!("finish-s{index}"),"body_kind":"step_finished","step_id":format!("s{index}"),"outcome":"success"}));
+    }
+    // 150 finished invocations push `proc-open` out of the newest-256
+    // structural window while it is still open.
+    for index in 0..150 {
+        let activity = format!("act-{index}");
+        rows.push(json!({"event_id":activity,"body_kind":"activity_started","parent_event_id":"start-implement"}));
+        rows.push(json!({"event_id":format!("proc-{index}"),"body_kind":"cli_invocation_process","parent_event_id":activity,"provider":"codex","pid":4_200_000 + index}));
+        rows.push(json!({"event_id":format!("fin-{index}"),"body_kind":"cli_invocation_finished","parent_event_id":activity,"provider":"codex","exit_code":0,"duration_ms":10,"timed_out":false}));
+    }
+    rows.push(json!({"event_id":"start-final","body_kind":"step_started","step_id":"final-open"}));
+
+    let mut connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open fixture store");
+    let transaction = connection.transaction().expect("seed transaction");
+    transaction
+        .execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                 scheduled_at, started_at, finished_at, duration_ms, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'running', '{}',
+                 '2026-10-11T00:00:00+00:00', '2026-10-11T00:00:00+00:00',
+                 NULL, NULL, '2026-10-11T00:00:00+00:00')",
+            rusqlite::params![RUN_ID, workspace_id],
+        )
+        .expect("seed run");
+    for (second, row) in rows.iter_mut().enumerate() {
+        let ts = format!(
+            "2026-10-11T{:02}:{:02}:{:02}+00:00",
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
+        row["ts"] = json!(ts);
+        row["run_id"] = json!(RUN_ID);
+        transaction
+            .execute(
+                "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                     event_type, ts, run_id, agent_identity, parent_event_id, payload_json)
+                 VALUES (?1, ?2, 'v2_envelope', 1, ?3, ?4, ?5, 'codex', ?6, ?7)",
+                rusqlite::params![
+                    workspace_id,
+                    row["event_id"].as_str(),
+                    row["body_kind"].as_str(),
+                    ts,
+                    RUN_ID,
+                    row["parent_event_id"].as_str(),
+                    row.to_string(),
+                ],
+            )
+            .expect("seed audit row");
+    }
+    transaction.commit().expect("commit seed");
+
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let full = client.call_tool_ok("orbit_run", json!({"action": "show", "id":RUN_ID}));
+    let progress = &full["execution_progress"];
+    assert_eq!(progress["state"], "observed", "{full}");
+    assert!(
+        progress["active_step"].is_null(),
+        "the open step past the lifecycle window is not named: {progress}"
+    );
+    assert_eq!(
+        progress["steps_complete"], false,
+        "a null active_step past the lifecycle window is signalled incomplete, not silent: {progress}"
+    );
+    assert_eq!(
+        progress["complete"], false,
+        "overflowed windows are signalled incomplete on the full show: {progress}"
+    );
+    assert_eq!(
+        progress["provider_processes"]["truncated"], true,
+        "the pre-window open child may be missing and says so: {progress}"
+    );
+    let items = progress["provider_processes"]["items"]
+        .as_array()
+        .expect("provider children");
+    assert!(
+        items.iter().all(|item| item["event_id"] != "proc-open"),
+        "the pre-window open child is outside the structural window: {progress}"
+    );
+}
+
 #[test]
 fn desktop_destination_and_routine_contracts() {
     for (name, check) in [
@@ -819,6 +932,10 @@ fn desktop_governance_and_bounded_reads() {
         (
             "bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history",
             bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history as fn(),
+        ),
+        (
+            "full_run_show_signals_incomplete_progress_past_the_lifecycle_window",
+            full_run_show_signals_incomplete_progress_past_the_lifecycle_window as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

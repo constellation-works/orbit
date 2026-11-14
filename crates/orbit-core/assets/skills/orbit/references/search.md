@@ -23,10 +23,14 @@ the task; search does not infer synonyms. Task create/update writes chunks
 synchronously in both CLI and long-lived hosts; deletion retracts them.
 
 Comments, external references, and artifact manifest paths are indexed as
-chunks too, and a substring supplement over the index supplements BM25 for
-them — and for queries inside a token of any indexed field. It matches a
-case-insensitive substring, so a multi-word query on these fields must be
-contiguous. Tasks not yet indexed with those sidecar fields still fall back
+chunks too, so BM25 ranks them like the other indexed fields: their query
+words need not be adjacent either. A substring supplement over the index
+also supplements BM25 for every indexed field, including for queries inside
+a token. That supplement is a literal contiguous substring match: it is
+case-insensitive with Unicode case folding, and it preserves the field's
+raw whitespace, so a multi-word substring query matches only where the
+words appear contiguously with the same internal whitespace. Tasks not yet
+indexed with those sidecar fields still fall back
 to a bundle-document matcher with the same substring semantics; an
 `orbit search reindex` after upgrade indexes every task with them. Artifact
 payloads are not searched. Frictions match a single case-insensitive substring, so query

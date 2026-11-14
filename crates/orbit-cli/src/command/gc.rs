@@ -165,7 +165,7 @@ impl Execute for DeploymentGcArgs {
 
 #[derive(Args)]
 #[command(
-    after_help = "Without --apply this only reports. The command audit (`audit_events`) is \
+    after_help = "Without --confirm this only reports. The command audit (`audit_events`) is \
                   host-wide. Run audit rows are this workspace's, plus rows whose workspace id is \
                   no longer registered; another registered workspace keeps its own window. Blobs \
                   are this workspace's. A blob is kept while \
@@ -174,12 +174,12 @@ impl Execute for DeploymentGcArgs {
                   after it was last written. Deletes run in batches of 1,000 rows, each its own \
                   write transaction. Freed pages stay in the store file; VACUUM it while Orbit \
                   is idle to return them to the filesystem.\n\nExamples:\n  orbit gc audit\n  \
-                  orbit gc audit --older-than-days 30 --apply --json"
+                  orbit gc audit --older-than-days 30 --confirm --json"
 )]
 pub struct AuditGcArgs {
     /// Delete what the plan lists; without this flag the command only reports
-    #[arg(long)]
-    pub apply: bool,
+    #[arg(long, visible_alias = "apply")]
+    pub confirm: bool,
 
     /// Retention window in days, overriding `retention.audit_days` (default 60)
     #[arg(long, value_name = "DAYS")]
@@ -188,7 +188,7 @@ pub struct AuditGcArgs {
 
 impl Execute for AuditGcArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.gc_audit(self.apply, self.older_than_days)?;
+        let report = runtime.gc_audit(self.confirm, self.older_than_days)?;
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize audit GC report: {error}"))
         })?;
@@ -223,7 +223,7 @@ impl Execute for AuditGcArgs {
 
 #[derive(Args)]
 #[command(
-    after_help = "Without --apply this only reports. Only success, failed, timeout, cancelled and \
+    after_help = "Without --confirm this only reports. Only success, failed, timeout, cancelled and \
                   interrupted runs of this workspace, and of workspace ids that are no longer \
                   registered, are selected; another registered workspace keeps its own window. A \
                   held run, which review \
@@ -236,12 +236,12 @@ impl Execute for AuditGcArgs {
                   200 deliveries per workspace, \
                   work class and complexity, the newest 10,000 forecasts, and host minutes \
                   from the oldest kept forecast onward.\n\n\
-                  Examples:\n  orbit gc runs\n  orbit gc runs --apply"
+                  Examples:\n  orbit gc runs\n  orbit gc runs --confirm"
 )]
 pub struct RunGcArgs {
     /// Drop what the plan lists; without this flag the command only reports
-    #[arg(long)]
-    pub apply: bool,
+    #[arg(long, visible_alias = "apply")]
+    pub confirm: bool,
 
     /// Retention window in days, overriding `retention.runs_days` (default 60, minimum 30)
     #[arg(long, value_name = "DAYS")]
@@ -250,7 +250,7 @@ pub struct RunGcArgs {
 
 impl Execute for RunGcArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.gc_runs(self.apply, self.older_than_days)?;
+        let report = runtime.gc_runs(self.confirm, self.older_than_days)?;
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize run GC report: {error}"))
         })?;
@@ -271,7 +271,7 @@ impl Execute for RunGcArgs {
 
 #[derive(Args)]
 #[command(
-    after_help = "Without --apply this only reports. Only applied rows of this workspace, and of \
+    after_help = "Without --confirm this only reports. Only applied rows of this workspace, and of \
                   workspace ids that are no longer registered, are selected; another registered \
                   workspace keeps its own window. An applied row is a commit decision already \
                   published to its task, so recovery never reads it again. Prepared and \
@@ -280,12 +280,12 @@ impl Execute for RunGcArgs {
                   no write lock, then deleted by key in batches of 1,000 rows, each its own \
                   write transaction. Freed pages stay in the store file; VACUUM it while Orbit \
                   is idle to return them to the filesystem.\n\n\
-                  Examples:\n  orbit gc journal\n  orbit gc journal --apply --json"
+                  Examples:\n  orbit gc journal\n  orbit gc journal --confirm --json"
 )]
 pub struct JournalGcArgs {
     /// Delete what the plan lists; without this flag the command only reports
-    #[arg(long)]
-    pub apply: bool,
+    #[arg(long, visible_alias = "apply")]
+    pub confirm: bool,
 
     /// Retention window in days (default 14)
     #[arg(long, value_name = "DAYS")]
@@ -294,7 +294,7 @@ pub struct JournalGcArgs {
 
 impl Execute for JournalGcArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.gc_journal(self.apply, self.older_than_days)?;
+        let report = runtime.gc_journal(self.confirm, self.older_than_days)?;
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize journal GC report: {error}"))
         })?;

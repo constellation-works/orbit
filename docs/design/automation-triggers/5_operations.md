@@ -46,8 +46,7 @@ Initialization
 does not overwrite existing workspace definitions. After-landing review is
 `delivery-code-review`'s own `enabled` flag (`orbit auto-task toggle
 delivery-code-review on|off`) [ORB-13992]; the deprecated
-`operation.review_policy = after-landing` still enables it, without editing its
-file, while no operator has configured it. See the [review
+`operation.review_policy = after-landing` no longer enables it. See the [review
 gate](../review-gate/2_design.md). The shipped defaults carry a
 `__ORBIT_BASE_BRANCH__` placeholder for `branch`; `orbit workspace init` and
 `orbit workspace sync` render it to the workspace's registered base branch, so a

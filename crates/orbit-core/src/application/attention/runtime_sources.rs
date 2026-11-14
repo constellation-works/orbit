@@ -1,6 +1,8 @@
 //! Observational runtime sources. Never use run listing/show or resume planners
 //! here: those entry points may reconcile owners or recover coordination journals.
-use super::sources::{AttentionCandidates, SharedOpenTasks, attention_reason};
+use super::sources::{
+    AttentionCandidates, SharedOpenTasks, attention_reason, attention_task, workspace_degraded,
+};
 use crate::{
     OrbitRuntime,
     application::job::{self, RunOwnerLiveness},
@@ -14,8 +16,8 @@ use orbit_store::contracts::{ClaimInspection, JobRunQuery, LocalPullPhase};
 use orbit_types::{
     task::Task,
     tool::{
-        AttentionDegraded, AttentionHost, AttentionItem, AttentionKind, AttentionNext,
-        AttentionSeverity, AttentionTask, AttentionWorkspace,
+        AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity,
+        AttentionWorkspace,
     },
     workflow::{JobRun, JobRunState},
 };
@@ -59,26 +61,20 @@ impl RuntimeAttention<'_> {
         } else {
             refs.clone()
         };
-        let identity = json!([kind, self.host.machine_id, self.workspace.id, subject]);
         let task = refs["task_id"].as_str().and_then(|id| self.tasks.get(id));
         AttentionItem {
-            id: format!(
-                "att_{}_{}",
-                kind.as_str(),
-                cursor::attention_digest(identity.to_string().as_bytes())
+            id: cursor::attention_item_id(
+                kind,
+                &self.host.machine_id,
+                &self.workspace.id,
+                &subject,
             ),
             kind,
             severity: AttentionSeverity::Medium,
             workspace: self.workspace.clone(),
             host: self.host.clone(),
             refs,
-            task: task.map(|task| AttentionTask {
-                status: task.status,
-                tags: task.tags.clone(),
-                crew: task.crew.clone(),
-                orchestrator: task.orchestrator.clone(),
-                title: task.title.clone(),
-            }),
+            task: task.map(attention_task),
             since: Some(since),
             age_seconds: Some((self.now - since).num_seconds().max(0) as u64),
             expires_at: None,
@@ -444,18 +440,13 @@ pub(super) fn read_runtime_attention(
     if kinds.is_empty() {
         return;
     }
-    let degraded = |kind: AttentionKind, code: &str, message: String| AttentionDegraded {
-        scope: format!("workspace:{}", workspace.id),
-        kind: kind.as_str().into(),
-        code: code.into(),
-        message,
-    };
     if !operator {
         candidates.degraded.extend(kinds.into_iter().map(|kind| {
-            degraded(
-                kind,
+            workspace_degraded(
+                workspace,
+                kind.as_str(),
                 "capability",
-                "This runtime source requires the Operator capability".into(),
+                "This runtime source requires the Operator capability",
             )
         }));
         return;
@@ -490,11 +481,14 @@ pub(super) fn read_runtime_attention(
     let mut sources = match sources {
         Ok(sources) => sources,
         Err(error) => {
-            candidates.degraded.extend(
-                kinds
-                    .into_iter()
-                    .map(|kind| degraded(kind, "source_unavailable", error.to_string())),
-            );
+            candidates.degraded.extend(kinds.into_iter().map(|kind| {
+                workspace_degraded(
+                    workspace,
+                    kind.as_str(),
+                    "source_unavailable",
+                    error.to_string(),
+                )
+            }));
             return;
         }
     };
@@ -618,16 +612,18 @@ pub(super) fn read_runtime_attention(
             .timings
             .insert(kind.as_str().into(), elapsed.as_micros());
         if elapsed.as_secs() >= super::ATTENTION_SOURCE_TIMEOUT_SECONDS {
-            candidates.degraded.push(degraded(
-                kind,
+            candidates.degraded.push(workspace_degraded(
+                workspace,
+                kind.as_str(),
                 "source_timeout",
-                "Runtime source read budget exhausted".into(),
+                "Runtime source read budget exhausted",
             ));
         } else {
             match result {
                 Ok(items) => candidates.items.extend(items),
-                Err(error) => candidates.degraded.push(degraded(
-                    kind,
+                Err(error) => candidates.degraded.push(workspace_degraded(
+                    workspace,
+                    kind.as_str(),
                     "source_unavailable",
                     error.to_string(),
                 )),

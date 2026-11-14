@@ -503,6 +503,107 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
     );
 }
 
+/// Claim evidence committed on an already indexed task is found by an
+/// ordinary owner search immediately, with no reindex or later task write:
+/// the claim seam refreshes the task's chunks from its settled row, so its
+/// recorded sidecar coverage never vouches for stale text. A replay of the
+/// same mutation commits nothing and duplicates no comment, and a
+/// settlement's comment is searchable on the same terms.
+fn claim_evidence_is_searchable_without_reindex() {
+    use orbit_core::{GlobalSearchKind, GlobalSearchParams};
+    use orbit_store::contracts::ClaimWorkerUpdate;
+
+    let pair = Pair::new(1);
+    let owner = pair.wire.owner.clone();
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let claim = pair.admission(&leaf).receipt.unwrap().claim.unwrap();
+    let worker = ClaimInvocation::trusted_worker(
+        task.clone(),
+        claim.claim_id.clone(),
+        FOLLOWER.into(),
+        Some(ClaimRun {
+            machine_id: FOLLOWER.into(),
+            run_id: leaf.clone(),
+        }),
+    );
+    let search = |query: &str| {
+        owner
+            .global_search(GlobalSearchParams {
+                query: Some(query.into()),
+                kind: GlobalSearchKind::Task,
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap()
+            .results
+            .iter()
+            .any(|hit| hit.id.as_deref() == Some(task.as_str()))
+    };
+    // The task was indexed when it was created and planned, before either
+    // token existed.
+    assert!(!search("quasarclaimcomment"), "negative control");
+    assert!(!search("quasarsettlementcomment"), "negative control");
+
+    let update = ClaimMutation::Update(ClaimWorkerUpdate {
+        evidence: ClaimEvidence {
+            summary: Some("Summary quasarclaimsummary recorded by the claim.".into()),
+            comment: Some("Comment quasarclaimcomment recorded by the claim.".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    owner
+        .mutate_execution_claim(Some(&worker), "search-evidence-update", &update)
+        .expect("the bound worker's update commits");
+    assert!(
+        search("quasarclaimcomment"),
+        "the committed claim comment is searchable without a reindex"
+    );
+    assert!(
+        search("quasarclaimsummary"),
+        "the committed claim summary is searchable without a reindex"
+    );
+
+    // Replay: the receipt returns the original result, commits nothing,
+    // and the evidence stays singly recorded and searchable.
+    owner
+        .mutate_execution_claim(Some(&worker), "search-evidence-update", &update)
+        .expect("the same mutation replays its receipt");
+    assert_eq!(
+        owner
+            .get_task_comments(&task)
+            .unwrap()
+            .iter()
+            .filter(|comment| comment.message.contains("quasarclaimcomment"))
+            .count(),
+        1,
+        "a replay duplicates no claim comment"
+    );
+    assert!(search("quasarclaimcomment"));
+
+    owner
+        .mutate_execution_claim(
+            Some(&worker),
+            "search-evidence-release",
+            &ClaimMutation::Release(ClaimEvidence {
+                summary: Some("The leaf gave the claim back.".into()),
+                comment: Some("Settlement quasarsettlementcomment recorded.".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("the bound worker releases its claim");
+    assert!(
+        search("quasarsettlementcomment"),
+        "the settlement comment is searchable without a reindex"
+    );
+    assert!(
+        search("quasarclaimcomment"),
+        "earlier claim evidence remains searchable after settlement"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim_scenarios,
@@ -510,5 +611,6 @@ crate::scenario_table!(
     a_claimed_worker_searches_and_lists_only_its_owners_workspace,
     agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist,
     a_worker_update_persists_redacted_text_and_a_task_scoped_audit,
-    a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes
+    a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes,
+    claim_evidence_is_searchable_without_reindex
 );

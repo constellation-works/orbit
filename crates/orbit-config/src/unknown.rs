@@ -90,15 +90,9 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
 /// Unknown settings in `path`; missing and empty files have none.
 /// Uses the shared no-follow config read checks.
 pub fn unknown_config_keys_at(path: &Path) -> Result<Vec<UnknownConfigKey>, OrbitError> {
-    let Some(raw) = crate::config_io::read_config_file(path)? else {
+    let Some(document) = crate::config_toml::read_config_toml(path)? else {
         return Ok(Vec::new());
     };
-    let document = toml::from_str(&raw).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })?;
     Ok(unknown_config_keys_present(&document))
 }
 

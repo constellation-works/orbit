@@ -1,8 +1,7 @@
 //! The serving host's host file as a generation-swapped snapshot [ORB-14451].
 //!
-//! Settings › Hosts lists from the last valid load of `hosts.toml` (or the
-//! legacy destinations file) under the same rule as the workspace registry
-//! snapshot: each request `stat`s the files the load reads, reloads only when
+//! Settings › Hosts lists from the last valid load of `hosts.toml` under
+//! the same rule as the workspace registry snapshot: each request `stat`s the files the load reads, reloads only when
 //! one changed, and swaps in a new generation only when the load succeeds. A
 //! file that fails to load leaves the last valid snapshot in place and is
 //! reported beside it, so a bad hand edit becomes a banner, not an empty view.

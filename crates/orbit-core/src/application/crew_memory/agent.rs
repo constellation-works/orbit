@@ -38,7 +38,7 @@ use crate::OrbitRuntime;
 use crate::application::job::IMPLEMENTING_ACTIVITY;
 
 /// Proposals one dreaming run may open.
-pub const CREW_MEMORY_MAX_PROPOSALS_PER_RUN: u32 = 2;
+pub(crate) const CREW_MEMORY_MAX_PROPOSALS_PER_RUN: u32 = 2;
 /// The activity whose dreaming run may write and propose.
 const DREAMING_ACTIVITY: &str = "agent_implement";
 const SHOW_TOOL: &str = "orbit.memory.show";
@@ -274,7 +274,7 @@ impl OrbitRuntime {
 
     /// `orbit.memory.history` for `caller`: the operator's read, or the read
     /// of a run whose task an operator granted the tool.
-    pub fn crew_memory_tool_history(
+    pub(crate) fn crew_memory_tool_history(
         &self,
         caller: &MemoryToolCaller,
         key: &str,
@@ -305,7 +305,7 @@ impl OrbitRuntime {
 
     /// `orbit.memory.write` for `caller`: the operator's write, or a
     /// dreaming run's write of its own key.
-    pub fn crew_memory_tool_write(
+    pub(crate) fn crew_memory_tool_write(
         &self,
         caller: &MemoryToolCaller,
         key: &str,
@@ -369,7 +369,7 @@ impl OrbitRuntime {
     /// `orbit.memory.propose` for `caller`: a dreaming run's proposal for
     /// the global memory, at most [`CREW_MEMORY_MAX_PROPOSALS_PER_RUN`] per
     /// run.
-    pub fn crew_memory_tool_propose(
+    pub(crate) fn crew_memory_tool_propose(
         &self,
         caller: &MemoryToolCaller,
         text: String,

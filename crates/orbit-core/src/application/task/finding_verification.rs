@@ -16,7 +16,6 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::identity::{Crew, agent_family_from_cli, infer_agent_family_from_model};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     DefectSeverity, SeveritySource, Task, TaskComment, TaskComplexity, TaskHistoryEntry,
     TaskRelation, TaskRelationType, TaskStatus, TaskType,
@@ -607,47 +606,34 @@ impl OrbitRuntime {
                     }
                     _ => None,
                 };
-                let updated = self.with_mutation(|| {
-                    let updated = self.stores().task_records().update(
-                        task_id,
-                        TaskRecordUpdateParams {
-                            actor: FINDING_VERIFICATION_ACTOR.to_string(),
-                            status: rejected.then_some(TaskStatus::Rejected),
-                            status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
-                            status_note: rejected.then(|| record.rejection_note()),
-                            relations,
-                            append_history: vec![TaskHistoryEntry {
-                                at: now,
-                                by: FINDING_VERIFICATION_ACTOR.to_string(),
-                                event: FINDING_VERIFIED_EVENT.to_string(),
-                                note: Some(note.clone()),
-                                from_status: None,
-                                to_status: None,
-                                operation_id: None,
-                                decision: None,
-                            }],
-                            append_comments: vec![TaskComment {
-                                at: now,
-                                by: FINDING_VERIFICATION_ACTOR.to_string(),
-                                message: comment.clone(),
-                                operation_id: None,
-                            }],
-                            expected_status: Some(vec![prepared_status]),
-                            ..Default::default()
-                        },
-                    )?;
-                    let event = if rejected {
-                        OrbitEvent::TaskProposalRejected {
-                            id: task_id.to_string(),
-                            rejected_by: FINDING_VERIFICATION_ACTOR.to_string(),
-                        }
-                    } else {
-                        OrbitEvent::TaskUpdated {
-                            id: task_id.to_string(),
-                        }
-                    };
-                    Ok((updated, event))
-                })?;
+                let updated = self.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: FINDING_VERIFICATION_ACTOR.to_string(),
+                        status: rejected.then_some(TaskStatus::Rejected),
+                        status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
+                        status_note: rejected.then(|| record.rejection_note()),
+                        relations,
+                        append_history: vec![TaskHistoryEntry {
+                            at: now,
+                            by: FINDING_VERIFICATION_ACTOR.to_string(),
+                            event: FINDING_VERIFIED_EVENT.to_string(),
+                            note: Some(note.clone()),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        append_comments: vec![TaskComment {
+                            at: now,
+                            by: FINDING_VERIFICATION_ACTOR.to_string(),
+                            message: comment.clone(),
+                            operation_id: None,
+                        }],
+                        expected_status: Some(vec![prepared_status]),
+                        ..Default::default()
+                    },
+                )?;
                 outcome = Some(VerdictWrite::Recorded(updated.status));
                 Ok(())
             })?;

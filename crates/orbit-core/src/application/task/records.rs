@@ -310,10 +310,9 @@ impl crate::OrbitRuntime {
         mutation_id: &str,
         mutation: &orbit_store::contracts::ClaimMutation,
     ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        self.stores()
-            .tasks()
-            .mutate_execution_claim(context, mutation_id, mutation)
+        Ok(self
+            .mutate_execution_claim_outcome(context, mutation_id, mutation)?
+            .result)
     }
 
     /// [`Self::mutate_execution_claim`], also reporting whether this call
@@ -326,9 +325,28 @@ impl crate::OrbitRuntime {
         mutation: &orbit_store::contracts::ClaimMutation,
     ) -> Result<orbit_store::contracts::ClaimMutationOutcome, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.stores()
-            .tasks()
-            .mutate_execution_claim_outcome(context, mutation_id, mutation)
+        let outcome =
+            self.stores()
+                .tasks()
+                .mutate_execution_claim_outcome(context, mutation_id, mutation)?;
+        // A committed claim mutation writes searchable text (evidence
+        // summary, comments, artifact paths, plan, external refs, and any
+        // deferred branch observation it lands in the same commit) outside
+        // `TaskRecordService::update`, so its recorded sidecar coverage
+        // would otherwise vouch for chunks the index does not hold. Refresh
+        // this task's chunks from its settled row before returning, so an
+        // ordinary owner search sees the evidence without a reindex or a
+        // later ordinary write. A replay committed nothing and leaves the
+        // index untouched; indexing is best-effort, so a refresh failure
+        // (read-only index, unreadable row) never fails the committed
+        // mutation — the next reindex repairs it, as for ordinary writes.
+        if outcome.committed
+            && let Some(task_id) = context.map(|invocation| invocation.task_id())
+            && let Ok(Some(task)) = self.stores().tasks().get_task(task_id)
+        {
+            self.stores().task_records().index_task(&task);
+        }
+        Ok(outcome)
     }
 
     /// Refuse a worker whose claim could no longer take its own update: the
@@ -381,7 +399,9 @@ impl crate::OrbitRuntime {
         // refresh the owner's chunks or its recorded sidecar coverage
         // would vouch for text the index does not hold. A deferred
         // receipt has written nothing yet; settlement lands it inside a
-        // claim commit, whose next ordinary task write re-indexes.
+        // claim commit, and the claim seam in
+        // `mutate_execution_claim_outcome` re-indexes that commit before
+        // it returns, so no later ordinary write is needed.
         if matches!(
             outcome,
             orbit_store::contracts::BranchObservationOutcome::Retained

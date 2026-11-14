@@ -5,7 +5,6 @@
 
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -25,22 +24,20 @@ pub(crate) trait ToolInvocationPort {
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError>;
 
-    /// A registered tool run as `role` with `tool_context`, under the default
+    /// A registered tool run with `tool_context`, under the default
     /// capability enforcement.
-    fn run_tool_in_role(
+    fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError>;
 
-    /// [`Self::run_tool_in_role`] with the caller's capability enforcement.
+    /// [`Self::run_tool_with_context`] with the caller's capability enforcement.
     fn run_tool_with_enforcement(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
         enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError>;

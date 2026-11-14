@@ -217,6 +217,19 @@ fn local_capacity_is_held_with_its_task_and_parents() {
 }
 
 #[test]
+fn local_authentication_failure_is_held_with_its_task_and_parents() {
+    if !super::dispatch_admission::isolated(
+        "local_provider_holds::local_authentication_failure_is_held_with_its_task_and_parents",
+    ) {
+        return;
+    }
+    local_provider_outcome(
+        "OAuth session expired",
+        Some(ProviderFailureClass::Unavailable),
+    );
+}
+
+#[test]
 fn local_usage_limit_is_held_with_its_task_and_parents() {
     if !super::dispatch_admission::isolated(
         "local_provider_holds::local_usage_limit_is_held_with_its_task_and_parents",

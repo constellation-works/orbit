@@ -194,11 +194,28 @@ step, and a `liveness` of `alive`, `exited`, or `unknown`.
 recycled PID reads `exited` rather than a false `alive`, and a PID recorded in
 another PID namespace reads `unknown` rather than a false `exited`. A child with
 `finished: true` carries its `exit_code` instead. `limit` and `truncated` say
-when a long retry history was bounded; open children are never the ones dropped.
+when a long retry history was bounded. Within the children that survive the
+bounded structural window, open children claim the budget before finished
+ones, but a still-open child spawned before that window never reaches the
+bound at all and can be absent from `provider_processes.items`;
+`provider_processes.truncated` is then `true`.
+
+`execution_progress` itself is served from those bounded windows on every
+`orbit_run` show surface. `steps_complete` is `false` when the step-lifecycle
+prefix (512 rows) does not include every lifecycle row: `active_step` may then
+be null even though a step is open, so a null `active_step` is not by itself
+proof that no step is open. `complete` is `false` when any window overflowed:
+older provider children, their samples, step positions, or the active step
+may be missing. Read a null `active_step` or a missing child as "no open
+step/child" only when the corresponding completeness signal is `true`.
 
 A `running` run whose open step has no `alive` child is the signature of an
-abandoned wrapper. `orbit run show <run_id> --json` reports the same
-`provider_processes` for the owning host.
+abandoned wrapper only when `execution_progress.complete` is `true` (and
+`provider_processes.truncated` is `false`); when it is incomplete or
+truncated, the missing child or step may predate the window, so that reading
+is unavailable from `execution_progress` alone. `orbit run show <run_id>
+--json` reports the same `provider_processes` for the owning host from a
+complete replay of the trail, which does distinguish those cases.
 
 With `view: "bounded"`, progress and the log page come from a fixed audit
 budget rather than a replay of the whole trail: a prefix of step lifecycle
@@ -208,7 +225,11 @@ them, the parents that place them in a step, and the requested log page.
 a full store count, so pagination stays exact. When `audit_metadata.complete`
 is `false`, the history outgrew a budget: children spawned before the window,
 their samples, step positions, or the active step may be missing, and
-`provider_processes.truncated` is `true`. Omit `view` for the full replay.
+`provider_processes.truncated` is `true`. `execution_progress.complete` and
+`execution_progress.steps_complete` carry the same completeness on both the
+bounded and the full `orbit_run` show surfaces; omitting `view` does not turn
+`execution_progress` into a full replay — only the CLI's `provider_processes`
+above replays the whole trail.
 
 ### Verify model routing before reading logs
 
@@ -471,7 +492,7 @@ alone does not establish a code defect or an abandoned run.
 | **Inherited** | The same emitted signature fails on the accepted base, or a moved base tip passes the same workflow/job. Untouched-file failures need the base-suspect procedure below unless matching base failure evidence establishes inheritance. Landing updates the PR branch onto the current base when admitted, then reads checks again; a still-red or unproven base waits without a repair agent. |
 | **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs within `workflow.ci_infrastructure_retry.max_attempts` (default 3), backing off exponentially from `workflow.ci_infrastructure_retry.backoff_seconds` (default 60). Exhaustion records a transient-class hold with the attempt count; no code repair runs. A set in which every failed job's provider-reported failed step matches `workflow.ci_infrastructure_retry.handoff_steps` (a dependency-handoff step, such as awaiting or downloading another job's artifact) is transient from the step names alone, with no log read, so a truncated or unreadable log cannot make it unknown or inconclusive; one failed job in any other step leaves the set to per-job classification. |
 | **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
-| **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. When the candidate set has no cause evidence (no aggregate, no changed-file citation, and no transient, inherited, unknown or inconclusive job), an eligible set on a head with no prior rerun first gets one unchanged-head classification rerun. It spends the shared once-per-head reservation before sending; a repeat failure goes to the one automatic repair, or the bounded backlog return when that repair is spent. Other candidate failures follow that repair or backlog route. |
+| **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. When the candidate set has no cause evidence (no aggregate, no changed-file citation, and no transient, inherited, unknown or inconclusive job), an eligible set on a head with no prior rerun first gets one unchanged-head classification rerun. It spends the shared once-per-head reservation before sending; a repeat failure returns the task to the backlog with the candidate kept, subject to the landing repair budget. Other candidate failures take the same immediate requeue route. |
 | **Workflow failed before jobs** | A workflow run on the pinned head completed with a non-success conclusion, its complete job listing is empty, and a required context from that workflow remains absent. Completion stops waiting on that poll. If the candidate diff changes the workflow file, `--auto-fix` admits the ordinary candidate repair directly, with the workflow path, run, attempt and readable provider diagnosis; no classification rerun comes first. Without `--auto-fix`, completion stops in review with that failed-check evidence. If the candidate does not change the file, completion uses the existing single cumulative infrastructure rerun for the PR and holds if it fails again, spending no agent repair. A workflow with no jobs that is queued or running stays pending. An absent context never passes, and this evidence never authorizes a merge. Final recovery receives the candidate-owned classification and excludes `rerun_ci`; repair or requeue the candidate through its admitted lane. |
 | **Unknown** | One failed job's log could not be read, including a truncated log without a selected diagnostic. The job is named in the evidence; it does not void the class decided by readable jobs. If no readable job decides, landing stays unclassified and stops in review without spending recovery. A cancelled or timed-out job is transient from its conclusion even without a log. |
 | **Inconclusive** | A read log contains no diagnostic, so its signature is only the step name, or a read classification rests on fails, such as the base jobs or a base log. Stop in review without rerunning, updating or repairing. |
@@ -500,7 +521,7 @@ and restarts. After the first update, a newer tip where every inherited job
 passes can permit another update. A red, pending or unproven tip keeps waiting
 within the landing deadline, including when the update budget is spent. Only
 a head already containing that passing tip that still fails earns candidate
-repair. These are verified merges of base advances into the PR branch;
+repair (one automatic repair, or requeue once that repair is spent). These are verified merges of base advances into the PR branch;
 landing does not edit or rebase the candidate to bypass a check.
 
 The `landing_waiting_for_base` note makes that wait visible. At the landing
@@ -510,21 +531,21 @@ have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
 exhaustion stops in review naming the check, signature and missing evidence.
 CI retry evidence that stays unreadable (plan authentication or log reads) for
 the same cycle count escalates too: a same-check base pass sends a flaky
-failure to candidate repair. Candidate failures keep their candidate
-repair/requeue route, and inherited failures keep their base update/wait route.
+failure to candidate repair (or requeue once its repair is spent). Candidate failures keep their
+immediate backlog requeue route, and inherited failures keep their base update/wait route.
 Other failure classes with unreadable retry evidence stop naming the read
 failure.
 Inspect the effective activity input and recorded deadline instead of
 extending or restarting the wait by assumption.
 
-A conclusive candidate failure stops for one automatic repair leaf with
-fresh validation and a new handoff. Once that repair is spent, the owner
-ends the claim and returns the task to `backlog`, preserving the candidate
-and failure evidence for its next run. That landing run is held as
+A conclusive candidate failure ends the claim and returns the task to `backlog`
+immediately, preserving the candidate
+and failure evidence for its next run, subject to the landing repair budget.
+That landing run is held as
 `delivery_landing_repair_requeue`, not failed, and the hold is not resumed
 or handed back to completion. Exhausting the task's landing repair
 budget blocks it for an operator. Unresolved base waits and evidence that
-leaves classification undecided spend no candidate repair. Confirm the actual task and latest landing
+leaves classification undecided keep the candidate in review without ending the claim. Confirm the actual task and latest landing
 attempt state before recommending any action.
 
 ### Review deliveries without a handoff
@@ -778,7 +799,7 @@ its reason, and the next step is yours.
 | `delivery_origin_unavailable` | The origin could not be reached while admitting backlog tasks; the run is held without changing those tasks. | Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead. |
 | `delivery_check_repair_activity_absent` | An in-budget auto-fix check repair was admitted, and the job has no `step_failure_recovery` to run it. No repair agent runs, but the admission remains in the per-PR ledger and spends one repair attempt. | Adding `step_failure_recovery` and retrying the same head holds again as `delivery_repair_dispatched`; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run. |
 | `delivery_check_runs_absent` | The head this run pushed reported no workflow run at all, and no run of any required check, for five minutes. A workflow run the forge already reports for that head, including one `queued`, `pending`, `waiting`, `requested` or `in_progress`, is checks still pending: completion keeps its normal budget and does not re-request checks or take this hold. With no workflow run, completion re-requests hosted checks once (recorded as `pr_checks_retrigger_requested` in the task history; on GitHub by closing and reopening the pull request, which keeps its head, branch and reviews), and holds if no required check run has started five minutes later. The head is unchanged, no repair is spent and the task stays in review. A later completion attempt on the same head holds again without re-triggering. Pending, queued, failed or skipped required checks never take this path. | *Auto-fix pass:* once the unchanged head reports a required check run, the next pass hands the task back to completion. Until then the pass lists it under this code and spends no hand-back. If no check run appears, confirm the forge runs workflows for the repository (Actions enabled, workflow triggers, outages), then start the required checks on that head by hand or push a new head. |
-| `delivery_landing_repair_requeue` | A required check failed because of the candidate after its one automatic repair was spent. The claim already ended. The task returned to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The landing run is held and is not a failure. | The next run repairs that candidate. Do not resume this held run, and do not hand it back to completion. |
+| `delivery_landing_repair_requeue` | A required check was classified as caused by the candidate. The claim already ended. The task returned to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The landing run is held and is not a failure. | The next run repairs that candidate. Do not resume this held run, and do not hand it back to completion. |
 | `owner_signoff_required` | The implementer stopped because recorded owner approval is still missing; no agent can record it. The run is held, the task is blocked with the declared message, and the candidate is committed on the run's branch. The handoff tries to carry it to a durable ref and names it in a system comment and `candidate_held` history entry. No PR was opened. If the push fails, the comment says the candidate is host-local; a run on another host cannot fetch it. | Record the approval on the task, move it back to `backlog` (or `in-progress`), and start a new delivery run. A successful push lets that run resume the candidate from any host. If the comment says host-local, recover or push the named head before routing the run to another host. Do not resume this held run. |
 
 ## Check Git State For Workflow Failures

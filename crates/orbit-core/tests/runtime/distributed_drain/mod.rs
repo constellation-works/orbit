@@ -38,7 +38,6 @@ use orbit_store::contracts::{
     JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
-use orbit_types::policy::Role;
 use orbit_types::task::TaskArtifact;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::automation::SourceRevision;
@@ -431,10 +430,9 @@ impl DrainOwnerTransport for Wire {
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..ToolSessionContext::default()
         };
-        let mut answer = self.owner.run_tool_with_context_and_role(
+        let mut answer = self.owner.run_tool_with_context(
             name,
             input,
-            Role::Admin,
             ToolContext {
                 session_context: session,
                 ..ToolContext::default()

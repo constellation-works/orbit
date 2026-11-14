@@ -121,7 +121,6 @@ mod artifact_get {
 
 fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution() {
     use orbit_tools::ToolContext;
-    use orbit_types::policy::Role;
     use orbit_types::tool::{McpCapability, McpTransport};
     use std::collections::BTreeSet;
 
@@ -148,14 +147,13 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         ..Default::default()
     };
     runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.artifact.put",
             json!({
                 "id": task.id,
                 "source_path": local_source.to_string_lossy(),
                 "path": "reports/local-proc.txt",
             }),
-            Role::Admin,
             ToolContext {
                 session_context: local_process_session,
                 cwd: Some(repo_root.to_string_lossy().to_string()),
@@ -175,14 +173,13 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         ..Default::default()
     };
     runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.artifact.put",
             json!({
                 "id": task.id,
                 "source_path": runtime_source.to_string_lossy(),
                 "path": "reports/local-runtime.txt",
             }),
-            Role::Admin,
             ToolContext {
                 session_context: local_runtime_session,
                 cwd: Some(repo_root.to_string_lossy().to_string()),
@@ -203,7 +200,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         ..Default::default()
     };
     runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.task.artifact.put",
             json!({
                 "id": task.id,
@@ -213,7 +210,6 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
                     "content": "from ssh remote",
                 }],
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ssh_session,
                 cwd: Some(repo_root.to_string_lossy().to_string()),

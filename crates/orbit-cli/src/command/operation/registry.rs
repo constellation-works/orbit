@@ -267,9 +267,9 @@ impl Commands {
                     GcTarget::Deployments(args) => {
                         ("deployments", args.confirm, RuntimeNeed::ReadOnly)
                     }
-                    GcTarget::Audit(args) => ("audit", args.apply, RuntimeNeed::Required),
-                    GcTarget::Runs(args) => ("runs", args.apply, RuntimeNeed::Required),
-                    GcTarget::Journal(args) => ("journal", args.apply, RuntimeNeed::Required),
+                    GcTarget::Audit(args) => ("audit", args.confirm, RuntimeNeed::Required),
+                    GcTarget::Runs(args) => ("runs", args.confirm, RuntimeNeed::Required),
+                    GcTarget::Journal(args) => ("journal", args.confirm, RuntimeNeed::Required),
                 };
                 CommandOperation::new(
                     runtime_need,

@@ -28,7 +28,6 @@ use orbit_engine::{
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunStepParams};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
-use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
@@ -658,14 +657,13 @@ impl RuntimeHost for OrbitRuntime {
         crew::resolved_crew_model(self, run_id)
     }
 
-    fn run_tool_with_context_and_role(
+    fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
-        OrbitRuntime::run_tool_with_context_and_role(self, name, input, role, tool_context)
+        OrbitRuntime::run_tool_with_context(self, name, input, tool_context)
     }
 
     fn run_private_vcs_operation(

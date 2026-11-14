@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use orbit_cmd::registry_runtime::{RegisteredRuntimeStamp, ResolvedWorkspaceSelection};
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
+use orbit_types::plugin::InstalledPlugin;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 
 /// Tracing target and message emitted once per workspace runtime this process
@@ -81,9 +82,10 @@ impl WorkspaceRuntimeCache {
         &self,
         global_root: &Path,
         selected: &ResolvedWorkspaceSelection,
+        host_plugins: Vec<InstalledPlugin>,
         build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-        resolve_kind(&self.writable, global_root, selected, build)
+        resolve_kind(&self.writable, global_root, selected, host_plugins, build)
     }
 
     /// Reuse the observation runtime already built for `selected`, or build
@@ -92,9 +94,16 @@ impl WorkspaceRuntimeCache {
         &self,
         global_root: &Path,
         selected: &ResolvedWorkspaceSelection,
+        host_plugins: Vec<InstalledPlugin>,
         build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-        resolve_kind(&self.observation, global_root, selected, build)
+        resolve_kind(
+            &self.observation,
+            global_root,
+            selected,
+            host_plugins,
+            build,
+        )
     }
 }
 
@@ -102,9 +111,14 @@ fn resolve_kind(
     entries: &Mutex<HashMap<String, CachedRuntime>>,
     global_root: &Path,
     selected: &ResolvedWorkspaceSelection,
+    host_plugins: Vec<InstalledPlugin>,
     build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
 ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-    let stamp = RegisteredRuntimeStamp::read(global_root, &selected.checkout);
+    let stamp = RegisteredRuntimeStamp::read_with_host_plugins(
+        global_root,
+        &selected.checkout,
+        host_plugins,
+    );
     if let Some(value) = reusable(entries, selected, &stamp) {
         return Ok(value);
     }

@@ -18,6 +18,188 @@ pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
 const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
 
 impl OrbitError {
+    /// Stable machine-readable code shared by Orbit error surfaces.
+    pub fn wire_code(&self) -> &str {
+        match self {
+            OrbitError::NoJobRuns => const { RemoteToolCode::NotFound.as_str() },
+            OrbitError::NotFound { kind, .. } => match kind {
+                NotFoundKind::Tool => "tool_not_found",
+                NotFoundKind::Task
+                | NotFoundKind::Friction
+                | NotFoundKind::Artifact
+                | NotFoundKind::Skill
+                | NotFoundKind::Job
+                | NotFoundKind::JobRun
+                | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
+            },
+            OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
+            OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
+            OrbitError::UnknownSelector(_) => "unknown_selector",
+            OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
+            OrbitError::UnreachableDestination(_) => "unreachable_destination",
+            OrbitError::StaleRoute(_) => "stale_route",
+            OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
+            OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
+            OrbitError::CapabilityRefused(_) => {
+                const { RemoteToolCode::CapabilityRefused.as_str() }
+            }
+            OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
+            OrbitError::DecisionRefused { code, .. } => code.as_str(),
+            OrbitError::NoticeRefused { code, .. } => code.as_str(),
+            OrbitError::TaskPilotRefused { code, .. } => code.as_str(),
+            OrbitError::HostRegistry { code, .. } => code.as_str(),
+            OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
+            OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
+            OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
+            OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
+            OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
+            OrbitError::HostConfiguration { .. } => {
+                const { RemoteToolCode::HostConfiguration.as_str() }
+            }
+            OrbitError::ForceOverridable(_) => "force_overridable",
+            OrbitError::InvalidInput(_)
+            | OrbitError::InvalidInputDiagnostic { .. }
+            | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
+            OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+            OrbitError::SensitiveInput { .. } => "sensitive_input",
+            OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
+            OrbitError::SourceRepairRunStateRefused { .. } => "validation_failed",
+            OrbitError::SourceRepairAuthorityRefused(code) => {
+                if code.reports_as_execution() {
+                    "execution_failed"
+                } else {
+                    "validation_failed"
+                }
+            }
+            OrbitError::JobRunStateTransition(_) => "invalid_transition",
+            // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
+            // incumbent owner is an expected race, and the caller yields rather
+            // than treating its own request as malformed.
+            OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
+            // [ORB-11253, ORB-12260] A compare-and-set revision conflict on a
+            // run-control update or operation grant transition.
+            OrbitError::JobRunControlConflict(_) => "conflict",
+            OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
+            OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
+            OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
+            OrbitError::TaskScheduled { .. } => "task_scheduled",
+            OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
+            OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
+            OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
+            OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
+            OrbitError::FrictionNotLocal(_) => "friction_not_local",
+            OrbitError::AgentProtocolViolation(_) => "agent_protocol_violation",
+            OrbitError::UnsupportedAgentProvider(_) => "unsupported_provider",
+            OrbitError::OwnerUnavailable(_) => "owner_unavailable",
+            OrbitError::OwnerNegotiation(_) => "owner_negotiation",
+            OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
+            OrbitError::RemoteTool { code, .. } => code.as_str(),
+            OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
+            OrbitError::Execution(_)
+            | OrbitError::PrivateVcs(_)
+            | OrbitError::ForgeUnavailable(_)
+            | OrbitError::WorkflowEvidenceUnavailable(_)
+            | OrbitError::ExecutionTimeout { .. } => "execution_failed",
+            OrbitError::ProcessTimeout { .. } => "process_timeout",
+            OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
+            OrbitError::Store(_) => "store_error",
+            // [ORB-15088] Retryable, unlike `internal_error`: a pull follower
+            // retries an owner read that lost only to a lock-wait deadline and
+            // never mistakes it for a failure of its candidate.
+            OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => {
+                LOCK_BUSY_ERROR_CODE
+            }
+            OrbitError::WorkspaceError(_) => "workspace_error",
+            OrbitError::Io(_) => "io_error",
+            OrbitError::Migration(_) => "migration_failed",
+            OrbitError::StorageAccessDenied { .. } => "storage_access_denied",
+            OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
+            OrbitError::CallbackWorkspaceOutsideSandbox(_) => "callback_workspace_outside_sandbox",
+            OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
+            OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
+            OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",
+            OrbitError::CandidateAbsorbed(_)
+            | OrbitError::DesktopWriteAccepted { .. }
+            | OrbitError::PullRequestMergeabilityUnknown { .. }
+            | OrbitError::RecoverableVcsConflict(_)
+            | OrbitError::RunCancellationIncomplete { .. }
+            | OrbitError::RunProviderTeardownUnconfirmed { .. }
+            | OrbitError::TaskRevisionConflict { .. } => "internal_error",
+        }
+    }
+
+    /// Structured error details shared by Orbit error surfaces.
+    pub fn wire_details(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
+        if let Some((host, path, _)) = self.host_configuration_details() {
+            fields.insert("host".to_string(), serde_json::json!(host));
+            fields.insert("path".to_string(), serde_json::json!(path));
+        }
+        if let Some(did_you_mean) = self.did_you_mean() {
+            fields.insert("did_you_mean".to_string(), serde_json::json!(did_you_mean));
+        }
+        if let Some(artifact_origin) = self.artifact_origin() {
+            fields.insert(
+                "artifact_origin".to_string(),
+                serde_json::json!(artifact_origin),
+            );
+        }
+        if let Some(refusal) = self.force_overridable() {
+            fields.insert(
+                "guard".to_string(),
+                serde_json::json!(refusal.kind.as_str()),
+            );
+            if let Some(run_id) = &refusal.run_id {
+                fields.insert("run_id".to_string(), serde_json::json!(run_id));
+            }
+            if let Some(run_state) = &refusal.run_state {
+                fields.insert("run_state".to_string(), serde_json::json!(run_state));
+            }
+            if let Some(task_status) = &refusal.task_status {
+                fields.insert("task_status".to_string(), serde_json::json!(task_status));
+            }
+        }
+        if let Some((task_id, run_id)) = self.ship_run_in_flight() {
+            fields.insert("task_id".to_string(), serde_json::json!(task_id));
+            fields.insert("run_id".to_string(), serde_json::json!(run_id));
+        }
+        if let OrbitError::TaskCompletionLiveRun { task_id, run_id } = self {
+            fields.insert("task_id".to_string(), serde_json::json!(task_id));
+            fields.insert("run_id".to_string(), serde_json::json!(run_id));
+        }
+        if let Some((source_run_id, run_id)) = self.resume_run_in_flight() {
+            fields.insert(
+                "source_run_id".to_string(),
+                serde_json::json!(source_run_id),
+            );
+            fields.insert("run_id".to_string(), serde_json::json!(run_id));
+        }
+        if let Some((task_id, path, reason)) = self.task_bundle_corruption() {
+            fields.insert("task_id".to_string(), serde_json::json!(task_id));
+            fields.insert("path".to_string(), serde_json::json!(path));
+            fields.insert("reason".to_string(), serde_json::json!(reason));
+        }
+        if let Some(details) = self.friction_not_local_details() {
+            fields.insert(
+                "friction_id".to_string(),
+                serde_json::json!(details.friction_id),
+            );
+            fields.insert("task_id".to_string(), serde_json::json!(details.task_id));
+            fields.insert(
+                "workspace_id".to_string(),
+                serde_json::json!(details.workspace_id),
+            );
+            fields.insert("found_in".to_string(), serde_json::json!(details.found_in));
+        }
+        if let OrbitError::TmpGcActiveRuns { run_ids } = self {
+            fields.insert("run_ids".to_string(), serde_json::json!(run_ids));
+        }
+        if let Some(tag) = self.dropped_system_tag() {
+            fields.insert("tag".to_string(), serde_json::json!(tag));
+        }
+        fields
+    }
+
     /// Preserve a destination's JSON-RPC error answer as structured data.
     ///
     /// The numeric `code` and string `message` fields are kept typed in the

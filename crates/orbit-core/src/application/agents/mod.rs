@@ -116,7 +116,7 @@ impl AgentRole {
 /// Every role scorecard's term keys and labels, in role order. The crew
 /// memory score-blind lint refuses a note that quotes them, so a model's
 /// memory describes its work rather than how the work is measured.
-pub fn scorecard_term_vocabulary() -> Vec<&'static str> {
+pub(crate) fn scorecard_term_vocabulary() -> Vec<&'static str> {
     AgentRole::ALL
         .into_iter()
         .flat_map(|role| roles::spec(role).terms.iter())
@@ -193,4 +193,4 @@ pub use api::{
     agent_per_task_export, agent_scorecard, agent_size_curves,
 };
 pub(crate) use query::WindowBounds;
-pub use rank::{RankQuery, RankSeasons, agent_rank, agent_rank_calibration};
+pub use rank::{RankQuery, RankSeasons, agent_rank};

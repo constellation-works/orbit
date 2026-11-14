@@ -50,46 +50,29 @@ impl OrbitRuntime {
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             previous_status = Some(task.status);
-            // Persisted status event and emitted event per rejectable status.
-            // `review_rejected` selects `TaskReviewRejected`; the others emit
-            // `TaskProposalRejected`.
-            let (status_event, review_rejected) = match task.status {
-                TaskStatus::Proposed => ("proposal_rejected", false),
-                TaskStatus::Review => ("review_rejected", true),
-                TaskStatus::Backlog => ("backlog_rejected", false),
-                TaskStatus::InProgress => ("in_progress_rejected", false),
+            let status_event = match task.status {
+                TaskStatus::Proposed => "proposal_rejected",
+                TaskStatus::Review => "review_rejected",
+                TaskStatus::Backlog => "backlog_rejected",
+                TaskStatus::InProgress => "in_progress_rejected",
                 other => {
                     return Err(OrbitError::InvalidInput(format!(
                         "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
                     )));
                 }
             };
-            result = Some(self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some(status_event.to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                let event = if review_rejected {
-                    OrbitEvent::TaskReviewRejected {
-                        id: id.to_string(),
-                        rejected_by: effective_label.clone(),
-                    }
-                } else {
-                    OrbitEvent::TaskProposalRejected {
-                        id: id.to_string(),
-                        rejected_by: effective_label.clone(),
-                    }
-                };
-                Ok((task.clone(), event))
-            })?);
+            result = Some(self.stores().task_records().update(
+                id,
+                StoreTaskUpdateParams {
+                    actor: effective_label.clone(),
+                    status: Some(TaskStatus::Rejected),
+                    status_event: Some(status_event.to_string()),
+                    status_note: Some(reason.clone()),
+                    append_comments: append_comments.clone(),
+                    expected_status: Some(vec![task.status]),
+                    ..Default::default()
+                },
+            )?);
             Ok(())
         })?;
         let result = result.ok_or_else(|| {
@@ -148,13 +131,11 @@ impl OrbitRuntime {
 
     pub fn delete_task(&self, id: &str) -> Result<(), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.with_mutation(|| {
-            let deleted = self.stores().task_records().delete(id)?;
-            if !deleted {
-                return Err(OrbitError::not_found(NotFoundKind::Task, id.to_string()));
-            }
-            Ok(((), OrbitEvent::TaskDeleted { id: id.to_string() }))
-        })
+        let deleted = self.stores().task_records().delete(id)?;
+        if !deleted {
+            return Err(OrbitError::not_found(NotFoundKind::Task, id.to_string()));
+        }
+        Ok(())
     }
 
     #[cfg(test)]

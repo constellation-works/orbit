@@ -90,6 +90,15 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
         })
     }
 
+    fn resolve_activity_tool_denials(
+        &self,
+        _task_ids: &[String],
+        _activity: &str,
+        _disallow_list: &[String],
+    ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
+        Ok(orbit_engine::ResolvedActivityTools::default())
+    }
+
     fn resolve_executor_sandbox(
         &self,
         provider: &str,
@@ -129,6 +138,7 @@ impl Fixture {
              cat > \"$state/prompt-$n\"\n\
              printf '%s\\n' \"$@\" > \"$state/argv-$n\"\n\
              printf '%s' \"$ORBIT_ACTIVITY_TOOLS\" > \"$state/tools-$n\"\n\
+             printf '%s' \"$ORBIT_ACTIVITY_TOOLS_DENY\" > \"$state/deny-$n\"\n\
              if [ \"$n\" = 1 ]; then\n\
              {first}\n\
              else\n\
@@ -169,6 +179,16 @@ impl Fixture {
         fs::read_to_string(self.temp.path().join(format!("tools-{invocation}"))).unwrap()
     }
 
+    /// The deny list the invocation's child enforces (deny mode only).
+    fn deny_list(&self, invocation: usize) -> Vec<String> {
+        fs::read_to_string(self.temp.path().join(format!("deny-{invocation}")))
+            .unwrap()
+            .split(',')
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
     fn dispatch(
         &self,
         policy: Option<ResponseCorrectionPolicy>,
@@ -183,6 +203,18 @@ impl Fixture {
         wall_clock_timeout_seconds: u64,
         required_tools: Vec<String>,
     ) -> Dispatched {
+        self.dispatch_with_grant(policy, wall_clock_timeout_seconds, required_tools, None)
+    }
+
+    /// Dispatch with `disallow_list` declared (deny mode) or, when `None`,
+    /// the fixture's allowlist.
+    fn dispatch_with_grant(
+        &self,
+        policy: Option<ResponseCorrectionPolicy>,
+        wall_clock_timeout_seconds: u64,
+        required_tools: Vec<String>,
+        disallow_list: Option<Vec<String>>,
+    ) -> Dispatched {
         let run_id = "response-correction";
         let (writer, _store) = build_writer(self.temp.path(), run_id).unwrap();
         let host = RecordingHost {
@@ -195,6 +227,7 @@ impl Fixture {
         spec.require_response_envelope = true;
         spec.wall_clock_timeout_seconds = wall_clock_timeout_seconds;
         spec.response_correction = policy;
+        spec.tool_disallow_list = disallow_list;
         let outcome = dispatch_v2_activity(V2DispatchInput {
             activity_name: "read_only_fixture",
             spec: &ActivityV2Spec::AgentLoop(spec),
@@ -754,6 +787,13 @@ fn only_a_read_only_activity_may_declare_response_correction() {
 
     orbit_engine::load_activity_asset(&asset(format!("{READ_ONLY}{NO_MUTATION}")))
         .expect("a read-only activity may declare it");
+    // A disallow list that names no mutating tool still loads: the dispatch
+    // path denies them all, so a tool a later release registers cannot make
+    // an existing workspace copy invalid [ORB-24639].
+    orbit_engine::load_activity_asset(&asset(format!(
+        "{READ_ONLY}  tool_disallow_list:\n    - orbit.search\n  proc_disallowed_programs: []\n"
+    )))
+    .expect("a disallow-list activity may declare it");
     let cases = [
         (
             "require_response_envelope",
@@ -774,12 +814,6 @@ fn only_a_read_only_activity_may_declare_response_correction() {
         (
             "orbit.task.add",
             format!("{READ_ONLY}  tools:\n    - orbit.task.*\n"),
-        ),
-        (
-            "orbit.auto_task:add",
-            format!(
-                "{READ_ONLY}  tool_disallow_list:\n    - orbit.search\n  proc_disallowed_programs: []\n"
-            ),
         ),
         (
             "incomplete_continuation",
@@ -860,74 +894,116 @@ fn a_mutating_task_requirement_is_still_granted_without_response_correction() {
 
 // [ORB-22448] These coordination writes used to pass admission even though a
 // correction repeats the entire activity under the same tool grant.
-fn assert_coordination_mutations_refused(deny_mode: bool) {
-    for yaml in [include_str!(
-        "../../../../orbit-core/assets/activities/task_pilot.yaml"
-    )] {
-        orbit_engine::load_activity_asset(yaml).expect("the shipped activity remains admissible");
-        let mut registry = orbit_tools::ToolRegistry::new();
-        registry.register_builtins();
-        // A family stands for its actions, which a policy list names as
-        // `family:action`.
-        let mut tools: Vec<_> = registry
-            .schemas()
-            .into_iter()
-            .flat_map(|schema| {
-                orbit_types::tool::tool_policy_operations(&schema.name)
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|operation| {
-                operation.starts_with("orbit.")
-                    && registry.execution_kind(operation)
-                        == Some(orbit_tools::ToolExecutionKind::Mutating)
-            })
-            .map(|operation| orbit_types::tool::tool_call_name(&operation).into_owned())
-            .collect();
-        tools.sort();
-        assert!(
-            !tools.is_empty(),
-            "the registry supplies the mutation surface"
+fn registry_mutating_tools() -> Vec<String> {
+    let mut registry = orbit_tools::ToolRegistry::new();
+    registry.register_builtins();
+    // A family stands for its actions, which a policy list names as
+    // `family:action`.
+    let mut tools: Vec<_> = registry
+        .schemas()
+        .into_iter()
+        .flat_map(|schema| {
+            orbit_types::tool::tool_policy_operations(&schema.name)
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|operation| {
+            operation.starts_with("orbit.")
+                && registry.execution_kind(operation)
+                    == Some(orbit_tools::ToolExecutionKind::Mutating)
+        })
+        .map(|operation| orbit_types::tool::tool_call_name(&operation).into_owned())
+        .collect();
+    tools.sort();
+    assert!(
+        !tools.is_empty(),
+        "the registry supplies the mutation surface"
+    );
+    tools
+}
+
+fn assert_coordination_mutations_refused_in_allow_mode() {
+    let yaml = include_str!("../../../../orbit-core/assets/activities/task_pilot.yaml");
+    orbit_engine::load_activity_asset(yaml).expect("the shipped activity remains admissible");
+    let tools = registry_mutating_tools();
+    for tool in &tools {
+        let mut asset: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let spec = asset["spec"].as_mapping_mut().unwrap();
+        spec.remove(serde_yaml::Value::from("tool_disallow_list"));
+        spec.insert(
+            serde_yaml::Value::from("tools"),
+            serde_yaml::to_value([tool]).unwrap(),
         );
-        for tool in &tools {
-            let mut asset: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
-            let spec = asset["spec"].as_mapping_mut().unwrap();
-            let deny_key = serde_yaml::Value::from("tool_disallow_list");
-            if deny_mode {
-                spec.get_mut(&deny_key)
-                    .unwrap()
-                    .as_sequence_mut()
-                    .unwrap()
-                    .retain(|entry| entry.as_str() != Some(tool.as_str()));
-            } else {
-                spec.remove(&deny_key);
-                spec.insert(
-                    serde_yaml::Value::from("tools"),
-                    serde_yaml::to_value([tool]).unwrap(),
-                );
-            }
-            let yaml = serde_yaml::to_string(&asset).unwrap();
-            let error = orbit_engine::load_activity_asset(&yaml)
-                .err()
-                .unwrap_or_else(|| {
-                    panic!("coordination write {tool} was admitted (deny={deny_mode})")
-                })
-                .to_string();
-            assert!(error.contains("response_correction"), "{error}");
-            assert!(error.contains(tool.as_str()), "{tool}: {error}");
-        }
+        let yaml = serde_yaml::to_string(&asset).unwrap();
+        let error = orbit_engine::load_activity_asset(&yaml)
+            .err()
+            .unwrap_or_else(|| panic!("coordination write {tool} was admitted"))
+            .to_string();
+        assert!(error.contains("response_correction"), "{error}");
+        assert!(error.contains(tool.as_str()), "{tool}: {error}");
     }
 }
 
 #[test]
 fn coordination_mutations_are_refused_in_allow_mode() {
-    assert_coordination_mutations_refused(false);
+    assert_coordination_mutations_refused_in_allow_mode();
 }
 
+/// [ORB-24639] Deny mode no longer relies on each activity naming a mutating
+/// tool, so the table dispatch denies from must cover the whole registry.
 #[test]
-fn coordination_mutations_are_refused_in_deny_mode() {
-    assert_coordination_mutations_refused(true);
+fn every_registry_mutation_is_denied_to_a_response_correction_activity() {
+    for tool in registry_mutating_tools() {
+        assert!(
+            orbit_types::workflow::activity_job::is_response_correction_mutating_tool(&tool),
+            "{tool} is mutating in the registry but missing from MUTATING_TOOLS"
+        );
+    }
+}
+
+/// [ORB-24639] A workspace copy of a correction activity written before a
+/// release registered a mutating tool carries a disallow list that does not
+/// name it. The copy keeps loading, and the new tool is still denied.
+#[test]
+fn a_disallow_list_that_predates_a_mutating_tool_still_denies_it() {
+    let yaml = include_str!("../../../../orbit-core/assets/activities/task_pilot.yaml");
+    let mut asset: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+    let list = asset["spec"]["tool_disallow_list"]
+        .as_sequence_mut()
+        .unwrap();
+    list.retain(|entry| entry.as_str() != Some("orbit.drain.claim.effort"));
+    let copy = serde_yaml::to_string(&asset).unwrap();
+    let loaded = orbit_engine::load_activity_asset(&copy)
+        .expect("a copy whose disallow list predates a mutating tool loads");
+    let ActivityV2Spec::AgentLoop(spec) = &loaded.spec.spec else {
+        panic!("task_pilot is an agent loop");
+    };
+    assert!(
+        !spec
+            .tool_disallow_list
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|entry| entry == "orbit.drain.claim.effort"),
+        "the fixture omits the new tool from its list"
+    );
+
+    let fixture = Fixture::new(&reply(VALID), &reply(VALID));
+    let dispatched =
+        fixture.dispatch_with_grant(admitted(1), 30, Vec::new(), spec.tool_disallow_list.clone());
+    assert!(
+        dispatched.outcome.success,
+        "{:?}",
+        dispatched.outcome.message
+    );
+    let denied = fixture.deny_list(1);
+    for tool in orbit_types::workflow::activity_job::MUTATING_TOOLS {
+        assert!(
+            denied.iter().any(|entry| entry == tool),
+            "{tool} not denied: {denied:?}"
+        );
+    }
 }
 
 // [ORB-22663] This terminal is a provider-owned formatting failure, not an

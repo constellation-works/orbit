@@ -15,50 +15,6 @@ use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reindex::TaskReindexArgs;
 use super::settle_merged::TaskSettleMergedArgs;
 
-/// Grouped `orbit task` help, rendered the same way `orbit run` and the root
-/// command render theirs: a hand-rolled template, because clap's derive has no
-/// per-variant `help_heading`. Fifteen ungrouped rows read as a wall; the
-/// sections say which of them you are looking for. Keep the variant order in
-/// `TaskSubcommand` matching the section order below — the order decides where
-/// a command would land if it were ever missing from the template.
-const TASK_HELP_TEMPLATE: &str = "\
-{about}
-
-{usage-heading} {usage}
-
-Tasks:
-  add               Create a new task
-  update            Update task fields; `--approve` takes the next approval step
-  repilot           Explicitly request one new pilot assessment
-  archive           Archive a task
-  list              List tasks with optional filters
-  eligible          List backlog/proposed tasks that collide with no in-flight work
-  show              Show one task in detail, by ID, across registered workspaces
-  artifact          Manage task artifact files
-
-Health:
-  lint              Lint tasks for context-file and acceptance-criteria problems
-  flow              Show filed-vs-closed rates over time — is the backlog draining?
-  locks             Inspect, reserve, and release the file locks that gate dispatch
-  review-reset      Reset one review lineage budget with an audited reason
-  reconcile-review  Validate and review a recovered delivery's changed merged head
-  retry-handoff     Retry a stopped authorized handoff through normal owner landing
-  recover-claim     Recover a live claim to a lifecycle-valid status with an audited reason
-  revoke-handoff    Revoke a handoff's completion authority with an audited reason
-  requeue           Requeue a blocked task onto its published candidate
-  recheck-blocked   Requeue tasks whose infrastructure block has cleared
-  settle-merged     Settle tasks whose delivery pull request merged outside Orbit
-
-Bundles:
-  export            Export task bundles to a portable tar.zst archive
-  import            Import task bundles from a tar.zst archive
-  publication       Publish, inspect, diagnose, or restore task snapshots
-  reindex           Rebuild the registry index from on-disk task bundles
-
-Options:
-{options}
-{after-help}";
-
 const TASK_AFTER_HELP: &str = "\
 Lifecycle:
   orbit task update <id> --approve                  proposed -> backlog, review -> done
@@ -71,7 +27,6 @@ Run `orbit task <COMMAND> --help` for a command's own options and examples.";
 #[command(
     about = TASK.cli_about,
     override_usage = "orbit task <COMMAND>",
-    help_template = TASK_HELP_TEMPLATE,
     after_help = TASK_AFTER_HELP
 )]
 pub struct TaskCommand {

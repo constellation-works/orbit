@@ -174,7 +174,7 @@ pub fn agent_rank(
 /// `seasons` with a new season appended: noise scales calibrated on the
 /// settled window of `query`, numbered after the seasons on file. A live
 /// query is refused, and so is a window without implemented work.
-pub fn agent_rank_calibration(
+pub(crate) fn agent_rank_calibration(
     facts: &AgentFacts,
     query: &RankQuery,
     seasons: &RankSeasons,

@@ -70,7 +70,7 @@ impl OrbitRuntime {
         job_run_id: Option<String>,
     ) -> Result<(), OrbitError> {
         let (claim, _) = self.landing_claim(handoff_id)?;
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&self.landing_invocation(&claim)),
             mutation_id,
             &ClaimMutation::DispatchLanding {

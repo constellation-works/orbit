@@ -18,7 +18,7 @@ use crate::OrbitRuntime;
 /// The caller supplies the artifact manifest it already loaded with the
 /// task, so an ungated task costs no further bundle read; only a listed
 /// certificate is fetched.
-pub fn task_review_projection(
+pub(crate) fn task_review_projection(
     runtime: &OrbitRuntime,
     task: &Task,
     artifacts: &[ArtifactManifestFileV2],

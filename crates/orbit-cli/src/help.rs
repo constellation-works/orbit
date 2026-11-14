@@ -749,18 +749,6 @@ fn render_grouped_rows<'a>(
 
 fn render_section(
     heading: &str,
-    rows: &[GroupedRow],
-    column: usize,
-    term_width: Option<usize>,
-) -> String {
-    let mut out = String::from(heading);
-    out.push_str(":\n");
-    out.push_str(&render_grouped_rows(rows.iter().copied(), column, term_width).join("\n"));
-    out
-}
-
-fn render_dynamic_section(
-    heading: &str,
     rows: &[(&str, &str)],
     column: usize,
     term_width: Option<usize>,
@@ -835,12 +823,7 @@ pub(crate) fn root_help_template(term_width: u16, plugin_rows: &[(String, String
         render_section("Advanced", ROOT_ADVANCED, column, width),
     ];
     if !plugin_rows.is_empty() {
-        sections.push(render_dynamic_section(
-            "Plugins",
-            &plugin_rows,
-            column,
-            width,
-        ));
+        sections.push(render_section("Plugins", &plugin_rows, column, width));
     }
     format!(
         "{{name}} {{version}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\nOptions:\n{{options}}",

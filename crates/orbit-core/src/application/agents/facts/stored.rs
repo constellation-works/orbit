@@ -37,8 +37,12 @@ use crate::OrbitRuntime;
 use crate::application::codebase::SettledFailure;
 
 /// Bump when [`TaskFacts`] or anything it serializes changes shape or
-/// meaning: every stored row is then recomputed and replaced.
-pub(super) const FACTS_FORMAT_VERSION: u32 = 1;
+/// meaning: every stored row is then recomputed and replaced. Version 1
+/// wrote a pulled attempt's `Some(None)` provider-default report as JSON
+/// `null` and read it back as no report [ORB-24640]; version 2 keeps the
+/// three states, and version-1 rows are recomputed from their settlement
+/// and history inputs instead of being reused.
+pub(super) const FACTS_FORMAT_VERSION: u32 = 2;
 
 /// One task's facts during a scan, and whether they need writing back.
 pub(super) struct Entry {

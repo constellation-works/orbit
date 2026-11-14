@@ -263,23 +263,14 @@ pub fn compatibility_config_keys_present(document: &toml::Value) -> Vec<Compatib
 
 /// Retired and deprecated registry keys set in the config file at `path`.
 ///
-/// A missing file has none. The read uses the same no-follow path check as
-/// other config loads, so a symlink is refused rather than followed.
+/// A missing or empty file has none. The read uses the same no-follow path
+/// check as other config loads, so a symlink is refused rather than followed.
 pub fn compatibility_config_keys_at(
     path: &Path,
 ) -> Result<Vec<CompatibilityConfigKey>, OrbitError> {
-    let Some(raw) = crate::config_io::read_config_file(path)? else {
+    let Some(document) = crate::config_toml::read_config_toml(path)? else {
         return Ok(Vec::new());
     };
-    if raw.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let document = toml::from_str(&raw).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })?;
     Ok(compatibility_config_keys_present(&document))
 }
 
