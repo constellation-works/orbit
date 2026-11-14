@@ -7,14 +7,13 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_runtime::{ApplicationPort, RuntimeKernel};
-use orbit_store::AuditEventInsertParams;
-use orbit_store::contracts::{ClaimInspection, TaskCandidates, TaskListFilter};
+use orbit_store::contracts::{TaskCandidates, TaskListFilter};
 use orbit_types::task::{
     CrewSource, ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority,
     TaskStatus,
 };
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::Value;
 
 use crate::runtime::OrbitRuntime;
@@ -110,13 +109,6 @@ impl ApplicationPort for CoreApplicationPort {
         OrbitRuntime::task_candidates(OrbitRuntime::from_kernel_ref(kernel), filter, limit)
     }
 
-    fn inspect_execution_claims(
-        &self,
-        kernel: &RuntimeKernel,
-    ) -> Result<Vec<ClaimInspection>, OrbitError> {
-        OrbitRuntime::inspect_execution_claims(OrbitRuntime::from_kernel_ref(kernel))
-    }
-
     fn apply_task_automation_update(
         &self,
         kernel: &RuntimeKernel,
@@ -128,30 +120,6 @@ impl ApplicationPort for CoreApplicationPort {
             task_id,
             update,
         )
-    }
-
-    fn record_audit_event(
-        &self,
-        kernel: &RuntimeKernel,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError> {
-        OrbitRuntime::record_audit_event(OrbitRuntime::from_kernel_ref(kernel), params)
-    }
-
-    fn get_job_run_backend(
-        &self,
-        kernel: &RuntimeKernel,
-        run_id: &str,
-    ) -> Result<Option<JobRun>, OrbitError> {
-        OrbitRuntime::get_job_run_backend(OrbitRuntime::from_kernel_ref(kernel), run_id)
-    }
-
-    fn read_run_state(
-        &self,
-        kernel: &RuntimeKernel,
-        run_id: &str,
-    ) -> Result<Option<PipelineState>, OrbitError> {
-        OrbitRuntime::read_run_state(OrbitRuntime::from_kernel_ref(kernel), run_id)
     }
 
     fn list_orphaned_running_job_runs(
