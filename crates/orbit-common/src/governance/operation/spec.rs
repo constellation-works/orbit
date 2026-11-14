@@ -184,6 +184,18 @@ impl<V: 'static> OperationSpec<V> {
     /// Parsing canonical input again yields the same input, so a host may
     /// re-wrap what the tool entry already parsed.
     pub fn parse_input(&self, input: Value) -> Result<OperationInput, OrbitError> {
+        let input = self.parse_input_fields(input)?;
+        self.require_input_fields(&input)?;
+        Ok(input)
+    }
+
+    /// Canonicalize and check present fields, without requiring absent ones.
+    ///
+    /// A surface with its own required-field diagnostic can run that check
+    /// after shape validation, then call [`Self::require_input_fields`].
+    /// Guarded modes may also check a subset of the operation's fields here
+    /// while retaining their own required-field contract.
+    pub fn parse_input_fields(&self, input: Value) -> Result<OperationInput, OrbitError> {
         let mut object = match input {
             Value::Object(object) => object,
             Value::Null => Map::new(),
@@ -239,15 +251,23 @@ impl<V: 'static> OperationSpec<V> {
             }
         }
 
-        let input = Value::Object(object);
+        Ok(OperationInput {
+            input: Value::Object(object),
+            unknown_fields,
+        })
+    }
+
+    /// Require this operation's mandatory fields on already parsed input.
+    pub fn require_input_fields(&self, input: &OperationInput) -> Result<(), OrbitError> {
+        let input = input.as_value();
         if let Some(missing) = self.wire_params().find(|param| {
             param.required
                 && !TOOL_INPUT_IDENTITY_KEYS.contains(&param.name)
                 && input.get(param.name).is_none()
         }) {
-            return Err(missing_tool_field(&input, missing.name));
+            return Err(missing_tool_field(input, missing.name));
         }
-        if let Value::Object(object) = &input
+        if let Value::Object(object) = input
             && self.misses_at_least_one_of(object)
         {
             return Err(OrbitError::InvalidInput(format!(
@@ -260,11 +280,7 @@ impl<V: 'static> OperationSpec<V> {
                 )
             )));
         }
-
-        Ok(OperationInput {
-            input,
-            unknown_fields,
-        })
+        Ok(())
     }
 }
 

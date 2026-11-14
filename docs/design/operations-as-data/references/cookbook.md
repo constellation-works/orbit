@@ -179,8 +179,11 @@ Delete the per-verb `Tool` files. Register the noun with
 `operation::register_noun(registry, &NOUN)`, which serves every operation with
 the generic `OperationTool<V>`; it takes `execution_kind` from `effect` and
 dispatches through the `From<<Noun>Verb> for OrbitBuiltinAction` impl from
-Step 4. It also validates input with `parse_input` and reports unknown fields
-(a `warn!` and one audit row each) before dispatch.
+Step 4. It also validates input with the spec's `parse_input_fields` and
+`require_input_fields` phases and reports unknown fields (a `warn!` and one
+audit row each in warn mode) before dispatch. The generic
+`Tool::execute_with_input_check` hook places family required-field diagnostics
+between those phases, preserving unknown-field suggestions before missing fields.
 Delete the noun's hand-written registration block. For a verb without MCP
 scope, `NounSpec::tool_only_registration` selects active local registration
 or inactive registration; preserve the previous kind. MCP-scoped verbs still
@@ -200,7 +203,8 @@ If the CLI command has options MCP must not accept (task `add --plan`,
 `update --approve`), the CLI `prepare` table moves them into one hidden
 object parameter (task's `cli_options`) for the core handler to read. Admit
 that field only from a caller without an MCP session, so MCP keeps refusing
-it.
+it. The noun's `GuardedModes::preempt` table owns this surface restriction;
+keep noun-specific field rules out of the generic tool registry.
 
 If a tool routed some inputs elsewhere before dispatch (auto-task's bounded
 `list`, acknowledged `mint` and checked `update` go to desktop host actions),

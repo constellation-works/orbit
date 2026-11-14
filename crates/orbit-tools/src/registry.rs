@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::family::{
     FamilyMember, FamilyTool, check_family_action_fields, family_members, is_family,
-    is_preloaded_artifact_payload, operation_is_not_a_tool, resolve_family_input,
+    operation_is_not_a_tool, resolve_family_input,
 };
 use crate::mcp::{builtin_mcp_toolset, mcp_annotations, mcp_rules};
 use crate::plugin::PluginToolBinding;
@@ -331,40 +331,20 @@ impl ToolRegistry {
                 ctx,
             )
         })?;
-        if name.starts_with("orbit.task.")
-            // Pull owns typed protocol negotiation in the host adapter, which
-            // checks the fingerprint before validating the derived request
-            // shape. This registry cannot know the owner's request types.
-            && name != "orbit.task.pull"
-            && tool.plugin.is_none()
-            && !is_preloaded_artifact_payload(name, &input)
-        {
-            let aliases = declared_aliases(name);
-            let retired_fields = declared_retired_fields(name);
-            let guarded_fields = is_guarded_task_write(name, &input)
-                .then(|| crate::builtin::orbit::task::guarded::shape_checked_fields(name, &input))
-                .flatten();
-            validate_task_arguments(
-                &input,
-                &tool.tool.schema(),
-                cli_fields(name, ctx),
-                &aliases,
-                &retired_fields,
-                guarded_fields.as_deref(),
-            )?;
-        }
-        // A family action's required fields are checked after the
-        // caller's authorization and the field-shape checks above, so a denied call learns nothing of them.
-        if let Some((family, _)) = tool_family_of_operation(name)
-            && let Some(member) = self.families.get(family.name).and_then(|members| {
-                members
-                    .iter()
-                    .find(|member| member.action.operation == name)
-            })
-        {
-            check_family_action_fields(family, member, &input, &declared_aliases(name), ctx)?;
-        }
-        tool.tool.execute(ctx, input)
+        // Each tool owns its field-shape checks. A family action's required
+        // fields follow those checks, so unknown fields keep their remedies.
+        tool.tool.execute_with_input_check(ctx, input, &|input| {
+            if let Some((family, _)) = tool_family_of_operation(name)
+                && let Some(member) = self.families.get(family.name).and_then(|members| {
+                    members
+                        .iter()
+                        .find(|member| member.action.operation == name)
+                })
+            {
+                check_family_action_fields(family, member, input, &declared_aliases(name), ctx)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn get_schema(&self, name: &str) -> Option<ToolSchema> {
@@ -559,19 +539,6 @@ impl ToolRegistry {
     }
 }
 
-/// Fields beyond the public schema a call may carry: the CLI options of a
-/// task write the operator command built. Only an MCP session carries an
-/// origin session, so an MCP caller is refused them as unknown fields.
-fn cli_fields(name: &str, ctx: &ToolContext) -> &'static [&'static str] {
-    const CLI_OPTIONS: &[&str] = &[orbit_common::governance::task::TASK_CLI_OPTIONS_PARAM];
-    let task_write = name == "orbit.task.add" || name == "orbit.task.update";
-    if task_write && ctx.session_context.origin_session_id.is_none() {
-        CLI_OPTIONS
-    } else {
-        &[]
-    }
-}
-
 /// The input spellings a registry operation accepts besides its canonical
 /// names, as `(canonical, alias)`. The schema lists canonical names only; the
 /// handler's `OperationSpec::parse_input` renames an alias, so the field checks
@@ -597,159 +564,6 @@ fn spec_aliases<V>(
             .flat_map(|spec| spec.wire_params())
             .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias))),
     );
-}
-
-/// A guarded task write owns its input contract, so the registry must not
-/// refuse its unknown fields first: the handler names the selector that chose
-/// the mode (ORB-24434).
-fn is_guarded_task_write(name: &str, input: &Value) -> bool {
-    crate::builtin::orbit::task::guarded::is_guarded(input)
-        && (name == "orbit.task.add" || name == "orbit.task.update")
-}
-
-/// Retired names that must reach `OperationSpec::parse_input`.
-///
-/// `orbit.task.add` retires fields onto the operation that still accepts
-/// them, and every task operation retires `agent` and the `context` alias.
-/// Those refusals name the replacement. Other retired names stay refused
-/// here, so their existing registry wording is unchanged.
-fn declared_retired_fields(name: &str) -> Vec<&'static str> {
-    orbit_common::governance::task::TASK_OPERATIONS
-        .iter()
-        .filter(|spec| spec.tool_name == name)
-        .flat_map(|spec| spec.retired_fields.iter().map(|field| field.name))
-        .filter(|field| name == "orbit.task.add" || *field == "agent" || *field == "context")
-        .collect()
-}
-
-/// Task argument shapes are checked before a handler can ignore a mistyped
-/// optional field or reach the application host. Required fields and richer
-/// guarded modes remain the handler's responsibility.
-///
-/// A guarded write owns its unknown-field contract, so the registry must not
-/// refuse its unknown fields first: the handler names the selector that chose
-/// the mode (ORB-24434). `guarded_fields` is `Some` for a guarded write with
-/// the envelope and the selected mode's accepted fields; only those are
-/// checked here, strictly as sent, so a mistyped field outside the mode
-/// reaches the handler's selector remedy instead of this refusal.
-fn validate_task_arguments(
-    input: &Value,
-    schema: &ToolSchema,
-    cli_fields: &[&str],
-    aliases: &[(&str, &str)],
-    retired_fields: &[&str],
-    guarded_fields: Option<&[&str]>,
-) -> Result<(), OrbitError> {
-    use orbit_common::protocol::tool_input::{
-        TOOL_INPUT_IDENTITY_KEYS, reject_unknown_tool_fields,
-    };
-
-    let object = input
-        .as_object()
-        .ok_or_else(|| OrbitError::InvalidInput("task tool arguments must be an object".into()))?;
-    // `model` stays an unadvertised identity key (CLI, `orbit tool run`, and
-    // a caller that still sends it). The MCP schema does not list it.
-    let allowed = schema
-        .parameters
-        .iter()
-        .map(|param| param.name.as_str())
-        .chain(cli_fields.iter().copied())
-        .chain(aliases.iter().map(|(_, alias)| *alias))
-        .chain(retired_fields.iter().copied())
-        .chain(TOOL_INPUT_IDENTITY_KEYS.iter().copied())
-        .collect::<Vec<_>>();
-    // The guarded handler names the selector and accepted fields in its
-    // refusal; known parameter shapes must still be checked here.
-    if guarded_fields.is_none() {
-        reject_unknown_tool_fields(input, &allowed)?;
-    }
-    for parameter in &schema.parameters {
-        // On a guarded write only the envelope and the selected mode's
-        // accepted fields are checked; the rest reach the handler's selector
-        // refusal.
-        if let Some(fields) = guarded_fields
-            && !fields.contains(&parameter.name.as_str())
-        {
-            continue;
-        }
-        // A call that sets both spellings is refused by the handler; check
-        // the canonical one here.
-        let Some(value) = object.get(&parameter.name).or_else(|| {
-            aliases
-                .iter()
-                .filter(|(canonical, _)| *canonical == parameter.name)
-                .find_map(|(_, alias)| object.get(*alias))
-        }) else {
-            continue;
-        };
-        // Existing optional parsers treat null as absence, and accept numeric
-        // strings and string booleans. Check their normalized shape without
-        // changing the value passed to the handler. Guarded values are
-        // forwarded verbatim to the desktop host, so they are checked strictly
-        // as sent: a lenient ordinary shape would otherwise leak an `invalid
-        // desktop operation` host error.
-        if value.is_null() && !parameter.required {
-            continue;
-        }
-        let guarded = guarded_fields.is_some();
-        let mut normalized = value.clone();
-        if !guarded {
-            // The persisted relation parser also accepts one relation object.
-            if parameter.name == "relations" && value.is_object() {
-                normalized = Value::Array(vec![value.clone()]);
-            }
-            if let Some(raw) = value.as_str() {
-                match parameter.param_type.as_str() {
-                    "boolean" | "bool" => match raw.trim().to_ascii_lowercase().as_str() {
-                        "true" => normalized = Value::Bool(true),
-                        "false" => normalized = Value::Bool(false),
-                        _ => {}
-                    },
-                    "integer" | "u64" => {
-                        if let Ok(number) = raw.trim().parse::<u64>() {
-                            normalized = Value::from(number);
-                        }
-                    }
-                    // MCP advertises string lists as arrays. A single string is
-                    // still a list for the handler; check it as one element and
-                    // leave the value the handler sees unchanged.
-                    "string_list" | "string[]" | "strings" => {
-                        normalized = Value::Array(vec![Value::String(raw.to_string())]);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let shape = Value::Object(guarded_wire_shape(&parameter.param_type, guarded));
-        let validator = jsonschema::JSONSchema::compile(&shape).map_err(|error| {
-            OrbitError::Execution(format!("invalid task parameter schema: {error}"))
-        })?;
-        if !validator.is_valid(&normalized) {
-            return Err(OrbitError::InvalidInput(format!(
-                "`{}` must have type {}",
-                parameter.name, parameter.param_type,
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// The JSON-Schema fragment `validate_task_arguments` checks a parameter
-/// against. Guarded values are forwarded verbatim, so a guarded `object` is
-/// checked as one JSON object rather than the ordinary object-or-list shape.
-fn guarded_wire_shape(param_type: &str, guarded: bool) -> serde_json::Map<String, Value> {
-    use orbit_common::protocol::tool_schema::tool_parameter_schema;
-    if guarded
-        && matches!(
-            param_type.trim().to_ascii_lowercase().as_str(),
-            "object" | "map" | "json"
-        )
-    {
-        let mut shape = serde_json::Map::new();
-        shape.insert("type".to_string(), Value::String("object".to_string()));
-        return shape;
-    }
-    tool_parameter_schema(param_type)
 }
 
 /// Whether a definition's tool addresses exactly one id with an optional

@@ -23,7 +23,7 @@ use orbit_common::governance::task::TaskVerb;
 use crate::ToolContext;
 
 /// Keep the shipped source-file remedy on incomplete calls. Unknown fields
-/// on complete calls still use the registry's warn mode.
+/// are refused by the operation spec before a source is materialized.
 pub(crate) fn source_presence_error(input: &Value) -> Option<OrbitError> {
     let spec = TaskVerb::ArtifactPut.spec();
     let source = spec

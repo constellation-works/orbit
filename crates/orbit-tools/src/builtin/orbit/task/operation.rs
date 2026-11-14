@@ -10,7 +10,7 @@
 //! verbs refuse a managed run before any field check.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::operation::{OperationInput, OperationVerb};
+use orbit_common::governance::operation::OperationInput;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb, artifact_listing_hint};
 use orbit_common::protocol::tool_input::{reject_unknown_tool_fields, required_string};
 use serde_json::Value;
@@ -23,28 +23,23 @@ use crate::{OrbitBuiltinAction, ToolContext};
 
 impl GuardedModes for TaskVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
+        // Task calls have always required an object; the shared spec also
+        // accepts null as empty input for other nouns.
+        if !input.is_object() {
+            return Some(Err(OrbitError::InvalidInput(
+                "task tool arguments must be an object".into(),
+            )));
+        }
+        if matches!(self, TaskVerb::Add | TaskVerb::Update)
+            && ctx.session_context.origin_session_id.is_some()
+            && input.get(TASK_CLI_OPTIONS_PARAM).is_some()
+        {
+            return Some(Err(OrbitError::InvalidInput(format!(
+                "unknown field '{TASK_CLI_OPTIONS_PARAM}'"
+            ))));
+        }
         match self {
             TaskVerb::ArtifactPut => super::artifact_put::preempt(ctx, input),
-            TaskVerb::ArtifactGet => {
-                // Preserve the list-before-read remedy before required-field
-                // validation; the alias keys still come from the declaration.
-                let path = self
-                    .spec()
-                    .wire_params()
-                    .find(|param| param.name == "path")?;
-                let keys = std::iter::once(path.name)
-                    .chain(path.aliases.iter().copied())
-                    .collect::<Vec<_>>();
-                let listing_hint = artifact_listing_hint(&ctx.session_context);
-                required_string(input, &["id"], "id")
-                    .and_then(|_| {
-                        required_string(input, &keys, "path").map_err(|error| {
-                            OrbitError::InvalidInput(format!("{error}; {listing_hint}"))
-                        })
-                    })
-                    .err()
-                    .map(Err)
-            }
             TaskVerb::Add => {
                 guarded::is_guarded(input).then(|| guarded::write(ctx, input.clone(), true))
             }
@@ -99,6 +94,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
@@ -227,6 +223,16 @@ impl GuardedModes for TaskVerb {
                 *input = crate::artifact_materialize::prepare_remote_payload(input.take(), ctx)?;
                 Ok(())
             }
+            TaskVerb::ArtifactGet => {
+                required_string(input, &["id"], "id")?;
+                required_string(input, &["path"], "path").map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "{error}; {}",
+                        artifact_listing_hint(&ctx.session_context)
+                    ))
+                })?;
+                Ok(())
+            }
             TaskVerb::Add => {
                 // The operator command leaves its text to the domain's own
                 // checks, and its description defaults to empty; MCP callers
@@ -245,7 +251,6 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Lint
-            | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease

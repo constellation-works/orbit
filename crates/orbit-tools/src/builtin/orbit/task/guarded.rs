@@ -1,5 +1,7 @@
 //! Optional guarded modes of existing task verbs, sharing the transactional write path.
 use crate::{OrbitBuiltinAction, ToolContext};
+use orbit_common::governance::operation::{OperationVerb, ParamType};
+use orbit_common::governance::task::TaskVerb;
 use orbit_common::{
     OrbitError,
     protocol::tool_input::{reject_unknown_tool_fields, required_string},
@@ -12,14 +14,13 @@ pub(crate) fn is_guarded(input: &Value) -> bool {
         .any(|key| input.get(*key).is_some())
 }
 
-/// The guarded mode a write selects, shared by the handler and the registry's
-/// shape check so both agree on which fields the mode accepts.
+/// The guarded mode a write selects and the fields its handler accepts.
 ///
 /// For creation the mode is always creation; for updates a present `verdict`
 /// selects review, else a present `comment` selects comment, else the write is
 /// an edit. The returned slice is the mode's accepted fields, without the
 /// envelope.
-pub(crate) fn guarded_mode(create: bool, input: &Value) -> (&'static [&'static str], &'static str) {
+fn guarded_mode(create: bool, input: &Value) -> (&'static [&'static str], &'static str) {
     if create {
         (
             &[
@@ -50,35 +51,56 @@ pub(crate) fn guarded_mode(create: bool, input: &Value) -> (&'static [&'static s
     }
 }
 
-/// Fields the registry shape-checks on a guarded write: the mode envelope
-/// plus the selected mode's accepted fields, strictly as sent.
-///
-/// Returns `None` for an ordinary write, where the registry checks every
-/// declared parameter with its lenient ordinary shapes. For a guarded write it
-/// returns the envelope and accepted fields only, so a mistyped field outside
-/// the mode reaches the handler's selector/accepted-fields remedy instead of
-/// the registry's `must have type` refusal (ORB-24499 F1).
-pub(crate) fn shape_checked_fields(tool: &str, input: &Value) -> Option<Vec<&'static str>> {
-    if tool != "orbit.task.add" && tool != "orbit.task.update" {
-        return None;
+/// Check only this guarded mode's accepted fields against their declared
+/// types. The original values reach the desktop host unchanged, so string
+/// lists must already be arrays and boolean strings are never normalized.
+fn validate_guarded_write_fields(
+    input: &Value,
+    create: bool,
+    allowed: &[&str],
+) -> Result<(), OrbitError> {
+    let spec = if create {
+        TaskVerb::Add
+    } else {
+        TaskVerb::Update
     }
-    if !is_guarded(input) {
-        return None;
-    }
-    let create = tool == "orbit.task.add";
-    let (allowed, _) = guarded_mode(create, input);
-    let envelope: &[&str] = if create {
+    .spec();
+    let envelope = if create {
         CREATE_ENVELOPE_KEYS
     } else {
         UPDATE_ENVELOPE_KEYS
     };
-    Some(
-        envelope
-            .iter()
-            .copied()
-            .chain(allowed.iter().copied())
-            .collect(),
-    )
+    let mut fields = serde_json::Map::new();
+    for param in spec
+        .wire_params()
+        .filter(|param| allowed.contains(&param.name) || envelope.contains(&param.name))
+    {
+        let Some(value) = input.get(param.name) else {
+            continue;
+        };
+        if value.is_null() {
+            if param.required {
+                return Err(OrbitError::InvalidInput(format!(
+                    "missing `{}`",
+                    param.name
+                )));
+            }
+            continue;
+        }
+        if matches!(
+            param.param_type,
+            ParamType::StringList | ParamType::EnumList(_)
+        ) && !value.is_array()
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "`{}` must be an array of strings",
+                param.name
+            )));
+        }
+        fields.insert(param.name.to_string(), value.clone());
+    }
+    spec.parse_input_fields(Value::Object(fields))?;
+    Ok(())
 }
 
 pub(crate) const GUARDED_SELECTOR_KEYS: &[&str] =
@@ -250,10 +272,11 @@ fn guarded_required_string(input: &Value, field: &str, create: bool) -> Result<S
     ))
 }
 pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
+    let (allowed, mode) = guarded_mode(create, &input);
+    validate_guarded_write_fields(&input, create, allowed)?;
     let workspace = guarded_required_string(&input, "workspace", create)?;
     let request_id = guarded_required_string(&input, "request_id", create)?;
     let mut operation = serde_json::Map::new();
-    let (allowed, mode) = guarded_mode(create, &input);
     if create {
         operation.insert("kind".into(), json!("create"));
     } else {

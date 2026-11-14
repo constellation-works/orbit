@@ -153,7 +153,16 @@ where
         }
     }
 
-    fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
+    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        self.execute_with_input_check(ctx, input, &|_| Ok(()))
+    }
+
+    fn execute_with_input_check(
+        &self,
+        ctx: &ToolContext,
+        mut input: Value,
+        check: &dyn Fn(&Value) -> Result<(), OrbitError>,
+    ) -> Result<Value, OrbitError> {
         if let Some(host) = ctx.orbit_host.as_deref() {
             host.prepare_operation_input(self.0.verb.into(), &mut input)?;
         }
@@ -161,7 +170,9 @@ where
             return served;
         }
         self.0.verb.normalize_input(&mut input);
-        let input = self.0.parse_input(input)?;
+        let input = self.0.parse_input_fields(input)?;
+        check(input.as_value())?;
+        self.0.require_input_fields(&input)?;
         if let Some(served) = self.0.verb.guarded_mode(ctx, &input) {
             return served;
         }

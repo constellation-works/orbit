@@ -431,7 +431,7 @@ pub(super) const REJECT: TaskOperation = TaskOperation {
     ],
     at_least_one_of: &[],
     retired_fields: &[RETIRED_AGENT_FIELD],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Task,
 };
@@ -454,7 +454,7 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Task,
 };

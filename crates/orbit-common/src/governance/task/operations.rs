@@ -435,7 +435,7 @@ const LIST: TaskOperation = TaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[RETIRED_AGENT_FIELD],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
@@ -499,7 +499,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[RETIRED_AGENT_FIELD],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
@@ -605,7 +605,7 @@ const SHOW: TaskOperation = TaskOperation {
     ],
     at_least_one_of: &[],
     retired_fields: &[RETIRED_AGENT_FIELD],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Task,
 };
@@ -659,7 +659,7 @@ const LINT: TaskOperation = TaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[RETIRED_AGENT_FIELD],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };
