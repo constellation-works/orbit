@@ -866,7 +866,7 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
   .tasks-dock { display: contents; }
   .tasks-dock > #side-dock { display: none; }
-  /* An explicit Drain, Log or Notices route (`dock=` in the hash) shows the
+  /* An explicit dock route (`dock=` in the hash) shows the
      dock in place of the list. The message area stays as the floating area at
      the foot of the view (below). Global search stays available on this route.
      Any route without `dock=` returns to
@@ -879,7 +879,7 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   main.tasks-layout.dock-route > .controls { display: none; }
   main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
-  main.tasks-layout.dock-route #dock-pane-notices { max-height: 70svh; }
+  main.tasks-layout.dock-route :is(#dock-pane-notices, #dock-pane-residents) { max-height: 70svh; }
   /* The dock route is what a phone drives a drain with: 44px targets, Stop and
      Start stay in reach while the pane scrolls, and a live window folds the Start
      form so state, Stop and warnings lead. */
@@ -928,6 +928,10 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   padding-bottom: min(12px, var(--tasks-dock-lead));
 }
 .tasks-messages > :empty { display: none; }
+.tasks-messages > #resident-operation-feedback:not(:empty) {
+  flex: none; margin: 0; padding: 6px 12px; border: 0; border-left: 3px solid var(--border-strong);
+  border-radius: 4px; background: var(--bg-elev); font: 12px/1.4 var(--font-sans);
+}
 #tasks-notices { display: flex; flex-direction: column; gap: 6px; }
 .tasks-messages > .panel-placeholder:not(.quiet) { flex: none; position: static; padding: 6px 12px; border-left: 3px solid var(--border-strong); border-radius: 4px; background: var(--bg-elev); }
 .tasks-messages > .panel-placeholder.action-error { border-left-color: var(--state-failed); }
@@ -984,7 +988,8 @@ main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-
 .tasks-dock #dock-pane-drain .panel { flex: 0 0 auto; min-height: 0; }
 .tasks-dock #dock-pane-drain .panel[hidden] { display: none; }
 .tasks-dock #dock-pane-log > #log-panel { flex: 1 1 auto; }
-.tasks-dock #dock-pane-notices > #notices-panel { flex: 1 1 auto; min-height: 0; }
+.tasks-dock #dock-pane-notices > #notices-panel,
+.tasks-dock #dock-pane-residents > #residents-panel { flex: 1 1 auto; min-height: 0; }
 
 /* The task pane: the list, a resizer, then the selected task's detail at the
    operator's remembered share of the width (`--task-pane-width`, set from

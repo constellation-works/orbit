@@ -421,7 +421,7 @@ rights or workspaces, and a direction the resident reads as a widening goes back
 
 ### 6.1 The dashboard path
 
-The dashboard's Automation › Residents view is the human's own surface for the same records, so a
+The dashboard's Tasks dock › Residents tab is the human's own surface for the same records, so a
 mandate can be set up and steered without a manager session ([ORB-21649]). Every read and write goes
 through the `orbit.resident.*` tools, and every write also leaves a `dashboard.operations` audit row
 under the governed operation `resident.write` (operator session only):
@@ -441,6 +441,10 @@ under the governed operation `resident.write` (operator session only):
 The dashboard runs the tools with its own session envelope (Agent, plus Operator when served
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
 unchanged.
+
+The start flow opens in a dialog so it fits the dock at phone widths. Legacy
+`#operations/residents` links open Tasks with that dock tab selected. The tab
+counts non-ended mandates, omitting the count at zero.
 
 The start flow offers the assessed complexity tiers `low`, `medium`, `hard` and `xhard`;
 the API validates the submitted tier. Repeating a widening whose rights and workspaces are

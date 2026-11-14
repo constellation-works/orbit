@@ -6,7 +6,7 @@
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain, Fleet, Log or Notices view.
+// and `setDockMode` for the router to select the Drain, Fleet, Log, Notices or Residents view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
@@ -51,7 +51,7 @@ let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "fleet", "log", "notices"];
+const DOCK_MODES = ["drain", "fleet", "log", "notices", "residents"];
 
 function loadLogPanelPrefs() {
   try {
@@ -180,6 +180,11 @@ export function noticesDockShown() {
   return shownDockMode() === "notices";
 }
 
+/// Whether the Tasks dock is showing its Residents tab.
+export function residentsDockShown() {
+  return shownDockMode() === "residents";
+}
+
 export function chooseDockMode(mode) {
   setDockMode(mode);
   const url = new URL(window.location.href);
@@ -213,11 +218,11 @@ export function setDockMode(mode) {
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
   applyDockMode();
-  // The post dialog lives outside the pane, so leaving Notices has to close
-  // it here: a dock switch rewrites the hash without a hashchange.
-  if (mode !== "notices") {
-    const dialog = $("notices-post-dialog");
-    if (dialog?.open) dialog.close();
+  // Dialogs live outside their panes; a dock switch rewrites the hash
+  // without a hashchange, so leaving their tab closes them here.
+  for (const [view, id] of [["notices", "notices-post-dialog"], ["residents", "resident-start-dialog"]]) {
+    const dialog = $(id);
+    if (mode !== view && dialog?.open) dialog.close();
   }
 }
 
@@ -869,6 +874,11 @@ function writeLogCounts(counts) {
   const word = { err: "error", deny: "denial", warn: "warning" }[level];
   state.textContent = level ? `${counts[level]} ${word}${counts[level] === 1 ? "" : "s"}` : "";
   state.dataset.level = level;
+  const tab = $("dock-tab-log");
+  if (tab) {
+    tab.title = state.textContent;
+    tab.setAttribute("aria-label", state.textContent ? `Log: ${state.textContent}` : "Log");
+  }
 }
 
 function rememberStreamOffset(lastEventId) {

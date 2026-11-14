@@ -56,7 +56,7 @@ const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "f
 const COST_TABS = ["spend"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "scripts", "residents"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "scripts"];
 const JOBS_SUBTABS = ["live", "history", "catalogue"];
 // Health views that replace the list panel with their own full-width <main>.
 const HEALTH_MAINS = {
@@ -410,8 +410,6 @@ function setOperationsSubtabImpl(ctx, name) {
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
   const scripts = $("operations-scripts-main");
   if (scripts) scripts.hidden = name !== "scripts";
-  const residents = $("operations-residents-main");
-  if (residents) residents.hidden = name !== "residents";
 }
 
 function setJobsSubtabImpl(ctx, name) {
@@ -598,22 +596,22 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let head = segments[0] || "tasks";
   let legacyRoute = false;
   let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
-  // `#notices` is the Notices dock tab on Tasks. The banner and older links
-  // still use it; the address is rewritten to `#tasks?dock=notices`.
-  if (head === "notices") {
-    dockView = "notices";
+  // Retired panel pages open their Tasks dock tab, preserving scope and
+  // rewriting the address in place so Back never loops through a redirect.
+  if (head === "notices" || (head === "operations" && segments[1] === "residents")) {
+    dockView = head === "notices" ? "notices" : "residents";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
   if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start", "notices"].includes(segments[1]))) {
-    dockView = ["log", "fleet", "start", "locks", "notices"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start", "notices", "residents"].includes(segments[1]))) {
+    dockView = ["log", "fleet", "start", "locks", "notices", "residents"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log", "notices"].includes(dockView)) {
+  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log", "notices", "residents"].includes(dockView)) {
     dockView = ["auto-drain", "locks"].includes(dockView) ? "drain" : dockView;
     query.set("dock", dockView);
     query.delete("dockMode");
