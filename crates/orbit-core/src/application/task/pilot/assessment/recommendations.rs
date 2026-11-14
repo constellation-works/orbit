@@ -99,7 +99,15 @@ pub(in super::super) fn validate_recommendations(
     task_id: &str,
     assessment: &Value,
 ) -> Result<TaskComplexity, DispatchError> {
-    required_string(assessment, "recommended_crew", action)?;
+    // The host owns crew selection from the assessed complexity pool. A
+    // read-only pilot may not have access to workspace configuration, so its
+    // advisory crew recommendation is optional.
+    if assessment
+        .get("recommended_crew")
+        .is_some_and(|crew| !crew.is_null())
+    {
+        required_string(assessment, "recommended_crew", action)?;
+    }
     let complexity = required_string(assessment, "recommended_complexity", action)?;
     let complexity = complexity.parse::<TaskComplexity>().map_err(|_| {
         DispatchError::action_failed(

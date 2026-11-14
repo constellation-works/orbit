@@ -69,6 +69,9 @@ fn task(workspace: &Workspace, explicit: bool) -> Task {
         .unwrap()
 }
 
+// ORB-24687: pilots cannot read workspace config in the inspection checkout.
+// A complete assessment without a crew must still apply and rerate via the
+// host pools, retaining explicit pins.
 fn assess(workspace: &Workspace, task: &Task, complexity: TaskComplexity) -> Value {
     let prepared = workspace.prepare(&[&task.id]);
     let applied = workspace.action(
@@ -80,7 +83,7 @@ fn assess(workspace: &Workspace, task: &Task, complexity: TaskComplexity) -> Val
                 "task_id": task.id,
                 "context_files_before": task.context_files,
                 "context_files_after": task.context_files,
-                "disposition": "selectors", "recommended_crew": if complexity == TaskComplexity::Hard { "hard_lane" } else { "low_lane" },
+                "disposition": "selectors",
                 "recommended_complexity": complexity.as_str(), "confidence": "high",
                 "assessment_rationale": "Assess the fixture tier.",
                 "validation_approach": "Observe crew assignment and run admission.",
