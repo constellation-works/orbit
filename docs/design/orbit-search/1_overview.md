@@ -37,7 +37,10 @@ commit) re-indexes its task from the settled row before returning, so the
 recorded sidecar coverage — comment bodies and artifact paths — vouches only
 for chunks the index currently holds. A replayed claim mutation commits
 nothing and leaves the index untouched, and tasks whose text did not change
-retain the indexed fast path with no bundle-document reads. Paragraph-first word chunks are bounded to 256 words;
+retain the indexed fast path with no bundle-document reads. A write that cannot
+read the settled row indexes task fields only and records that coverage even when
+its chunks are unchanged, so the fast path falls back to bundle reads until a
+sidecar-aware write covers the task again. Paragraph-first word chunks are bounded to 256 words;
 long paragraphs overlap by 32 words. SQLite triggers maintain the external-content
 `corpus_fts` table over `chunks`. Each task replacement and a complete task rebuild
 are transactional. Failed incidental writes leave the task authoritative and

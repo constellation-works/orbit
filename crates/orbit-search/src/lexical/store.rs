@@ -151,13 +151,12 @@ impl LexicalStore {
         // Any difference — including no stored chunks, so a task left
         // unindexed by an earlier failure is still repaired by its next
         // write — takes today's delete-and-insert path below. Unchanged
-        // chunks still record today's coverage, so an index built before
-        // a coverage version bump is upgraded by the next write instead
-        // of needing an unrelated text change.
+        // chunks still record this call's coverage: chunk equality does not
+        // imply coverage equality (empty sidecars add no chunks), so a
+        // task-only write must drop sidecar coverage and a sidecar write
+        // must claim it without any chunk change.
         if !stored.is_empty() && stored == desired {
-            if sidecar_coverage {
-                record_coverage(&conn, &task.id, FIELDS_VERSION_SIDECARS)?;
-            }
+            record_coverage(&conn, &task.id, coverage_version(sidecar_coverage))?;
             return Ok(stored.len());
         }
         let tx = conn.transaction().map_err(err)?;
@@ -167,15 +166,7 @@ impl LexicalStore {
         )
         .map_err(err)?;
         let count = insert_task(&tx, task, sidecars)?;
-        record_coverage(
-            &tx,
-            &task.id,
-            if sidecar_coverage {
-                FIELDS_VERSION_SIDECARS
-            } else {
-                FIELDS_VERSION_TASK_ONLY
-            },
-        )?;
+        record_coverage(&tx, &task.id, coverage_version(sidecar_coverage))?;
         tx.commit().map_err(err)?;
         Ok(count)
     }
@@ -228,15 +219,7 @@ impl LexicalStore {
         let mut chunks = 0;
         for (task, sidecars, sidecar_coverage) in records {
             chunks += insert_task(&tx, task, sidecars)?;
-            record_coverage(
-                &tx,
-                &task.id,
-                if *sidecar_coverage {
-                    FIELDS_VERSION_SIDECARS
-                } else {
-                    FIELDS_VERSION_TASK_ONLY
-                },
-            )?;
+            record_coverage(&tx, &task.id, coverage_version(*sidecar_coverage))?;
         }
         tx.commit().map_err(err)?;
         Ok(SearchIndexStats {
@@ -369,6 +352,16 @@ const FIELDS_VERSION_TASK_ONLY: i64 = 1;
 /// counts as covered, and earlier rows fall back to the bundle matcher
 /// until a write or reindex rebuilds them.
 const FIELDS_VERSION_SIDECARS: i64 = 3;
+
+/// The coverage version an index write records: sidecar coverage only when
+/// the caller indexed the sidecar text.
+fn coverage_version(sidecar_coverage: bool) -> i64 {
+    if sidecar_coverage {
+        FIELDS_VERSION_SIDECARS
+    } else {
+        FIELDS_VERSION_TASK_ONLY
+    }
+}
 
 fn record_coverage(
     conn: &Connection,
