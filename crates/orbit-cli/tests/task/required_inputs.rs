@@ -4,6 +4,52 @@ use crate::isolated_cli_fixture::Fixture;
 use serde_json::{Value, json};
 
 #[test]
+fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
+    if crate::isolated_test::run_in_child(
+        "required_inputs::guarded_writes_reject_mistyped_known_fields_before_dispatch",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    for (tool, input, message) in [
+        (
+            "orbit.task.add",
+            json!({"workspace": fixture.repo, "request_id": "type-create", "title": 123, "description": "d", "acceptance_criteria": ["a"]}),
+            "`title` must have type string",
+        ),
+        (
+            "orbit.task.add",
+            json!({"workspace": fixture.repo, "request_id": "type-priority", "title": "t", "description": "d", "acceptance_criteria": ["a"], "priority": 7}),
+            "`priority` must have type string",
+        ),
+        (
+            "orbit.task.add",
+            json!({"workspace": fixture.repo, "request_id": "type-criteria", "title": "t", "description": "d", "acceptance_criteria": 42}),
+            "`acceptance_criteria` must have type string_list",
+        ),
+        (
+            "orbit.task.update",
+            json!({"workspace": fixture.repo, "request_id": "type-verdict", "id": "missing", "expected_revision": "revision", "verdict": "approve"}),
+            "`verdict` must have type object",
+        ),
+    ] {
+        let output = fixture
+            .command(&["tool", "run", tool, "--input", &input.to_string(), "--json"])
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        assert_eq!(
+            error["error"],
+            format!("invalid input: {message}"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn task_add_reports_required_complexity_before_dispatch() {
     if crate::isolated_test::run_in_child(
         "required_inputs::task_add_reports_required_complexity_before_dispatch",
