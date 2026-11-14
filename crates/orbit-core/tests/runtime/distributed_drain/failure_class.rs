@@ -468,6 +468,24 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
     }
 }
 
+/// [ORB-24694] The Codex quota classification the completion path now
+/// emits (`[provider_unavailable] provider=codex … Quota exceeded…`) feeds
+/// the same drain accounting as the Claude authentication failure above:
+/// the claim releases as `provider` and the crew is excluded for the window
+/// as provider-unavailable.
+fn a_codex_quota_failure_releases_the_claim_and_excludes_the_crew() {
+    let quota = "[provider_unavailable] provider=codex codex provider quota exceeded: \
+         Quota exceeded. Check your plan and billing details.";
+    let (pair, drain, _) = a_released_failure(quota, "provider");
+    let exclusion = sol_exclusion(&pair, &drain)
+        .expect("provider-unavailable quota excludes the crew for the window");
+    assert_eq!(
+        exclusion.source,
+        CrewExclusionSource::ProviderUnavailable,
+        "{exclusion:?}"
+    );
+}
+
 /// An Orbit upgrade replaced the follower's `orbit` while a claimed leaf's
 /// before-landing reviewer ran, and its agent declared the refusal under one
 /// of the kinds agents gave it. The claim releases as `transient`, as a leaf
@@ -2384,6 +2402,7 @@ crate::scenario_table!(
     handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks_scenarios,
     handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks,
     crew_failures_release_the_claim_and_exclude_the_crew_for_the_window,
+    a_codex_quota_failure_releases_the_claim_and_excludes_the_crew,
     an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
     an_upgrade_quiesced_leaf_settles_outside_the_failure_count,
     the_owner_lists_a_follower_leaf_release_with_its_evidence_class,

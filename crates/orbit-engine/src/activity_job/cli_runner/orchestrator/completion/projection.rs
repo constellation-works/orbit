@@ -15,7 +15,7 @@ use super::super::limit::{record_limit, record_usage_windows, structured_provide
 use super::ProviderExit;
 use super::frames::{
     provider_reported, provider_reported_failure, structured_provider_auth_error,
-    structured_provider_refusal,
+    structured_provider_quota_error, structured_provider_refusal,
 };
 use super::{failure, frames};
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
@@ -25,7 +25,7 @@ use orbit_agent::{
     latest_assistant_message, muse_terminal_failure_diagnostic, normalize_cli_stdout,
     project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
     provider_content_refusal, provider_invocation_diagnostic, provider_long_prompt_requests,
-    provider_usage_limit,
+    provider_quota_exceeded, provider_usage_limit,
 };
 use orbit_common::security::redaction::redact_all_json;
 use orbit_types::workflow::activity_job::Provider;
@@ -58,6 +58,7 @@ fn provider_reported_ending(
         || [
             provider_authentication_failure as fn(&str) -> bool,
             provider_usage_limit,
+            provider_quota_exceeded,
             provider_capacity_exhausted,
             provider_content_refusal,
         ]
@@ -342,6 +343,9 @@ pub(in super::super) fn project_completion(
         && completion_envelope_error.is_none()
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"));
     let provider_auth_error = structured_provider_auth_error(&provider, stdout.protocol_bytes());
+    // [ORB-24694] A quota/billing failure frame ends the turn like an auth
+    // failure, whatever the exit code.
+    let provider_quota_error = structured_provider_quota_error(&provider, stdout.protocol_bytes());
     // [ORB-14266] A provider's terminal refusal frame ends the turn whatever
     // the exit code, so it fails the invocation like an authentication error.
     let provider_refusal = structured_provider_refusal(&provider, stdout.protocol_bytes());
@@ -362,6 +366,7 @@ pub(in super::super) fn project_completion(
     // (ADR-0224 / L-0087) — outside that opt-in, parsing stays advisory.
     let success = exit_success
         && provider_auth_error.is_none()
+        && provider_quota_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
         && structured_output_exhaustion.is_none()
@@ -379,6 +384,7 @@ pub(in super::super) fn project_completion(
         && completion_status_failure
         && exit_success
         && provider_auth_error.is_none()
+        && provider_quota_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
         && structured_output_exhaustion.is_none()
@@ -400,6 +406,7 @@ pub(in super::super) fn project_completion(
     let parse_rejection = (spec.response_correction.is_some()
         && spec.require_response_envelope
         && provider_auth_error.is_none()
+        && provider_quota_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
         && muse_terminal_failure.is_none()
@@ -476,6 +483,7 @@ pub(in super::super) fn project_completion(
         && !stderr_text.to_ascii_lowercase().contains("api error")
         && sandbox_write_diagnostic.is_none()
         && provider_auth_error.is_none()
+        && provider_quota_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
         && !completion_status_failure
@@ -586,6 +594,7 @@ pub(in super::super) fn project_completion(
         timeout_seconds,
         duration,
         provider_auth_error,
+        provider_quota_error,
         provider_refusal,
         provider_limit,
         structured_output_exhaustion,

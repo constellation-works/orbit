@@ -1,7 +1,8 @@
 use super::super::super::super::response_diagnostics::declared_failure_code;
 use orbit_types::workflow::{
     ClaimFailureClass, HeldFailure, OWNER_SIGNOFF_REQUIRED_ERROR_CODE, STALLED_ERROR_CODE,
-    STALLED_MARKER, StepFailureCode, TRANSIENT_FAILURE_MARKER, is_owner_route_unavailable,
+    STALLED_MARKER, StepFailureCode, TRANSIENT_FAILURE_MARKER, failed_provider,
+    is_owner_route_unavailable, is_provider_unavailable,
 };
 use serde_json::json;
 
@@ -78,6 +79,54 @@ fn a_terminal_failure_frame_is_classified_after_an_undecodable_stdout_line() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// [ORB-24694] Codex's quota/billing turn failure is provider-unavailable,
+/// like a Claude authentication failure, not a bare exit code. Other Codex
+/// exits, and quota text the agent itself wrote, keep their classification.
+#[test]
+fn a_codex_quota_turn_failure_is_provider_unavailable() {
+    const QUOTA: &str = "Quota exceeded. Check your plan and billing details.";
+    let frames = format!(
+        "{{\"type\":\"error\",\"message\":\"{QUOTA}\"}}\n\
+         {{\"type\":\"turn.failed\",\"error\":{{\"message\":\"{QUOTA}\"}}}}"
+    );
+    for exit_success in [false, true] {
+        let outcome = project_stdout("codex", frames.as_bytes(), exit_success, false, false);
+        assert!(!outcome.success, "quota turn must fail: {outcome:?}");
+        let message = outcome.message.as_deref().unwrap_or_default();
+        assert!(is_provider_unavailable(None, Some(message)), "{message}");
+        assert!(message.contains("[provider_unavailable]"), "{message}");
+        assert_eq!(failed_provider(message), Some("codex"), "{message}");
+        assert!(message.contains(QUOTA), "{message}");
+        assert!(
+            !message.contains("stderr tail"),
+            "not a bare exit/stderr root cause: {message}"
+        );
+        assert_eq!(
+            ClaimFailureClass::of_step_failure(None, Some(message)),
+            Some(ClaimFailureClass::Provider),
+            "{message}"
+        );
+    }
+
+    // A task-level failure after work, and agent text quoting the quota
+    // phrase, are not the provider reporting its own quota.
+    for stdout in [
+        r#"{"type":"item.completed","item":{"type":"command_execution","command":"cargo test","aggregated_output":"boom","exit_code":1,"status":"failed"}}"#
+            .to_string(),
+        format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{QUOTA}"}}}}}}"#
+        ),
+    ] {
+        let outcome = project_stdout("codex", stdout.as_bytes(), false, false, false);
+        assert!(!outcome.success, "{outcome:?}");
+        let message = outcome.message.as_deref().unwrap_or_default();
+        assert!(
+            !is_provider_unavailable(None, Some(message)),
+            "ordinary Codex exit keeps its classification: {message}"
+        );
+    }
 }
 
 /// [ORB-23956] An implement step that declares `owner_signoff_required` is

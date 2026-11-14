@@ -2,7 +2,7 @@
 
 use orbit_agent::{
     provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
-    provider_usage_limit,
+    provider_quota_exceeded, provider_usage_limit,
 };
 use serde_json::Value;
 
@@ -95,6 +95,7 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
                 || [
                     provider_authentication_failure as fn(&str) -> bool,
                     provider_usage_limit,
+                    provider_quota_exceeded,
                     provider_capacity_exhausted,
                     provider_content_refusal,
                 ]
@@ -246,6 +247,16 @@ pub(super) fn structured_provider_auth_error(provider: &str, stdout: &[u8]) -> O
             message.unwrap_or("provider credentials were rejected")
         ))
     })
+}
+
+/// [ORB-24694] A provider's own failure frame saying its quota/billing is
+/// exhausted, read like an authentication failure: Codex ends the turn with
+/// `error` and `turn.failed` frames carrying `Quota exceeded. Check your
+/// plan and billing details.` and the provider is unavailable until an
+/// operator restores the account. Only provider-owned frames are read.
+pub(super) fn structured_provider_quota_error(provider: &str, stdout: &[u8]) -> Option<String> {
+    let text = provider_reported(provider, stdout, "", None, provider_quota_exceeded)?;
+    Some(format!("{provider} provider quota exceeded: {text}"))
 }
 
 /// [ORB-14266] Claude's terminal `result` frame stopping for a refusal: the

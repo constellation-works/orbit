@@ -16,7 +16,7 @@ use orbit_agent::{
     DeclaredResponseFailure, antigravity_background_task_diagnostic,
     antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
     provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
-    provider_invocation_diagnostic, provider_usage_limit,
+    provider_invocation_diagnostic, provider_quota_exceeded, provider_usage_limit,
 };
 use orbit_common::security::redaction::PatternRedactor;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
@@ -44,6 +44,7 @@ pub(super) struct CompletionFailureInput<'a> {
     pub(super) timeout_seconds: u64,
     pub(super) duration: Duration,
     pub(super) provider_auth_error: Option<String>,
+    pub(super) provider_quota_error: Option<String>,
     pub(super) provider_refusal: Option<String>,
     pub(super) provider_limit: Option<String>,
     pub(super) structured_output_exhaustion: Option<String>,
@@ -83,6 +84,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         timeout_seconds,
         duration,
         provider_auth_error,
+        provider_quota_error,
         provider_refusal,
         provider_limit,
         structured_output_exhaustion,
@@ -143,6 +145,15 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             timeout_seconds
         ))
     } else if let Some(diagnostic) = provider_auth_error {
+        failure_class = Some(ProviderFailureClass::Unavailable);
+        Some(provider_failure_text(
+            ProviderFailureClass::Unavailable,
+            provider.as_str(),
+            &bounded_diagnostic(&diagnostic, redaction),
+        ))
+    } else if let Some(diagnostic) = provider_quota_error {
+        // [ORB-24694] A quota/billing exhaustion is unavailable like an
+        // authentication failure: no rerun on the account can succeed.
         failure_class = Some(ProviderFailureClass::Unavailable);
         Some(provider_failure_text(
             ProviderFailureClass::Unavailable,
@@ -280,6 +291,24 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 ProviderFailureClass::Unavailable,
                 provider.as_str(),
                 &diagnostic,
+            ))
+        } else if let Some(quota) = provider_reported(
+            provider.as_str(),
+            stdout.protocol_bytes(),
+            stderr_text.as_ref(),
+            terminal_error.as_deref(),
+            provider_quota_exceeded,
+        ) {
+            // [ORB-24694] Same quota classification when it reaches this
+            // branch only as provider stderr/terminal text on a failed exit.
+            failure_class = Some(ProviderFailureClass::Unavailable);
+            Some(provider_failure_text(
+                ProviderFailureClass::Unavailable,
+                provider.as_str(),
+                &format!(
+                    "{diagnostic}: {provider} provider quota exceeded: {}",
+                    bounded_diagnostic(&quota, redaction)
+                ),
             ))
         } else if let Some(limit) = provider_reported(
             provider.as_str(),
