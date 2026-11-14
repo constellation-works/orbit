@@ -27,6 +27,30 @@ pub(crate) enum ToolRunBootstrap {
     CwdWorkspace,
 }
 
+/// The output policy carried from a prepared tool call to any CLI transport's renderer.
+pub(crate) struct ToolRunShape {
+    operation_name: String,
+    full: bool,
+    fields: Vec<String>,
+    bare_field: bool,
+    list_policy: TaskListResultPolicy,
+}
+
+impl ToolRunShape {
+    /// Apply the call's resolved operation and output flags to its answer.
+    pub(crate) fn render_tool_run_output(self, output: Value) -> CommandOut {
+        let output = shape_tool_output(
+            &self.operation_name,
+            output,
+            &self.list_policy,
+            self.full,
+            &self.fields,
+            self.bare_field,
+        )?;
+        Ok(Payload::document(output).into())
+    }
+}
+
 #[derive(Args)]
 pub struct ToolRunArgs {
     /// Tool name
@@ -72,6 +96,33 @@ pub struct ToolRunArgs {
 }
 
 impl ToolRunArgs {
+    /// Request write sidecars before workspace binding or dry-run admission.
+    pub(crate) fn prepare_tool_run_input(&self) -> Result<Value, OrbitError> {
+        let mut input = self.parsed_input()?;
+        request_write_sidecars_from_cli_fields(&self.name, &mut input, &self.fields)?;
+        Ok(input)
+    }
+
+    /// Capture output policy from prepared input, then hint only the execution copy.
+    pub(crate) fn prepare_tool_run_shape(
+        &self,
+        execution_input: &mut Value,
+    ) -> Result<ToolRunShape, OrbitError> {
+        let shape = ToolRunShape {
+            operation_name: tool_operation_name(&self.name, execution_input).to_owned(),
+            full: self.full,
+            fields: self.fields.clone(),
+            bare_field: answers_with_bare_field(&self.name, execution_input)?,
+            list_policy: TaskListResultPolicy::for_call(
+                &self.name,
+                execution_input,
+                task_list_result_profile(self.full, &self.fields),
+            ),
+        };
+        shape.list_policy.apply_compact_hint(execution_input);
+        Ok(shape)
+    }
+
     /// Choose the runtime from tool input.
     ///
     /// A JSON parse failure or an unreadable `--input-file` is returned to the
@@ -164,8 +215,7 @@ fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
 
 impl Execute for ToolRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut input = self.parsed_input()?;
-        request_write_sidecars_from_cli_fields(&self.name, &mut input, &self.fields)?;
+        let mut input = self.prepare_tool_run_input()?;
 
         // Resolve `workspace` once above local CLI tools, then bind or fail
         // closed. MCP uses its own server-side selector resolution.
@@ -223,14 +273,8 @@ impl Execute for ToolRunArgs {
             return Ok(Payload::detail(doc, text).into());
         }
 
-        let bare_field = answers_with_bare_field(&self.name, &input)?;
-        let list_policy = TaskListResultPolicy::for_call(
-            &self.name,
-            &input,
-            task_list_result_profile(self.full, &self.fields),
-        );
         let mut execution_input = input.clone();
-        list_policy.apply_compact_hint(&mut execution_input);
+        let shape = self.prepare_tool_run_shape(&mut execution_input)?;
         let output = runtime.execute_tool_command_with_session_context(
             &self.name,
             execution_input,
@@ -244,16 +288,7 @@ impl Execute for ToolRunArgs {
             owner.as_ref(),
             output,
         )?;
-        let output = shape_tool_output(
-            tool_operation_name(&self.name, &input),
-            output,
-            &list_policy,
-            self.full,
-            &self.fields,
-            bare_field,
-        )?;
-
-        Ok(Payload::document(output).into())
+        shape.render_tool_run_output(output)
     }
 }
 
@@ -300,7 +335,7 @@ fn is_task_write_tool(tool_name: &str) -> bool {
 /// Task writes omit `comments`/`history` unless the tool-side `fields`/`field`
 /// projection asks for them. CLI `--fields` is otherwise a post-filter, so a
 /// write asked for those sidecars must also request them from the tool.
-pub(crate) fn request_write_sidecars_from_cli_fields(
+fn request_write_sidecars_from_cli_fields(
     tool_name: &str,
     input: &mut Value,
     cli_fields: &[String],
@@ -338,7 +373,7 @@ fn requests_write_sidecar(fields: &[String]) -> bool {
 /// `field` alias, for every field except `terminal`, which keeps its
 /// `{"terminal": …}` key. A `fields` array — which takes precedence over
 /// `field` — always answers keyed by field name, even for one field.
-pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<bool, OrbitError> {
+fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<bool, OrbitError> {
     if tool_name != "orbit.task.show" {
         return Ok(false);
     }
@@ -352,7 +387,7 @@ pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<
 }
 
 /// The `orbit.task.list` result profile `orbit tool run`'s output flags ask for.
-pub(crate) fn task_list_result_profile(full: bool, fields: &[String]) -> TaskListResultProfile<'_> {
+fn task_list_result_profile(full: bool, fields: &[String]) -> TaskListResultProfile<'_> {
     if full {
         TaskListResultProfile::Full
     } else {
@@ -365,7 +400,7 @@ pub(crate) fn task_list_result_profile(full: bool, fields: &[String]) -> TaskLis
 /// value, not a record to filter. `list_policy` is Core's result policy for
 /// this call: when it owns the result (`orbit.task.list`), its answer is the
 /// output and no CLI shaping applies.
-pub(crate) fn shape_tool_output(
+fn shape_tool_output(
     tool_name: &str,
     output: Value,
     list_policy: &TaskListResultPolicy,

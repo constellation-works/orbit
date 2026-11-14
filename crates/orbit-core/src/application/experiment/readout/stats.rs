@@ -4,10 +4,10 @@
 //! two arms, and the chi-square test of observed arm counts against their
 //! weights.
 
+use crate::application::statistics::{self, SplitMix64};
+
 /// Bootstrap resamples per interval.
 const RESAMPLES: usize = 2_000;
-/// The 97.5th percentile of the standard normal distribution.
-const Z_95: f64 = 1.959_963_984_540_054;
 /// Every bootstrap stream starts from this seed, mixed with the label of what
 /// it resamples, so a readout is reproducible and its streams independent.
 const SEED: u64 = 0x0e57_a11e_2026_1026;
@@ -15,71 +15,31 @@ const SEED: u64 = 0x0e57_a11e_2026_1026;
 /// A 95% interval, low then high.
 pub(super) type Interval = [f64; 2];
 
-/// splitmix64: small, fast and fully determined by its seed.
-struct Stream(u64);
-
-impl Stream {
-    fn seeded(label: &str) -> Self {
-        // FNV-1a over the label, then mixed into the fixed seed.
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in label.bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        Self(SEED ^ hash)
+/// The stream for one label: FNV-1a over the label, mixed into the fixed seed.
+fn seeded_stream(label: &str) -> SplitMix64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in label.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
+    SplitMix64::seeded(SEED ^ hash)
+}
 
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    /// An index below `len`, which must be positive.
-    fn index(&mut self, len: usize) -> usize {
-        // `len` fits in u64 and the remainder is below it, so both casts hold.
-        (self.next() % len as u64) as usize
-    }
-
-    fn resample(&mut self, values: &[f64], into: &mut Vec<f64>) {
-        into.clear();
-        into.extend((0..values.len()).map(|_| values[self.index(values.len())]));
-    }
+fn resample(stream: &mut SplitMix64, values: &[f64], into: &mut Vec<f64>) {
+    into.clear();
+    into.extend((0..values.len()).map(|_| values[stream.index(values.len())]));
 }
 
 pub(super) fn mean(values: &[f64]) -> Option<f64> {
     (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }
 
-pub(super) fn median(values: &[f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let n = sorted.len();
-    Some(if n % 2 == 1 {
-        sorted[n / 2]
-    } else {
-        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-    })
-}
-
 /// The 2.5th and 97.5th percentiles of `draws`, linearly interpolated.
 fn percentile_interval(mut draws: Vec<f64>) -> Option<Interval> {
-    if draws.is_empty() {
-        return None;
-    }
-    draws.sort_by(f64::total_cmp);
-    let at = |q: f64| {
-        let position = q * (draws.len() - 1) as f64;
-        let low = position.floor() as usize;
-        let high = position.ceil() as usize;
-        draws[low] + (draws[high] - draws[low]) * (position - low as f64)
-    };
-    Some([at(0.025), at(0.975)])
+    Some([
+        statistics::percentile(&mut draws, 2.5)?,
+        statistics::percentile(&mut draws, 97.5)?,
+    ])
 }
 
 /// A percentile-bootstrap interval of `statistic` over `values`, resampled by
@@ -87,46 +47,20 @@ fn percentile_interval(mut draws: Vec<f64>) -> Option<Interval> {
 pub(super) fn bootstrap(
     label: &str,
     values: &[f64],
-    statistic: fn(&[f64]) -> Option<f64>,
+    statistic: fn(&mut [f64]) -> Option<f64>,
 ) -> Option<Interval> {
     if values.len() < 2 {
         return None;
     }
-    let mut stream = Stream::seeded(label);
+    let mut stream = seeded_stream(label);
     let mut sample = Vec::with_capacity(values.len());
     let draws = (0..RESAMPLES)
         .filter_map(|_| {
-            stream.resample(values, &mut sample);
-            statistic(&sample)
+            resample(&mut stream, values, &mut sample);
+            statistic(&mut sample)
         })
         .collect();
     percentile_interval(draws)
-}
-
-/// The Wilson score interval of `successes` in `n` trials.
-pub(super) fn wilson(successes: usize, n: usize) -> Option<Interval> {
-    if n == 0 {
-        return None;
-    }
-    let trials = n as f64;
-    let p = successes as f64 / trials;
-    let z2 = Z_95 * Z_95;
-    let centre = (p + z2 / (2.0 * trials)) / (1.0 + z2 / trials);
-    let half =
-        Z_95 * (p * (1.0 - p) / trials + z2 / (4.0 * trials * trials)).sqrt() / (1.0 + z2 / trials);
-    // The bounds are exactly 0 and 1 at the edges; rounding would leave
-    // residue there.
-    let low = if successes == 0 {
-        0.0
-    } else {
-        (centre - half).max(0.0)
-    };
-    let high = if successes == n {
-        1.0
-    } else {
-        (centre + half).min(1.0)
-    };
-    Some([low, high])
 }
 
 /// One task's numerator and its reviewable-line denominator.
@@ -149,7 +83,7 @@ pub(super) fn paired_ratio_bootstrap(label: &str, pairs: &[WeightedPair]) -> Opt
     if pairs.len() < 2 {
         return None;
     }
-    let mut stream = Stream::seeded(label);
+    let mut stream = seeded_stream(label);
     let draws = (0..RESAMPLES)
         .filter_map(|_| {
             let sample: Vec<WeightedPair> = (0..pairs.len())
@@ -173,7 +107,7 @@ pub(super) fn paired_ratio_difference(
     if control.len() < 2 || treatment.len() < 2 {
         return Some((estimate, None));
     }
-    let mut stream = Stream::seeded(label);
+    let mut stream = seeded_stream(label);
     let draws = (0..RESAMPLES)
         .filter_map(|_| {
             let control_sample: Vec<WeightedPair> = (0..control.len())
@@ -226,15 +160,15 @@ pub(super) fn stratified_difference(
     if !resamplable {
         return Some((estimate, None));
     }
-    let mut stream = Stream::seeded(label);
+    let mut stream = seeded_stream(label);
     let mut control = Vec::new();
     let mut treatment = Vec::new();
     let draws = (0..RESAMPLES)
         .filter_map(|_| {
             used.iter()
                 .map(|cell| {
-                    stream.resample(cell.control, &mut control);
-                    stream.resample(cell.treatment, &mut treatment);
+                    resample(&mut stream, cell.control, &mut control);
+                    resample(&mut stream, cell.treatment, &mut treatment);
                     Some(weight(cell) * (mean(&treatment)? - mean(&control)?))
                 })
                 .sum::<Option<f64>>()

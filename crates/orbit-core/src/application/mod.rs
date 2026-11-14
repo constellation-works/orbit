@@ -48,6 +48,7 @@ pub mod routines;
 pub(crate) mod search;
 pub mod seeding_policy;
 pub mod skill;
+pub(crate) mod statistics;
 pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
 pub mod task;

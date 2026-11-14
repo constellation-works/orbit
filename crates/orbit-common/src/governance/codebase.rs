@@ -99,19 +99,6 @@ const ESCAPES: &[EnumValue] = &[
     EnumValue::plain("unclassified"),
     EnumValue::plain("absent"),
 ];
-const LAYERS: &[EnumValue] = &[
-    EnumValue::plain("ci_tests"),
-    EnumValue::plain("docs_skills"),
-    EnumValue::plain("dashboard"),
-    EnumValue::plain("sandbox_policy"),
-    EnumValue::plain("store_migration"),
-    EnumValue::plain("vcs_delivery"),
-    EnumValue::plain("config"),
-    EnumValue::plain("cli_mcp"),
-    EnumValue::plain("runtime_lifecycle"),
-    EnumValue::plain("other"),
-    EnumValue::plain("unknown"),
-];
 const DETECTORS: &[EnumValue] = &[
     EnumValue::plain("delivery_review"),
     EnumValue::plain("security_review"),
@@ -142,10 +129,10 @@ const REGRESSION_FILTER: &[ParamSpec] = &[
     ),
     both(
         "layer",
-        ParamType::Enum(LAYERS),
-        "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        ParamType::String,
+        "Count only regressions whose fix sits in this layer: a name from the workspace's `workflow.regression_layers`, `other` or `unknown`. The layer is read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
         CliArgKind::flag("layer"),
-        "Count only regressions whose fix sits in this layer",
+        "Count only regressions whose fix sits in this layer (a workflow.regression_layers name, other or unknown)",
     ),
     both(
         "detected_by",

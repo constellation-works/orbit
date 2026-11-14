@@ -14,6 +14,12 @@ Clap entry point (`orbit` binary) and client configuration. Assembles MCP, Regis
 
 `main.rs` (`fn main`), `command`, `entry`, `output`, `parse`, `help`, `plugin_cli`, `audit_middleware`. See ``crates/orbit-cli/src/main.rs``.
 
+`command/tool/run.rs` owns `ToolRunShape`, the prepared operation name and
+output policy shared by local execution, host routing and workspace-less notice
+aggregation. `ToolRunArgs` requests write sidecars before workspace binding,
+then builds the shape from prepared input and applies the compact list hint to
+the execution input. Routed calls alone carry the declared model to the owner.
+
 ## Dependencies
 
 - Depends on (internal, production): `orbit-cmd`, `orbit-common`, `orbit-config`, `orbit-core`, `orbit-mcp`, `orbit-registry`, `orbit-types`, `orbit-web`.

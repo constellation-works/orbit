@@ -14,7 +14,7 @@ use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::application::task::{TaskArtifactRead, TaskListResultPolicy};
+use orbit_core::application::task::TaskArtifactRead;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
@@ -26,7 +26,7 @@ use serde_json::{Map, Value, json};
 use super::run::RunSubcommand;
 use super::task::TaskInvocation;
 use super::task::TaskSubcommand;
-use super::tool::ToolSubcommand;
+use super::tool::{self, ToolSubcommand};
 use super::{Cli, CommandOut, Commands, Payload};
 
 /// What the preflight decided.
@@ -271,12 +271,7 @@ fn workspace_less(cli: &Cli) -> Result<bool, OrbitError> {
 /// How a workspace-less notice list's merged answer renders.
 enum AggregateRender {
     Notice(NoticeVerb),
-    ToolRun {
-        full: bool,
-        fields: Vec<String>,
-        bare_field: bool,
-        list_policy: TaskListResultPolicy,
-    },
+    ToolRun(tool::ToolRunShape),
 }
 
 /// Deliver a workspace-less `orbit.notice.list` to the federated client,
@@ -302,22 +297,7 @@ fn deliver_notice_aggregate(
     let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| match render {
         AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
-        AggregateRender::ToolRun {
-            full,
-            fields,
-            bare_field,
-            list_policy,
-        } => {
-            let shaped = super::tool::shape_tool_output(
-                name,
-                value,
-                &list_policy,
-                full,
-                &fields,
-                bare_field,
-            )?;
-            Ok(Payload::document(shaped).into())
-        }
+        AggregateRender::ToolRun(shape) => shape.render_tool_run_output(value),
     })))
 }
 
@@ -337,26 +317,14 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
         && workspace_less(cli)?
         && !orbit_mcp::federated::load_destinations(global_root)?.is_empty()
     {
-        let mut input = args.parsed_input()?;
+        let mut input = args.prepare_tool_run_input()?;
         carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
-        super::tool::request_write_sidecars_from_cli_fields(&args.name, &mut input, &args.fields)?;
-        let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
-        let list_policy = TaskListResultPolicy::for_call(
-            &args.name,
-            &input,
-            super::tool::task_list_result_profile(args.full, &args.fields),
-        );
-        list_policy.apply_compact_hint(&mut input);
+        let shape = args.prepare_tool_run_shape(&mut input)?;
         return deliver_notice_aggregate(
             global_root,
-            &args.name.clone(),
+            &args.name,
             input,
-            AggregateRender::ToolRun {
-                full: args.full,
-                fields: args.fields.clone(),
-                bare_field,
-                list_policy,
-            },
+            AggregateRender::ToolRun(shape),
         );
     }
     let Some(selector) = workspace_value(cli)? else {
@@ -575,28 +543,15 @@ struct RoutedCall {
 }
 
 enum Render {
-    TaskShow {
-        fields: Vec<String>,
-    },
-    TaskWrite {
-        verb: &'static str,
-    },
-    ArtifactGet {
-        out: Option<PathBuf>,
-    },
-    Notice {
-        verb: NoticeVerb,
-    },
+    TaskShow { fields: Vec<String> },
+    TaskWrite { verb: &'static str },
+    ArtifactGet { out: Option<PathBuf> },
+    Notice { verb: NoticeVerb },
     ReviewReset,
     Requeue,
     Reconcile,
     Pilot,
-    ToolRun {
-        full: bool,
-        fields: Vec<String>,
-        bare_field: bool,
-        list_policy: TaskListResultPolicy,
-    },
+    ToolRun(tool::ToolRunShape),
 }
 
 fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
@@ -625,29 +580,13 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                         holder.name, holder.ssh, args.name
                     )));
                 }
-                let mut input = args.parsed_input()?;
+                let mut input = args.prepare_tool_run_input()?;
                 carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
-                super::tool::request_write_sidecars_from_cli_fields(
-                    &args.name,
-                    &mut input,
-                    &args.fields,
-                )?;
-                let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
-                let list_policy = TaskListResultPolicy::for_call(
-                    &args.name,
-                    &input,
-                    super::tool::task_list_result_profile(args.full, &args.fields),
-                );
-                list_policy.apply_compact_hint(&mut input);
+                let shape = args.prepare_tool_run_shape(&mut input)?;
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,
-                    render: Render::ToolRun {
-                        full: args.full,
-                        fields: args.fields.clone(),
-                        bare_field,
-                        list_policy,
-                    },
+                    render: Render::ToolRun(shape),
                 })
             }
             _ => Err(not_routable()),
@@ -801,13 +740,11 @@ fn deliver(
     {
         object.insert("workspace".into(), Value::String(selector));
     }
-    // Output policy is keyed by the operation a family call names.
-    let operation = tool_operation_name(&call.name, &input).to_owned();
     let answer =
         orbit_mcp::McpHost::call_tool(&client, &call.name, input, ToolSessionContext::default());
-    Ok(Preflight::Remote(answer.and_then(|value| {
-        render(&operation, call.render, value, holder)
-    })))
+    Ok(Preflight::Remote(
+        answer.and_then(|value| render(call.render, value, holder)),
+    ))
 }
 
 fn host_json(holder: &HostEntry) -> Value {
@@ -822,7 +759,7 @@ fn with_host(mut value: Value, holder: &HostEntry) -> Value {
     value
 }
 
-fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> CommandOut {
+fn render(render: Render, value: Value, holder: &HostEntry) -> CommandOut {
     match render {
         Render::Notice { verb } => Ok(super::notice::render_notice(verb, value).into()),
         Render::TaskShow { fields } => {
@@ -883,22 +820,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())
         }
-        Render::ToolRun {
-            full,
-            fields,
-            bare_field,
-            list_policy,
-        } => {
-            let shaped = super::tool::shape_tool_output(
-                name,
-                value,
-                &list_policy,
-                full,
-                &fields,
-                bare_field,
-            )?;
-            Ok(Payload::document(shaped).into())
-        }
+        Render::ToolRun(shape) => shape.render_tool_run_output(value),
     }
 }
 
