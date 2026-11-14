@@ -151,9 +151,10 @@ pub use reservation_owner::{PipelineChildAdmissionMeta, ReservationOwnerMetadata
 pub use severity::{DefectSeverity, SeveritySource};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS, TASK_SHOW_PROJECTION_FIELDS_CSV,
-    TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, refuses_implementer_writes,
-    task_artifact_manifest_json, task_base_json, task_dependency_labels, task_os_requirement_json,
-    task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
+    TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, ordered_external_refs_for_show,
+    refuses_implementer_writes, show_external_refs_json, task_artifact_manifest_json,
+    task_base_json, task_dependency_labels, task_os_requirement_json, task_show_record_field_json,
+    task_show_reference_field_json, unknown_task_show_field_message,
 };
 pub use source_location::{
     SourceLocationEmptyComponents, SourceLocationParseError, parse_source_location,

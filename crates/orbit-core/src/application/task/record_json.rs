@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    Task, TaskStatus, serialize_task_artifacts, task_artifact_manifest_json, task_base_json,
-    task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
+    Task, TaskStatus, serialize_task_artifacts, show_external_refs_json,
+    task_artifact_manifest_json, task_base_json, task_show_record_field_json,
+    task_show_reference_field_json, unknown_task_show_field_message,
 };
 use serde_json::{Map, Value};
 
@@ -143,6 +144,14 @@ pub fn task_show_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
     let mut object = task_record_json(runtime, row, status_by_id)?;
+    // The show projection reports the task's current delivery: the latest
+    // recorded `github-pr` first. Storage appends, so without this a requeued
+    // task that opened a fresh pull request would keep reporting the closed
+    // earlier one (the CLI's `PR:` line reads the first match).
+    object.insert(
+        "external_refs".to_string(),
+        show_external_refs_json(&row.task),
+    );
     object.insert(
         "experiments".into(),
         serde_json::to_value(runtime.task_experiment_assignment_readout(&row.task.id)?)
@@ -265,6 +274,9 @@ pub fn task_show_field_json(
             })?;
             Ok(task_show_reference_field_json(task, field, status_by_id).unwrap_or(Value::Null))
         }
+        // The show field projection reports the same current-delivery order
+        // as the full show record.
+        "external_refs" => Ok(show_external_refs_json(task)),
         other => task_show_record_field_json(task, other)
             .or_else(|| runtime.task_crew_field_json(task, other))
             .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
