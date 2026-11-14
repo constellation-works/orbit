@@ -1,6 +1,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::*;
+use orbit_core::OrbitError;
+use orbit_core::bootstrap::linux_sandbox_host::{
+    BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource,
+};
+
+use super::super::linux_host::{
+    Host, probe_intended_probe_user as intended_probe_user, probe_prepare_with as prepare_with,
+    probe_profile_is_loaded as profile_is_loaded, probe_profile_source, probe_profile_target,
+};
 
 struct FixtureHost {
     release: String,
@@ -133,12 +141,16 @@ impl Host for FixtureHost {
             ));
         }
         if path == "/usr/bin/apt-get" && args.contains(&"apparmor-profiles") {
-            self.files
-                .insert(PROFILE_SOURCE.to_string(), b"packaged profile".to_vec());
+            self.files.insert(
+                probe_profile_source().to_string(),
+                b"packaged profile".to_vec(),
+            );
         }
-        if path == "/usr/bin/install" && args.contains(&PROFILE_TARGET) {
-            self.files
-                .insert(PROFILE_TARGET.to_string(), b"packaged profile".to_vec());
+        if path == "/usr/bin/install" && args.contains(&probe_profile_target()) {
+            self.files.insert(
+                probe_profile_target().to_string(),
+                b"packaged profile".to_vec(),
+            );
         }
         if path == "/usr/bin/install" && args.contains(&BUNDLED_BWRAP_PATH) {
             let digest = if self.tamper_install {
@@ -183,8 +195,10 @@ fn authorization_refusal_never_runs_a_privileged_command() {
                 vec![initial, initial]
             };
             let mut host = FixtureHost::new("ubuntu", "24.04", &probes);
-            host.files
-                .insert(PROFILE_SOURCE.to_string(), b"packaged profile".to_vec());
+            host.files.insert(
+                probe_profile_source().to_string(),
+                b"packaged profile".to_vec(),
+            );
             host.authorization_error = Some(reason);
             let error = prepare_with(&mut host, non_interactive)
                 .unwrap_err()
@@ -223,8 +237,10 @@ fn partial_host_changes_are_reported_and_preparation_stops_on_command_failure() 
         ),
     ] {
         let mut host = FixtureHost::new("ubuntu", "24.04", &probes);
-        host.files
-            .insert(PROFILE_SOURCE.to_string(), b"packaged profile".to_vec());
+        host.files.insert(
+            probe_profile_source().to_string(),
+            b"packaged profile".to_vec(),
+        );
         host.fail_command = Some(failed);
         let error = prepare_with(&mut host, true).unwrap_err().to_string();
         for command in &attempted {
@@ -325,17 +341,22 @@ fn apparmor_remedy_requires_ubuntu_and_the_exact_uid_map_denial() {
         let final_detail = if remedy { "ready" } else { detail };
         let mut host = FixtureHost::new(id, version, &[detail, detail, final_detail]);
         host.release.push_str(&format!("ID_LIKE='{id_like}'\n"));
-        host.files
-            .insert(PROFILE_SOURCE.to_string(), b"packaged profile".to_vec());
+        host.files.insert(
+            probe_profile_source().to_string(),
+            b"packaged profile".to_vec(),
+        );
         let result = prepare_with(&mut host, true);
         assert_eq!(result.is_ok(), remedy, "{id} {version}: {result:?}");
         if remedy {
-            assert_eq!(host.files.get(PROFILE_TARGET).unwrap(), b"packaged profile");
+            assert_eq!(
+                host.files.get(probe_profile_target()).unwrap(),
+                b"packaged profile"
+            );
             assert!(profile_is_loaded(host.profiles.as_deref().unwrap()));
             assert_eq!(host.calls.len(), 3, "{:?}", host.calls);
         } else {
             assert!(host.calls.is_empty(), "{id} {version}: {:?}", host.calls);
-            assert!(!host.files.contains_key(PROFILE_TARGET));
+            assert!(!host.files.contains_key(probe_profile_target()));
             assert!(!host.bundled_staged);
             assert!(result.unwrap_err().to_string().contains(detail));
         }
@@ -350,14 +371,17 @@ fn existing_custom_or_loaded_apparmor_profiles_are_preserved() {
         (Some(b"packaged profile".to_vec()), "bwrap (complain)\n"),
     ] {
         let mut host = FixtureHost::new("ubuntu", "25.10", &[UID_MAP, UID_MAP]);
-        host.files
-            .insert(PROFILE_SOURCE.to_string(), b"packaged profile".to_vec());
+        host.files.insert(
+            probe_profile_source().to_string(),
+            b"packaged profile".to_vec(),
+        );
         if let Some(bytes) = &target {
-            host.files.insert(PROFILE_TARGET.to_string(), bytes.clone());
+            host.files
+                .insert(probe_profile_target().to_string(), bytes.clone());
         }
         host.profiles = Some(profiles.to_string());
         assert!(prepare_with(&mut host, true).is_err());
-        assert_eq!(host.files.get(PROFILE_TARGET), target.as_ref());
+        assert_eq!(host.files.get(probe_profile_target()), target.as_ref());
         assert_eq!(host.profiles.as_deref(), Some(profiles));
         assert!(
             host.calls.is_empty(),
@@ -384,7 +408,10 @@ fn apparmor_package_install_rechecks_the_signature_before_loading_policy() {
                 loads_profile || after_package == "ready",
                 "{result:?}"
             );
-            assert_eq!(host.files.contains_key(PROFILE_TARGET), loads_profile);
+            assert_eq!(
+                host.files.contains_key(probe_profile_target()),
+                loads_profile
+            );
             assert_eq!(
                 profile_is_loaded(host.profiles.as_deref().unwrap()),
                 loads_profile
@@ -477,5 +504,5 @@ fn namespace_denial_after_install_never_tries_a_bundle_or_profile() {
         "only Bubblewrap package installation may run"
     );
     assert!(!host.bundled_staged);
-    assert!(!host.files.contains_key(PROFILE_TARGET));
+    assert!(!host.files.contains_key(probe_profile_target()));
 }
