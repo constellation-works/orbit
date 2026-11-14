@@ -436,7 +436,7 @@ template:
   - Every filed finding clears its lens bar; duplication findings list each behavioural difference between copies with a resolution.
   - Open and rejected `code-health` coverage was checked first; findings touching in-flight tasks were deferred, not filed or chained.
   - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria; a change to a documented-stable surface records either the owner's approval or a pending owner decision, and no filed criterion asks the implementer to obtain sign-off.
-  - Every filed task that names a new module, test or other created file lists that exact path in `context_files` and was filed with `allow_missing_context: true`, and reading it back with `orbit.task.show` showed a `context_creation_authorized` grant for that exact path; a finding whose exact creation destination could not be named was recorded as an evidence gap instead of filed.
+  - Every filed task that names a new module, test or other created file lists that exact path in `context_files` and was filed with `allow_missing_context` set to true, and reading it back with `orbit.task.show` showed a `context_creation_authorized` grant for that exact path; a finding whose exact creation destination could not be named was recorded as an evidence gap instead of filed.
   - The artifact `code-health.json` is attached to this task and the execution summary maps every candidate and finding to a disposition; a run with no findings above the bars succeeds with that evidence.
   task_type: chore
   tags:
