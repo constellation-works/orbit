@@ -31,10 +31,12 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
         self.document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         self.jobs = self.document["jobs"]
         self.seed = yaml.safe_load((ROOT / ".github/workflows/ci-cache-seed.yml").read_text())
+        msrv = yaml.safe_load((ROOT / ".github/workflows/msrv.yml").read_text())["jobs"]["msrv"]
         self.producers = {
-            name: next(step for step in self.jobs[name]["steps"]
+            name: next(step for step in job["steps"]
                        if step.get("uses", "").startswith("Swatinem/rust-cache@"))
-            for name in ("ci", "test-build", "msrv")
+            for name, job in (("ci", self.jobs["ci"]), ("test-build", self.jobs["test-build"]),
+                              ("msrv", msrv))
         }
 
     def cache_identity(self, step):

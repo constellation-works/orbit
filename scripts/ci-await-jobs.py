@@ -36,10 +36,9 @@ listing that returns after expiry is not accepted as success: the wait fails
 with a timeout even when every awaited job succeeded.
 
 With --step, a job also counts as done once its step of that name succeeds,
-while its later steps still run. The shard jobs wait this way for the test
-build's archive upload, not for the partition guard after it. A step that
-concludes without success, or a job that completes without success before the
-step succeeded, fails the wait at once.
+while its later steps still run. A step that concludes without success, or a
+job that completes without success before the step succeeded, fails the wait
+at once.
 
 A named job omitted from a complete listing is absent: the wait fails at once
 and names it (`ci-await: <job> is absent from the run`). Several omitted names

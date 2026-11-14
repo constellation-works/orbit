@@ -846,6 +846,45 @@ A 2026-11-14 pass (ORB-24310) follows the ORB-24308 audit (pin `8a8830de9`, runs
 
 Candidate `--guards-core` walls under the same conditions were 143 s and 157 s against the 278 s baseline; the dependency-direction self-test (143–157 s in-pool, 105 s standalone) now sets the pool wall, so it is the next lever, ahead of the QA lane's 175 s. The removed time is two fixed 60 s wall-clock loops plus the late-start tail, so most of the saving transfers to hosted runs whose guardrails execute the self-tests; runs that skip them, and runs bound by the build or the slowest partition, gain nothing. No runner is added, so runner allocation cost is unchanged. This is local phase evidence, not a hosted p90: hosted timings are unavailable before publication, and restored 400-second compliance is claimed only when the operator's post-merge `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` over completed `pull_request` `ci.yml` runs carrying this revision shows it, with executed, skipped, cancelled and missing counts, failures and queue wait reported separately. No test was retired, skipped, retried or weakened; the partition exact-once proof, the shard-1 sandbox and Landlock gates and the changed-input guard selection are unchanged.
 
+### Test jobs start after the test build (2026-11-14)
+
+Over 91 green PR runs measured on 2026-11-14, each run started 19 jobs and used
+about 100 runner-minutes. About 45 of them were idle: every test job set up
+beside the build, then held its runner for about four minutes in an `Await the
+nextest archive` step. The uncontended median run took 10.7 min, but drained
+PRs saturate the organization's concurrent-job cap, so the median over all
+runs was 19.3 min and queueing dominated.
+
+ORB-24733 makes every test job (`Test shard k/3`, `Test extra partition`,
+`Test partition k`) `needs: [pr-state, scope, test-build]` with its `if`
+unchanged, so it requests a runner only once the whole build job has finished.
+The polling step and the test jobs' `actions: read` permission are gone. The
+shards used to poll because Orbit's PR emission proof refused a job with a
+third `needs` entry; since ORB-24732 it admits sibling needs behind the same
+full change-scope gate, so every Orbit host must run a build with that change
+before this workflow lands. The `if` keeps `!cancelled()`, so a test job still
+runs after a failed or cancelled build. Its first step then fails at once and
+prints the waiter's line form, for example `ci-await: Test build concluded
+failure: https://github.com/<owner>/<repo>/actions/runs/<id>`, so CI-failure
+signatures and the awaited-stop classification read it as the build's failure.
+`Check / Clippy / Test` still awaits the build, every test job and both
+guardrails jobs, so its elapsed time remains the gate's wall time.
+
+What changes on the critical path: the test jobs now also wait for the build's
+post-upload partition proof (about 25 s), and their setup (about 36 s:
+checkout, toolchain, tool caches, Bubblewrap probe) and runner pickup follow
+the build instead of overlapping it. The uncontended path is projected about
+one minute longer, in exchange for fewer held runners and so less queueing
+under the cap. A partition-proof failure now fails every test job's first step
+instead of letting them run, and a build that timed out reports `failure`
+(`needs.<job>.result` has no `timed_out`). The MSRV check, neither a required
+check nor awaited, moved from `ci.yml` to the push-only `msrv.yml` on
+`agent-main`; `make ci-fast` still runs it locally. No test was retired,
+skipped, retried or weakened, and job names, `NEXTEST_PARTITIONS` and the
+ruleset are unchanged. The hosted after column (per-job durations, runner
+minutes and wall time against this baseline) is owed by the pull request's own
+run and the following PR runs.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).

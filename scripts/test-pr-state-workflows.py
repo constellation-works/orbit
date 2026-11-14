@@ -345,7 +345,7 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch", "schedule"):
                     with self.subTest(job=name, event=event):
                         self.assertEqual(evaluate(condition, event), event == "push")
-        self.assertEqual(set(writers), {"ci", "docs", "guardrails", "msrv", "test-1", "test-2",
+        self.assertEqual(set(writers), {"ci", "docs", "guardrails", "test-1", "test-2",
                                                 "test-3", "test-build", "test-extra", "test-partition-2",
                                                 "test-partition-6", "test-partition-7", "test-partition-8",
                                                 "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
@@ -862,10 +862,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
         shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
                       and job_id != "test-build"}
         self.assertGreater(shards, 1)
-        # The shards start on the build's last upload step; the partition
-        # guard follows it. A renamed upload step would leave them waiting for
-        # the whole build job, and a step after the awaited one would let
-        # them download before every part exists.
+        # The test jobs `needs:` the whole build job; the partition guard
+        # follows the last upload, so it proves the archive the shards download.
         parts = int(self.document["env"]["NEXTEST_ARCHIVE_PARTS"])
         self.assertGreater(parts, 1)
         build_steps = [step.get("name") for step in jobs["test-build"]["steps"]]
@@ -878,13 +876,11 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(pack[1], "pack")
         self.assertEqual(pack[4:], ["--parts", str(parts)])
         names = set()
-        artifact_flags = []
         for k, name in enumerate(uploads, 1):
             upload_step = next(step for step in jobs["test-build"]["steps"] if step.get("name") == name)
             self.assertEqual(upload_step["with"]["path"].replace("${{ runner.temp }}", str(self.root)),
                              f"{pack[3]}.{k}")
             names.add(upload_step["with"]["name"])
-            artifact_flags += ["--artifact", upload_step["with"]["name"]]
         partitions = {}
         for job_id, job in shard_jobs.items():
             with self.subTest(job=job_id):
@@ -922,9 +918,34 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 self.assertIn("steps.nextest-archive-download.outcome == 'failure'", downloads[1]["if"])
                 self.assertIn("steps.nextest-archive-download.outcome == 'failure'", downloads[2]["if"])
                 self.assertIn("steps.nextest-archive-download-2.outcome == 'failure'", downloads[2]["if"])
+                # Orbit's emission proof admits one sibling need only behind
+                # the same full scope gate, with the sibling needing exactly
+                # the gate jobs; the deployed engine refuses any other shape.
+                self.assertEqual(job["needs"], ["pr-state", "scope", "test-build"])
+                self.assertEqual(job["if"], jobs["test-build"]["if"])
+                self.assertIn("!cancelled()", job["if"],
+                              "a failed build must fail the shard, not skip a required check")
                 step_names = [step.get("name") for step in job["steps"]]
-                self.assertLess(step_names.index("Await the nextest archive"),
-                                step_names.index("Download nextest archive"))
+                self.assertEqual(step_names[0], "Require a successful test build")
+                self.assertNotIn("Await the nextest archive", step_names, "shards no longer poll for the archive")
+                # Orbit folds the shard's failure onto the build by the
+                # waiter's `ci-await: <job> concluded <conclusion>:` line.
+                require = job["steps"][0]
+                self.assertEqual(require["env"], {"TEST_BUILD_RESULT": "${{ needs.test-build.result }}"})
+                for result, status, stderr in (
+                        ("success", 0, ""),
+                        ("failure", 1, f"ci-await: {jobs['test-build']['name']} concluded failure: "
+                                       "https://github.com/fixture/repository/actions/runs/7\n"),
+                        ("cancelled", 1, f"ci-await: {jobs['test-build']['name']} concluded cancelled: "
+                                         "https://github.com/fixture/repository/actions/runs/7\n")):
+                    completed = self_test_hang.run(
+                        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", require["run"]],
+                        step=require["name"], cwd=self.root, text=True, capture_output=True,
+                        env={"PATH": os.environ["PATH"], "TEST_BUILD_RESULT": result,
+                             "GITHUB_SERVER_URL": "https://github.com",
+                             "GITHUB_REPOSITORY": "fixture/repository", "GITHUB_RUN_ID": "7"})
+                    self.assertEqual((completed.returncode, completed.stdout, completed.stderr),
+                                     (status, "", stderr))
                 self.assertLess(step_names.index("Download nextest archive attempt 3"),
                                 step_names.index("Restore native nextest archive"))
                 self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
@@ -934,8 +955,6 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 partition = nextest[nextest.index("--partition") + 1]
                 self.assertNotIn(partition, partitions, f"{job_id} repeats {partitions.get(partition)}'s shard")
                 partitions[partition] = job["name"]
-                [wait] = self.run_step(job, "Await the nextest archive")
-                self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload, *artifact_flags])
         self.assertEqual(sorted(partitions),
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
                          "the test runners must select every count partition "
@@ -1225,7 +1244,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(mode, "full", "a Markdown delta cannot hide untested code in BEFORE")
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
-                self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2",
+                self.assertEqual(admitted, {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2",
                                             "test-3", "test-extra", "test-partition-2",
                                             "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
@@ -1250,9 +1269,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
-            "": {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "full": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "affected:orbit-cli": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }

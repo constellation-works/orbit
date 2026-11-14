@@ -263,7 +263,7 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                         self.assertTrue(helper_revision_errors(candidate), "helper must precede its calls")
         self.assertGreater(checked, 0, "the ownership guard must exercise orchestration calls")
 
-    def test_old_pr_head_executes_new_wait_cli_without_changing_candidate_code(self):
+    def test_old_pr_head_gets_workflow_revision_helpers_without_changing_candidate_code(self):
         scratch = ROOT / ".orbit/tmp"
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch, prefix="workflow-revisions-") as directory:
@@ -280,46 +280,17 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
             run(["git", "config", "user.email", "ci@example.invalid"])
             scripts = source / "scripts"
             scripts.mkdir()
-            # An old public CLI rejects --step. Without it the in-progress
-            # build would wait for the whole job; fail immediately in this fixture.
-            (scripts / "ci-await-jobs.py").write_text(
-                'import argparse\np = argparse.ArgumentParser()\n'
-                'p.add_argument("--job", action="append", required=True)\np.parse_args()\n'
-                'raise SystemExit("old helper waits for the still-running build")\n')
+            # The old PR head predates the helper; only the workflow revision has it.
             (source / "candidate.py").write_text('print("old PR code")\n')
             run(["git", "add", "."])
             run(["git", "commit", "-qm", "old PR head"])
             old = run(["git", "rev-parse", "HEAD"]).stdout.strip()
-            (scripts / "ci-await-jobs.py").write_bytes((ROOT / "scripts/ci-await-jobs.py").read_bytes())
-            (scripts / "ci-download-verified.sh").write_bytes((ROOT / "scripts/ci-download-verified.sh").read_bytes())
+            helper = (ROOT / "scripts/ci-download-verified.sh").read_bytes()
+            (scripts / "ci-download-verified.sh").write_bytes(helper)
             (source / "candidate.py").write_text('raise SystemExit("workflow code must not run")\n')
             run(["git", "add", "."])
             run(["git", "commit", "-qm", "workflow and new helper interface"])
             workflow = run(["git", "rev-parse", "HEAD"]).stdout.strip()
-            bin_dir = root / "bin"
-            bin_dir.mkdir()
-            gh = bin_dir / "gh"
-            # Transport fixture: the last upload succeeded but the build is
-            # still running, so success requires the real helper's --step behavior.
-            upload = [step["name"] for step in self.document["jobs"]["test-build"]["steps"]
-                      if step.get("name", "").startswith("Upload nextest archive")][-1]
-            job = {"name": "Test build", "status": "in_progress", "conclusion": None,
-                   "steps": [{"name": upload, "status": "completed", "conclusion": "success"}]}
-            # The shard wait also lists artifacts. Returning the jobs document
-            # for that call makes the real helper poll until its 2400 s timeout.
-            parts = [{"name": f"nextest-archive-{index}", "expired": False, "size_in_bytes": 1}
-                     for index in range(1, 5)]
-            jobs_json = json.dumps({"total_count": 1, "jobs": [job]})
-            artifacts_json = json.dumps({"total_count": len(parts), "artifacts": parts})
-            gh.write_text(
-                f"#!{sys.executable}\nimport sys\n"
-                f"jobs = {jobs_json!r}\n"
-                f"artifacts = {artifacts_json!r}\n"
-                "payload = artifacts if any('artifacts' in arg for arg in sys.argv) else jobs\n"
-                "print('HTTP/2.0 200 OK\\n\\n' + payload if '--include' in sys.argv else payload)\n")
-            gh.chmod(0o755)
-            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
-                       GITHUB_REPOSITORY="fixture/repository", GITHUB_RUN_ID="1")
             bindings = {WORKFLOW_REF: workflow, PRODUCER_REF: workflow,
                         "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}": old}
             for job_name in ("docs", "ci", "test-build", "test-1", "test-2", "test-3"):
@@ -342,17 +313,8 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                                 step="sparse workflow helper checkout", cwd=target, input=patterns, stdin=subprocess.PIPE,
                                 check=True, text=True, capture_output=True)
                         run(["git", "checkout", "--force", "--detach", "-q", bindings[options["ref"]]], cwd=target)
-                    if job_name.startswith("test-") and job_name != "test-build":
-                        step = next(s for s in self.document["jobs"][job_name]["steps"]
-                                    if s.get("name") == "Await the nextest archive")
-                        result = run(["bash", "-euo", "pipefail", "-c", step["run"]],
-                                     cwd=checkout, check=False, env=env)
-                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                        self.assertIn(f"passed step '{upload}'", result.stdout)
-                        negative = run([sys.executable, "scripts/ci-await-jobs.py", "--job", "Test build",
-                                        "--step", upload], cwd=checkout, check=False)
-                        self.assertEqual(negative.returncode, 2, negative.stderr)
-                        self.assertIn("unrecognized arguments: --step", negative.stderr)
+                    self.assertFalse((checkout / "scripts/ci-download-verified.sh").exists(),
+                                     "the candidate checkout stays at the old PR head")
                     self.assertEqual(run(["git", "rev-parse", "HEAD"], cwd=checkout).stdout.strip(), old)
                     self.assertEqual(run([sys.executable, "candidate.py"], cwd=checkout).stdout.strip(),
                                      "old PR code", "the build/test checkout must remain at the PR head")
@@ -360,3 +322,5 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                     self.assertTrue(helper_checkout.is_dir(), "workflow helper checkout must exist")
                     self.assertEqual(run(["git", "rev-parse", "HEAD"], cwd=helper_checkout).stdout.strip(), workflow)
                     self.assertFalse((helper_checkout / "candidate.py").exists(), "helper checkout is sparse")
+                    self.assertEqual((helper_checkout / "scripts/ci-download-verified.sh").read_bytes(), helper,
+                                     "orchestration helpers come from the workflow revision")
