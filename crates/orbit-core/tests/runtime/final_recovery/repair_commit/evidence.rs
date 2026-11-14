@@ -29,11 +29,10 @@ pub(super) fn repair_evidence_output(fixture: &Fixture) -> Value {
         .to_string();
     for task in [&fixture.task_id, &other] {
         for tool in ["orbit.task.update", "orbit.task.artifact.put"] {
-            let error = RuntimeHost::run_tool_with_context_and_role(
+            let error = RuntimeHost::run_tool_with_context(
                 &fixture.runtime,
                 tool,
                 json!({"id": task, "model": "codex"}),
-                orbit_types::policy::Role::Admin,
                 ToolContext {
                     tool_deny_policy: Some(policy.clone()),
                     ..Default::default()

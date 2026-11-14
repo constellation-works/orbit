@@ -2422,14 +2422,13 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
 /// `caller_before_pr` would be admitted.
 fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
     owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.drain.probe",
             json!({
                 "caller_version": orbit_core::application::distributed::owner_binary_version(),
                 "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                 "caller_before_pr": caller_before_pr,
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     caller_machine_id: Some(FOLLOWER.to_string()),

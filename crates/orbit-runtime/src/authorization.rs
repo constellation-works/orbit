@@ -60,7 +60,7 @@ pub struct OperatorAuthorizer {
 impl RuntimeKernel {
     /// Authorize a governed tool call.
     ///
-    /// Called from `run_tool_with_context_and_role`, which every tool caller
+    /// Called from `run_tool_with_context`, which every tool caller
     /// traverses: CLI `tool run`, the CLI's admin `run_tool` bypass, MCP
     /// `tools/call`, the dashboard, the v2 deterministic dispatcher, and agent
     /// loops. There is deliberately no second tool-side guard anywhere.

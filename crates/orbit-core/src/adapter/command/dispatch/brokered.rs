@@ -23,7 +23,6 @@ use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_engine::PluginBrokerRun;
 use orbit_tools::{ActivityBinding, OrbitBuiltinAction, ToolContext};
-use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, ToolSessionContext, is_claimed_owner_tool};
 use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
@@ -345,10 +344,9 @@ impl BrokerDispatch for RunDispatch {
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;
                     self.refuse_outside_activity_policy(&tool)?;
-                    self.runtime.run_tool_with_context_and_role_and_capability(
+                    self.runtime.run_tool_with_context_and_capability(
                         &tool,
                         input,
-                        Role::Admin,
                         {
                             let mut ctx = self.tool_context(&cwd, session_context);
                             ctx.broker_call = Some(orbit_tools::plugin::BrokerCall {

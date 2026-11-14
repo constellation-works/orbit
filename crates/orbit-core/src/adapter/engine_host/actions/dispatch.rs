@@ -2,7 +2,6 @@ use std::time::{Duration, Instant};
 
 use orbit_engine::DispatchError;
 use orbit_tools::{ToolCaller, ToolContext, WitnessedProgramGrant};
-use orbit_types::policy::Role;
 use orbit_types::tool::McpCapability;
 use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
 use serde_json::Value;
@@ -102,7 +101,7 @@ pub(crate) fn run_deterministic(
                 .unwrap_or(Value::Null);
 
             runtime
-                .run_tool_with_context_and_role(tool_name, args, Role::Admin, tool_context)
+                .run_tool_with_context(tool_name, args, tool_context)
                 .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
         }
         // Retired Phase 4 stubs. These used to return structured skipped
@@ -382,12 +381,7 @@ pub(crate) fn run_deterministic(
                 }
             }
             runtime
-                .run_tool_with_context_and_role(
-                    "orbit.task.locks.release",
-                    args,
-                    Role::Admin,
-                    tool_context,
-                )
+                .run_tool_with_context("orbit.task.locks.release", args, tool_context)
                 .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
         }
         // Submit a child v2 Job and block on its terminal state.
@@ -496,9 +490,7 @@ fn plugin_tool_call(
             args,
             crate::adapter::command::ToolEntryPoint::Cli,
             tool_context.session_context.clone(),
-            |args| {
-                runtime.run_tool_with_context_and_role(&tool_name, args, Role::Admin, tool_context)
-            },
+            |args| runtime.run_tool_with_context(&tool_name, args, tool_context),
         )
         .map(|outcome| outcome.value)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))

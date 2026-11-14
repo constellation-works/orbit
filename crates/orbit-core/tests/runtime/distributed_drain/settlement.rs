@@ -629,13 +629,12 @@ fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backof
     *pair.wire.refuse_settle.lock().unwrap() = None;
     let stopped = pair
         .follower
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.workflow.auto",
             json!({
                 "workspace": pair.follower.workspace_id().unwrap(),
                 "action": "stop",
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     transport: Some(McpTransport::Local),

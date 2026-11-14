@@ -307,10 +307,9 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
     );
     let summary = "rescued work already landed by hand";
     let task_update = |capability, input: Value| {
-        runtime.run_tool_with_context_and_role(
+        runtime.run_tool_with_context(
             "orbit.task.update",
             input,
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     effective_capabilities: BTreeSet::from([capability]),

@@ -7,7 +7,6 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_tools::{ToolContext, ToolExecutionKind};
-use orbit_types::policy::Role;
 use orbit_types::tool::{ToolSessionContext, is_tool_family_operation, tool_family};
 use serde_json::Value;
 
@@ -398,10 +397,9 @@ impl OrbitRuntime {
                     ToolEntryPoint::Cli => CapabilityEnforcement::Enforce,
                     ToolEntryPoint::Mcp => CapabilityEnforcement::McpSessionOnly,
                 };
-                self.run_tool_with_context_and_role_and_capability(
+                self.run_tool_with_context_and_capability(
                     name,
                     input,
-                    Role::Admin,
                     tool_context,
                     capability_enforcement,
                 )

@@ -12,7 +12,6 @@ use std::collections::BTreeSet;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::telemetry::AuditEventStatus;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -177,14 +176,13 @@ pub(crate) fn gate_starvation_step(
         .ok_or_else(|| {
             DispatchError::action_failed(action, "late reservation missing reservation_id")
         })?;
-        runtime
-            .run_tool_in_role(
-                "orbit.task.locks.release",
-                json!({"reservation_id": reservation_id}),
-                Role::Admin,
-                tool_context,
-            )
-            .map_err(|err| DispatchError::action_failed("release_locks", format!("{err}")))?;
+        ToolInvocationPort::run_tool_with_context(
+            runtime,
+            "orbit.task.locks.release",
+            json!({"reservation_id": reservation_id}),
+            tool_context,
+        )
+        .map_err(|err| DispatchError::action_failed("release_locks", format!("{err}")))?;
         gate.window.reserved = Some(TemplateReserved::Bool(false));
         if let GateReservationInput::Observed(reservation) = &mut gate.reservation {
             reservation.window.reserved = Some(TemplateReserved::Bool(false));

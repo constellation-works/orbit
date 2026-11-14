@@ -1675,7 +1675,6 @@ crate::scenario_table!(
 fn simple_body_signature_survives_governed_submit() {
     use orbit_core::test_support::with_decision_dkim_resolver;
     use orbit_tools::ToolContext;
-    use orbit_types::policy::Role;
     use orbit_types::tool::{McpCapability, ToolSessionContext};
 
     let fixture: Value =
@@ -1692,7 +1691,7 @@ fn simple_body_signature_survives_governed_submit() {
         let submit = |raw_message: &str| {
             if through_tool {
                 with_decision_dkim_resolver(FixtureResolver, || {
-                    fx.runtime.run_tool_with_context_and_role(
+                    fx.runtime.run_tool_with_context(
                         "orbit.decision.submit",
                         json!({
                             "id": b.request.id,
@@ -1703,7 +1702,6 @@ fn simple_body_signature_survives_governed_submit() {
                             "auth_results": AUTH_PASS,
                             "raw_message": raw_message,
                         }),
-                        Role::Admin,
                         ToolContext {
                             session_context: ToolSessionContext {
                                 effective_capabilities: [McpCapability::Operator].into(),
