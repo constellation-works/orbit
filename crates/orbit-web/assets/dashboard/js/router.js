@@ -20,7 +20,7 @@
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
-import { renderRuns } from './runs.js';
+import { adoptRunFiltersFromAddress, renderRuns } from './runs.js';
 import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
@@ -739,6 +739,12 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (top === "jobs") {
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
+    // The state and task or job id filters ride in the query string. A load,
+    // Back or Forward onto History shows what that entry's address names.
+    if (sub === "history") {
+      adoptRunFiltersFromAddress();
+      if (opts.fromAddress) routedHref = window.location.href;
+    }
     setJobsSubtabImpl(ctx, sub);
     hash = `#jobs/${sub}` + (sub === "history" ? `?${windowQuery()}` : "");
   } else if (top === "diagnostics") {
@@ -810,8 +816,21 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       }
       ctx.setMemorySelection(key);
     }
+    // `#knowledge/frictions[/<id>]`: the segment names the friction the list
+    // and detail show. A bare `#knowledge/frictions` keeps the remembered one.
+    if (sub === "frictions" && segments[2] && ctx.setFrictionSelection) {
+      let id = null;
+      try {
+        id = decodeURIComponent(segments[2]);
+      } catch {
+        id = null;
+      }
+      ctx.setFrictionSelection(id);
+    }
     setKnowledgeSubtabImpl(ctx, sub);
-    hash = sub === "memory" && ctx.memoryRoute ? `#${ctx.memoryRoute()}` : `#knowledge/${sub}`;
+    hash = sub === "memory" && ctx.memoryRoute ? `#${ctx.memoryRoute()}`
+      : sub === "frictions" && ctx.frictionRoute ? `#${ctx.frictionRoute()}`
+      : `#knowledge/${sub}`;
   } else if (top === "operations") {
     const sub = OPERATIONS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getOperationsSubtab();
     setOperationsSubtabImpl(ctx, sub);

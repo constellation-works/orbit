@@ -23,7 +23,7 @@ import {
 } from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
-import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, returnFromRunDetail, runDetailBackLabel, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, recordRoutedHref, returnFromRunDetail, runDetailBackLabel, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekJobFailures, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
@@ -187,6 +187,12 @@ let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
 let frictionPage = 0;
 let frictionListScope = null;
+// A friction the address names, until the list that may hold it has loaded:
+// it then selects that friction on its page, or finds none. `frictionNoDefault`
+// keeps the list from falling back to its first card after an address named a
+// friction that does not exist; the next selection or filter change lifts it.
+let pendingFrictionId = null;
+let frictionNoDefault = false;
 
 // Health strip state
 let jobsInFlightSequence = 0;
@@ -326,6 +332,9 @@ function routerContext() {
     // The memory key on screen is owned by memory.js, which renders it.
     setMemorySelection,
     memoryRoute,
+    // The friction on screen is owned here; the router reads and sets it.
+    setFrictionSelection,
+    frictionRoute,
     getOperationsSubtab: () => activeOperationsSubtab,
     setOperationsSubtab: (v) => { activeOperationsSubtab = v; },
     // ORB-12724: the Config sub-view is owned by config.js, which needs it to
@@ -602,6 +611,76 @@ function stepFrictionPage(delta) {
   if (pane) pane.scrollTop = 0;
 }
 
+// Friction ids in an address are untrusted input: keep only id-shaped values.
+function parseFrictionId(value) {
+  const id = String(value || "").trim();
+  return /^[\w.-]{1,64}$/.test(id) ? id : null;
+}
+
+/// Select the friction an address names. An unusable id selects nothing.
+function setFrictionSelection(value) {
+  const id = parseFrictionId(value);
+  pendingFrictionId = id;
+  frictionNoDefault = !id;
+  if (!id) activeFrictionId = null;
+}
+
+/// The hash route of the Frictions view on screen, without the leading `#`.
+function frictionRoute() {
+  const id = pendingFrictionId || activeFrictionId;
+  return id ? `knowledge/frictions/${encodeURIComponent(id)}` : "knowledge/frictions";
+}
+
+// Name the friction on screen in the current entry, in place: selecting a card
+// adds no Back step. The router's last-routed address moves with it.
+function syncFrictionAddress() {
+  if (activeTab !== "knowledge" || activeKnowledgeSubtab !== "frictions") return;
+  if (typeof window.history?.replaceState !== "function") return;
+  const hash = `#${frictionRoute()}`;
+  if (window.location.hash === hash) return;
+  window.history.replaceState(window.history.state, "", hash);
+  recordRoutedHref();
+}
+
+// Settle the address's friction against the list just loaded: its page, then
+// the card itself. A friction that is not in the list leaves nothing selected.
+function settlePendingFriction(items) {
+  if (!pendingFrictionId) return;
+  const index = items.findIndex((item) => item.id === pendingFrictionId);
+  if (index >= 0) {
+    frictionPage = Math.floor(index / FRICTION_PAGE_SIZE);
+    activeFrictionId = pendingFrictionId;
+    frictionNoDefault = false;
+  } else {
+    activeFrictionId = null;
+    frictionNoDefault = true;
+  }
+  pendingFrictionId = null;
+}
+
+// A friction the list in view cannot hold (another status filter) is looked
+// up among every status, and the filter widens to its status. Not found, or
+// unreadable, leaves the id for settlePendingFriction to drop.
+async function widenFrictionFilterTo(id) {
+  if (lastFrictionPayload.items.some((item) => item.id === id)) return;
+  let payload = null;
+  try {
+    payload = await fetchJson(`/api/frictions?limit=${FRICTION_LIMIT}`);
+  } catch {
+    return;
+  }
+  if (pendingFrictionId !== id) return;
+  const items = Array.isArray(payload && payload.items) ? payload.items : [];
+  const status = items.find((item) => item.id === id)?.status;
+  if (!FRICTION_STATUSES.includes(status)) return;
+  const shown = frictionStatusFilter === "all" || frictionStatusFilter === status
+    || (frictionStatusFilter === "active" && status !== "resolved");
+  if (shown) return;
+  frictionStatusFilter = status;
+  const select = $("friction-status-filter");
+  if (select) select.value = status;
+}
+
 function renderFrictions(payload) {
   const body = $("frictions-body");
   if (!body) return;
@@ -617,9 +696,10 @@ function renderFrictions(payload) {
   const visible = portion.visible;
 
   if (visible.length > 0 && !visible.some((item) => item.id === activeFrictionId)) {
-    activeFrictionId = accordion ? null : visible[0].id;
+    activeFrictionId = accordion || frictionNoDefault ? null : visible[0].id;
   }
   if (visible.length === 0) activeFrictionId = null;
+  syncFrictionAddress();
 
   if (visible.length === 0) {
     const suffix = frictionSearchQuery ? " match the current search." : ".";
@@ -678,6 +758,8 @@ function renderFrictions(payload) {
     if (expanded) row.classList.add("active");
     const toggle = () => {
       activeFrictionId = accordion && expanded ? null : friction.id;
+      pendingFrictionId = null;
+      frictionNoDefault = false;
       renderFrictions(lastFrictionPayload);
     };
     makeRowDisclosure(row, openButton, accordion
@@ -908,6 +990,8 @@ function wireFrictionStatusFilter() {
   select.addEventListener("change", (e) => {
     frictionStatusFilter = e.target.value;
     activeFrictionId = null;
+    pendingFrictionId = null;
+    frictionNoDefault = false;
     if (activeTab === "knowledge") fetchAndRenderFrictions().catch(console.error);
   });
 }
@@ -1892,7 +1976,7 @@ function fetchAndRenderSummary(read = null) {
   });
 }
 
-function fetchAndRenderFrictions() {
+async function fetchAndRenderFrictions() {
   // ORB-00040: /api/frictions and /api/frictions/stats are per-workspace; skip
   // both in aggregate mode.
   // ORB-00044: also replace the stale detail panel (live resolve/status/tags).
@@ -1901,8 +1985,9 @@ function fetchAndRenderFrictions() {
     renderKnowledgeDetailPlaceholder("friction");
     const nav = $("friction-pagination");
     if (nav) nav.hidden = true;
-    return Promise.resolve();
+    return;
   }
+  if (pendingFrictionId) await widenFrictionFilterTo(pendingFrictionId);
   const statuses = frictionStatusFilter === "active" ? ["open", "triaged"] : [frictionStatusFilter];
   const listRequests = statuses.map((status) => {
     const sp = new URLSearchParams();
@@ -1930,6 +2015,7 @@ function fetchAndRenderFrictions() {
       })
       .slice(0, FRICTION_LIMIT);
     const tags = [...new Set(payloads.flatMap((payload) => Array.isArray(payload && payload.tags) ? payload.tags : []))].sort();
+    settlePendingFriction(items);
     lastFrictionPayload = { stats: stats || {}, tags, items };
     renderFrictions(lastFrictionPayload);
   });
