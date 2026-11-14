@@ -4,6 +4,7 @@ use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 
 use super::collect::{Bounds, investigation_slots, push_retryable_error};
+use super::log_signature::{StepBinding, step_binding};
 use super::partition::{
     CONCURRENCY_CANCELLATION_FIELD, job_concurrency_cancellation, job_is_inconclusive_cancellation,
     run_is_completed,
@@ -464,10 +465,6 @@ fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::R
     });
 }
 
-/// The step column `gh run view --log*` prints when it cannot attribute a log
-/// line to a step. Some runs label every line of a job this way.
-const UNATTRIBUTED_STEP: &str = "UNKNOWN STEP";
-
 /// A unique runner failure unit can only name a unique failed step. Primary
 /// gh output also carries job/step columns; reject conflicting labels rather
 /// than borrowing a different step's command. Raw fallback logs have no columns.
@@ -506,25 +503,12 @@ pub(super) fn bound_diagnostic(
         .filter(|name| !name.trim().is_empty())?;
     if log.source == orbit_tools::github_cli::SOURCE_RUN_LOG {
         let job_name = job["name"].as_str()?;
-        let mut labels = std::collections::BTreeSet::new();
-        for line in text.lines() {
-            let mut columns = line.splitn(3, '\t');
-            let (Some(line_job), Some(line_step), Some(_)) =
-                (columns.next(), columns.next(), columns.next())
-            else {
-                return None;
-            };
-            if line_job != job_name || (line_step != step && line_step != UNATTRIBUTED_STEP) {
-                return None;
-            }
-            labels.insert(line_step);
-        }
-        match labels.into_iter().collect::<Vec<_>>().as_slice() {
-            [label] if *label == UNATTRIBUTED_STEP => {
+        match step_binding(text, job_name, step) {
+            Some(StepBinding::Unattributed) => {
                 unit["step_attribution"] = json!("unattributed");
             }
-            [label] if *label == step => {}
-            _ => return None,
+            Some(StepBinding::Named) => {}
+            None => return None,
         }
     }
     unit["job_id"] = json!(job_id);

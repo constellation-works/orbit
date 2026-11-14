@@ -4,7 +4,7 @@ use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 use std::path::Path;
 
-use super::super::super::ci::log_signature::log_payload;
+use super::super::super::ci::log_signature::{UNATTRIBUTED_STEP, log_columns, log_payload};
 use super::super::completion_deadline::Deadline;
 use super::{
     ci::ci_job_log,
@@ -46,7 +46,7 @@ pub(super) fn complete_job_log(
         return Err(unreadable("retry requires one known failed provider step"));
     };
     let name = text(step, "name", unreadable)?;
-    if name == "UNKNOWN STEP"
+    if name == UNATTRIBUTED_STEP
         || steps
             .iter()
             .filter(|candidate| candidate["name"] == name)
@@ -90,11 +90,14 @@ pub(super) fn complete_job_log(
     let binding = match &read.source {
         Some(CiLogSource::RunLog) => {
             for line in selected.lines() {
-                let mut columns = line.splitn(3, '\t');
-                if columns.next() != Some(text(job, "name", unreadable)?)
-                    || columns.next() != Some(name)
-                    || columns.next().is_none()
-                {
+                // Missing job identity refuses as `name`, including on a line
+                // whose columns do not parse. That check stays ahead of the
+                // column mismatch below.
+                let job_name = text(job, "name", unreadable)?;
+                let bound = log_columns(line).is_some_and(|(line_job, line_step, _)| {
+                    line_job == job_name && line_step == name
+                });
+                if !bound {
                     return Err(unreadable(
                         "retry diagnostic columns do not bind the provider job and failed step",
                     ));

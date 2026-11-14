@@ -11,6 +11,9 @@ use super::super::super::operations::{
 };
 use super::log_cache::{self, JobLogKey};
 use crate::context::RuntimeHost;
+use crate::executor::automation::ci::log_signature::{
+    UNATTRIBUTED_STEP, log_columns, step_binding,
+};
 
 /// One failed job's log. A completed job's readable answer is reused from
 /// the host's [`log_cache`] for its run attempt. A read that recovered no
@@ -99,20 +102,17 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     // gh's columns bind command evidence to the provider's failed step.
     // Raw job API logs have no columns; a unique complete failed command is
     // preferred there so successful setup cannot supply the cause.
+    // `log_columns` treats a timestamp-led line as having no columns, so
+    // payload tabs stay data and the line is kept.
     let mut selected_lines = Vec::new();
     for line in text.lines() {
-        // A raw job API log can contain arbitrary tabs in printed commands or
-        // output. Its ISO timestamp precedes the payload, so recognize that
-        // shape before interpreting any tabs as gh's job/step columns.
-        if timestamp_prefixed(line) || response.source == Some(CiLogSource::JobApiLog) {
+        if response.source == Some(CiLogSource::JobApiLog) {
             selected_lines.push(line);
             continue;
         }
-        let mut columns = line.splitn(3, '\t');
-        if let (Some(_), Some(line_step), Some(_)) =
-            (columns.next(), columns.next(), columns.next())
+        if let Some((_, line_step, _)) = log_columns(line)
             && line_step != step
-            && line_step != "UNKNOWN STEP"
+            && line_step != UNATTRIBUTED_STEP
         {
             if selected.is_some() {
                 return Err(OrbitError::Execution(
@@ -124,12 +124,6 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
         selected_lines.push(line);
     }
     Ok(selected_lines.join("\n"))
-}
-
-fn timestamp_prefixed(line: &str) -> bool {
-    line.split_once(' ').is_some_and(|(timestamp, _)| {
-        timestamp.ends_with('Z') && timestamp.contains('T') && !timestamp.contains('\t')
-    })
 }
 
 /// Regions omit source bytes, so attribution must come from the collector's
@@ -158,22 +152,7 @@ fn bound_failure_regions<'a>(
     match response.source.as_ref()? {
         CiLogSource::RunLog => {
             let name = job.name.text().filter(|name| !name.trim().is_empty())?;
-            let mut label = None;
-            for line in text.lines() {
-                let mut columns = line.splitn(3, '\t');
-                let (Some(line_job), Some(line_step), Some(_)) =
-                    (columns.next(), columns.next(), columns.next())
-                else {
-                    return None;
-                };
-                if line_job != name
-                    || (line_step != step && line_step != "UNKNOWN STEP")
-                    || label.is_some_and(|label| label != line_step)
-                {
-                    return None;
-                }
-                label = Some(line_step);
-            }
+            step_binding(text, name, step)?;
         }
         // Collection refuses raw evidence from multiple failed commands,
         // including when their other failures fall outside retained regions.

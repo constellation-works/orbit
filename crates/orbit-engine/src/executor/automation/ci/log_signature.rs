@@ -641,16 +641,64 @@ pub fn declared_infrastructure_signature<'a>(
         })
 }
 
-pub fn log_payload(line: &str) -> &str {
+/// The step column `gh run view --log*` prints when it cannot attribute a log
+/// line to a step. Some runs label every line of a job this way.
+pub const UNATTRIBUTED_STEP: &str = "UNKNOWN STEP";
+
+/// How every line of an excerpt names the job's one failed step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepBinding {
+    /// Every line's step column is the failed step.
+    Named,
+    /// Every line's step column is [`UNATTRIBUTED_STEP`].
+    Unattributed,
+}
+
+/// Job, step and remainder of one `gh run view --log` line (`job`, `step`, rest).
+///
+/// `None` for a timestamp-led raw job-API line, whose payload may contain tabs,
+/// and for a line that does not carry two tab separators.
+pub fn log_columns(line: &str) -> Option<(&str, &str, &str)> {
     // Raw job API logs have no job/step columns. Their payload can contain
     // arbitrary tabs, so recognize the leading timestamp before splitting.
-    if let Some(payload) = timestamp_payload(line) {
-        return payload;
+    if timestamp_payload(line).is_some() {
+        return None;
     }
     let mut columns = line.splitn(3, '\t');
-    let rest = match (columns.next(), columns.next(), columns.next()) {
-        (Some(_job), Some(_step), Some(rest)) => rest,
-        _ => line,
+    Some((columns.next()?, columns.next()?, columns.next()?))
+}
+
+/// An excerpt belongs to `job` only when every line's job and step columns name
+/// that job and one failed step: `step` or [`UNATTRIBUTED_STEP`], the same
+/// label on every line. An empty excerpt binds nothing.
+pub fn step_binding(text: &str, job: &str, step: &str) -> Option<StepBinding> {
+    let mut binding = None;
+    for line in text.lines() {
+        let (line_job, line_step, _) = log_columns(line)?;
+        if line_job != job || (line_step != step && line_step != UNATTRIBUTED_STEP) {
+            return None;
+        }
+        let line_binding = if line_step == UNATTRIBUTED_STEP {
+            StepBinding::Unattributed
+        } else {
+            StepBinding::Named
+        };
+        if let Some(seen) = binding
+            && seen != line_binding
+        {
+            return None;
+        }
+        binding = Some(line_binding);
+    }
+    binding
+}
+
+pub fn log_payload(line: &str) -> &str {
+    let rest = match log_columns(line) {
+        Some((_job, _step, rest)) => rest,
+        // A timestamp-led raw line, or a line without runner columns, still
+        // drops a leading timestamp below. Payload tabs stay intact.
+        None => line,
     };
     timestamp_payload(rest).unwrap_or(rest)
 }
