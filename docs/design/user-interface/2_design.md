@@ -37,7 +37,7 @@ Status reads as a coloured dot and a plain word, never colour alone: status pill
 
 Live processing is visible through pulsing dots, spinners, buffered-log counters, periodically refreshed tiles, and compact ticker-style values. The `orbit.log` tail is viewport-bounded; overflowing rows scroll inside the log stream so its filters and follow-tail controls remain visible [T20260430-29]. When a paused buffer overflows, resuming keeps a notice of the discarded lines among the retained rows until newer rows push it out. Motion is functional: it points to active work without making the operator read raw logs first.
 
-The tail is the Tasks dock's Log view (`#tasks?dock=log`), under its `Drain | Locks held | Log` tab bar. The URL selects the view; the agent toggle and Wrap remain local browser preferences. Its toolbar holds the level filters (All, Err, Deny, Warn), each level counting its lines among those kept, the Agent toggle for agents' stdout relays, Follow and Wrap; a caption under it gives the number of lines shown and whether the stream is live or reconnecting. Each line is its time beside a head line (a badge — `AGENT` for an agent's stdout, else the event code such as `WRN` or `INF` — then the task its fields name as `task_id=…`, linked into Tasks, then its source) over the message, which stays on one line until the line is expanded or Wrap is on. The Log tab names the worst level present (`2 warn`, `1 err`) so a problem shows while Drain is selected. The status bar at the foot of every view repeats the newest line and offers **Open log**, which opens `#tasks?dock=log`.
+The tail is the Tasks dock's Log view (`#tasks?dock=log`), under its `Drain | Log` tab bar. The URL selects the view; the agent toggle and Wrap remain local browser preferences. Its toolbar holds the level filters (All, Err, Deny, Warn), each level counting its lines among those kept, the Agent toggle for agents' stdout relays, Follow and Wrap; a caption under it gives the number of lines shown and whether the stream is live or reconnecting. Each line is its time beside a head line (a badge — `AGENT` for an agent's stdout, else the event code such as `WRN` or `INF` — then the task its fields name as `task_id=…`, linked into Tasks, then its source) over the message, which stays on one line until the line is expanded or Wrap is on. The Log tab names the worst level present (`2 warn`, `1 err`) so a problem shows while Drain is selected. The status bar at the foot of every view repeats the newest line and offers **Open log**, which opens `#tasks?dock=log`.
 
 Tasks uses the full page width and keeps an independent, guaranteed-minimum body height. Awaiting approval and its inline Approve buttons remain on Tasks. Review approval in both the row and detail requires a selected workspace so claim admission checks the owning workspace. A completed task save takes precedence over any older in-flight detail read, including a refresh of a pinned task outside the current filter. The pin, shared detail cache and visible controls keep the confirmed save; a subsequent refresh still picks up external changes without discarding unsent drafts. When the list itself is narrower than ~620px its rows stack: the title and any tags come first, the ID and waiting/run metadata sit on the second line, and the crew and action sit below. From 1024px up the top bar is one fixed-height row on every route [ORB-14481]: the brand, then, above 1024px, provider usage with one host warning chip when a reading is elevated or worse, and global search, New task (while Tasks is open) and Notify when available. At 1024px and below the provider usage and the warning chip are not rendered. From 761px to 1023px the bar may wrap onto a second row, holding the brand, global search, New task (while Tasks is open) and Notify. At 760px and below the rail foot is omitted. The brand and Notify stay on the first row, with Notify at the trailing edge, the same place it occupies on every other view. Search takes the next row on every page, with New task beside it while Tasks is open, so the controls and Notify fit at 375px and the bar does not scroll horizontally [ORB-24281].
 
@@ -373,12 +373,12 @@ Steps show a loading skeleton until the detail read settles, a read error on fai
 
 The two-column desktop layout stacks below 900px, and routine/clock metadata collapses to one column below 600px so schedules, state labels, and controls remain scannable at 480–720px widths.
 
-The **Tasks dock** is the home of **Drain**, **Locks held** and **Log**.
+The **Tasks dock** is the home of **Drain** and **Log**.
 Under **All workspaces** it inserts **Fleet** immediately after **Drain**, with
 `fleet` supported in the remembered dock mode and `#tasks?dock=fleet`.
 It stays beside the task list and gives way to an open task. Below 1000px the
 list keeps the full width, so the dock is not beside it. An explicit dock route
-(`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain, Locks held or Log
+(`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain or Log
 link, or the bottom log bar) shows the dock in place of the list at that width:
 its tabs sit directly under the top nav. The rail's **Tasks** item returns to
 the list, dropping only `dock=` from the hash and keeping the list's filters.
@@ -391,18 +391,19 @@ list. The dock route is how a phone drives a drain: its tabs and drain controls
 are 44px targets, Stop and Start stick to the foot of the scrolling pane, and a
 live window folds the Start form behind **Start another window**, so state, Stop
 and warnings lead. The log scrolls within 70% of the viewport height there. Drain contains the Auto-drain status card
-and a simple **Start a window** card. Locks held has By file (default) and
-By task views, remembered for Tasks, and a task-ID filter. Log is the live,
+and a simple **Start a window** card. Retired Locks held links and remembered
+dock modes open Drain. Backlog readiness still names holding tasks, and each
+task detail lists its own context files and lock contention. Log is the live,
 filterable tail; its tab names the worst level present. The active tab's
-first card (Auto-drain on Drain, Locks held, or the log) starts level with the
+first card (Auto-drain on Drain or the log) starts level with the
 first task block, with the tab bar above that line. The outer dock ends with
 the list; this bottom alignment applies to the dock, not every card. Auto-drain
-and Locks held keep their natural heights, while the Log panel fills its pane.
-All three first cards share the same depth below the tabs, so switching views
+keeps its natural height, while the Log panel fills its pane.
+The first cards share the same depth below the tabs, so switching views
 keeps the shared tab strip and content viewport fixed. Drain action and state
 feedback belongs only to Drain: it remains in that scrollable pane when
 switching away and is available again on return, without leaving a banner or
-spacing above Locks held.
+spacing in the other views.
 On short viewports the task list shrinks within the grid and scrolls internally,
 keeping its bottom edge level with the dock and clear of the shell's bottom bar.
 `alignTasksDock` in

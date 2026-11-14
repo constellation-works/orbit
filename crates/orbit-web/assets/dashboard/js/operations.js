@@ -23,7 +23,6 @@ import { startFleetIndicatorRefresh } from './operations-fleet.js';
 export { OPERATION_FEEDBACK_CLEAR_MS, initOperations, triggerFeedbackClear } from './operations-shared.js';
 export { startFleetIndicatorRefresh };
 export { fetchAndRenderAutoDrainPane } from './operations-drain.js';
-export { drainHolderCounts } from './operations-drain-capacity.js';
 export { peekRoutineFailures } from './operations-routines.js';
 export { fetchAndRenderJobs, peekJobFailures } from './operations-jobs.js';
 

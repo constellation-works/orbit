@@ -1,7 +1,7 @@
 import { cpuReadingLabel, cpuReadingValue } from './host-resources.js';
-import { drainReason, drainReadinessView, DRAIN_LOCK_REASONS } from './drain-waits.js';
+import { drainReason, DRAIN_LOCK_REASONS } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
-import { autoDrainNumber, $, operationsState, runLink, time, workspaceReadOnlyReason, workspaceSelectionReason } from './operations-shared.js';
+import { autoDrainNumber, $, runLink, time, workspaceReadOnlyReason, workspaceSelectionReason } from './operations-shared.js';
 import { el, infoHint, isAggregateView, pinnedInfoHint } from './common.js';
 
 // ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
@@ -341,18 +341,6 @@ export function autoDrainThrottleLine(capacity) {
   const note = el("p", { class: "operation-control-note drain-throttle-line", text: throttleSentence(resources) });
   note.setAttribute("role", "status");
   return note;
-}
-
-// How many waiting tasks name each task as their lock holder, from the last
-// readiness snapshot of the selected workspace.
-export function drainHolderCounts() {
-  const counts = new Map();
-  const tasks = Array.isArray(operationsState.lastAutoDrain?.tasks) ? operationsState.lastAutoDrain.tasks : [];
-  for (const entry of tasks) {
-    if (!entry || entry.eligible === true) continue;
-    for (const holder of drainReadinessView(entry).badge?.holders || []) counts.set(holder, (counts.get(holder) || 0) + 1);
-  }
-  return counts;
 }
 
 // A dismissed provider-limit note stays hidden in this browser until its set
