@@ -148,6 +148,61 @@ fn generic_stderr_quoting_a_check_repair_marker_is_not_a_check_repair() {
     assert!(!is_pr_auto_fix_check_repair(&wrapped), "{wrapped}");
 }
 
+/// [ORB-24697] A Claude result terminal carrying an error subtype is the
+/// step's root cause, even when its other fields keep it out of the strict
+/// structured-output correction admission; the stderr warning is secondary.
+#[test]
+fn claude_error_result_terminal_names_the_failure_before_the_stderr_tail() {
+    let warning = "Ignoring 12 permissions.allow entries from .claude/settings.json: this workspace has not been trusted";
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{{\"type\":\"result\",\"subtype\":\"error_max_structured_output_retries\",\"is_error\":true,\"terminal_reason\":\"structured_output_retry_exhausted\",\"stop_reason\":\"tool_use\",\"api_error_status\":null,\"errors\":[\"Failed to provide valid structured output after 5 attempts\"],\"result\":\"Failed to provide valid structured output after 5 attempts\"}}\nPAYLOAD\ncat >&2 <<'STDERR'\n{warning}\nSTDERR\nexit 1\n"
+        ),
+    )
+    .unwrap();
+    let host = ScriptHost::new(fake.cli_path());
+    let mut spec = cli_agent_loop_spec(Some(Provider::Claude));
+    spec.model = None;
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "claude_terminal_fixture",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: serde_json::json!({"prompt": "test"}),
+        audit: Arc::new(V2AuditWriter::new(
+            "claude-terminal-fixture",
+            "fixture",
+            Arc::new(orbit_agent::loop_engine::audit::NullSink),
+        )),
+        run_id: "claude-terminal-fixture",
+        host: Some(&host),
+    })
+    .unwrap();
+    assert!(!outcome.success, "a nonzero provider exit fails the step");
+    let message = outcome.message.unwrap();
+    let subtype_at = message
+        .find("error_max_structured_output_retries")
+        .unwrap_or_else(|| panic!("terminal subtype names the failure: {message}"));
+    let reason_at = message
+        .find("structured_output_retry_exhausted")
+        .unwrap_or_else(|| panic!("terminal reason names the failure: {message}"));
+    let tail_at = message
+        .find("\nstderr tail:\n")
+        .unwrap_or_else(|| panic!("stderr stays as secondary tail: {message}"));
+    assert!(
+        subtype_at < tail_at && reason_at < tail_at,
+        "terminal reason precedes the stderr tail: {message}"
+    );
+    assert!(message[tail_at..].contains(warning), "{message}");
+    // The terminal cause, not the stderr warning, is the classification text.
+    let classified = orbit_types::workflow::failure_classification_text(&message);
+    assert!(
+        classified.contains("error_max_structured_output_retries"),
+        "{classified}"
+    );
+    assert!(!classified.contains(warning), "{classified}");
+}
+
 #[test]
 fn genuine_stall_keeps_its_terminal_failure_code() {
     let message = format!(
