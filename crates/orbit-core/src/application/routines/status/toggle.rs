@@ -1,6 +1,7 @@
 use super::*;
 
 use super::super::edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
+use super::super::guarded_edit::guarded_routine_edit;
 
 /// Select routine `name` from `report` for a definition edit.
 ///
@@ -42,6 +43,23 @@ pub fn select_listed_routine<'a>(
     Ok(routine)
 }
 
+/// [`select_listed_routine`] plus the caller's `target` check: the one
+/// selection every `*_listed_*` edit runs before its guarded write.
+pub(crate) fn select_listed_routine_for_target<'a>(
+    report: &'a RoutineStatusReport,
+    name: &str,
+    source: Option<(&str, &Path)>,
+    target: &str,
+) -> Result<&'a LoadedRoutine, RoutineEditRefusal> {
+    let routine = select_listed_routine(report, name, source)?;
+    if routine.definition.target.as_ref_string() != target {
+        return Err(RoutineEditRefusal::TargetMismatch {
+            actual_target: routine.definition.target.clone(),
+        });
+    }
+    Ok(routine)
+}
+
 /// Select routine `name` from `report` and toggle its versioned `enabled`.
 ///
 /// Selection is [`select_listed_routine`]; the caller's `target` must still
@@ -56,16 +74,11 @@ pub fn toggle_listed_routine(
     expected_enabled: bool,
     enabled: bool,
 ) -> Result<Result<RoutineEditOutcome, RoutineEditRefusal>, OrbitError> {
-    let routine = match select_listed_routine(report, name, source) {
+    let routine = match select_listed_routine_for_target(report, name, source, target) {
         Ok(routine) => routine,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    if routine.definition.target.as_ref_string() != target {
-        return Ok(Err(RoutineEditRefusal::TargetMismatch {
-            actual_target: routine.definition.target.clone(),
-        }));
-    }
-    set_routine_enabled(routine, expected_enabled, enabled).map(RoutineToggleOutcome::into_edit)
+    set_routine_enabled(routine, expected_enabled, enabled)
 }
 
 /// The routine's next scheduled occurrence, rendered host-local.
@@ -83,36 +96,6 @@ pub(crate) fn next_scheduled_occurrence(cron: &str, now: &DateTime<Local>) -> Op
         .map(|slot| slot.to_rfc3339())
 }
 
-/// Optimistic outcome for a versioned routine-definition toggle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoutineToggleOutcome {
-    /// The definition was atomically changed.
-    Changed,
-    /// The desired state already matched the current definition.
-    Unchanged,
-    /// The caller's expected state was stale, so no write occurred.
-    Conflict { actual_enabled: bool },
-    /// The definition now dispatches a different target than the one the
-    /// caller selected, so no write occurred.
-    TargetConflict { actual_target: RoutineTarget },
-}
-
-impl RoutineToggleOutcome {
-    /// This write result in the shared routine-edit contract.
-    pub fn into_edit(self) -> Result<RoutineEditOutcome, RoutineEditRefusal> {
-        match self {
-            Self::Changed => Ok(RoutineEditOutcome { changed: true }),
-            Self::Unchanged => Ok(RoutineEditOutcome { changed: false }),
-            Self::Conflict { actual_enabled } => {
-                Err(RoutineEditRefusal::StaleState { actual_enabled })
-            }
-            Self::TargetConflict { actual_target } => {
-                Err(RoutineEditRefusal::TargetMismatch { actual_target })
-            }
-        }
-    }
-}
-
 /// Change only the typed `enabled` field of a routine definition.
 ///
 /// The path comes from a freshly loaded [`LoadedRoutine`], never from a
@@ -125,44 +108,29 @@ pub fn set_routine_enabled(
     routine: &LoadedRoutine,
     expected_enabled: bool,
     enabled: bool,
-) -> Result<RoutineToggleOutcome, OrbitError> {
-    let raw = std::fs::read_to_string(&routine.path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", routine.path.display())))?;
-    let current = parse_routine_yaml(&raw)?;
-    if current.name != routine.definition.name {
-        return Err(OrbitError::InvalidInput(format!(
-            "routine definition at {} changed identity from '{}' to '{}'",
-            routine.path.display(),
-            routine.definition.name,
-            current.name
-        )));
-    }
-    if current.target != routine.definition.target {
-        return Ok(RoutineToggleOutcome::TargetConflict {
-            actual_target: current.target,
-        });
-    }
-    if current.enabled != expected_enabled {
-        return Ok(RoutineToggleOutcome::Conflict {
-            actual_enabled: current.enabled,
-        });
-    }
-    if current.enabled == enabled {
-        return Ok(RoutineToggleOutcome::Unchanged);
-    }
-
-    let rendered = rewrite_enabled_line(&raw, enabled)?;
-    let rewritten = parse_routine_yaml(&rendered)?;
-    let mut expected = current;
-    expected.enabled = enabled;
-    if rewritten != expected {
-        return Err(OrbitError::Execution(
-            "routine toggle validation changed fields other than enabled".to_string(),
-        ));
-    }
-    atomic_write_text(&routine.path, &rendered)
-        .map_err(|error| OrbitError::Io(format!("write {}: {error}", routine.path.display())))?;
-    Ok(RoutineToggleOutcome::Changed)
+) -> Result<Result<RoutineEditOutcome, RoutineEditRefusal>, OrbitError> {
+    guarded_routine_edit(
+        routine,
+        |current| {
+            if current.enabled != expected_enabled {
+                Err(RoutineEditRefusal::StaleState {
+                    actual_enabled: current.enabled,
+                })
+            } else {
+                Ok(())
+            }
+        },
+        |current| current.enabled == enabled,
+        |raw, mut expected| {
+            let rendered = rewrite_enabled_line(raw, enabled)?;
+            expected.enabled = enabled;
+            Ok((
+                rendered,
+                expected,
+                "routine toggle validation changed fields other than enabled",
+            ))
+        },
+    )
 }
 
 /// Rewrite only the top-level `enabled:` line of a routine document, keeping

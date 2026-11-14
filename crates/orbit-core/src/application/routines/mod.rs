@@ -22,6 +22,7 @@ pub use orbit_clock as clock;
 mod leases;
 pub use orbit_automation::routines::due;
 pub mod edit_contract;
+mod guarded_edit;
 pub mod loader;
 pub(crate) mod materialize;
 mod resident_port;
@@ -48,18 +49,16 @@ pub use loader::{
 };
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
-    FireField, RoutineField, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome,
-    ScheduleDisplayState, pause_routine, project_fire, recent_fires, resume_routine,
-    routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
-    toggle_listed_routine,
+    FireField, RoutineField, RoutineStatus, RoutineStatusReport, ScheduleDisplayState,
+    pause_routine, project_fire, recent_fires, resume_routine, routine_statuses_with_providers,
+    select_listed_routine, set_routine_enabled, toggle_listed_routine,
 };
 pub use sweep::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     run_sweep_at_with_providers, run_sweep_with_providers,
 };
 pub use trigger_edit::{
-    RoutineTriggerEditOutcome, RoutineTriggerOptions, edit_listed_routine_trigger,
-    set_routine_trigger, trigger_options,
+    RoutineTriggerOptions, edit_listed_routine_trigger, set_routine_trigger, trigger_options,
 };
 
 /// Who this machine is, as reported by routine status and sweep output.
