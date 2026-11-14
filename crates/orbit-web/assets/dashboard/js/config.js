@@ -18,7 +18,7 @@ import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, get
 import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
-import { renderSettingsBar, settingsEditButton, settingsKeyName, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource } from './settings-ui.js';
+import { renderSettingsBar, settingsEditButton, settingsKeyName, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, settingsSourceIsSet } from './settings-ui.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -855,7 +855,7 @@ function crewRow(crew, payload) {
     crewLimitCell(crew.limit),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.effort) }),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.tags) }),
-    crew.source ? settingsSource(crew.source, { set: crew.source === "workspace" || crew.source === "global" }) : el("span", { class: "settings-value none", text: EMPTY_ARRAY }),
+    crew.source ? settingsSource(crew.source, { set: settingsSourceIsSet(crew.source) }) : el("span", { class: "settings-value none", text: EMPTY_ARRAY }),
     usedBy,
     editable(payload) ? settingsEditButton(() => startEdit({ kind: "crew", name: crew.name }), `Edit crew ${crew.name}`) : null,
   ].map((value, index) => el("div", { class: `config-crew-cell${CREW_DETAIL_COLUMNS.has(index) ? " config-crew-detail" : ""}${value ? "" : " config-crew-blank"}` }, [
