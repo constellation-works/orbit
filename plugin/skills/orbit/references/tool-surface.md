@@ -157,9 +157,9 @@ drain still requires operator authorization.
 
 | Code | Remedy |
 |---|---|
-| `unknown_task_prefix` | Check `orbit host list`, then register the task's host with `orbit host add <ssh-target>`. Legacy rows have no prefix until migrated. |
+| `unknown_task_prefix` | Check `orbit host list`, then register the task's host with `orbit host add <ssh-target>`. |
 | `task_prefix_remote` | Use federated MCP or the CLI's ID route, or connect directly to the named host and select its workspace. A direct MCP server does not relay. |
-| `unknown_host` | Copy the exact name or machine ID from `orbit host list`; register a missing host or migrate its legacy row with `orbit host add`. |
+| `unknown_host` | Copy the exact name or machine ID from `orbit host list`; register a missing host with `orbit host add <ssh-target>`. |
 | `owner_unreachable` | Restore SSH and the task host's Orbit process. If the error names a local mirror, select it explicitly for a labelled snapshot read. |
 | `unreachable_destination` | Check that the registered SSH target logs in without a prompt and has `orbit` on PATH, then retry discovery. |
 | `stale_route` | Select a workspace the host's live list reports; repair its registration on that host if it should exist. |
@@ -169,8 +169,8 @@ drain still requires operator authorization.
 | `capability_refused` | Follow the named authority/owner restriction. A replica or local-host pull is not an owner route; routing grants no extra capability. |
 | `protocol_skew` | Deploy matching Orbit builds and restart long-lived processes on both endpoints before a new pull drain. |
 
-Registration errors, the doctor's `hosts` row and the one-release legacy-file
-migration are in [remote-access.md](../../orbit-setup/references/remote-access.md).
+Registration errors, the doctor's `hosts` row and the retired destinations file
+recovery are in [remote-access.md](../../orbit-setup/references/remote-access.md).
 
 ## Model provenance
 
