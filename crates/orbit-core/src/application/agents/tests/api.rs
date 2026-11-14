@@ -1937,3 +1937,84 @@ fn recorded_effort_wins_over_a_crew_label_effort() {
         json!({"follower_report": 1})
     );
 }
+
+/// [ORB-24640] A terminal pulled task whose follower reported provider-default
+/// effort keeps its `m1 @ provider default` grouping and `follower_report`
+/// source on a second unchanged scan that reuses the stored-facts cache,
+/// even when its crew label names a different effort; a missing report and
+/// a named effort stay distinct across the same reuse. Before the fix the
+/// cached row wrote the provider-default report as `null` and read it back
+/// as no report, so the warm scan fell back to the crew label.
+#[test]
+fn provider_default_report_survives_stored_facts_reuse() {
+    let cold = labelled_facts(&[
+        // Conflicting crew suffix: the reported default must still win warm.
+        LabelledUnit {
+            task_id: "pulled-default",
+            crew: "opus@high",
+            run: None,
+            reported: Some(None),
+        },
+        LabelledUnit {
+            task_id: "pulled-missing",
+            crew: "opus",
+            run: None,
+            reported: None,
+        },
+        LabelledUnit {
+            task_id: "pulled-named",
+            crew: "opus",
+            run: None,
+            reported: Some(Some("low".into())),
+        },
+    ]);
+    // The stored-facts cache round trip `StoredFacts::keep`/`entry` perform.
+    let warm_tasks: Vec<TaskFacts> = cold
+        .tasks
+        .iter()
+        .map(|task| serde_json::from_str(&serde_json::to_string(task).unwrap()).unwrap())
+        .collect();
+    let (charges, credits) = attribution::attribute(&warm_tasks, &[], &[]);
+    let warm = AgentFacts {
+        invocations: Default::default(),
+        launches: Default::default(),
+        computed_at: cold.computed_at,
+        tasks_scanned: cold.tasks_scanned,
+        tasks: warm_tasks,
+        charges,
+        credits,
+        run_costs: BTreeMap::new(),
+        regressions: Vec::new(),
+        landed_lines: BTreeMap::new(),
+        performance_types: Vec::new(),
+        pilots: Vec::new(),
+    };
+    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
+    let cold_payload = agent_scorecard(&cold, AgentRole::Implementers, &query, Duration::ZERO);
+    let warm_payload = agent_scorecard(&warm, AgentRole::Implementers, &query, Duration::ZERO);
+    assert_eq!(
+        warm_payload["rows"], cold_payload["rows"],
+        "an unchanged warm scan must preserve the cold scan's grouping"
+    );
+    let rows = warm_payload["rows"].as_array().unwrap();
+    let by_label = |label: &str| {
+        rows.iter()
+            .find(|row| row["label"] == label)
+            .unwrap_or_else(|| panic!("no {label} row: {warm_payload}"))
+    };
+    assert_eq!(
+        by_label("m1 @ provider default")["effort_sources"],
+        json!({"follower_report": 1}),
+        "the provider-default report survives cache reuse: {warm_payload}"
+    );
+    assert_eq!(
+        by_label("m1 @ effort unknown")["effort_sources"],
+        json!({"unrecorded": 1}),
+        "a missing report stays distinct: {warm_payload}"
+    );
+    assert_eq!(
+        by_label("m1 @ low")["effort_sources"],
+        json!({"follower_report": 1}),
+        "a named effort stays distinct: {warm_payload}"
+    );
+}
