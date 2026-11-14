@@ -242,6 +242,12 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// its `limit`.
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError>;
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
+    /// Only the run's lifecycle state: no step rows, no input and no pipeline
+    /// state. The default hydrates the whole run; persistent backends read
+    /// the one column.
+    fn get_job_run_state(&self, run_id: &str) -> Result<Option<JobRunState>, OrbitError> {
+        Ok(self.get_job_run(run_id)?.map(|run| run.state))
+    }
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn insert_job_run(
         &self,

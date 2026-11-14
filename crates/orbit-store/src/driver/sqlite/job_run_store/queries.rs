@@ -11,6 +11,8 @@ use orbit_types::workflow::{
     run_id_minute_stem,
 };
 
+use rusqlite::OptionalExtension;
+
 use super::input_keys::parse_input_keys;
 use super::state::write_state_json_conn;
 use crate::contracts::{JobRunOrder, JobRunQuery};
@@ -184,6 +186,31 @@ impl Store {
     ) -> Result<Option<JobRun>, OrbitError> {
         let conn = self.read()?;
         get_job_run_for_workspace_conn(&conn, workspace_id, run_id)
+    }
+
+    /// The one-column counterpart of [`Self::get_job_run_for_workspace`]:
+    /// no run row, step rows, input or pipeline state.
+    pub fn get_job_run_state_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<JobRunState>, OrbitError> {
+        let conn = self.read()?;
+        let state = conn
+            .query_row(
+                "SELECT state FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+                rusqlite::params![workspace_id, run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)?;
+        state
+            .map(|raw| {
+                parse_job_run_state(&raw).map_err(|error| {
+                    OrbitError::Store(format!("invalid job run state for {run_id}: {error}"))
+                })
+            })
+            .transpose()
     }
 
     /// Every workspace id this store records `run_id` under, ascending,
