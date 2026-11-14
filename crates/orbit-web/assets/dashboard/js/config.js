@@ -14,7 +14,7 @@
 // config-topics.js and the blocks every page shares in settings-ui.js; this
 // module owns the tab, Crews and the throttle panel.
 
-import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, teardownNode } from './common.js';
 import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
@@ -140,6 +140,9 @@ function render(payload) {
 }
 
 function renderPanels(payload, body) {
+  // replaceChildren detaches without running teardown, so a poll would leave
+  // the previous render's clamp spans observed. Release them first.
+  teardownNode(body);
   body.replaceChildren();
   const ctx = viewContext(payload);
   let bar;

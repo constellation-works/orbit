@@ -587,6 +587,9 @@ function clampedLine(id, text) {
   if (typeof ResizeObserver === 'function') {
     clampObserver ||= new ResizeObserver((entries) => { for (const entry of entries) syncClamp(entry.target); });
     clampObserver.observe(clamp);
+    // The observer keeps a target until unobserve. A Settings poll replaces
+    // this line, and resetPanel drops the body; both run teardownNode.
+    clamp.teardown = () => clampObserver.unobserve(clamp);
   }
   return el('div', { class: 'settings-meta settings-line' }, [clamp, more]);
 }
