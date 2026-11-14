@@ -1174,12 +1174,11 @@ evidence produce typed `delivery_evidence_stale` holds. A permanent failure to
 read required-check evidence in auto-fix, including a credential or permission
 refusal, holds as `delivery_check_evidence_inconclusive` before or after a
 completion mutation; no repair agent runs and no merge is admitted on that
-evidence. Permanent forge-read failures at other boundaries, a candidate-caused
-required-check failure whose one automatic repair is still available, and
-unlisted refusals remain failures. Once that repair is spent, the same
-failure holds as `delivery_landing_repair_requeue`: the claim ends, the
-task returns to the backlog with the candidate kept (or blocks once the
-landing repair budget is spent), and the held run is not resumed. Transport failures after a merge,
+evidence. Permanent forge-read failures at other boundaries and unlisted
+refusals remain failures. A candidate-caused required-check failure holds as
+`delivery_landing_repair_requeue`: the claim ends, the task returns to the
+backlog with the candidate kept (or blocks once the landing repair budget is
+spent), and the held run is not resumed. Transport failures after a merge,
 auto-merge or rebase request (in that run or recorded in the task's history)
 also remain failures, except that a narrowly classified synchronous HTTP
 500/502/503/504 merge server error permits one read-only reconciliation within

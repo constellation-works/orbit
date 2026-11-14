@@ -18,7 +18,7 @@ use super::super::jobs::describe;
 use super::classify::{ClassifiedFailures, classify_failed_checks, task_history};
 use super::{CheckFailureClass, CheckRecovery, CheckRecoveryStep, unreadable_job_text};
 
-/// What a candidate-caused failure does once the automatic repair is spent.
+/// The requeue evidence for a failure whose automatic repair is already spent.
 const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the owner ends the claim \
      and returns the task to the backlog, where its next run repairs this candidate";
 
@@ -184,11 +184,11 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         }
     }
 
-    // [model ranking §5.1] A candidate set routed to repair with no evidence
-    // of its cause (no job cites a changed file, none is the base's or the
-    // infrastructure's, every log was read), on a head that has had no
-    // rerun, is rerun once first: the second result classes it as flaky or
-    // the head's own. Unreadable evidence keeps its stop and spends nothing.
+    // [model ranking §5.1] A candidate set with no evidence of its cause (no
+    // job cites a changed file, none is the base's or the infrastructure's,
+    // every log was read), on a head that has had no rerun, is rerun once
+    // first: the second result classes it as flaky or the head's own.
+    // Unreadable evidence keeps its stop and spends nothing.
     if class == CheckFailureClass::Candidate
         && !has_aggregates
         && !jobs.iter().any(|job| {
@@ -267,8 +267,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         {
             // An update already landed the candidate on a base tip where
             // the same job passes, so the failure that remains is the
-            // candidate's. It takes the same single repair a candidate-class
-            // failure does, and a spent repair requeues with the run held.
+            // candidate's. It takes one automatic repair, and a spent repair
+            // requeues with the run held.
             if context.automatic_repair_spent {
                 Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
             } else {
