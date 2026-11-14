@@ -47,7 +47,7 @@
 //! or, when the note names no landing and the task leaves `review`, the PR it
 //! was reviewed through. The whole pass
 //! is best effort: the transition has already been written, so a forge error is
-//! a warning (log plus session event), never a failure. Each successful close
+//! a logged warning, never a failure. Each successful close
 //! is recorded in the task's history with its comment. Branches are kept.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,7 +55,6 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInspection, JobRunQuery};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskHistoryEntry, TaskStatus,
     names_task_delivery_pull_request,
@@ -237,10 +236,6 @@ impl OrbitRuntime {
                         status = %task.status,
                         "{closed_message}"
                     );
-                    self.record_session_event(OrbitEvent::TaskPullRequestClosed {
-                        task_id: task.id.clone(),
-                        pr_number: pr.number,
-                    });
                     if let Err(error) = self.append_system_history(
                         &task.id,
                         vec![TaskHistoryEntry {
@@ -479,15 +474,6 @@ impl OrbitRuntime {
             "could not close an Orbit-authored pull request after the task's terminal decision; \
              the transition stands"
         );
-        self.record_session_event(OrbitEvent::TaskPullRequestCloseFailed {
-            task_id: task_id.to_string(),
-            pr_number,
-            reason: error.to_string(),
-        });
-    }
-
-    fn record_session_event(&self, event: OrbitEvent) {
-        self.event_log.append(event);
     }
 }
 

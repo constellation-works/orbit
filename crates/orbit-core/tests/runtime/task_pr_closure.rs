@@ -236,23 +236,6 @@ impl Fixture {
             BOT,
         );
     }
-
-    fn session_event_types(&self) -> Vec<(String, Value)> {
-        self.runtime
-            .list_session_events(200)
-            .expect("session events")
-            .into_iter()
-            .map(|event| {
-                (
-                    event.payload["type"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    event.payload["data"].clone(),
-                )
-            })
-            .collect()
-    }
 }
 
 #[test]
@@ -495,15 +478,6 @@ fn forge_errors_are_warnings_and_never_fail_the_transition() {
         vec![13],
         "the other PR still closes"
     );
-
-    let failures = fx
-        .session_event_types()
-        .into_iter()
-        .filter(|(kind, _)| kind == "TaskPullRequestCloseFailed")
-        .map(|(_, data)| (data["task_id"].clone(), data["pr_number"].clone()))
-        .collect::<Vec<_>>();
-    assert!(failures.contains(&(json!(listed), Value::Null)));
-    assert!(failures.contains(&(json!(closing), json!(11))));
 }
 
 #[test]

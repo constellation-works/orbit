@@ -411,74 +411,7 @@ impl OrbitRuntime {
             )?;
             let approved_from_proposed = task.status == TaskStatus::Proposed;
             warn_unmet_dependencies();
-            started = Some(self.with_mutation(|| {
-                // A start from `proposed` is two transitions, and history must
-                // read that way: approve into backlog first, then start from
-                // backlog. Writing them as two record updates under the task
-                // lock lets the store derive each event's `from_status` from
-                // the status it actually left, instead of stamping `started`
-                // with `proposed` after a hand-built approval entry.
-                //
-                // The start write can still be refused after approval, for
-                // example by a concurrent claim. Report that partial outcome.
-                if approved_from_proposed {
-                    self.stores().task_records().update(
-                        id,
-                        StoreTaskUpdateParams {
-                            actor: effective_label.clone(),
-                            status_event: Some("proposal_approved".to_string()),
-                            status_note: note.clone(),
-                            expected_status: Some(vec![TaskStatus::Proposed]),
-                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::Backlog),
-                                ..Default::default()
-                            })
-                        },
-                    )?;
-                }
-                let started = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        planned_by: attribution.planned_by.clone(),
-                        status_event: Some("started".to_string()),
-                        status_note: (!approved_from_proposed)
-                            .then(|| note.clone())
-                            .flatten(),
-                        append_comments: append_comments.clone(),
-                        crew_source: crew_source.clone(),
-                        append_history: crew_assignment
-                            .as_ref()
-                            .map(|assignment| {
-                                crew_assigned_history(
-                                    orbit_types::task::CrewAssignmentState::new(
-                                        task.crew.clone(),
-                                        task.crew_source.clone(),
-                                    ),
-                                    assignment,
-                                )
-                            })
-                            .into_iter()
-                            .chain(crew_redraw_history.clone())
-                            .collect(),
-                        artifact_owner_run_id: artifact_owner.clone(),
-                        expected_status: Some(vec![if approved_from_proposed {
-                            TaskStatus::Backlog
-                        } else {
-                            task.status
-                        }]),
-                        ..StoreTaskUpdateParams::from(start_edits.clone())
-                    },
-                )?;
-                Ok((
-                    started,
-                    OrbitEvent::TaskStarted {
-                        id: id.to_string(),
-                        started_by: effective_label.clone(),
-                        approved_from_proposed,
-                    },
-                ))
-            }).map_err(|error| {
+            let start_error = |error| {
                 if !approved_from_proposed {
                     return error;
                 }
@@ -493,7 +426,67 @@ impl OrbitRuntime {
                     ),
                 };
                 proposed_start_error_with_context(error, &state)
-            })?);
+            };
+            // A start from `proposed` is two transitions, and history must
+            // read that way: approve into backlog first, then start from
+            // backlog. Writing them as two record updates under the task
+            // lock lets the store derive each event's `from_status` from
+            // the status it actually left, instead of stamping `started`
+            // with `proposed` after a hand-built approval entry.
+            //
+            // The start write can still be refused after approval, for
+            // example by a concurrent claim. Report that partial outcome.
+            if approved_from_proposed {
+                self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        status_event: Some("proposal_approved".to_string()),
+                        status_note: note.clone(),
+                        expected_status: Some(vec![TaskStatus::Proposed]),
+                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                            status: Some(TaskStatus::Backlog),
+                            ..Default::default()
+                        })
+                    },
+                ).map_err(start_error)?;
+            }
+            let task = self.stores().task_records().update(
+                id,
+                StoreTaskUpdateParams {
+                    actor: effective_label.clone(),
+                    planned_by: attribution.planned_by.clone(),
+                    status_event: Some("started".to_string()),
+                    status_note: (!approved_from_proposed)
+                        .then(|| note.clone())
+                        .flatten(),
+                    append_comments: append_comments.clone(),
+                    crew_source: crew_source.clone(),
+                    append_history: crew_assignment
+                        .as_ref()
+                        .map(|assignment| {
+                            crew_assigned_history(
+                                orbit_types::task::CrewAssignmentState::new(
+                                    task.crew.clone(),
+                                    task.crew_source.clone(),
+                                ),
+                                assignment,
+                            )
+                        })
+                        .into_iter()
+                        .chain(crew_redraw_history.clone())
+                        .collect(),
+                    artifact_owner_run_id: artifact_owner.clone(),
+                    expected_status: Some(vec![if approved_from_proposed {
+                        TaskStatus::Backlog
+                    } else {
+                        task.status
+                    }]),
+                    ..StoreTaskUpdateParams::from(start_edits.clone())
+                },
+            ).map_err(start_error)?;
+            started = Some(task);
+
             Ok(())
         })?;
         started.ok_or_else(|| {

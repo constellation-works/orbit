@@ -41,7 +41,6 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
@@ -444,32 +443,24 @@ impl OrbitRuntime {
                 if current.blocked_at != scanned.blocked_at || current.held.is_some() {
                     return Ok(());
                 }
-                self.with_mutation(|| {
-                    let updated = self.stores().task_records().update(
-                        &scanned.task_id,
-                        StoreTaskUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            append_history: vec![TaskHistoryEntry {
-                                at: Utc::now(),
-                                by: SYSTEM_ACTOR_LABEL.to_string(),
-                                event: event.to_string(),
-                                note: Some(format!("run_id={}: {reason}", scanned.run_id)),
-                                from_status: None,
-                                to_status: None,
-                                operation_id: None,
-                                decision: None,
-                            }],
-                            expected_status: Some(vec![TaskStatus::Blocked]),
-                            ..Default::default()
-                        },
-                    )?;
-                    Ok((
-                        updated,
-                        OrbitEvent::TaskUpdated {
-                            id: scanned.task_id.clone(),
-                        },
-                    ))
-                })?;
+                self.stores().task_records().update(
+                    &scanned.task_id,
+                    StoreTaskUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        append_history: vec![TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: event.to_string(),
+                            note: Some(format!("run_id={}: {reason}", scanned.run_id)),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        expected_status: Some(vec![TaskStatus::Blocked]),
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })
     }

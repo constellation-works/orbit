@@ -1,30 +1,18 @@
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::{enter_isolated_child, test_runtime};
 
 /// Fault injection: the crew provenance write after the insert fails once.
-/// The insert has committed, so every create must report that task and
-/// publish its event, and no retry may insert a second one.
+/// The insert has committed, so every create must report that task,
+/// and no retry may insert a second one.
 #[test]
-fn creation_provenance_failure_keeps_one_task_and_its_event() {
-    if !enter_isolated_child(
-        module_path!(),
-        "creation_provenance_failure_keeps_one_task_and_its_event",
-    ) {
+fn creation_provenance_failure_keeps_one_task() {
+    if !enter_isolated_child(module_path!(), "creation_provenance_failure_keeps_one_task") {
         return;
     }
     let (_root, runtime) = test_runtime();
-    let task_added = |id: &str| {
-        runtime
-            .event_log
-            .snapshot()
-            .iter()
-            .filter(|event| matches!(event, OrbitEvent::TaskAdded { id: added } if added == id))
-            .count()
-    };
     let crew_history = |id: &str| {
         runtime
             .get_task_history(id)
@@ -60,11 +48,6 @@ fn creation_provenance_failure_keeps_one_task_and_its_event() {
             "{key:?}: the injected fault hit provenance"
         );
         assert_eq!(
-            task_added(&id),
-            1,
-            "{key:?}: the committed insert emits TaskAdded"
-        );
-        assert_eq!(
             runtime.list_tasks().expect("tasks").len(),
             before + 1,
             "{key:?}: the failed provenance write leaves exactly one task"
@@ -75,7 +58,6 @@ fn creation_provenance_failure_keeps_one_task_and_its_event() {
                 .add_task_admitted_guarded(params, None, None, key, digest)
                 .expect("keyed retry replays");
             assert_eq!(retry.id, id, "{key:?}: the retry returns the original task");
-            assert_eq!(task_added(&id), 1, "{key:?}: a replay emits no event");
             assert_eq!(runtime.list_tasks().expect("tasks").len(), before + 1);
         }
     }
@@ -87,10 +69,10 @@ fn creation_provenance_failure_keeps_one_task_and_its_event() {
 /// crew before another retry. The internal keyed admission seam is not
 /// exposed by ordinary task-add transports.
 #[test]
-fn keyed_creation_lost_reply_replays_without_history_or_events() {
+fn keyed_creation_lost_reply_replays_without_history_changes() {
     if !enter_isolated_child(
         module_path!(),
-        "keyed_creation_lost_reply_replays_without_history_or_events",
+        "keyed_creation_lost_reply_replays_without_history_changes",
     ) {
         return;
     }
@@ -152,16 +134,6 @@ fn keyed_creation_lost_reply_replays_without_history_or_events() {
             runtime.get_task_history(&task.id).expect("final history"),
             history,
             "replay must not append stale creation provenance"
-        );
-        assert_eq!(
-            runtime
-                .event_log
-                .snapshot()
-                .iter()
-                .filter(|event| { matches!(event, OrbitEvent::TaskAdded { id } if id == &task.id) })
-                .count(),
-            1,
-            "ORB-14352: only the first creation emits TaskAdded"
         );
     }
     assert_eq!(runtime.list_tasks().expect("tasks").len(), 2);
