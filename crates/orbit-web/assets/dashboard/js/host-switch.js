@@ -88,9 +88,13 @@ function rememberHost(name) {
 /// chosen name (null for the serving host) when the operator switches.
 export async function initHostSwitcher({ select }) {
   onSelect = select;
+  // A failed read is not evidence a host was deregistered, so it must not
+  // forget the remembered host below.
+  let hostsKnown = false;
   try {
     const payload = await fetchJson("/api/hosts?probe=false");
     setRegisteredHosts(payload && payload.hosts);
+    hostsKnown = true;
   } catch (error) {
     console.error("Failed to read registered hosts", error);
     setRegisteredHosts([]);
@@ -102,8 +106,8 @@ export async function initHostSwitcher({ select }) {
     setHost(params.get("host"));
   } else {
     const remembered = rememberedHost();
-    const row = remembered ? findRegisteredHost(remembered) : null;
-    if (remembered && (!row || row.local)) rememberHost(null);
+    const row = remembered && hostsKnown ? findRegisteredHost(remembered) : null;
+    if (remembered && hostsKnown && (!row || row.local)) rememberHost(null);
     setHost(row && !row.local ? row.name : null);
   }
   buildPicker();

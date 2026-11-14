@@ -43,6 +43,7 @@ export function fetchAndRenderRank({ window: selectedWindow, execution, live, on
     disclosureScope = scope;
     rankedOpen = false;
     pendingOpen = false;
+    openModels.clear();
   }
   const body = document.getElementById(BODY_ID);
   if (body) body.classList.add("agents-body-rank");

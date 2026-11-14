@@ -229,7 +229,7 @@ function lockRow(row, blocking) {
   group.dataset.key = key;
   group.dataset.hash = JSON.stringify([
     path,
-    owners.map(owner => [owner.owner, [...owner.via], [...owner.selectors], [...owner.runs], owner.task?.status, owner.task?.title, blocking.get(owner.taskId) || 0]),
+    owners.map(owner => [owner.owner, owner.actor, owner.expires, [...owner.via], [...owner.selectors], [...owner.runs], owner.task?.status, owner.task?.title, blocking.get(owner.taskId) || 0]),
     filter?.id || null,
   ]);
   const details = detailsPanel(key, { class: "lock-details" });

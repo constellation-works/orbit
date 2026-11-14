@@ -227,6 +227,7 @@ function chartNode(drawnSeries) {
       if (wrap.clientWidth > 0) draw();
     });
     observer.observe(wrap);
+    wrap.teardown = () => observer.disconnect();
   }
   requestAnimationFrame(() => { if (wrap.isConnected && wrap.clientWidth > 0) draw(); });
   return wrap;

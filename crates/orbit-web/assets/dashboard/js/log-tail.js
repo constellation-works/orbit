@@ -937,9 +937,15 @@ function connectLogStream() {
   logStream.onmessage = (e) => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);
-    rememberStreamOffset(e.lastEventId);
+    let ev;
     try {
-      const ev = JSON.parse(e.data);
+      ev = JSON.parse(e.data);
+    } catch (err) {
+      console.error("Failed to parse SSE event", err);
+      rememberStreamOffset(e.lastEventId);
+      return;
+    }
+    try {
       noteLogStatusEvent(ev);
       if (logFollowTail) {
         const inner = $("logInner");
@@ -955,8 +961,12 @@ function connectLogStream() {
         bufferPausedLogEvent(ev);
       }
     } catch (err) {
-      console.error("Failed to parse SSE event", err);
+      // Do not advance the cursor: a reconnect replays this event instead
+      // of permanently dropping a line the render failed on.
+      console.error("Failed to render SSE event", err);
+      return;
     }
+    rememberStreamOffset(e.lastEventId);
   };
   logStream.onerror = () => {
     setLogStreamConnected(false);

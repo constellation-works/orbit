@@ -8,6 +8,7 @@ let bulkRemoval = null;
 let workflowQuery = '';
 let workflowCollapsed = new Set(); // the saved layout, in force when no search is active
 let workflowSearchCollapsed = new Set(); // sections collapsed while a search is active
+let workflowNavObserver = null; // the live workflow-nav ResizeObserver, released on rerender/teardown
 let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
@@ -61,7 +62,9 @@ function isStructured(row) {
   return isTable(row) || isTableList(row);
 }
 // TOML inline-table text for a JSON table, as `orbit config set` reads it.
+// TOML has no null, so a null leaf cannot be shown as a runnable command.
 function tomlInline(v) {
+  if (v === null) throw new Error('TOML cannot represent null');
   if (Array.isArray(v)) return `[${v.map(tomlInline).join(', ')}]`;
   if (v && typeof v === 'object') {
     const key = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
@@ -178,11 +181,15 @@ export function cliCmd(row, scope, text) {
   } else if (isTable(row)) {
     let parsed = null;
     try { parsed = JSON.parse(text.trim() || '{}'); } catch { parsed = null; }
-    v = shellQuote(parsed && typeof parsed === 'object' ? tomlInline(parsed) : text);
+    if (parsed && typeof parsed === 'object') {
+      try { v = shellQuote(tomlInline(parsed)); } catch { return '# TOML cannot represent null: remove null values to use this command'; }
+    } else v = shellQuote(text);
   } else if (isTableList(row)) {
     let parsed = null;
     try { parsed = JSON.parse(text.trim() || '[]'); } catch { parsed = null; }
-    v = shellQuote(Array.isArray(parsed) ? tomlInline(parsed) : text);
+    if (Array.isArray(parsed)) {
+      try { v = shellQuote(tomlInline(parsed)); } catch { return '# TOML cannot represent null: remove null values to use this command'; }
+    } else v = shellQuote(text);
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
@@ -484,7 +491,16 @@ export function renderWorkflow(body, payload, context) {
     document.querySelector('button.workflow-collapse-all')?.focus({ preventScroll: true });
   });
   nav.append(expandAll, collapseAll);
-  if (typeof ResizeObserver === 'function') new ResizeObserver(() => syncWorkflowNavOffset(nav)).observe(nav);
+  if (typeof ResizeObserver === 'function') {
+    workflowNavObserver?.disconnect();
+    const observer = new ResizeObserver(() => syncWorkflowNavOffset(nav));
+    workflowNavObserver = observer;
+    observer.observe(nav);
+    nav.teardown = () => {
+      observer.disconnect();
+      if (workflowNavObserver === observer) workflowNavObserver = null;
+    };
+  }
   nodes.push(nav);
   if (query && !shown.length) {
     const empty = el('section', { class: 'panel config-section' });
