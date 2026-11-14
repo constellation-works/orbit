@@ -8,6 +8,105 @@
 //! Rendered bytes stay the historical strings, including each producer's
 //! separator, so rows already stored still parse. The history record stays a
 //! note string.
+//!
+//! Failed reviewer-fix validation additionally records a versioned JSON note;
+//! its display comment is read only for historical comment-only records.
+
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::task::{self, TaskComment, TaskHistoryEntry};
+
+/// History event published atomically with a failed reviewer-fix escalation.
+pub const REVIEW_FIX_VALIDATION_FAILED_EVENT: &str = "review_fix_validation_failed";
+/// Version of the JSON note on [`REVIEW_FIX_VALIDATION_FAILED_EVENT`].
+pub const REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION: u32 = 1;
+
+/// Reviewer fixes that failed owner validation on the preserved candidate.
+///
+/// The attempt is provenance. Scoring still associates the failure with the
+/// nearest earlier review, including for historical comment-only failures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordedReviewFixValidationFailure {
+    /// Version of this history note's contract.
+    pub schema_version: u32,
+    /// Delivery run that failed reviewer-fix validation.
+    pub run_id: String,
+    /// Admitted review attempt, when available.
+    pub attempt_id: Option<String>,
+    /// Preserved head whose validation failed.
+    pub candidate_commit: String,
+}
+
+impl RecordedReviewFixValidationFailure {
+    /// JSON history note with the same timestamp and author as its display comment.
+    pub fn history_entry(
+        &self,
+        at: DateTime<Utc>,
+        by: &str,
+    ) -> Result<TaskHistoryEntry, serde_json::Error> {
+        Ok(TaskHistoryEntry {
+            at,
+            by: by.to_string(),
+            event: REVIEW_FIX_VALIDATION_FAILED_EVENT.to_string(),
+            note: Some(serde_json::to_string(self)?),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        })
+    }
+
+    /// Decode this event's versioned note once; other events are not failures.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != REVIEW_FIX_VALIDATION_FAILED_EVENT {
+            return None;
+        }
+        serde_json::from_str::<Self>(entry.note.as_deref()?)
+            .ok()
+            .filter(|record| record.schema_version == REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION)
+    }
+}
+
+/// Failure timestamps for the task-facts boundary's nearest-earlier-review policy.
+///
+/// Typed history takes precedence over its paired display comment. Legacy
+/// comments carry no required provenance, so this projection deliberately keeps
+/// only the timestamp needed for scoring, rather than inventing missing fields.
+#[must_use]
+pub fn review_fix_validation_failure_times(
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+) -> Vec<DateTime<Utc>> {
+    let recorded: BTreeSet<_> = history
+        .iter()
+        .filter_map(|entry| {
+            RecordedReviewFixValidationFailure::from_entry(entry)
+                .map(|_| (entry.at, entry.by.as_str()))
+        })
+        .collect();
+    let mut failures: Vec<_> = recorded.iter().map(|(at, _)| *at).collect();
+    failures.extend(
+        comments
+            .iter()
+            .filter(|comment| !recorded.contains(&(comment.at, comment.by.as_str())))
+            .filter(|comment| legacy_review_fix_validation_failure(comment))
+            .map(|comment| comment.at),
+    );
+    failures.sort();
+    failures
+}
+
+/// Sole compatibility decoder of the historical escalation prose.
+fn legacy_review_fix_validation_failure(comment: &TaskComment) -> bool {
+    comment.message.contains("## Review gate escalation")
+        && comment.message.contains("Verdict: `reject`")
+        // A settlement can quote escalation prose; settlement always wins.
+        && task::recorded_review_settlements(&[], std::slice::from_ref(comment)).is_empty()
+}
 
 /// Fields a review-gate history note carries for the automation that reads it.
 ///

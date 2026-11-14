@@ -1193,7 +1193,18 @@ failure handoff — for any failure of `review_gate_admit`, `review`,
 no verdict yet (§5), commits leftover reviewer work under the reviewer
 identity (`partial_repair_commit`), leaves the implementation and reviewer
 commits as they are, pushes the candidate branch, and opens no PR.
-Substantive failures block with `review_gate_escalation`. A reviewer wall-clock
+Substantive failures block with `review_gate_escalation`. When `review_validate`
+fails, that same task update also appends `review_fix_validation_failed`: its
+JSON note is a version-1 `RecordedReviewFixValidationFailure` containing the run,
+optional admitted attempt and preserved candidate commit. Existing status notes
+and escalation comments are unchanged. For failed-fix scoring, agents read the
+typed event once, suppress its paired comment by timestamp and author, and decode older
+comment-only failures through one compatibility reader. Settlement comments
+retain precedence when their findings quote escalation text. Failure attribution
+still uses the nearest earlier settled review; the recorded attempt is provenance
+and does not change that policy.
+
+A reviewer wall-clock
 failure permits one automatic requeue per task and implementation tree,
 recording `review_timeout_incomplete`, `candidate_tree` and
 `implementation_tree` in durable task history. The implementation tree is the

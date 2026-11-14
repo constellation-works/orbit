@@ -94,12 +94,3 @@ pub(in crate::application::agents) fn review_settlement_facts(
         })
         .collect()
 }
-
-/// The gate escalation of reviewer fixes that failed owner revalidation.
-pub(super) fn failed_fix(comment: &TaskComment) -> bool {
-    comment.message.contains("## Review gate escalation")
-        && comment.message.contains("Verdict: `reject`")
-        // A settlement's finding text can quote escalation prose. The old
-        // comment loop classified settlements first, so retain that priority.
-        && task::recorded_review_settlements(&[], std::slice::from_ref(comment)).is_empty()
-}
