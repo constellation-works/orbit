@@ -42,6 +42,8 @@ pub struct AdmissionOrdering {
     /// it. Empty leaves admission on the task's `os:` tags alone. Not part of
     /// the follower's request, so it does not change the request fingerprint.
     pub executor_host_os: BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+    /// The owner's configured tag-to-host-capability policy, never the follower's.
+    pub tag_label_requirements: orbit_types::task::TagLabelRequirements,
     /// Offer only a pending landing repair, never a backlog task: the
     /// owner's own repair pull, which its `orbit run auto` drain starts once
     /// a repair's fallback window has passed.

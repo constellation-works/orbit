@@ -2355,6 +2355,36 @@ orbit task update <id> --requires-labels ""   # clears the requirement
 - **Crew draws.** A creation-time complexity draw for a labelled task narrows the task's OS requirement to the OSes of the known hosts that carry its labels, so it does not draw a crew whose executor `host_os` excludes every such host.
 - **Mixed versions.** The pull request's `labels` field is part of the distributed-drain protocol fingerprint, so a follower and owner on releases with and without label support refuse each other's admission as protocol skew rather than ignoring the field. Upgrade the hosts in lockstep.
 
+A workspace can require capabilities for every task carrying a tag:
+
+```toml
+[workflow.tag_requires_labels]
+ui = ["visual-fixture"]
+```
+
+The effective requirement is the sorted, deduplicated union of the task's
+`requires_labels` and the labels mapped by **all** its tags. Tags match after
+trimming and lowercasing; blank tags, duplicate normalized keys and invalid
+labels are refused at config load. An empty array disables an inherited
+mapping for that tag. Workspace entries replace global entries with the same key spelling.
+The default map is empty. Derived labels are evaluated at each admission,
+including tasks filed before the mapping existed; they are never stored in
+`requires_labels`. Clearing the task field therefore leaves tag requirements
+in force. Local discovery, explicit ship, readiness, placement waits, creation
+crew draws, pull admission (including repairs) and executor-census affinity use
+the same effective set. The owner applies its mapping to pull requests; a
+follower's workspace configuration cannot weaken it. The built-in `ui`
+browser-kit requirement remains in force as well.
+
+Orbit's [workspace policy example](../config/orbit-workspace.toml) maps `ui`
+to `visual-fixture`. During rollout, merge that table into the owning workspace
+and add `visual-fixture` to `machine.labels` only on hosts where
+`scripts/visual-fixture-server.sh busy-workspace` has been verified **inside
+the managed worker runtime**, with a disposable home and workspace. A working
+browser kit or a host-shell fixture run alone does not establish that capability.
+A host whose worker denies the backend must omit the label. If no serving host
+carries it, UI tasks wait; the policy never infers a capability from the OS.
+
 ## Executor authentication recovery probes
 
 An executor may declare `spec.auth_probe`. Only a pull drain's **auth-excluded** providers run it: never at drain start, for healthy crews, after the window closes, or for capacity or refusal exclusions. The first attempt is due ten minutes after the failed leaf; failures wait twenty, then thirty minutes (the cap). Exclusions and probes are per provider account: a crew that sets [`env`](#per-crew-credentials-env) is excluded, probed and re-admitted alone, and the provider's default login covers its crews without `env`. A pass durably acknowledges those auth failures and re-admits that account's crews within the window; it never clears a preflight, capacity, crew or host exclusion. Without a probe the exclusion lasts the whole window: re-login and start a new drain. Owner-local drains use timed, task-specific [provider holds](#provider-failure-holds) instead. Drain-side view: [distributed drain runbook](runbooks/distributed-drain.md).

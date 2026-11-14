@@ -730,3 +730,11 @@ pub(super) fn resolve_activity_timeouts(
     }
     Ok(timeouts)
 }
+
+/// Admit the shared tag-to-host-capability policy at config load.
+pub(super) fn resolve_tag_requires_labels(
+    raw: Option<BTreeMap<String, Vec<String>>>,
+) -> Result<orbit_types::task::TagLabelRequirements, OrbitError> {
+    orbit_types::task::TagLabelRequirements::try_from(raw.unwrap_or_default())
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+}

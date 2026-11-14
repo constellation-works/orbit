@@ -84,6 +84,7 @@ pub(super) struct Screen<'a> {
     /// The requester's census row, upserted with whatever receipt this
     /// admission commits [ORB-17304]; absent for the owner's own identity.
     pub(super) census: Option<&'a ExecutorCensusEntry>,
+    pub(super) tag_label_requirements: &'a orbit_types::task::TagLabelRequirements,
 }
 
 impl Screen<'_> {
@@ -167,7 +168,12 @@ impl Screen<'_> {
         }
         // Nor one requiring a capability label the executor lacks. Read at
         // each admission, so a relabelled host or task applies to the next.
-        if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+        if let Some(reason) = labels_unavailable_with_tag_requirements(
+            request.os,
+            &request.labels,
+            task,
+            self.tag_label_requirements,
+        ) {
             receipt
                 .labels_unavailable
                 .push(diagnostic(reason, Vec::new()));

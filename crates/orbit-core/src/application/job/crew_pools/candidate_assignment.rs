@@ -186,7 +186,8 @@ impl OrbitRuntime {
                 source,
             }));
         }
-        let task_os = self.label_narrowed_os(TaskOsRequirement::from_tags(tags), requires_labels);
+        let required = self.effective_task_host_labels(tags, requires_labels);
+        let task_os = self.label_narrowed_os(TaskOsRequirement::from_tags(tags), &required);
         if let Some(route) = self.task_type_pool_route(complexity, tags, context_files)
             && let Some((candidates, _)) = self.type_pool_candidates(&route, Some(&task_os))?
         {

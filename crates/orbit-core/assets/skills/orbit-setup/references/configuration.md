@@ -649,6 +649,32 @@ wait such as:
 
 The task stays in the backlog while it waits.
 
+Map tags to required capabilities in the owning workspace's configuration:
+
+```toml
+[workflow.tag_requires_labels]
+ui = ["visual-fixture"]
+```
+
+Every matching tag adds its labels to the task's explicit `requires_labels`;
+all are required. Tags match after trimming and lowercasing, and the labels
+use the same normalization as `machine.labels`. The default map is empty.
+Workspace entries replace global entries with the same key spelling; `ui = []` disables an
+inherited mapping. Invalid labels, blank tags and duplicate normalized tag
+keys are refused at load. Derived labels apply to existing tasks at their
+next admission and are not stored on the task. Clearing `requires_labels`
+does not remove a tag's requirements. Local admission, placement, crew draws,
+pull admission and census affinity use this union. The owner supplies pull
+policy, so a follower cannot weaken it with its own map. The `ui` browser-kit
+check remains separate and mandatory.
+
+Before declaring `visual-fixture` in a host's `machine.labels`, verify the
+workspace's fixture backend inside that host's managed worker runtime, using
+a disposable home and workspace. A browser-kit verification or host-shell run
+alone does not prove the backend is available to workers. Hosts whose worker
+runtime denies it must omit the label. Labels describe capabilities, not OSes;
+if no serving host carries a required label, the task waits.
+
 ## Experiments
 
 Experiments compare a control arm with one or more treatments for agent work.

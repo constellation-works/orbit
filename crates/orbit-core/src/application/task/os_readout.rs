@@ -19,6 +19,7 @@ pub struct TaskOsReadout {
     human_crews: BTreeSet<String>,
     limits: BTreeMap<String, ExecutorOsLimit>,
     fleet: Vec<FleetLabelHost>,
+    tag_label_requirements: orbit_types::task::TagLabelRequirements,
 }
 
 impl TaskOsReadout {
@@ -46,6 +47,7 @@ impl TaskOsReadout {
             human_crews,
             limits: runtime.executor_host_os_limits()?,
             fleet: runtime.fleet_label_hosts(),
+            tag_label_requirements: runtime.tag_label_requirements().clone(),
         })
     }
 
@@ -147,7 +149,10 @@ impl TaskOsReadout {
     /// Why `task` waits for a host carrying its `requires_labels`, while no
     /// live host carries them all, or `None`.
     pub fn placement_wait(&self, task: &Task) -> Option<String> {
-        label_placement_wait(task, &self.fleet)
+        let required = self
+            .tag_label_requirements
+            .required_labels(&task.tags, &task.requires_labels);
+        label_placement_wait(task, &required, &self.fleet)
     }
 
     /// Replace any tags-only base enrichment with this host's derived value,

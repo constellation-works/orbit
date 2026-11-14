@@ -75,8 +75,9 @@ pub use granted_tools::{
     granted_tools_change_note, tool_names_migrated_note,
 };
 pub use host_labels::{
-    MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, effective_host_labels, host_labels_unavailable,
-    host_labels_wait, missing_host_labels, normalize_host_labels, quoted_labels,
+    MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, TAG_REQUIRES_LABELS_KEY, TagLabelRequirements,
+    effective_host_labels, host_labels_unavailable, host_labels_wait, missing_host_labels,
+    normalize_host_labels, quoted_labels,
 };
 pub use light_delivery::{
     DEFAULT_LIGHT_DELIVERY_PATHS, GuardOutcome, LIGHT_DELIVERY_APPLIED_EVENT,
