@@ -431,17 +431,58 @@ impl Fixture {
         self.write_checkpoint(brief, run, json!({"outcome": outcome}));
     }
 
-    /// Echo continuity and conversation_ref exactly as resident_cycle.yaml instructs.
+    /// Dispatch the shipped activity to a substitute provider that interprets
+    /// its checkpoint example. Relay the provider's call through the public
+    /// tool boundary; never add fields to the record on the provider's behalf.
+    #[cfg(unix)]
     fn checkpoint_as_instructed(&self, brief: &Value, run: &str) -> Value {
-        self.write_checkpoint(
-            brief,
-            run,
-            json!({
-                "crew": brief["crew"], "notes": "Checkpoint written as instructed.",
-                "continuity": brief["continuity"], "conversation_ref": brief["conversation_ref"],
-                "probe": brief["mandate"]["probe"]
-            }),
-        )
+        let provider_dir = tempfile::tempdir_in(self._root.path()).unwrap();
+        let request_path = provider_dir.path().join("checkpoint-call.json");
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import datetime, json, pathlib, re, sys
+envelope = json.loads(sys.stdin.read().strip().splitlines()[-1])
+brief = envelope["input"]["brief"]
+# Interpret the dispatched example's placeholder syntax, not a second copy
+# of its fields. ORB-21467: an omitted field must stay omitted in our call.
+contract, = re.findall(r'`(\{{"task_id":.*?\}})`', envelope["instruction"], re.S)
+def substitute(match):
+    expression = match.group(1)
+    if expression.startswith("brief."):
+        value = brief
+        for part in expression.removeprefix("brief.").removesuffix(" or null").split("."):
+            value = value.get(part)
+        return json.dumps(value)
+    return json.dumps("Checkpoint from dispatched instructions.")
+concrete = re.sub(r'"?<([^<>]+)>"?', substitute, contract.replace("[...]", "[]"))
+call = json.loads(concrete)
+# Supply only the discretionary outcome and wake time, after deriving the
+# entire record from the contract actually delivered to this process.
+call["record"]["outcome"] = "idle"
+call["record"]["next_wake"]["not_before"] = (
+    datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)
+).isoformat()
+pathlib.Path({request_path}).write_text(json.dumps({{"args": sys.argv[1:], "call": call}}))
+print(json.dumps({{"schemaVersion": 1, "status": "success", "result": {{"outcome": "idle"}}, "error": None}}))
+"#,
+            request_path = serde_json::to_string(&request_path).unwrap(),
+        );
+        self.install_codex(&provider_dir.path().join("codex"), script);
+        assert!(
+            self.dispatch_cycle(run, brief).unwrap(),
+            "ORB-21467: substitute provider must interpret the dispatched checkpoint contract"
+        );
+        let request: Value = serde_json::from_slice(&std::fs::read(request_path).unwrap()).unwrap();
+        let args: Vec<String> = serde_json::from_value(request["args"].clone()).unwrap();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "resume" && pair[1] == brief["conversation_ref"]),
+            "ORB-21467: provider must resume the live conversation: {args:?}"
+        );
+        self.as_cycle_agent(run, || {
+            self.agent_call("orbit.resident.checkpoint", request["call"].clone())
+                .unwrap()
+        })
     }
 
     fn seed_conversation(
@@ -2131,6 +2172,7 @@ PY
     assert_eq!(logged[2]["conversation_ref"], Value::Null);
 }
 
+#[cfg(unix)]
 #[test]
 fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() {
     let fx = isolated_fixture!(
@@ -2150,10 +2192,9 @@ fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() 
         true,
     );
 
-    // Two consecutive cycles each write only the instructed checkpoint
-    // shape (echoing brief.conversation_ref). Before the template carried
-    // conversation_ref, the first of these dropped it and the next brief
-    // fell back to rebuilt.
+    // ORB-21467: two consecutive real dispatches each let the provider derive
+    // its checkpoint from the delivered example. Before the template carried
+    // conversation_ref, the first dropped it and the next brief rebuilt.
     for (index, key) in ["resident-instructed-1", "resident-instructed-2"]
         .into_iter()
         .enumerate()
@@ -2164,7 +2205,10 @@ fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() 
         assert_eq!(brief["conversation_ref"], "conv-live", "cycle {index}");
         let written = fx.checkpoint_as_instructed(&brief, &run);
         assert_eq!(written["checkpoint"]["continuity"], "resumed");
-        assert_eq!(written["checkpoint"]["conversation_ref"], "conv-live");
+        assert_eq!(
+            written["checkpoint"]["conversation_ref"], "conv-live",
+            "ORB-21467: the dispatched checkpoint contract must preserve the live reference"
+        );
         fx.finish_cycle(&run);
     }
 
