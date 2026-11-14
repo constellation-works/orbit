@@ -92,9 +92,16 @@ impl PilotChild {
 }
 
 /// The task-pilot children this drain dispatched, live and finished.
+///
+/// With `liveness_only`, a dispatch already recorded closed (`Terminal`
+/// phase, which recording sets only after observing a terminal child) is
+/// reported finished from the dispatch record itself, without a
+/// `get_job_run` read of that pilot. Open dispatches are still read, as
+/// their phase alone does not say whether the child has ended.
 pub(super) fn pilot_children(
     runtime: &OrbitRuntime,
     run_id: &str,
+    liveness_only: bool,
 ) -> Result<Vec<PilotChild>, OrbitError> {
     let Some(state) = runtime.stores().jobs().read_run_state(run_id)? else {
         return Ok(Vec::new());
@@ -105,6 +112,23 @@ pub(super) fn pilot_children(
         .iter()
         .filter(|child| child.job_name == PILOT_JOB)
     {
+        if liveness_only && !child.phase.is_open() {
+            let finished = child
+                .child_status
+                .as_deref()
+                .and_then(|status| status.parse::<JobRunState>().ok())
+                .filter(|status| status.is_terminal())
+                .unwrap_or(JobRunState::Failed);
+            pilots.push(PilotChild {
+                run_id: child.child_run_id.clone(),
+                task_ids: Vec::new(),
+                submitted_at: child.submitted_at,
+                finished: Some(finished),
+                unrecorded: false,
+                task_independent_failure: false,
+            });
+            continue;
+        }
         let Some(run) = runtime.stores().jobs().get_job_run(&child.child_run_id)? else {
             continue;
         };
@@ -273,9 +297,36 @@ pub(super) fn read_pilots(
     action: &str,
     run_id: &str,
 ) -> Result<Vec<PilotChild>, DispatchError> {
-    pilot_children(runtime, run_id).map_err(|error| {
+    pilot_children(runtime, run_id, false).map_err(|error| {
         DispatchError::action_failed(action, format!("read task-pilot children: {error}"))
     })
+}
+
+fn read_pilots_liveness_only(
+    runtime: &OrbitRuntime,
+    action: &str,
+    run_id: &str,
+) -> Result<Vec<PilotChild>, DispatchError> {
+    pilot_children(runtime, run_id, true).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task-pilot children: {error}"))
+    })
+}
+
+/// Whether pilot run `run_id` is still live, through the same stale-run
+/// reconcile a reconciling `show_job_run` read performs: a run whose
+/// worker died is finalized `interrupted` there and so reads as ended.
+/// A missing run reads as ended, matching `pilot_children` skipping it.
+fn pilot_run_is_live(runtime: &OrbitRuntime, run_id: &str) -> Result<bool, OrbitError> {
+    let Some(run) = runtime.get_job_run_backend(run_id)? else {
+        return Ok(false);
+    };
+    if runtime.reconcile_stale_job_run(&run)? {
+        let Some(run) = runtime.get_job_run_backend(run_id)? else {
+            return Ok(false);
+        };
+        return Ok(!run.state.is_terminal());
+    }
+    Ok(!run.state.is_terminal())
 }
 
 /// The tasks this drain approved, read back from the approve transition's
@@ -451,14 +502,43 @@ pub(crate) fn await_approval_pilot(
     }
     let timeout = Duration::from_secs(timeout_seconds);
     let started_at = Instant::now();
+    // Resolve the live pilots once; each poll then reads only those runs,
+    // never the drain's own state blob or its finished pilots.
+    let mut live = read_pilots_liveness_only(runtime, action, run_id)?
+        .into_iter()
+        .filter(PilotChild::is_live)
+        .map(|pilot| pilot.run_id)
+        .collect::<Vec<_>>();
+    let mut polled = false;
     loop {
-        let live = read_pilots(runtime, action, run_id)?
-            .into_iter()
-            .filter(PilotChild::is_live)
-            .map(|pilot| pilot.run_id)
-            .collect::<Vec<_>>();
+        if polled {
+            let mut still_live = Vec::with_capacity(live.len());
+            for run in &live {
+                let is_live = pilot_run_is_live(runtime, run).map_err(|error| {
+                    DispatchError::action_failed(
+                        action,
+                        format!("read task-pilot run {run}: {error}"),
+                    )
+                })?;
+                if is_live {
+                    still_live.push(run.clone());
+                }
+            }
+            live = still_live;
+        }
         let waited = started_at.elapsed();
         if live.is_empty() || waited >= timeout {
+            // One full read as the wait ends, so the payload names the
+            // pilots live at that moment exactly as the old per-poll
+            // full reads did. A wait that never polled already holds
+            // that list from its initial read.
+            if polled {
+                live = read_pilots(runtime, action, run_id)?
+                    .into_iter()
+                    .filter(PilotChild::is_live)
+                    .map(|pilot| pilot.run_id)
+                    .collect::<Vec<_>>();
+            }
             return Ok(json!({
                 "pilot_live": !live.is_empty(),
                 "live_pilot_run_ids": live,
@@ -466,5 +546,6 @@ pub(crate) fn await_approval_pilot(
             }));
         }
         std::thread::sleep(PILOT_WAIT_POLL.min(timeout - waited));
+        polled = true;
     }
 }
