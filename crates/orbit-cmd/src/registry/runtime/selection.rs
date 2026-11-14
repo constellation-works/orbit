@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use orbit_types::identity::{MACHINE_ID_PREFIX, WORKSPACE_ID_PREFIX};
+
 use super::*;
 
 pub(crate) fn retry_pipeline_worker_bootstrap<T>(
@@ -138,7 +140,10 @@ fn local_workspace_selector<'a>(
     let Some((host, workspace)) = selector.split_once('/') else {
         return Ok(selector);
     };
-    if !host.starts_with("hm_") || !workspace.starts_with("ws_") || workspace.contains('/') {
+    if !host.starts_with(MACHINE_ID_PREFIX)
+        || !workspace.starts_with(WORKSPACE_ID_PREFIX)
+        || workspace.contains('/')
+    {
         return Ok(selector);
     }
     if local_machine_id == Some(host) {
