@@ -106,7 +106,7 @@ class AffectedTestGateTests(unittest.TestCase):
             (crate / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nversion = "0.1.0"\n')
             (crate / "src/lib.rs").write_text("// fixture\n")
             packages.append(dict(id=name, name=name, manifest_path=str(crate / "Cargo.toml"),
-                                 targets=[dict(name=name.replace("-", "_"), kind=["lib"], doctest=True)],
+                                 targets=[dict(name=name.replace("-", "_"), kind=["lib"], doctest=False)],
                                  dependencies=[dict(name=target, kind=kind, rename=rename,
                                                     path=str(self.root / "crates" / target))
                                                for target, kind, rename in edges]))
@@ -162,22 +162,10 @@ elif arguments[0] == "tree":
 elif arguments == ["nextest", "--version"]:
     sys.exit(int(os.environ.get("GUARD_TEST_NO_NEXTEST", "0")))
 elif "--doc" in arguments:
-    if os.environ.get("GUARD_TEST_TIMINGS"):
-        selected = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"]
-        metadata = json.load(open(os.environ["GUARD_TEST_METADATA"]))
-        seconds_for = {"orbit-core": "0.02", "orbit-cli": "0.03", "orbit_tools": "0.04"}
-        if os.environ.get("GUARD_TEST_DOC_NO_REPORT"):
-            print("    Finished `test` profile in 0.09s", flush=True)
-        else:
-            emit_timings([{"name": name, "duration": 0.05} for name in selected if name in seconds_for])
-        for package in metadata["packages"]:
-            name = package["name"]
-            if name in selected and name in seconds_for:
-                seconds = seconds_for[name]
-                target = next(target for target in package["targets"] if target["doctest"])
-                print(f"   Doc-tests {target['name']}", flush=True)
-                print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in %ss" % seconds, flush=True)
-    sys.exit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
+    # Doctests are disabled (`doctest = false` on every library): the gate
+    # never runs `cargo test --doc`, so any such invocation is a regression.
+    print("unexpected cargo test --doc invocation (doctests are disabled)", flush=True)
+    sys.exit(99)
 else:
     metadata = json.load(open(os.environ["GUARD_TEST_METADATA"]))
     selected = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"]
@@ -411,7 +399,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                             metadata["workspace_members"].append(name)
                             metadata["packages"].append(dict(
                                 id=name, name=name, manifest_path=str(self.root / "crates" / name / "Cargo.toml"),
-                                dependencies=[], targets=[dict(name=name, kind=["lib"], doctest=True)]))
+                                dependencies=[], targets=[dict(name=name, kind=["lib"], doctest=False)]))
                         self.metadata.write_text(json.dumps(metadata))
                         try:
                             result = self.gate("--pull-request-scope", str(paths))
@@ -475,23 +463,21 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertEqual(build("orbit-retired")[0], "workspace")
         self.assertEqual(build("orbit-cli", GUARD_TEST_TREE_WORKSPACE_ONLY="signal")[0], "workspace")
 
-    def test_full_test_targets_and_doctests_run_under_build_admission(self):
+    def test_full_test_targets_run_under_build_admission(self):
         self.touch_core()
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         package_flags = [argument for name in self.core_dependents for argument in ("-p", name)]
         runtime = ["nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--lib", "--bins", "--tests"]
-        docs = ["test", "--timings", "--no-fail-fast", *package_flags, "--doc"]
         calls = self.calls()
         self.assertEqual(calls[1:], [["nextest", "--version"],
-                                    ["build-budget", "--", "cargo", *runtime], runtime,
-                                    ["build-budget", "--", "cargo", *docs], docs])
+                                    ["build-budget", "--", "cargo", *runtime], runtime])
+        self.assertFalse(any("--doc" in call for call in calls))
 
-    def test_test_failures_propagate_including_cargo_fallback_and_doctests(self):
+    def test_test_failures_propagate_including_cargo_fallback(self):
         self.touch_core()
         for environment, code in ((dict(GUARD_TEST_EXIT="17"), 17),
-                                  (dict(GUARD_TEST_EXIT="18", GUARD_TEST_NO_NEXTEST="1"), 18),
-                                  (dict(GUARD_TEST_DOC_EXIT="19"), 19)):
+                                  (dict(GUARD_TEST_EXIT="18", GUARD_TEST_NO_NEXTEST="1"), 18)):
             with self.subTest(environment=environment):
                 self.log.write_text("")
                 result = self.gate(**environment)
@@ -499,19 +485,27 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                 tests = [call for call in self.calls() if call[0] in {"test", "nextest"}
                          and call != ["nextest", "--version"]]
                 self.assertTrue(tests)
-                if "GUARD_TEST_EXIT" in environment:
-                    self.assertTrue(all("--doc" not in call for call in tests))
+                self.assertTrue(all("--doc" not in call for call in tests))
                 if "GUARD_TEST_NO_NEXTEST" in environment:
                     self.assertEqual(tests[0][0], "test")
 
-    def test_bin_only_selection_skips_inapplicable_doctest_command(self):
+    def test_no_selection_runs_doctests(self):
+        # Doctests are disabled: no selection runs `cargo test --doc`.
+        self.touch_core()
+        result = self.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call[:2] == ["nextest", "run"] for call in self.calls()))
+        self.assertFalse(any("--doc" in call for call in self.calls()))
+        # A bin-only selection runs the same way: there is no doctest command
+        # for it to skip.
         metadata = json.loads(self.metadata.read_text())
         for package in metadata["packages"]:
             if package["name"] == "orbit-cli":
                 package["targets"] = [dict(name="orbit-cli", kind=["bin"], doctest=False)]
         self.metadata.write_text(json.dumps(metadata))
         (self.root / "crates/orbit-cli/src/lib.rs").write_text("// bin-only fixture change\n")
-        result = self.gate(GUARD_TEST_DOC_EXIT="19")
+        self.log.write_text("")
+        result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any(call[:2] == ["nextest", "run"] for call in self.calls()))
         self.assertFalse(any("--doc" in call for call in self.calls()))
@@ -534,7 +528,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                 result = self.gate(ORBIT_WORKER_CONTEXT_REQUIRED="1", ORBIT_RUN_ID="jrun-fixture",
                                    GUARD_TEST_PROBE_WORKER_MARKER="1", **environment)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertTrue(any("--doc" in call for call in self.calls()))
+                self.assertFalse(any("--doc" in call for call in self.calls()))
 
     def summarized(self, **environment):
         summary = self.root / ".scratch/summary.json"
@@ -548,8 +542,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         result, summary = self.summarized()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), executed_tests=[f"{name} a" for name in self.core_dependents], selection=dict(
-            packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"],
-            doctest_packages=self.core_dependents), command=None, base=self.base, exit_code=0, notices=[],
+            packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"]), command=None, base=self.base, exit_code=0, notices=[],
             compile_ms=None, test_ms=None, package_timings=None))
         # A failing run still reports what it selected and ran.
         result, failed = self.summarized(GUARD_TEST_EXIT="17")
@@ -575,12 +568,12 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         result, summary = self.summarized(**timed)
         self.assertEqual(result.returncode, 0, result.stderr)
         assert_phase_sums(self, summary)
-        self.assertEqual(summary["compile_ms"], 1100)
-        self.assertEqual(summary["test_ms"], 150)
+        self.assertEqual(summary["compile_ms"], 1000)
+        self.assertEqual(summary["test_ms"], 100)
         self.assertEqual(summary["package_timings"], [
-            dict(package="orbit-cli", compile_ms=150, test_ms=40),
+            dict(package="orbit-cli", compile_ms=100, test_ms=10),
             dict(package="orbit-cmd", compile_ms=200, test_ms=20),
-            dict(package="orbit-core", compile_ms=350, test_ms=50),
+            dict(package="orbit-core", compile_ms=300, test_ms=30),
             dict(package="orbit-web", compile_ms=400, test_ms=40),
         ])
         # A failing run still reports the timings of the tests it did run.
@@ -603,51 +596,23 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertTrue(all(entry["test_ms"] is None for entry in fallback["package_timings"]))
         self.assertEqual(sum(entry["compile_ms"] for entry in fallback["package_timings"]), fallback["compile_ms"])
 
-    def test_cargo_fallback_keeps_libtest_time_when_doctests_follow(self):
+    def test_cargo_fallback_keeps_libtest_time(self):
         # cargo test cannot attribute its libtest time to a package, so no row
-        # claims it. The doctests that follow are still per package, and they
-        # add to the total without replacing the libtest time.
+        # claims it. Doctests are disabled, so the total is the libtest time.
         self.touch_core()
         directory = str(self.root / "target" / "cargo-timings")
         result, summary = self.summarized(GUARD_TEST_NO_NEXTEST="1", GUARD_TEST_TIMINGS="1",
                                           GUARD_TEST_TIMING_DIR=directory)
         self.assertEqual(result.returncode, 0, result.stderr)
         assert_phase_sums(self, summary)
-        # 50 ms of libtest runtime, plus 30 ms (orbit-cli) and 20 ms (orbit-core) of doctests.
-        self.assertEqual(summary["test_ms"], 100)
+        # 50 ms of libtest runtime, with no doctest time to add.
+        self.assertEqual(summary["test_ms"], 50)
         self.assertTrue(all(entry["test_ms"] is None for entry in summary["package_timings"]))
-
-    def test_doctest_target_names_resolve_to_package_rows(self):
-        metadata = json.loads(self.metadata.read_text())
-        for package in metadata["packages"]:
-            if package["name"] == "orbit-cli":
-                package["targets"][0]["name"] = "custom_documentation"
-                manifest = Path(package["manifest_path"])
-                manifest.write_text(manifest.read_text() + '\n[lib]\nname = "custom_documentation"\n')
-            elif package["name"] == "orbit-tools":
-                # Underscores in package names are valid; replacing them with
-                # hyphens would assign this duration to a different identity.
-                package["name"] = "orbit_tools"
-        self.metadata.write_text(json.dumps(metadata))
-        selected = ["orbit-cli", "orbit-core", "orbit_tools"]
-        for no_report in ("", "1"):
-            with self.subTest(doctest_compile_report=not bool(no_report)):
-                result, summary = self.summarized(
-                    ORBIT_VALIDATION_SELECTION=json.dumps(dict(packages=selected)),
-                    GUARD_TEST_TIMINGS="1", GUARD_TEST_TIMING_DIR=str(self.root / "target/cargo-timings"),
-                    GUARD_TEST_DOC_NO_REPORT=no_report)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                assert_phase_sums(self, summary)
-                self.assertEqual(summary["package_timings"], [
-                    dict(package="orbit-cli", compile_ms=130 if no_report else 150, test_ms=40),
-                    dict(package="orbit-core", compile_ms=330 if no_report else 350, test_ms=50),
-                    dict(package="orbit_tools", compile_ms=130 if no_report else 150, test_ms=50),
-                ])
 
     def test_summary_records_what_a_deferral_handoff_derives_from(self):
         # [ORB-15516] Orbit derives an implementer's deferred-sandbox record
         # from the summary: the gate's command, its base, its final exit
-        # status (doctests included) and every notice its tests printed.
+        # status and every notice its tests printed.
         self.touch_core()
         notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
         result, summary = self.summarized(ORBIT_VALIDATION_GATE="make ci-test-affected",
@@ -655,7 +620,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((summary["command"], summary["base"], summary["exit_code"], summary["notices"]),
                          ("make ci-test-affected", self.base, 0, [notice]))
-        result, failed = self.summarized(GUARD_TEST_NOTICE=notice, GUARD_TEST_DOC_EXIT="19")
+        result, failed = self.summarized(GUARD_TEST_NOTICE=notice, GUARD_TEST_EXIT="19")
         self.assertEqual(result.returncode, 19, result.stderr)
         self.assertEqual((failed["exit_code"], failed["notices"]), (19, [notice]))
         result, explicit = self.summarized(CI_TEST_BASE="agent-main")
@@ -690,8 +655,9 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
 
     def test_a_failing_tests_selection_replays_only_those_tests(self):
         # [ORB-15328] A base replay of a failed candidate's tests builds only
-        # the packages their binary ids name, filters to those tests, skips
-        # doctests, and still reports the selection it was handed.
+        # the packages their binary ids name, filters to those tests, and
+        # still reports the selection it was handed. Doctests are disabled,
+        # so there is no doctest command to skip.
         self.touch_core()
         _, candidate = self.summarized()
         tests = ["orbit-core::runtime suite::broken", "orbit-cli suite::other"]

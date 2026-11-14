@@ -33,8 +33,9 @@ done
 # --test-archive PATH
 # runs only the workspace test build and archives its test binaries for the
 # parallel nextest shards. --test-partitions PATH proves the shards' count
-# partitions of that archive cover every test. --test-doctests runs doctests
-# on the test-build runner, reusing its libraries after the archive upload.
+# partitions of that archive cover every test. Doctests are disabled
+# (`doctest = false` on every library); `check-doctest-fences.sh` fails a
+# doc fence that would run as Rust so a future doctest is not silently skipped.
 fast=false
 static=false
 checks=false
@@ -43,9 +44,8 @@ separate_qa=false
 qa_only=false
 archive=""
 partitions=false
-test_doctests=false
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --guards | --guards-core | --guards-qa | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --guards | --guards-core | --guards-qa | --test-archive PATH | --test-partitions PATH]" >&2
   exit 2
 }
 case "${1:-}" in
@@ -56,7 +56,6 @@ case "${1:-}" in
   --guards) guards=true ;;
   --guards-core) guards=true; separate_qa=true ;;
   --guards-qa) guards=true; qa_only=true ;;
-  --test-doctests) test_doctests=true ;;
   --test-archive | --test-partitions)
     [[ -n "${2:-}" ]] || usage
     [[ "$1" == --test-partitions ]] && partitions=true
@@ -70,7 +69,7 @@ esac
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
-if [[ -z "$archive" && "$test_doctests" == false && "$checks" == false && "$qa_only" == false ]] && ! command -v rg >/dev/null 2>&1; then
+if [[ -z "$archive" && "$checks" == false && "$qa_only" == false ]] && ! command -v rg >/dev/null 2>&1; then
   echo "ci-guardrails: ripgrep (rg) is required; install it before running" >&2
   exit 1
 fi
@@ -125,7 +124,7 @@ join_exclusive_lane() {
   if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
 }
 
-# Joins the background production clippy, doctest and documentation chain:
+# Joins the background production clippy and documentation chain:
 # prints its output, adopts its phase records and folds its status into the
 # first failure.
 join_check_chain() {
@@ -168,12 +167,6 @@ run_phase() {
 
 export GIT_OPTIONAL_LOCKS=0
 
-if [[ "$test_doctests" == true ]]; then
-  run_phase doctests "$repo_root/scripts/with-test-build-lint.sh" \
-    cargo test --no-fail-fast --workspace --doc
-  exit 0
-fi
-
 # The hosted test-build job: the folded workspace test build, then an archive
 # of its test binaries and the `orbit` binary the CLI fixtures execute. The
 # shard jobs run nextest from that archive, one count partition each, and the
@@ -183,7 +176,7 @@ fi
 # itself, so the guard proves what the shards receive while they already run.
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
 # and the additional partition jobs run every partition; the test-build
-# job runs the proof and doctests after the upload.
+# job runs the proof after the upload.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a
@@ -529,15 +522,13 @@ with_production_lint() {
     "$@"
 }
 
-# Production clippy, local doctests, then documentation. Each takes the Cargo build
+# Production clippy, then documentation. Each takes the Cargo build
 # lock, so they run in sequence; a failure still reports the later phases, and
 # the first failure is the chain's status. Production clippy is the only pass
 # that denies clippy::disallowed_methods, so test-only channels stay exempt on
 # the folded build; it checks lib and bin targets and writes no test binary.
-# Doctests use the folded build's lint environment and so reuse its library
-# artifacts. Hosted doctests run on the test-build runner instead: --checks
-# has only checked metadata, so building doctest libraries there would repeat
-# the test-build runner's code generation and dependency compilation.
+# Doctests are disabled (`doctest = false` on every library), so there is no
+# doctest phase to reuse the folded build's artifacts.
 # --checks then type-checks aarch64-apple-darwin. Host checks never compile
 # cfg(target_os = "macos") tests, so a rename of a shared item stays green
 # on Linux and fails only the informational macOS job. Plain rustc keeps
@@ -548,10 +539,6 @@ with_production_lint() {
 run_check_chain() {
   local status=0 next=0
   run_phase clippy-production with_production_lint run_lowered cargo check --workspace --lib --bins || status=$?
-  if [[ "$checks" == false ]]; then
-    run_phase doctests run_lowered "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
-  fi
-  if [[ "$status" -eq 0 ]]; then status="$next"; fi
   next=0
   RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint run_lowered cargo doc --no-deps --workspace || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
@@ -581,7 +568,7 @@ run_lowered() {
   "${lowered_command[@]}" "$@"
 }
 
-# Runs the clippy/doctest/documentation chain in the background while nextest
+# Runs the clippy/documentation chain in the background while nextest
 # runs. At idle priority it takes only the CPU nextest leaves unused, so the
 # workspace suites' elapsed-time and timeout assertions keep the host to
 # themselves. None of its commands writes the test binaries nextest executes.
@@ -666,6 +653,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-doc-links.py"
   run_guard "$repo_root/scripts/check-cli-imports.sh"
   run_guard "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
+  run_guard "$repo_root/scripts/check-doctest-fences.sh"
   run_guard "$repo_root/scripts/generate-doc-indexes.sh" --check
   run_guard "$repo_root/scripts/test-agent-corpus.py"
   run_guard "$repo_root/scripts/check-installer-pubkey.sh"
@@ -735,14 +723,13 @@ fi
 
 # Every Cargo command that compiles workspace members after the folded build
 # runs under its lint environment. Cargo fingerprints it, so without it the
-# nextest pass and doctests would recompile the whole workspace.
+# nextest pass would recompile the whole workspace.
 lint="$repo_root/scripts/with-test-build-lint.sh"
 
 if [[ "$checks" == true ]]; then
   # The hosted Check job builds no test binaries: the test-build job does, and
   # the shard jobs run nextest. The CI guardrails job runs the guard pool and
-  # the exclusive lane on their own runner. Doctests reuse the test-build
-  # job's libraries there, after the archive upload.
+  # the exclusive lane on their own runner.
   start_check_chain
   join_check_chain
 elif [[ "$guards" == true ]]; then

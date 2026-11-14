@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 # Only dev-dependencies enable fixture hooks; shipped probes keep fixed caps.
 [features]
 test-support = []

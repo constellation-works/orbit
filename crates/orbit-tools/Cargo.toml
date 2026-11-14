@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 flate2.workspace = true
 getrandom.workspace = true

@@ -9,8 +9,8 @@ run executes exactly those packages instead of selecting from a diff, so a
 rerun on the base commit tests what the candidate tested. A selection that
 also names `failing_tests` (each a nextest `<binary-id> <test>` or a bare test
 name, as a failed candidate run printed them) runs only those tests, building
-only the packages their binary ids name and skipping doctests [ORB-15328]; the
-summary still reports the selection it was handed.
+only the packages their binary ids name [ORB-15328]; the summary still
+reports the selection it was handed.
 
 The summary also records what an implementer's deferred-sandbox handoff
 needs, so Orbit derives that record instead of the implementer writing it
@@ -22,11 +22,12 @@ It records where that time went. compile_ms and test_ms are millisecond
 totals, and package_timings lists each package's share. A total equals the
 sum of the per-package values for that phase, except under the cargo test
 fallback. Compile time is Cargo's unit durations (they overlap when the build
-is parallel). Test time is nextest testcase time plus doctest time (testcase
-time overlaps when tests are parallel). A phase that was not measured is null.
-The cargo test fallback has no per-package test split: its libtest time has no
-package, so those package test_ms values stay null while test_ms is that
-libtest time plus the doctest time.
+is parallel). Test time is nextest testcase time (testcase time overlaps
+when tests are parallel). A phase that was not measured is null. The cargo
+test fallback has no per-package test split: its libtest time has no package,
+so those package test_ms values stay null while test_ms is that libtest time.
+Doctests are disabled (`doctest = false` on every library), so there is no
+doctest time to attribute.
 """
 
 import argparse
@@ -500,7 +501,6 @@ def unit_milliseconds(path):
 
 FINISHED_SECONDS = re.compile(r"^\s*Finished\b.*\bin\s+([0-9]*\.?[0-9]+)s\s*$")
 COMPILING_PACKAGE = re.compile(r"^\s*Compiling (\S+) v\d")
-DOCTEST_TARGET = re.compile(r"^\s*Doc-tests (\S+)\s*$")
 TEST_RESULT_SECONDS = re.compile(r"test result:.*\bfinished in ([0-9]*\.?[0-9]+)s\s*$")
 
 
@@ -517,14 +517,11 @@ def finished_milliseconds(text):
     return total if saw else None
 
 
-def mentioned_packages(text, doctest_packages):
+def mentioned_packages(text):
     names = []
     for line in text_lines(text):
         match = COMPILING_PACKAGE.match(line)
         name = match.group(1) if match else None
-        match = DOCTEST_TARGET.match(line)
-        if match:
-            name = doctest_packages.get(match.group(1))
         if name and name not in names:
             names.append(name)
     return names
@@ -556,39 +553,11 @@ def package_test_milliseconds(junit):
     return totals if saw else None
 
 
-def doctest_milliseconds(text, doctest_packages):
-    """Per-package doctest time, resolving Cargo's library target labels."""
-    totals = {}
-    current = None
-    for line in text_lines(text):
-        match = DOCTEST_TARGET.match(line)
-        if match:
-            current = doctest_packages.get(match.group(1))
-            continue
-        if current is None:
-            continue
-        match = TEST_RESULT_SECONDS.search(line)
-        if match:
-            ms = milliseconds(match.group(1))
-            if ms is not None:
-                totals[current] = totals.get(current, 0) + ms
-            current = None
-    return totals or None
-
-
 def libtest_milliseconds(text):
-    """Sum of libtest finished-in times, excluding doctest blocks."""
+    """Sum of libtest finished-in times."""
     total = 0
     saw = False
-    in_doctest = False
     for line in text_lines(text):
-        if DOCTEST_TARGET.match(line):
-            in_doctest = True
-            continue
-        if in_doctest:
-            if TEST_RESULT_SECONDS.search(line):
-                in_doctest = False
-            continue
         match = TEST_RESULT_SECONDS.search(line)
         if match:
             ms = milliseconds(match.group(1))
@@ -610,17 +579,6 @@ class PhaseTimings:
 
     def __init__(self, packages, metadata):
         self.packages = list(packages)
-        # Cargo prints the library target name, which may be normalized or
-        # explicitly named. Only unique targets among selected packages can
-        # be attributed from that label alone.
-        owners = {}
-        for package in metadata["packages"]:
-            if package["name"] in self.packages:
-                for target in package["targets"]:
-                    if target["doctest"]:
-                        owners.setdefault(target["name"], set()).add(package["name"])
-        self.doctest_packages = {target: next(iter(names)) for target, names in owners.items()
-                                 if len(names) == 1}
         self.compile = None
         self.test = None
         self.unsplit_compile = 0
@@ -673,10 +631,9 @@ class PhaseTimings:
         if units is not None:
             self.add_compile_units(units)
         else:
-            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text, self.doctest_packages))
+            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text))
         if junit is not None:
             self.add_tests(package_test_milliseconds(junit))
-        self.add_tests(doctest_milliseconds(text, self.doctest_packages))
         if self.test is None:
             ms = libtest_milliseconds(text)
             if ms is not None:
@@ -711,9 +668,7 @@ class PhaseTimings:
         if test_split:
             test_ms = sum(entry["test_ms"] for entry in entries)
         elif self.unsplit_test_seen:
-            # Doctests arrive per package even under the fallback, so they add to the unsplit libtest time.
-            doctest_ms = sum(self.test.values()) if self.test is not None else 0
-            test_ms = self.unsplit_test + doctest_ms
+            test_ms = self.unsplit_test
         else:
             test_ms = None
         return compile_ms, test_ms, entries
@@ -889,8 +844,8 @@ def _stop_observed_group(process):
 def run_observed(command, environment):
     """Run a command, relay both streams, and return its exit code and merged output.
 
-    Doctest compile lines and the test harness result are on different streams.
-    Both are needed to attribute doctest time to a package. Each pipe has its
+    Cargo's compile lines and the test harness result are on different
+    streams. Each pipe has its
     own reader. A blocking line read waits only for that pipe, so a partial
     line cannot leave the other pipe unread while the child fills it. Lines
     are appended whole, so one stream's bytes never split a timing line.
@@ -1038,12 +993,9 @@ def main():
         packages = affected_packages(metadata, changed)
         print(f"ci-test-affected: base={base}", file=sys.stderr, flush=True)
     target_flags = test_target_flags(metadata, packages)
-    # nextest does not execute doctests; they run through Cargo for the same set.
-    # A bin-only selection has no doctest targets and Cargo rejects --doc for it.
-    doc_packages = sorted(package["name"] for package in metadata["packages"]
-                          if package["name"] in packages
-                          and any(target["doctest"] for target in package["targets"]))
-    selection = dict(packages=packages, target_flags=target_flags, doctest_packages=doc_packages)
+    # Doctests are disabled (`doctest = false` on every library), so the
+    # selection carries no doctest packages and no `--doc` command runs.
+    selection = dict(packages=packages, target_flags=target_flags)
     filters, libtest_filters = [], []
     run_packages, run_target_flags = packages, target_flags
     if failing_tests is not None:
@@ -1052,7 +1004,6 @@ def main():
         run_packages, filterset, names = failing_test_runs(packages, failing_tests)
         run_target_flags = test_target_flags(metadata, run_packages)
         filters, libtest_filters = ["-E", filterset, "--test-threads", "1", "--retries", "0"], ["--", "--exact", *names, "--test-threads", "1"]
-        doc_packages = []
     # Checked before the empty-selection return, so a workflow-only change still runs it.
     # A replayed selection carries no diff, so the candidate run that named it decided.
     if changed is not None and not arguments.list and touches_macos_workflow(changed):
@@ -1077,8 +1028,7 @@ def main():
     budget = build_budget_command()
     nextest = subprocess.run([*cargo, "nextest", "--version"], cwd=ROOT,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # One timings object across the test command and the doctest command.
-    # `--timings` is a report of the build those commands already do.
+    # `--timings` is a report of the build the test command already does.
     timings = PhaseTimings(run_packages, metadata)
     with tempfile.TemporaryDirectory(prefix="ci-test-affected-") as report:
         junit = Path(report) / "junit.xml"
@@ -1117,16 +1067,7 @@ def main():
         write_summary(summary, selection, tests_run, base, code, notices, timings.record(), executed)
         return code
 
-    if exit_code or not doc_packages:
-        return finished(exit_code)
-    # Doctests still run, so the summary does not yet report an exit status.
-    write_summary(summary, selection, tests_run, base, None, notices, timings.record(), executed)
-    doc_flags = [argument for name in doc_packages for argument in ("-p", name)]
-    doc_code, doc_output = run_observed(
-        [*budget, "--", *cargo, "test", "--timings", "--no-fail-fast", *doc_flags, "--doc"],
-        test_environment)
-    timings.observe(doc_output)
-    return finished(doc_code)
+    return finished(exit_code)
 
 
 if __name__ == "__main__":

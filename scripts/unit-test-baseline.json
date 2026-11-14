@@ -697,9 +697,7 @@
       ]
     },
     "orbit-types": {
-      "test_function_paths": [
-        "workflow/review/tests/gate_note.rs::legacy_shapes_parse_to_run_and_tree_and_render_historical_bytes"
-      ]
+      "test_function_paths": []
     },
     "orbit-web": {
       "test_function_paths": [
