@@ -31,9 +31,7 @@ Options:
           [possible values: no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic, unclassified, absent]
 
       --layer <LAYER>
-          Count only regressions whose fix sits in this layer
-          
-          [possible values: ci_tests, docs_skills, dashboard, sandbox_policy, store_migration, vcs_delivery, config, cli_mcp, runtime_lifecycle, other, unknown]
+          Count only regressions whose fix sits in this layer (a workflow.regression_layers name, other or unknown)
 
       --detected-by <DETECTED_BY>
           Count only regressions found this way

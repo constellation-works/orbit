@@ -118,9 +118,9 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     HoldForBase(String),
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
-    /// [ORB-16890] That repair is spent: stop so the owner returns the task
-    /// to the backlog for its next run to repair the candidate, with this
-    /// evidence. The landing run is held, not failed.
+    /// [ORB-16890] Stop so the owner returns the task to the backlog for its
+    /// next run to repair the candidate, with this evidence. The landing run
+    /// is held, not failed.
     Requeue(String),
     /// Stop in review and fail the run, with this evidence. A status that
     /// reports no head or number has no jobs to read, so it fails here too. A

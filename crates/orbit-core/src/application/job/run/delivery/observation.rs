@@ -385,6 +385,24 @@ impl OrbitRuntime {
         if let Some(run_id) = run_id {
             return self.observe_run_delivery(run_id, task_id);
         }
+        let (task_id, observation) = self.find_task_delivery_with_task_id(task_id)?;
+        observation.ok_or_else(|| no_task_delivery_run(&task_id))
+    }
+
+    /// Find this workspace's latest delivery observation for one task, if a
+    /// delivery run was submitted with it.
+    pub(crate) fn find_task_delivery(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<RunDeliveryObservation>, OrbitError> {
+        self.find_task_delivery_with_task_id(task_id)
+            .map(|(_, observation)| observation)
+    }
+
+    fn find_task_delivery_with_task_id(
+        &self,
+        task_id: &str,
+    ) -> Result<(String, Option<RunDeliveryObservation>), OrbitError> {
         let task_id = bounded_id(task_id, "task_id")?;
         let task = self.get_task(task_id)?;
         // Filter submitted task bindings before hydrating run inputs, newest
@@ -396,13 +414,17 @@ impl OrbitRuntime {
             ..JobRunQuery::default()
         })?;
         let run_id = self.latest_delivery_run_id(
-            &task.id,
             runs.iter()
                 .filter(|run| run_task_ids(run).contains(&task.id.as_str()))
                 .map(|run| (run.run_id.as_str(), run.job_id.as_str())),
             &DeliveryDefinitions::default(),
         )?;
-        self.observe_run_delivery(&run_id, &task.id)
+        let Some(run_id) = run_id else {
+            return Ok((task.id, None));
+        };
+        let task_id = task.id;
+        let observation = self.observe_run_delivery(&run_id, &task_id)?;
+        Ok((task_id, Some(observation)))
     }
 
     /// [`Self::observe_task_delivery`] for one task of a codebase scan, which
@@ -426,14 +448,15 @@ impl OrbitRuntime {
             })
             .as_ref()
             .map_err(|error| OrbitError::Store(error.clone()))?;
-        let run_id = self.latest_delivery_run_id(
-            task_id,
-            runs.get(task_id)
-                .into_iter()
-                .flatten()
-                .map(|(run_id, job_id)| (run_id.as_str(), job_id.as_str())),
-            &scan.definitions,
-        )?;
+        let run_id = self
+            .latest_delivery_run_id(
+                runs.get(task_id)
+                    .into_iter()
+                    .flatten()
+                    .map(|(run_id, job_id)| (run_id.as_str(), job_id.as_str())),
+                &scan.definitions,
+            )?
+            .ok_or_else(|| no_task_delivery_run(task_id))?;
         let run = self.show_job_run_observed(&run_id)?;
         if !run_task_ids(&run).contains(&task_id) {
             return Err(OrbitError::InvalidInput(format!(
@@ -481,20 +504,23 @@ impl OrbitRuntime {
     /// the catalog's verdict.
     pub(super) fn latest_delivery_run_id<'a>(
         &self,
-        task_id: &str,
         runs: impl Iterator<Item = (&'a str, &'a str)>,
         definitions: &DeliveryDefinitions,
-    ) -> Result<String, OrbitError> {
+    ) -> Result<Option<String>, OrbitError> {
         for (run_id, job_id) in runs {
             if self
                 .run_definition(run_id, job_id, definitions)
                 .is_some_and(|job| job.holds_task_delivery())
             {
-                return Ok(run_id.to_string());
+                return Ok(Some(run_id.to_string()));
             }
         }
-        Err(OrbitError::InvalidInput(format!(
-            "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — call orbit.task.show without field \"delivery\" instead"
-        )))
+        Ok(None)
     }
+}
+
+fn no_task_delivery_run(task_id: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — call orbit.task.show without field \"delivery\" instead"
+    ))
 }

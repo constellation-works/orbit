@@ -224,15 +224,17 @@ fn unrequire_property(schema: &mut JsonObject, property: &str) {
     }
 }
 
-pub(crate) fn build_input_schema_with_friction_taxonomy(
-    tool_name: &str,
-    params: &[ToolParam],
-    taxonomy: Option<&[(String, String)]>,
+pub(super) fn build_input_schema(tool_name: &str, params: &[ToolParam]) -> JsonObject {
+    tool_input_schema_for(tool_name, params)
+}
+
+pub(super) fn apply_input_decoration(
+    schema: &mut JsonObject,
     decoration: McpInputDecoration,
-) -> JsonObject {
-    let mut schema = tool_input_schema_for(tool_name, params);
+    taxonomy: Option<&[(String, String)]>,
+) {
     if decoration == McpInputDecoration::Friction {
-        decorate_friction_schema(&mut schema, taxonomy);
+        decorate_friction_schema(schema, taxonomy);
     }
     if decoration == McpInputDecoration::Search {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
@@ -256,7 +258,6 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
             ] }]),
         );
     }
-    schema
 }
 
 fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String, String)]>) {
