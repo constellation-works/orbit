@@ -18,7 +18,10 @@ mod antigravity {
             }
         })
         .to_string();
-        let normalized = normalize_cli_stdout("antigravity", stdout.as_bytes());
+        let normalized = normalize_cli_stdout(
+            orbit_types::workflow::activity_job::Provider::Antigravity,
+            stdout.as_bytes(),
+        );
         assert!(normalized.is_empty());
     }
 
@@ -38,8 +41,11 @@ mod antigravity {
         })
         .to_string();
 
-        let diagnostic = antigravity_terminal_error_diagnostic("antigravity", stdout.as_bytes())
-            .expect("terminal error");
+        let diagnostic = antigravity_terminal_error_diagnostic(
+            orbit_types::workflow::activity_job::Provider::Antigravity,
+            stdout.as_bytes(),
+        )
+        .expect("terminal error");
         assert_eq!(
             diagnostic,
             "Antigravity terminal error: timeout waiting for response"
@@ -49,7 +55,13 @@ mod antigravity {
 
         assert!(diagnostic.contains("timeout waiting for response"));
         assert!(!diagnostic.contains(&response));
-        assert!(antigravity_terminal_error_diagnostic("claude", stdout.as_bytes()).is_none());
+        assert!(
+            antigravity_terminal_error_diagnostic(
+                orbit_types::workflow::activity_job::Provider::Claude,
+                stdout.as_bytes()
+            )
+            .is_none()
+        );
     }
 }
 
@@ -57,8 +69,14 @@ mod claude {
     use orbit_agent::project_cli_response;
 
     fn projected(stdout: &str) -> String {
-        String::from_utf8(project_cli_response("claude", stdout.as_bytes()).into_owned())
-            .expect("utf8 projected response")
+        String::from_utf8(
+            project_cli_response(
+                orbit_types::workflow::activity_job::Provider::Claude,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 projected response")
     }
 
     const ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
@@ -109,8 +127,14 @@ mod codex {
     use orbit_agent::project_cli_response;
 
     fn projected(stdout: &str) -> String {
-        String::from_utf8(project_cli_response("codex", stdout.as_bytes()).into_owned())
-            .expect("utf8 projected response")
+        String::from_utf8(
+            project_cli_response(
+                orbit_types::workflow::activity_job::Provider::Codex,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 projected response")
     }
 
     #[test]
@@ -137,8 +161,14 @@ mod copilot {
     use orbit_types::tool::ExecutionResult;
 
     fn normalized(stdout: &str) -> String {
-        String::from_utf8(normalize_cli_stdout("copilot", stdout.as_bytes()).into_owned())
-            .expect("utf8 normalized stdout")
+        String::from_utf8(
+            normalize_cli_stdout(
+                orbit_types::workflow::activity_job::Provider::Copilot,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 normalized stdout")
     }
 
     fn exec_result(stdout: &str, stderr: &str, exit_code: i32) -> ExecutionResult {
@@ -193,8 +223,14 @@ mod grok {
     const FAILURE: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"final_failure","message":"the final answer failed","details":null}}"#;
 
     fn projected(stdout: &str) -> String {
-        String::from_utf8(project_cli_response("grok", stdout.as_bytes()).into_owned())
-            .expect("utf8 projected response")
+        String::from_utf8(
+            project_cli_response(
+                orbit_types::workflow::activity_job::Provider::Grok,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 projected response")
     }
 
     fn exec_result(stdout: String, exit_code: i32) -> ExecutionResult {
@@ -379,7 +415,11 @@ fn the_newest_assistant_message_is_read_from_each_output_shape() {
     ];
     for (provider, stdout, expected) in cases {
         assert_eq!(
-            latest_assistant_message(provider, stdout.as_bytes()).as_deref(),
+            latest_assistant_message(
+                orbit_types::workflow::activity_job::Provider::parse(provider).unwrap(),
+                stdout.as_bytes()
+            )
+            .as_deref(),
             expected,
             "{provider} output: {stdout}"
         );

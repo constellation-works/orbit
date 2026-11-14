@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use orbit_types::telemetry::ToolCallTrace;
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 /// Upper bound on a provider `error` string copied into a diagnostic. The CLI
@@ -93,8 +94,8 @@ pub(crate) fn antigravity_terminal_error(stdout: &[u8]) -> Option<String> {
 }
 
 /// Provider-gated diagnostic for a nonzero CLI exit whose stderr is empty.
-pub fn antigravity_terminal_error_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
-    if provider != "antigravity" && provider != "agy" {
+pub fn antigravity_terminal_error_diagnostic(provider: Provider, stdout: &[u8]) -> Option<String> {
+    if provider != Provider::Antigravity {
         return None;
     }
     let error = antigravity_terminal_error(stdout)?;

@@ -278,7 +278,10 @@ impl OrbitRuntime {
 
     pub(crate) fn crew_supports_continuity(&self, crew_name: &str) -> bool {
         self.resolve_crew_for_task(Some(crew_name), None)
-            .is_ok_and(|crew| orbit_engine::provider_supports_continuity(&crew.assignment.provider))
+            .is_ok_and(|crew| {
+                orbit_types::workflow::activity_job::Provider::parse(&crew.assignment.provider)
+                    .is_ok_and(orbit_engine::provider_supports_continuity)
+            })
     }
 
     /// Record that `run_id`'s resident cycle fell back from an expired or

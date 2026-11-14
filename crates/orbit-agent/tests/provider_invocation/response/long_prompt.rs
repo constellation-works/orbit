@@ -68,7 +68,14 @@ fn price(total: &TokenUsage, requests: Option<&[TokenUsage]>) -> Option<f64> {
 fn claude_final_usage_prices_recorded_requests_and_refuses_incomplete_evidence() {
     let now = chrono::Utc::now();
     let read = |raw: &str| {
-        provider_long_prompt_requests("claude", raw.as_bytes(), true, None, Some(MODEL), now)
+        provider_long_prompt_requests(
+            orbit_types::workflow::activity_job::Provider::Claude,
+            raw.as_bytes(),
+            true,
+            None,
+            Some(MODEL),
+            now,
+        )
     };
     let expected = usage();
     let captured = read(STREAM);
@@ -116,7 +123,14 @@ fn claude_final_usage_prices_recorded_requests_and_refuses_incomplete_evidence()
         "unknown cache TTL buckets must not produce a derived tier price"
     );
     assert_eq!(
-        provider_long_prompt_requests("claude", STREAM.as_bytes(), false, None, Some(MODEL), now),
+        provider_long_prompt_requests(
+            orbit_types::workflow::activity_job::Provider::Claude,
+            STREAM.as_bytes(),
+            false,
+            None,
+            Some(MODEL),
+            now
+        ),
         None
     );
 
@@ -187,7 +201,7 @@ fn claude_final_usage_prices_recorded_requests_and_refuses_incomplete_evidence()
     assert!((price(&totals, Some(&requests)).unwrap() - base_cost - premium).abs() < 1e-10);
     assert_eq!(
         provider_long_prompt_requests(
-            "claude",
+            orbit_types::workflow::activity_job::Provider::Claude,
             capture(&combined).as_bytes(),
             true,
             None,

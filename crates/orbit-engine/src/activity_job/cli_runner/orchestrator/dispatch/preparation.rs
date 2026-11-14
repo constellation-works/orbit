@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_tools::ToolContext;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider, V2AuditEventKind};
 use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord};
 use serde_json::Value;
 
@@ -29,6 +29,7 @@ use super::CliDispatchContext;
 
 pub(super) struct PreparedCliDispatch<'a> {
     pub(super) provider: String,
+    pub(super) provider_enum: Provider,
     pub(super) cli_executor: ResolvedCliExecutor,
     pub(super) inspection_tools: Option<InspectionTools>,
     pub(super) image_input: Option<ImageInputPlan>,
@@ -180,7 +181,8 @@ pub(crate) fn dispatch_cli_invocation(
     if fs_profile != Some("reviewer") {
         host.acquire_deferred_footprint(run_id, activity_name)?;
     }
-    let provider = spec.provider.as_str().to_string();
+    let provider_enum = spec.provider;
+    let provider = provider_enum.as_str().to_string();
     reject_removed_trusted_host_execution(spec, activity_name)?;
     // Reject an inspection configuration that cannot start (a non-reviewer
     // profile, a provider with no CLI runtime) before executor lookup can
@@ -277,6 +279,7 @@ pub(crate) fn dispatch_cli_invocation(
         },
         PreparedCliDispatch {
             provider,
+            provider_enum,
             cli_executor,
             inspection_tools,
             image_input,

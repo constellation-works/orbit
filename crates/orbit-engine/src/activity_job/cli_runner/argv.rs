@@ -7,6 +7,7 @@ use orbit_exec::{
     sandbox_exec_program_for_audit,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
+use orbit_types::workflow::activity_job::Provider;
 
 use super::super::dispatcher::ResolvedSandbox;
 use super::spawn::linux_bwrap_mask;
@@ -140,7 +141,7 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
 /// Returns the provider print-timeout it injected, if any, so completion can
 /// tell a run that spent that budget from one that exited early. [ORB-14683]
 pub(super) fn apply_provider_runtime_arg_fixups(
-    provider: &str,
+    provider: Provider,
     args: &mut Vec<String>,
     remaining_deadline: Duration,
 ) -> Option<Duration> {

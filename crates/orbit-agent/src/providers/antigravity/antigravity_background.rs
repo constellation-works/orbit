@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 use super::antigravity_output::antigravity_terminal_response;
@@ -79,12 +80,12 @@ pub(crate) fn running_background_tasks(stdout: &[u8]) -> Vec<String> {
 /// limit) before they join the text. Returns `None` for another provider or when no running task was reported,
 /// so the generic completion violation stands.
 pub fn antigravity_background_task_diagnostic(
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     elapsed: Duration,
     bound: impl Fn(&str) -> String,
 ) -> Option<String> {
-    if provider != "antigravity" && provider != "agy" {
+    if provider != Provider::Antigravity {
         return None;
     }
     let running = running_background_tasks(stdout);

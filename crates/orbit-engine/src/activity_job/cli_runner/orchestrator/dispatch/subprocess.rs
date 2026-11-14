@@ -6,7 +6,7 @@ use orbit_common::process::build_budget::{BuildBudgetWaits, read_waits};
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_descendant_threshold};
 use orbit_common::security::redaction::PatternRedactor;
-use orbit_types::workflow::activity_job::V2AuditEventKind;
+use orbit_types::workflow::activity_job::{Provider, V2AuditEventKind};
 use serde_json::Value;
 
 use crate::activity_job::cli_runner::plugin_broker::RunPluginBroker;
@@ -38,6 +38,7 @@ const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 pub(super) struct CliProviderInvocation<'a> {
     pub(super) context: CliDispatchContext<'a>,
     pub(super) provider: &'a String,
+    pub(super) provider_enum: Provider,
     pub(super) resolved_program: &'a str,
     pub(super) subprocess_args: &'a [String],
     pub(super) child_env: &'a [(String, String)],
@@ -73,6 +74,7 @@ pub(super) fn invoke_cli_provider(
     let CliProviderInvocation {
         context,
         provider,
+        provider_enum,
         resolved_program,
         subprocess_args,
         child_env,
@@ -132,7 +134,7 @@ pub(super) fn invoke_cli_provider(
             return;
         }
         let message = bounded_assistant_message(
-            &progress_provider,
+            provider_enum,
             &progress.recent,
             redaction,
             PROGRESS_MESSAGE_LIMIT_BYTES,

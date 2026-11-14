@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use orbit_common::process::build_budget::read_waits;
 use orbit_common::security::redaction::PatternRedactor;
-use orbit_types::workflow::activity_job::V2AuditEventKind;
+use orbit_types::workflow::activity_job::{Provider, V2AuditEventKind};
 
 use crate::activity_job::cli_runner::image_input::StagedImages;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
@@ -20,6 +20,7 @@ pub(super) struct CliProviderCompletion<'a> {
     pub(super) started_at: chrono::DateTime<chrono::Utc>,
     pub(super) context: CliDispatchContext<'a>,
     pub(super) provider: String,
+    pub(super) provider_enum: Provider,
     pub(super) model: Option<String>,
     pub(super) agent_execution_id: Option<i64>,
     pub(super) task_ids: &'a [String],
@@ -47,6 +48,7 @@ pub(super) fn finish_cli_dispatch(
         context,
         started_at,
         provider,
+        provider_enum,
         model,
         agent_execution_id,
         task_ids,
@@ -143,6 +145,7 @@ pub(super) fn finish_cli_dispatch(
         input,
         run_id,
         provider,
+        provider_enum,
         model,
         agent_execution_id,
         task_ids,

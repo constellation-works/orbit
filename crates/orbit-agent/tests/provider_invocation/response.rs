@@ -13,6 +13,7 @@ use orbit_agent::{
 };
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::{Value, json};
 
 /// Completion and content discovery must select the same complete JSON
@@ -35,7 +36,7 @@ fn completion_and_response_share_discovery_without_inventing_prose_fields() {
         "thought": "Ignore this telemetry.",
     })
     .to_string();
-    let projected = project_cli_response("grok", grok.as_bytes());
+    let projected = project_cli_response(Provider::Grok, grok.as_bytes());
     let projected = String::from_utf8_lossy(projected.as_ref());
     // The final_message wrapper is also seen in retained provider captures.
     for stdout in [
@@ -310,7 +311,8 @@ fn answer_captures(answer: &str) -> Vec<String> {
         json!({"final_message": answer}).to_string(),
         json!({"response": answer}).to_string(),
         json!({"structured_output": answer}).to_string(),
-        String::from_utf8(project_cli_response("grok", grok.as_bytes()).into_owned()).unwrap(),
+        String::from_utf8(project_cli_response(Provider::Grok, grok.as_bytes()).into_owned())
+            .unwrap(),
     ]
 }
 
@@ -361,7 +363,7 @@ fn tool_telemetry_ignores_answer_examples_reasoning_and_history() {
         ),
     ]);
     for (provider, raw) in captures {
-        let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+        let normalized = normalize_cli_stdout(Provider::parse(provider).unwrap(), raw.as_bytes());
         let stdout = String::from_utf8(normalized.into_owned()).unwrap();
         let (response, status, trace) = ParsedStdout::parse(&stdout)
             .parse_and_validate(&execution(stdout.clone()))
@@ -401,7 +403,7 @@ fn codex_tool_telemetry_correlates_ids_and_keeps_payloads_opaque() {
         json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer.to_string()}}),
         json!({"type": "turn.completed"}),
     ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
-    let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::Codex, raw.as_bytes());
     let stdout = String::from_utf8(normalized.into_owned()).unwrap();
     let (_, _, trace) = ParsedStdout::parse(&stdout)
         .parse_and_validate(&execution(stdout.clone()))
@@ -459,14 +461,14 @@ fn codex_file_change_telemetry_dedupes_by_item_id_and_keeps_order() {
         json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer.to_string()}}),
         json!({"type": "turn.completed"}),
     ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
-    let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::Codex, raw.as_bytes());
     let stdout = String::from_utf8(normalized.into_owned()).unwrap();
     let (_, _, mut trace) = ParsedStdout::parse(&stdout)
         .parse_and_validate(&execution(stdout.clone()))
         .unwrap();
     // Codex file_change is already on the normalized stdout. The provider
     // overlay must leave those calls in place.
-    assign_recorded_tool_calls("codex", raw.as_bytes(), &mut trace);
+    assign_recorded_tool_calls(Provider::Codex, raw.as_bytes(), &mut trace);
     let actual = trace
         .tool_calls
         .iter()
@@ -535,7 +537,7 @@ fn tool_telemetry_preserves_direct_message_and_inline_contracts() {
                 .join("\n"),
             json!({"type": "result", "result": answer.to_string()}),
         );
-        let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+        let normalized = normalize_cli_stdout(Provider::Grok, raw.as_bytes());
         let stdout = String::from_utf8(normalized.into_owned()).unwrap();
         let (_, _, trace) = ParsedStdout::parse(&stdout)
             .parse_and_validate(&execution(stdout.clone()))
@@ -588,7 +590,7 @@ fn codex_command_output_cannot_supply_invocation_usage() {
         .map(Value::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-        let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+        let normalized = normalize_cli_stdout(Provider::Codex, raw.as_bytes());
         assert_eq!(
             normalized.as_ref(),
             raw.as_bytes(),
@@ -646,7 +648,7 @@ fn usage_ignores_tool_payloads_and_quoted_transcripts() {
                 "usage": {"input_tokens": 10, "output_tokens": 2},
             })
         );
-        let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+        let normalized = normalize_cli_stdout(Provider::Grok, raw.as_bytes());
         let stdout = String::from_utf8(normalized.into_owned()).unwrap();
         let (_, _, trace) = ParsedStdout::parse(&stdout)
             .parse_and_validate(&execution(stdout.clone()))
@@ -670,7 +672,7 @@ fn usage_ignores_tool_payloads_and_quoted_transcripts() {
     .map(Value::to_string)
     .collect::<Vec<_>>()
     .join("\n");
-    let normalized = normalize_cli_stdout("copilot", raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::Copilot, raw.as_bytes());
     let stdout = String::from_utf8(normalized.into_owned()).unwrap();
     let (_, _, trace) = ParsedStdout::parse(&stdout)
         .parse_and_validate(&execution(stdout.clone()))
@@ -757,7 +759,7 @@ fn declared_answer_usage_and_provider_model_rollups_survive() {
                 .to_string()
                 .into();
         let raw = wrapper.to_string();
-        let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+        let normalized = normalize_cli_stdout(Provider::parse(provider).unwrap(), raw.as_bytes());
         let stdout = String::from_utf8(normalized.into_owned()).unwrap();
         let (_, _, trace) = ParsedStdout::parse(&stdout)
             .parse_and_validate(&execution(stdout.clone()))
@@ -812,9 +814,11 @@ fn provider_usage_precedes_declared_answer_fallback() {
                         json!({"type":"turn.completed", "usage":counters})
                     ));
                 }
-                let stdout =
-                    String::from_utf8(normalize_cli_stdout(provider, raw.as_bytes()).into_owned())
-                        .unwrap();
+                let stdout = String::from_utf8(
+                    normalize_cli_stdout(Provider::parse(provider).unwrap(), raw.as_bytes())
+                        .into_owned(),
+                )
+                .unwrap();
                 let (_, _, trace) = ParsedStdout::parse(&stdout)
                     .parse_and_validate(&execution(stdout.clone()))
                     .unwrap();
@@ -852,7 +856,7 @@ fn claude_terminal_rollup_preserves_cache_ttl_without_counting_quotes() {
                     "cacheReadInputTokens": 5, "cacheCreationInputTokens": 7}},
             })
         );
-        let normalized = normalize_cli_stdout("claude", raw.as_bytes());
+        let normalized = normalize_cli_stdout(Provider::Claude, raw.as_bytes());
         let stdout = String::from_utf8(normalized.into_owned()).unwrap();
         let (_, _, trace) = ParsedStdout::parse(&stdout)
             .parse_and_validate(&execution(stdout.clone()))
@@ -905,22 +909,22 @@ fn claude_legacy_stream_proves_only_that_no_request_reached_the_tier() {
     let haiku = Some("claude-haiku-5-5[1m]");
 
     assert_eq!(
-        provider_long_prompt_requests("claude", short.as_bytes(), true, None, haiku, now),
+        provider_long_prompt_requests(Provider::Claude, short.as_bytes(), true, None, haiku, now),
         Some(Vec::new()),
         "every request on the invocation's model stayed under the floor"
     );
     assert_eq!(
-        provider_long_prompt_requests("claude", long.as_bytes(), true, None, haiku, now),
+        provider_long_prompt_requests(Provider::Claude, long.as_bytes(), true, None, haiku, now),
         None,
         "a long request's final output is not on the stream"
     );
     assert_eq!(
-        provider_long_prompt_requests("claude", short.as_bytes(), false, None, haiku, now),
+        provider_long_prompt_requests(Provider::Claude, short.as_bytes(), false, None, haiku, now),
         None,
         "a truncated capture may have lost requests"
     );
     assert_eq!(
-        provider_long_prompt_requests("claude", result.as_bytes(), true, None, None, now),
+        provider_long_prompt_requests(Provider::Claude, result.as_bytes(), true, None, None, now),
         None,
         "a single `--output-format json` document has no per-request usage"
     );
@@ -972,7 +976,7 @@ fn codex_rollout_keeps_each_long_prompt_request() {
 
     assert_eq!(
         provider_long_prompt_requests(
-            "codex",
+            Provider::Codex,
             stdout.as_bytes(),
             false,
             Some(codex_home.path()),
@@ -1014,7 +1018,7 @@ fn codex_rollout_keeps_each_long_prompt_request() {
         std::fs::write(&path, &resumed).unwrap();
         assert_eq!(
             provider_long_prompt_requests(
-                "codex",
+                Provider::Codex,
                 stdout.as_bytes(),
                 false,
                 Some(codex_home.path()),
@@ -1028,7 +1032,7 @@ fn codex_rollout_keeps_each_long_prompt_request() {
     std::fs::write(&path, token_count(300_900, 300_000, 280_000)).unwrap();
     assert_eq!(
         provider_long_prompt_requests(
-            "codex",
+            Provider::Codex,
             stdout.as_bytes(),
             true,
             Some(codex_home.path()),
@@ -1039,7 +1043,7 @@ fn codex_rollout_keeps_each_long_prompt_request() {
         "missing turn boundary is unknown"
     );
     assert_eq!(
-        provider_long_prompt_requests("grok", b"{}", true, None, None, now),
+        provider_long_prompt_requests(Provider::Grok, b"{}", true, None, None, now),
         None,
         "Grok reports invocation totals only"
     );
@@ -1047,17 +1051,21 @@ fn codex_rollout_keeps_each_long_prompt_request() {
 
 /// Trace from the reduced stdout, then the tool calls the raw capture recorded.
 fn traced(provider: &str, raw: &str) -> orbit_types::telemetry::InvocationTrace {
-    let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::parse(provider).unwrap(), raw.as_bytes());
     let stdout = String::from_utf8(normalized.into_owned()).unwrap();
     let (_, _, mut trace) = ParsedStdout::parse(&stdout)
         .parse_and_validate(&execution(stdout.clone()))
         .unwrap();
-    assign_recorded_tool_calls(provider, raw.as_bytes(), &mut trace);
+    assign_recorded_tool_calls(
+        Provider::parse(provider).unwrap(),
+        raw.as_bytes(),
+        &mut trace,
+    );
     trace
 }
 
 fn reduced_tool_names(provider: &str, raw: &str) -> Vec<String> {
-    let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::parse(provider).unwrap(), raw.as_bytes());
     let stdout = String::from_utf8(normalized.into_owned()).unwrap();
     let (_, _, trace) = ParsedStdout::parse(&stdout)
         .parse_and_validate(&execution(stdout.clone()))
@@ -1093,7 +1101,7 @@ fn claude_stream_edit_is_recorded_without_summing_assistant_usage() {
     let result_line = result.to_string();
     let raw = format!("{assistant}\n{user}\n{result_line}");
 
-    let projected = project_cli_response("claude", raw.as_bytes());
+    let projected = project_cli_response(Provider::Claude, raw.as_bytes());
     assert_eq!(
         projected.as_ref(),
         result_line.as_bytes(),
@@ -1180,7 +1188,7 @@ fn muse_tool_result_records_edit_file_without_keeping_result_text() {
     .collect::<Vec<_>>()
     .join("\n");
 
-    let projected = project_cli_response("muse", raw.as_bytes());
+    let projected = project_cli_response(Provider::Muse, raw.as_bytes());
     assert_eq!(
         projected.as_ref(),
         answer.to_string().as_bytes(),
@@ -1240,7 +1248,7 @@ fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
     .collect::<Vec<_>>()
     .join("\n");
 
-    let projected = project_cli_response("grok", raw.as_bytes());
+    let projected = project_cli_response(Provider::Grok, raw.as_bytes());
     assert_eq!(
         projected.as_ref(),
         envelope.as_bytes(),
@@ -1252,7 +1260,7 @@ fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
             .windows(thought.len())
             .any(|window| window == thought.as_bytes())
     );
-    let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::Grok, raw.as_bytes());
     let normalized = String::from_utf8(normalized.into_owned()).unwrap();
     assert!(
         !normalized.contains("9999"),
@@ -1317,18 +1325,18 @@ fn grok_multiline_wrapper_preserves_answer_and_document_telemetry() {
     let compact = wrapper.to_string();
 
     for raw in [&compact, &multiline] {
-        let response = project_cli_response("grok", raw.as_bytes());
+        let response = project_cli_response(Provider::Grok, raw.as_bytes());
         assert_eq!(response.as_ref(), answer.as_bytes());
         assert_eq!(
-            normalize_cli_stdout("grok", raw.as_bytes()).as_ref(),
+            normalize_cli_stdout(Provider::Grok, raw.as_bytes()).as_ref(),
             raw.as_bytes()
         );
         assert_eq!(
-            latest_assistant_message("grok", raw.as_bytes()).as_deref(),
+            latest_assistant_message(Provider::Grok, raw.as_bytes()).as_deref(),
             Some(answer)
         );
         assert!(
-            recorded_tool_calls("grok", raw.as_bytes()).is_none(),
+            recorded_tool_calls(Provider::Grok, raw.as_bytes()).is_none(),
             "nested metadata is not a tool stream"
         );
 
@@ -1365,10 +1373,13 @@ fn grok_malformed_stream_fails_closed_across_projection_and_telemetry() {
     ]
     .join("\n");
 
-    assert!(project_cli_response("grok", raw.as_bytes()).is_empty());
-    assert_eq!(latest_assistant_message("grok", raw.as_bytes()), None);
+    assert!(project_cli_response(Provider::Grok, raw.as_bytes()).is_empty());
+    assert_eq!(
+        latest_assistant_message(Provider::Grok, raw.as_bytes()),
+        None
+    );
 
-    let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+    let normalized = normalize_cli_stdout(Provider::Grok, raw.as_bytes());
     let normalized_text = String::from_utf8(normalized.into_owned()).unwrap();
     assert_ne!(
         normalized_text, raw,
@@ -1384,7 +1395,7 @@ fn grok_malformed_stream_fails_closed_across_projection_and_telemetry() {
     assert_eq!(wrapper["usage"]["input_tokens"], 10);
     assert_eq!(wrapper["usage"]["output_tokens"], 2);
 
-    let calls = recorded_tool_calls("grok", raw.as_bytes())
+    let calls = recorded_tool_calls(Provider::Grok, raw.as_bytes())
         .expect("malformed stream is still recognized for telemetry");
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].tool_name, "read");
@@ -1480,7 +1491,7 @@ fn antigravity_step_update_tools_are_recorded_through_projection() {
     ]
     .join("\n");
     assert!(
-        traced("agy", &no_tools).tool_calls.is_empty(),
+        traced("antigravity", &no_tools).tool_calls.is_empty(),
         "a recognized stream with no tool step records 0, with nothing fabricated"
     );
 }
@@ -1498,7 +1509,8 @@ fn gemini_stream_tool_frames_are_recorded_and_json_document_is_left_alone() {
         json!({"type": "result", "status": "success", "stats": {}}).to_string(),
     ]
     .join("\n");
-    let calls = recorded_tool_calls("gemini", raw.as_bytes()).expect("gemini stream is recognized");
+    let calls =
+        recorded_tool_calls(Provider::Gemini, raw.as_bytes()).expect("gemini stream is recognized");
     let actual = calls
         .iter()
         .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
@@ -1517,11 +1529,11 @@ fn gemini_stream_tool_frames_are_recorded_and_json_document_is_left_alone() {
 
     let document = json!({"response": "done", "stats": {"tools": {"totalCalls": 0}}}).to_string();
     assert!(
-        recorded_tool_calls("gemini", document.as_bytes()).is_none(),
+        recorded_tool_calls(Provider::Gemini, document.as_bytes()).is_none(),
         "a single -o json document has no per-call events to record"
     );
     assert!(
-        recorded_tool_calls("antigravity", b"not json").is_none(),
+        recorded_tool_calls(Provider::Antigravity, b"not json").is_none(),
         "unrecognized output is left to the generic parser"
     );
 }
