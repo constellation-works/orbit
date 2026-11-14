@@ -206,9 +206,14 @@ pub(super) fn read_ci_attention(
         // No fetched remote-tracking head: freshness is unknown, so no
         // run can be shown to be on the current base head. Degrade
         // explicitly rather than treating any reported head as current.
-        candidates.degraded.push(workspace_degraded(workspace, AttentionKind::CiRed.as_str(), "source_unavailable", format!(
-            "Current head of base branch '{base_branch}' is unavailable; fetch the branch and retry"
-        )));
+        candidates.degraded.push(workspace_degraded(
+            workspace,
+            AttentionKind::CiRed.as_str(),
+            "source_unavailable",
+            format!(
+                "Current head of base branch '{base_branch}' is unavailable; fetch the branch and retry"
+            ),
+        ));
         candidates
             .timings
             .insert("ci_red".into(), started.elapsed().as_micros());
