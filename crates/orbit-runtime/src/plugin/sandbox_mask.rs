@@ -124,9 +124,14 @@ pub fn prepare_plugin_mask(global_root: &Path) -> Result<PreparedPluginMask, Orb
                 root.display()
             ))
         })?;
-        trees.push(create_owned_dir(&root, relative)?);
+        trees.push(
+            orbit_common::fs::io::create_private_dir_chain(&root, relative)
+                .map_err(mask_private_dir_error)?,
+        );
     }
-    let sentinel = create_owned_dir(&root, Path::new(PLUGIN_MASK_SENTINEL_DIR))?;
+    let sentinel =
+        orbit_common::fs::io::create_private_dir_chain(&root, Path::new(PLUGIN_MASK_SENTINEL_DIR))
+            .map_err(mask_private_dir_error)?;
     write_sentinel_file(&sentinel.join(PLUGIN_MASK_SENTINEL_FILE))?;
     Ok(PreparedPluginMask { sentinel, trees })
 }
@@ -154,47 +159,38 @@ pub fn prepare_agent_mask(global_root: &Path) -> Result<PreparedPluginMask, Orbi
         let root = root
             .canonicalize()
             .map_err(|error| mask_io_error("resolve", root, error))?;
-        prepared.trees.push(create_owned_dir(&root, relative)?);
+        prepared.trees.push(
+            orbit_common::fs::io::create_private_dir_chain(&root, relative)
+                .map_err(mask_private_dir_error)?,
+        );
         Ok(prepared)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Ok(prepared)
 }
 
-/// Create `root/relative` one component at a time with mode `0700`, refusing
-/// any component that is a link, not a directory, or owned by another user.
 #[cfg(unix)]
-fn create_owned_dir(root: &Path, relative: &Path) -> Result<PathBuf, OrbitError> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+fn mask_private_dir_error(error: orbit_common::fs::io::PrivateDirError) -> OrbitError {
+    use orbit_common::fs::io::PrivateDirError;
 
-    // SAFETY: `geteuid` only reads the calling process's credentials.
-    let euid = unsafe { libc::geteuid() };
-    let mut dir = root.to_path_buf();
-    for component in relative.components() {
-        dir.push(component);
-        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(mask_io_error("create", &dir, error)),
-        }
-        let metadata = std::fs::symlink_metadata(&dir)
-            .map_err(|error| mask_io_error("inspect", &dir, error))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(OrbitError::PolicyDenied(format!(
+    match error {
+        PrivateDirError::Symlink { path } | PrivateDirError::NotDirectory { path } => {
+            OrbitError::PolicyDenied(format!(
                 "the agent sandbox mask refuses `{}`: it is not a plain directory",
-                dir.display()
-            )));
+                path.display()
+            ))
         }
-        if metadata.uid() != euid {
-            return Err(OrbitError::PolicyDenied(format!(
-                "the agent sandbox mask refuses `{}`: it is owned by uid {}, not this host \
+        PrivateDirError::ForeignOwner { path, uid } => {
+            // SAFETY: `geteuid` only reads the calling process's credentials.
+            let euid = unsafe { libc::geteuid() };
+            OrbitError::PolicyDenied(format!(
+                "the agent sandbox mask refuses `{}`: it is owned by uid {uid}, not this host \
                  (uid {euid})",
-                dir.display(),
-                metadata.uid()
-            )));
+                path.display()
+            ))
         }
+        PrivateDirError::Io { path, source } => mask_io_error("create", &path, source),
     }
-    Ok(dir)
 }
 
 /// Create the sentinel file once, never through a link; an existing regular
