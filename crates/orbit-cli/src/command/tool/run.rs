@@ -224,9 +224,17 @@ impl Execute for ToolRunArgs {
             return Ok(Payload::detail(doc, text).into());
         }
 
+        let bare_field = answers_with_bare_field(&self.name, &input)?;
+        let list_policy = TaskListResultPolicy::for_call(
+            &self.name,
+            &input,
+            task_list_result_profile(self.full, &self.fields),
+        );
+        let mut execution_input = input.clone();
+        list_policy.apply_compact_hint(&mut execution_input);
         let output = runtime.execute_tool_command_with_session_context(
             &self.name,
-            input.clone(),
+            execution_input,
             self.agent,
             self.model,
             session_context,
@@ -237,12 +245,6 @@ impl Execute for ToolRunArgs {
             owner.as_ref(),
             output,
         )?;
-        let bare_field = answers_with_bare_field(&self.name, &input)?;
-        let list_policy = TaskListResultPolicy::for_call(
-            &self.name,
-            &input,
-            task_list_result_profile(self.full, &self.fields),
-        );
         let output = shape_tool_output(
             tool_operation_name(&self.name, &input),
             output,

@@ -16,8 +16,9 @@ use serde_json::{Map, Value, json};
 use crate::OrbitRuntime;
 use crate::application::contracts::TaskBundleMaintenancePort;
 use crate::application::task::{
-    TaskEligibilityQuery, TaskFieldProjection, TaskListFilter, TaskListQuery, TaskOsReadout,
-    TaskWriteMetadata, TaskWriteResponsePolicy, task_listing_field_json, task_write_response_json,
+    TaskEligibilityQuery, TaskFieldProjection, TaskListFilter, TaskListHydration, TaskListQuery,
+    TaskOsReadout, TaskWriteMetadata, TaskWriteResponsePolicy, task_listing_field_json,
+    task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -471,6 +472,18 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             "not_before_from must be at or before not_before_until".into(),
         ));
     }
+    let pilot_warnings_filter = input.optional_bool("pilot_warnings")? == Some(true);
+    // Compact is the transport's internal hint, decided from the same policy
+    // that will project this answer to the minimal fields. It never applies
+    // when the call projects rows itself (`fields`/`view`) or when the
+    // pilot-warnings filter must read audit sidecars.
+    let compact = input
+        .as_value()
+        .get(orbit_common::governance::task::TASK_LIST_COMPACT_HINT)
+        == Some(&Value::Bool(true))
+        && fields.is_none()
+        && !pilot_warnings_filter
+        && input.as_value().get("view").is_none_or(Value::is_null);
     let page = runtime.query_task_rows_status_aware(&TaskListQuery {
         filter: TaskListFilter {
             statuses,
@@ -488,7 +501,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             has_external_ref_system,
             ..Default::default()
         },
-        pilot_warnings: input.optional_bool("pilot_warnings")? == Some(true),
+        pilot_warnings: pilot_warnings_filter,
         ready: input.optional_bool("ready")? == Some(true),
         runs_on: input
             .optional_string("runs_on")?
@@ -502,14 +515,26 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             .transpose()?,
         path: input.optional_string("path")?,
         limit: super::super::input::task_list_limit(input.as_value())?,
+        hydration: if compact {
+            TaskListHydration::EnvelopeOnly
+        } else {
+            TaskListHydration::Full
+        },
     })?;
     let status_by_id = page.status_by_id;
-    let os_readout = TaskOsReadout::new(runtime)?;
+    // A compact row keeps none of the OS or pilot-warning enrichments, so
+    // neither readout is built for it: no crew/executor read and no pilot
+    // receipt artifact read (which also resolves a `get_task` per warning
+    // prerequisite for proposed tasks).
+    let os_readout = if compact {
+        None
+    } else {
+        Some(TaskOsReadout::new(runtime)?)
+    };
     let mut warnings = Vec::new();
-    let tasks = page
-        .items
-        .into_iter()
-        .map(|row| match &fields {
+    let mut tasks = Vec::with_capacity(page.items.len());
+    for row in page.items {
+        let value = match &fields {
             None => {
                 let mut object = task_base_json(&row.task, &status_by_id);
                 object.insert(
@@ -520,26 +545,34 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                             .map(orbit_types::task::format_not_before)
                     ),
                 );
-                os_readout.insert_into(&row.task, &mut object);
-                object.insert(
-                    "pilot_warnings".into(),
-                    json!(runtime.task_pilot_warning_findings(
-                        &row.task,
-                        &row.comments,
-                        &|id: &str| runtime.warning_prerequisite_is_done(id),
-                    )),
-                );
-                Ok(Value::Object(object))
+                if let Some(os_readout) = &os_readout {
+                    os_readout.insert_into(&row.task, &mut object);
+                    object.insert(
+                        "pilot_warnings".into(),
+                        json!(runtime.task_pilot_warning_findings(
+                            &row.task,
+                            &row.comments,
+                            &|id: &str| runtime.warning_prerequisite_is_done(id),
+                        )),
+                    );
+                }
+                Value::Object(object)
             }
-            Some(fields) => project_listed_task(
-                runtime,
-                &row.task,
-                &fields.fields,
-                &os_readout,
-                &mut warnings,
-            ),
-        })
-        .collect::<Result<Vec<_>, OrbitError>>()?;
+            Some(fields) => {
+                // A field projection is never compact, so the readout exists.
+                let readout = match &os_readout {
+                    Some(readout) => readout,
+                    None => {
+                        return Err(OrbitError::Execution(
+                            "task list field projection without an OS readout".into(),
+                        ));
+                    }
+                };
+                project_listed_task(runtime, &row.task, &fields.fields, readout, &mut warnings)?
+            }
+        };
+        tasks.push(value);
+    }
     let total = page.total;
     let truncated = tasks.len() < total;
     let empty = tasks.is_empty();

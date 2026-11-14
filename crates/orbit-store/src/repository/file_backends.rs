@@ -274,8 +274,9 @@ impl TaskStoreBackend for TaskV2Store {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
         residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
     ) -> Result<crate::contracts::TaskPage, OrbitError> {
-        self.in_boundary(|| self.query_task_rows(filter, limit, residual))
+        self.in_boundary(|| self.query_task_rows(filter, limit, residual, hydration))
     }
     fn get_task_row(
         &self,

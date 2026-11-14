@@ -307,6 +307,7 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
         residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
     ) -> Result<crate::contracts::TaskPage, OrbitError>;
     /// Direct reads remain strict; list reads tolerate concurrent creation/deletion.
     fn get_task_row(
