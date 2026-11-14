@@ -22,7 +22,7 @@ import {
 } from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
-import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, returnFromRunDetail, runDetailBackLabel, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekJobFailures, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
@@ -454,6 +454,8 @@ function runDetailContext() {
     // run action builders (from runs.js) and nav for renderRunDetailMeta
     navigateToRun: nTR,
     setActiveTab: sAT,
+    returnFromRunDetail,
+    runDetailBackLabel,
     runIsCancellable,
     buildCancelRunButton,
     buildReplayRunButton,

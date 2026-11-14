@@ -474,7 +474,7 @@ export function persistScopeToUrl() {
   if (currentWindow) url.searchParams.set("window", currentWindow);
   else url.searchParams.delete("window");
   if (url.href !== window.location.href) {
-    history.replaceState(null, "", url);
+    history.replaceState(history.state, "", url);
   }
   addressScope = addressScopeKey();
 }
