@@ -173,6 +173,15 @@ impl OrbitRuntime {
     pub(crate) fn get_job_run_backend(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         self.stores().jobs().get_job_run(run_id)
     }
+
+    /// Only the run's lifecycle state, for polls that must not hydrate
+    /// steps, input or pipeline state.
+    pub(crate) fn get_job_run_state_backend(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::JobRunState>, OrbitError> {
+        self.stores().jobs().get_job_run_state(run_id)
+    }
 }
 
 fn job_run_query(params: JobRunListParams) -> JobRunQuery {
