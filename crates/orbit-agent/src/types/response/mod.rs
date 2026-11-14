@@ -70,9 +70,13 @@ const PROVIDER_CAPACITY_PHRASES: &[&str] = &["model is at capacity"];
 /// Phrases a provider CLI prints in its own failure diagnostics when its
 /// account is out of quota/billing credit. Lowercase, matched
 /// case-insensitively. Codex: `Quota exceeded. Check your plan and billing
-/// details.` Generic quota errors can describe timed API limits or host disk
-/// exhaustion and do not establish a billing failure.
-const PROVIDER_QUOTA_PHRASES: &[&str] = &["quota exceeded. check your plan and billing details."];
+/// details.`; Claude Code: `Credit balance is too low` [ORB-24803]. Generic
+/// quota errors can describe timed API limits or host disk exhaustion and do
+/// not establish a billing failure.
+const PROVIDER_QUOTA_PHRASES: &[&str] = &[
+    "quota exceeded. check your plan and billing details.",
+    "credit balance is too low",
+];
 
 /// Whether a provider's own failure text says its account's quota/billing
 /// is exhausted, so the provider is unavailable on that account until an

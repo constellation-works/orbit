@@ -1821,6 +1821,36 @@ narrow fallback; unknown wording does not establish provider unavailability.
 
 ---
 
+## Classify Claude's credit-balance diagnostic as provider quota exhaustion
+
+**Recorded:** 2026-11-14 · [ORB-24803]
+
+### Context
+
+Claude Code ends a turn it cannot bill with a `result` frame whose `result`
+text is `Credit balance is too low`, under `terminal_reason=api_error`. It is
+not a timed usage limit, and the phrase was not in the billing fallback, so
+the failure was not provider-unavailable. The drain's provider breaker never
+counted it, and the same credit key kept receiving work that could only fail.
+
+### Decision
+
+Add Claude Code's `Credit balance is too low` to the billing fallback beside
+Codex's phrase, under the same scoped deviation recorded above. The claude
+adapter needs no change: the structured quota reader and the failed-exit
+branch both read the provider's own `result` frame and its terminal text.
+Usage-limit precedence is unchanged, so a timed limit named in the same turn
+keeps its reset.
+
+### Consequences
+
+Claude's credit exhaustion is provider-unavailable, like Codex's billing
+failure: the claim releases as a provider failure and the crew is excluded for
+the window. Other Claude billing wording stays unclassified until it is
+observed and added to the narrow list.
+
+---
+
 ## Task References
 
 - [T20260418-2018] — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).

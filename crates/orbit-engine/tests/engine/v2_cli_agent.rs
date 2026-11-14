@@ -374,6 +374,75 @@ fn claude_revoked_token_preserves_the_release_marker_without_step_recovery() {
     );
 }
 
+/// [ORB-24803] Claude Code's credit exhaustion ends the turn as
+/// provider-unavailable on either exit convention, read from the provider's
+/// own `result` frame. A timed usage limit named in the same turn keeps its
+/// limit classification and reset instead.
+#[cfg(unix)]
+#[test]
+fn claude_credit_balance_results_are_provider_unavailable_unless_a_limit_is_named() {
+    const CREDIT: &str = r#"{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Credit balance is too low"}"#;
+    const CREDIT_AND_LIMIT: &str = r#"{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Credit balance is too low\nUsage limit reached. Please retry in 34s."}"#;
+    for (index, (payload, limited)) in [(CREDIT, false), (CREDIT_AND_LIMIT, true)]
+        .into_iter()
+        .enumerate()
+    {
+        for exit_code in [0, 1] {
+            let run = format!("claude-credit-{index}-{exit_code}");
+            let writer = Arc::new(V2AuditWriter::new(
+                &run,
+                "smoke",
+                Arc::new(orbit_agent::loop_engine::audit::NullSink),
+            ));
+            let fake = fake_cli(
+                "claude",
+                &format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{payload}\nPAYLOAD\nexit {exit_code}\n"
+                ),
+            )
+            .unwrap();
+            let mut spec = cli_agent_loop_spec(Some(Provider::Claude));
+            spec.model = None;
+            spec.require_completion_envelope = false;
+            let host = ScriptHost::new(fake.cli_path());
+            let outcome = dispatch_v2_activity(V2DispatchInput {
+                activity_name: "credit_fixture",
+                spec: &ActivityV2Spec::AgentLoop(spec),
+                fs_profile: None,
+                input: serde_json::json!({"prompt":"test"}),
+                audit: writer,
+                run_id: &run,
+                host: Some(&host),
+            })
+            .unwrap();
+            assert!(!outcome.success, "exit {exit_code}: {outcome:?}");
+            let message = outcome.message.as_deref().unwrap_or_default();
+            if limited {
+                assert_eq!(
+                    orbit_types::workflow::ProviderFailureClass::of(None, Some(message)),
+                    Some(orbit_types::workflow::ProviderFailureClass::Limit),
+                    "exit {exit_code}: a named usage limit keeps its classification: {message}"
+                );
+                assert!(
+                    orbit_types::workflow::ProviderLimitFailure::from_text(message)
+                        .is_some_and(|limit| limit.resets_at.is_some()),
+                    "exit {exit_code}: the usage limit keeps its reset: {message}"
+                );
+            } else {
+                assert!(
+                    orbit_types::workflow::is_provider_unavailable(None, Some(message)),
+                    "exit {exit_code}: credit exhaustion is provider-unavailable: {message}"
+                );
+                assert!(
+                    message.contains("provider quota exceeded")
+                        && message.contains("Credit balance is too low"),
+                    "exit {exit_code}: the quota text is recorded: {message}"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
