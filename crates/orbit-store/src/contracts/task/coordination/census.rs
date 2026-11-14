@@ -119,21 +119,12 @@ pub fn browser_kit_unavailable(browser_kit: bool, task: &Task) -> Option<String>
     })
 }
 
-/// Why `task`'s `requires_labels` exclude an executor on `os` declaring
-/// `labels`, or `None` when it carries every one.
+/// Why `task`'s labels, under the owner's tag policy `requirements` (explicit
+/// `requires_labels` plus every matching tag's mapping), exclude an executor
+/// on `os` declaring `labels`, or `None` when it carries every one. Every
+/// reader that judges an executor's labels passes the owner's policy here.
 #[must_use]
-pub fn labels_unavailable(os: Option<HostOs>, labels: &[String], task: &Task) -> Option<String> {
-    labels_unavailable_with_tag_requirements(
-        os,
-        labels,
-        task,
-        &orbit_types::task::TagLabelRequirements::default(),
-    )
-}
-
-/// The executor's label gap against explicit and configured tag requirements.
-#[must_use]
-pub(crate) fn labels_unavailable_with_tag_requirements(
+pub fn labels_unavailable_with_tag_requirements(
     os: Option<HostOs>,
     labels: &[String],
     task: &Task,

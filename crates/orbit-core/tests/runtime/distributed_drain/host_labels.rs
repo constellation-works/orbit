@@ -480,3 +480,114 @@ crate::scenario_table!(
     configured_fixture_labels_gate_ui_scenarios,
     configured_fixture_labels_gate_ui_claims_and_local_admission
 );
+
+/// Follower readiness evidence judges a follower's labels under the owner's
+/// `workflow.tag_requires_labels`, as pull admission does. The owner is on
+/// another OS, so the `ui` tasks are excluded there by `os:macos`, and
+/// readiness asks the macOS follower whether it could run them. The follower
+/// carries the tasks' explicit label and a browser kit, so only the tag-derived
+/// `visual-fixture` decides: until it declares that label the follower is not
+/// compatible, and once it does readiness names it as the pending follower.
+fn tag_derived_labels_judge_follower_readiness_evidence() {
+    let mut pair = Pair::with_owner_host(
+        "[workflow.tag_requires_labels]\nui = [\"visual-fixture\"]\n",
+        "",
+        &[None, None],
+        |owner| {
+            owner
+                .with_host_os(Some(HostOs::Macos))
+                .with_machine_labels(vec!["image-export".into(), "visual-fixture".into()])
+        },
+    );
+    for ui in pair.tasks.clone() {
+        pair.wire
+            .owner
+            .run_tool(
+                "orbit.task.update",
+                json!({
+                    "id": ui,
+                    "tags": ["ui", "os:macos"],
+                    "requires_labels": ["image-export"],
+                    "model": "codex",
+                }),
+            )
+            .expect("the macOS owner carries every label the task requires");
+    }
+    // The owner reads readiness as a Linux host, so its OS excludes the tasks.
+    let linux_owner = pair
+        .wire
+        .owner
+        .clone()
+        .with_host_os(Some(HostOs::Linux))
+        .with_machine_labels(vec!["image-export".into()]);
+    let kit_home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    super::super::host_ui_routing::write_kit(kit_home.path(), true);
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(HostOs::Macos))
+        .with_browser_kit_home(kit_home.path())
+        .with_machine_labels(vec!["image-export".into()]);
+    let readiness_row = |task: &str| -> Value {
+        let ready = linux_owner
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        ready["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == task)
+            .unwrap_or_else(|| panic!("{task} is listed: {ready}"))
+            .clone()
+    };
+
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    for task in pair.tasks.clone() {
+        let row = readiness_row(&task);
+        assert_eq!(
+            row["executor_evidence"]["status"], "no_compatible_recent",
+            "{row}"
+        );
+        let executors = row["executor_evidence"]["executors"].as_array().unwrap();
+        assert!(
+            executors
+                .iter()
+                .any(|executor| executor["compatible"] == false
+                    && executor["refusal"]
+                        .as_str()
+                        .is_some_and(|refusal| refusal.contains("visual-fixture"))),
+            "the follower lacks the tag-derived label: {row}"
+        );
+        assert_ne!(row["reason"], "follower_admission_pending", "{row}");
+    }
+
+    // Declaring the tag-derived label claims one task; the other stays in
+    // backlog for readiness to read against the now-compatible follower.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["image-export".into(), "visual-fixture".into()]);
+    let claiming = pair.start_drain();
+    let leaf = pair.running_leaf(&claiming, 1);
+    let claimed = pair.claimed_task(&leaf);
+    let remaining = pair
+        .tasks
+        .iter()
+        .find(|task| **task != claimed)
+        .expect("one task stays in backlog")
+        .clone();
+    assert_eq!(pair.owner_status(&remaining), "backlog");
+    let row = readiness_row(&remaining);
+    assert_eq!(
+        row["executor_evidence"]["status"], "compatible_recent",
+        "{row}"
+    );
+    assert_eq!(row["reason"], "follower_admission_pending", "{row}");
+}
+
+crate::scenario_table!(
+    tag_derived_labels_judge_follower_readiness_evidence_scenarios,
+    tag_derived_labels_judge_follower_readiness_evidence
+);
