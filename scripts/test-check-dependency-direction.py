@@ -722,9 +722,20 @@ class RelativeImportTests(unittest.TestCase):
             ("job/run/audit.rs", "use crate::application::job::{pipeline::Probe, run::Other};\n"),
             ("job/run/delivery/observe.rs", "use super::super::{pipeline::Probe};\n"),
         ], rejected=True)
+        # A nested group that closes before `pipeline` must not hide it.
+        self.check_rows([
+            ("job/run/audit.rs",
+             "use crate::application::job::{catalog::{A, B}, pipeline::Probe};\n"),
+            ("job/run/delivery/observe.rs",
+             "use super::super::{catalog::{A, B}, pipeline::Probe};\n"),
+        ], rejected=True)
         self.check_rows([
             ("job/run/audit.rs", "use crate::application::{job::pipeline::Probe};\n"),
             ("job/run/reconcile.rs", "use crate::application::{job::{pipeline::Probe}};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("job/run/audit.rs",
+             "use crate::application::{job::{catalog::{A, B}, pipeline::Probe}};\n"),
         ], rejected=True)
         self.check_rows([
             ("job/run/reconcile.rs",

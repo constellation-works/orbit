@@ -1192,13 +1192,15 @@ done
 # reverse. A path, a grouped tree or a `super::` chain from production code
 # under `job/run` into `pipeline`, or a call to an inherent method an `impl
 # OrbitRuntime` block under `job/pipeline` defines (derived, so a new method is
-# covered without being listed), is a reintroduced edge.
+# covered without being listed), is a reintroduced edge. A grouped tree runs to
+# the `;` ending its `use` item, not to its first `}`, so a nested group ahead of
+# `pipeline` cannot hide it [ORB-24832].
 run_src="$app_src/job/run"
 if dependency_matches -n '\b(crate::application::job|super::super|super)::pipeline\b' \
   "$run_src" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U '\b(crate::application::job|super::super|super)::\{[^}]*\bpipeline\b' \
+  dependency_matches -n -U '\b(crate::application::job|super::super|super)::\{[^;]*\bpipeline\b' \
     "$run_src" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bjob::(pipeline\b|\{[^}]*\bpipeline\b)' \
+  dependency_matches -n -U 'crate::application::\{[^;]*\bjob::(pipeline\b|\{[^;]*\bpipeline\b)' \
     "$run_src" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" job/run pipeline '' '' "$app_src/job"; then
   echo "orbit-core job::run must not reach job::pipeline; run owns its audit writer, worker-exit evidence and definition reads"
