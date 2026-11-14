@@ -34,6 +34,7 @@ import sys
 mode = sys.argv[1]
 initializes = 0
 calls = 0
+last_call_id = None
 for line in sys.stdin:
     request = json.loads(line)
     if 'id' not in request:
@@ -45,11 +46,14 @@ for line in sys.stdin:
     elif method == 'ping':
         if mode == 'wedged-after-call' and calls >= 1:
             continue
+        if mode == 'stale-response-before-ping' and last_call_id is not None:
+            print(json.dumps({'jsonrpc': '2.0', 'id': last_call_id, 'result': {'stale': True}}), flush=True)
         result = {}
     elif method == 'tools/call':
         if mode == 'never-answers-call':
             continue
         calls += 1
+        last_call_id = request['id']
         result = {'structuredContent': {'initializes': initializes, 'calls': calls}}
     elif method == 'tools/list':
         result = {'tools': []}
@@ -177,6 +181,27 @@ fn a_wedged_parked_session_fails_its_health_check_and_is_not_reused() {
     assert!(
         !parked.health_check_for_reuse(Duration::from_millis(300)),
         "a parked session that no longer answers ping must be discarded, not reused"
+    );
+}
+
+#[test]
+fn a_parked_session_with_a_stale_response_is_discarded_during_its_health_check() {
+    let pool = RoutedSessionPool::default();
+    let key = pool_key(None);
+    routed_call(
+        &pool,
+        key.clone(),
+        fake_destination_session("stale-response-before-ping"),
+        Duration::from_secs(5),
+    )
+    .expect("the first answered call parks before the stale response arrives");
+
+    let mut parked = pool
+        .checkout(&key)
+        .expect("the intact answer parks the session");
+    assert!(
+        !parked.health_check_for_reuse(Duration::from_secs(5)),
+        "a response for an earlier request is a framing mismatch and must discard the session"
     );
 }
 

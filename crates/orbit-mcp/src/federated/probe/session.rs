@@ -247,7 +247,7 @@ impl DestinationSession {
         }
         self.line_cap.store(self.probe_line_cap, Ordering::Release);
         self.restart_budget(probe_timeout.min(REUSE_HEALTH_TIMEOUT));
-        match self.request_probe("ping", json!({})) {
+        match self.request("ping", json!({}), LostAnswer::Unreachable, true) {
             Ok(_) => !self.has_pending_line(),
             Err(error) => {
                 tracing::debug!(
@@ -368,6 +368,7 @@ impl DestinationSession {
                 "arguments": arguments,
             }),
             LostAnswer::OutcomeUnknown { tool: name },
+            false,
         )?;
         self.dispatched_content(&response, name)
     }
@@ -408,6 +409,7 @@ impl DestinationSession {
             crate::internal_drain::CALL_METHOD,
             json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL, "name": name, "arguments": arguments}),
             LostAnswer::OutcomeUnknown { tool: name },
+            false,
         )?;
         self.dispatched_content(&response, name)
     }
@@ -418,7 +420,7 @@ impl DestinationSession {
         method: &str,
         params: Value,
     ) -> Result<Value, OrbitError> {
-        self.request(method, params, LostAnswer::Unreachable)
+        self.request(method, params, LostAnswer::Unreachable, false)
     }
 
     fn request(
@@ -426,6 +428,7 @@ impl DestinationSession {
         method: &str,
         params: Value,
         lost: LostAnswer<'_>,
+        reject_unexpected_response_id: bool,
     ) -> Result<Value, OrbitError> {
         let context = OversizedContext::pending(
             method,
@@ -445,7 +448,7 @@ impl DestinationSession {
             }),
             |destination, reason| lost.classify(destination, id, reason),
         )?;
-        self.await_response(method, id, lost, context)
+        self.await_response(method, id, lost, context, reject_unexpected_response_id)
     }
 
     fn notify(&mut self, method: &str) -> Result<(), OrbitError> {
@@ -533,6 +536,7 @@ impl DestinationSession {
         id: i64,
         lost: LostAnswer<'_>,
         context: OversizedContext,
+        reject_unexpected_response_id: bool,
     ) -> Result<Value, OrbitError> {
         loop {
             // Checked before every read: a zero-length wait still returns a
@@ -611,6 +615,16 @@ impl DestinationSession {
                     })?;
                 }
                 continue;
+            }
+            if reject_unexpected_response_id
+                && let Some(response_id) = message.get("id")
+                && response_id.as_i64() != Some(id)
+            {
+                return Err(lost.classify(
+                    &self.destination,
+                    id,
+                    format!("emitted a response with an unexpected id while awaiting '{method}'"),
+                ));
             }
             if message.get("id").and_then(Value::as_i64) == Some(id) {
                 if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
