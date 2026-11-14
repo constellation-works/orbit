@@ -614,6 +614,8 @@ impl OrbitRuntime {
                 since: Some(since),
                 activity_id: Some((*activity).to_string()),
                 limit: INVOCATION_LIMIT,
+                // Implement wall time reads task links and durations only.
+                skip_tool_calls: true,
                 ..Default::default()
             })?;
             for record in records {

@@ -296,6 +296,8 @@ impl OrbitRuntime {
                 job_run_id: Some(run_id.to_string()),
                 until: Some(at),
                 limit: RECOVERY_INVOCATION_LIMIT,
+                // Recovery reads activity, timestamp and model only.
+                skip_tool_calls: true,
                 ..InvocationQuery::default()
             })
             .unwrap_or_else(|error| {
