@@ -217,9 +217,13 @@ def detect_help_removals(git, parent, commit, changed):
 def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
     if isinstance(schema, bool):
-        # Only `true` is an existing location: it accepts everything, so
-        # requiring a child there rejects previously valid input. `false`
-        # accepts nothing, so relaxing it to an object only admits input.
+        # Record both booleans so tightening to `false` (rejects everything
+        # previously accepted there) and relaxing `false` inside oneOf are
+        # visible to detect_mcp_changes. Only `true` is a schema node: it
+        # accepts everything, so requiring a child there rejects previously
+        # valid input, while `false` accepts nothing, so relaxing it to an
+        # object outside oneOf only admits input.
+        facts.setdefault("boolean", {})[path] = schema
         if schema:
             facts.setdefault("schema_nodes", set()).add(path)
         return
@@ -730,6 +734,31 @@ def detect_mcp_changes(git, parent, commit, changed):
             {path: True for path in after.get("schema_nodes", set())}, path_map, unmatched)
         after_closed = translated_facts(
             {path: True for path in after.get("closed_objects", set())}, path_map, unmatched)
+        after_boolean = translated_facts(after.get("boolean", {}), path_map, unmatched)
+        before_boolean = before.get("boolean", {})
+        # Tightening an existing location to `false` rejects every instance
+        # it accepted before (witness: any previously valid value there).
+        # `additionalProperties: false` is the parent's closed-object fact,
+        # already reported below, so its child path is not reported again.
+        for path, value in sorted(after_boolean.items()):
+            if value is not False or path.endswith("[additionalProperties]"):
+                continue
+            if before_boolean.get(path) is False:
+                continue
+            if path in before.get("schema_nodes", set()) or path in before_boolean:
+                report(f"`{name}` `{path}` schema tightened to false")
+        # Relaxing `false` only admits input, except inside oneOf where a
+        # widened branch can steal the single match a valid input had.
+        for path, value in sorted(before_boolean.items()):
+            if value is not False or path.endswith("[additionalProperties]"):
+                continue
+            if not inside_oneof(path):
+                continue
+            if after_boolean.get(path) is False:
+                continue
+            if path in after_nodes or path in after_boolean:
+                report(f"`{name}` `{path}` boolean schema relaxed "
+                       "inside oneOf alternative")
         for path in sorted(after_closed):
             if (path in before.get("schema_nodes", set())
                     and path not in before.get("closed_objects", set())):
@@ -763,6 +792,12 @@ def detect_mcp_changes(git, parent, commit, changed):
                 report(f"`{name}` `{path}` additionalProperties relaxed inside oneOf alternative")
         for path, names in sorted(before.get("properties", {}).items()):
             if path not in after_properties:
+                # Replacing a schema with `true` drops its properties fact
+                # but keeps a node; inside oneOf that relaxation can steal
+                # the single match, like removing the keyword itself.
+                if names and path in after_nodes and inside_oneof(path):
+                    report(f"`{name}` `{path}` properties constraint removed "
+                           "inside oneOf alternative")
                 continue
             if path not in after_properties_keywords:
                 if names and inside_oneof(path):

@@ -145,8 +145,12 @@ elif sys.argv[1] == "test":
         raise SystemExit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
     args = sys.argv[2:]
     split = args.index("--") if "--" in args else len(args)
-    for line in fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:]):
+    lines = fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:])
+    for line in lines:
         print(line)
+    if "--list" not in sys.argv:
+        print(f"test result: ok. {len(lines)} passed; 0 failed; 0 ignored; "
+              "0 measured; 0 filtered out; finished in 0.00s")
 ''')
         # Stands in for a compiled test binary: logs its argv like the cargo
         # stub and lists the tests of the target it was built for.
@@ -1650,6 +1654,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         "logs": os.environ.get("ORBIT_UPDATE_LOG_GOLDENS"),
         "store_schema": os.environ.get("ORBIT_UPDATE_STORE_SCHEMA_GOLDENS"),
     }) + "\\n")
+print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
 ''',
         )
         result = self.run_guard("check-goldens.sh", "--update")
@@ -1668,6 +1673,19 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--fast")
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+    def test_goldens_without_summary_fails(self):
+        # A successful cargo with no harness summary is missing evidence,
+        # not a pass: all nine legs must refuse it.
+        self.write_executable(
+            self.bin / "cargo",
+            '#!/usr/bin/env python3\nimport json, os, sys\n'
+            'with open(os.environ["GUARD_TEST_LOG"], "a") as log:\n'
+            '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n',
+        )
+        result = self.run_guard("check-goldens.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no test-result summary", result.stderr)
 
     def test_goldens_dead_filter_beside_live_filter_fails(self):
         """A dead filter must fail even when a sibling filter matches (ORB-24436).
