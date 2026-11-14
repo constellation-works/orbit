@@ -17,10 +17,15 @@ body.operations-active .rail {
   position: sticky;
   top: 0;
   align-self: start;
-  height: 100vh;
-  height: 100dvh;
-  max-height: 100vh;
-  max-height: 100dvh;
+  /* The rail's grid row starts below the top bar, so a full viewport
+     height would push its foot one bar-height past the fold on arrival.
+     Size it to the viewport below the bar instead: selectors and foot
+     stay visible on arrival, and it sticks at the viewport top (leaving
+     the bar's height below it) once the document scrolls. */
+  height: calc(100vh - var(--topbar-height, 56px) - 4px);
+  height: calc(100dvh - var(--topbar-height, 56px) - 4px);
+  max-height: calc(100vh - var(--topbar-height, 56px) - 4px);
+  max-height: calc(100dvh - var(--topbar-height, 56px) - 4px);
 }
 @media (max-width: 760px) {
   body.operations-active .rail { height: auto; max-height: none; }

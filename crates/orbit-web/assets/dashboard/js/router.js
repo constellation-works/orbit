@@ -439,15 +439,26 @@ function scrollElementIntoRailView(element) {
       const rect = element.getBoundingClientRect();
       const box = container.getBoundingClientRect();
       const style = getComputedStyle(container);
+      // Only a container that actually scrolls on an axis may move on it:
+      // on desktop the rail and destination column no longer scroll, so a
+      // reveal must never push a destination or the selectors out of view.
+      const canScrollY = (style.overflowY === "auto" || style.overflowY === "scroll")
+        && container.scrollHeight > container.clientHeight + 1;
+      const canScrollX = (style.overflowX === "auto" || style.overflowX === "scroll")
+        && container.scrollWidth > container.clientWidth + 1;
       const padTop = parseFloat(style.scrollPaddingTop) || 0;
       const padBottom = parseFloat(style.scrollPaddingBottom) || 0;
       const padLeft = parseFloat(style.scrollPaddingLeft) || 0;
       const padRight = parseFloat(style.scrollPaddingRight) || 0;
-      if (rect.top < box.top + padTop) container.scrollTop -= box.top + padTop - rect.top;
-      else if (rect.bottom > box.bottom - padBottom) container.scrollTop += rect.bottom - (box.bottom - padBottom);
-      const nextRect = element.getBoundingClientRect();
-      if (nextRect.left < box.left + padLeft) container.scrollLeft -= box.left + padLeft - nextRect.left;
-      else if (nextRect.right > box.right - padRight) container.scrollLeft += nextRect.right - (box.right - padRight);
+      if (canScrollY) {
+        if (rect.top < box.top + padTop) container.scrollTop -= box.top + padTop - rect.top;
+        else if (rect.bottom > box.bottom - padBottom) container.scrollTop += rect.bottom - (box.bottom - padBottom);
+      }
+      if (canScrollX) {
+        const nextRect = element.getBoundingClientRect();
+        if (nextRect.left < box.left + padLeft) container.scrollLeft -= box.left + padLeft - nextRect.left;
+        else if (nextRect.right > box.right - padRight) container.scrollLeft += nextRect.right - (box.right - padRight);
+      }
     }
     if (container.classList?.contains("rail")) break;
   }
@@ -479,9 +490,18 @@ function revealActiveRailSelection() {
 function syncRailScrollCues() {
   const phone = window.matchMedia("(max-width: 760px)").matches;
   for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
-    const canScroll = strip.scrollWidth > strip.clientWidth + 1;
-    strip.classList.toggle("has-overflow-start", phone && canScroll && strip.scrollLeft > 1);
-    strip.classList.toggle("has-overflow-end", phone && canScroll && strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+    if (phone) {
+      const canScroll = strip.scrollWidth > strip.clientWidth + 1;
+      strip.classList.toggle("has-overflow-start", canScroll && strip.scrollLeft > 1);
+      strip.classList.toggle("has-overflow-end", canScroll && strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+    } else if (strip.classList.contains("rail-subtabs")) {
+      // Desktop: the open destination's views scroll vertically on their own.
+      const canScroll = strip.scrollHeight > strip.clientHeight + 1;
+      strip.classList.toggle("has-overflow-start", canScroll && strip.scrollTop > 1);
+      strip.classList.toggle("has-overflow-end", canScroll && strip.scrollTop + strip.clientHeight < strip.scrollHeight - 1);
+    } else {
+      strip.classList.remove("has-overflow-start", "has-overflow-end");
+    }
   }
 }
 
