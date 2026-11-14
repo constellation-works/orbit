@@ -1162,3 +1162,112 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
         "nonresumable run must not claim it cannot be resumed:\n{nonresumable_human}"
     );
 }
+
+/// [ORB-24468] After a requeue with a discarded candidate opens a fresh pull
+/// request, show reports the new pull request, not the closed earlier one.
+/// The old ref stays recorded (storage appends); the show projection presents
+/// the latest recorded `github-pr` first and the `PR:` line uses it.
+#[test]
+fn task_show_reports_latest_pr_after_requeue_with_new_pr() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_reports_latest_pr_after_requeue_with_new_pr",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown_workspace = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown_workspace["orbit_root"].as_str().unwrap());
+    let id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("requeue-pr-fixture"));
+        // The earlier run's pull request, still recorded after the requeue.
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Requeue PR fixture".into(),
+                acceptance_criteria: vec!["Show the fresh pull request".into()],
+                complexity: TaskComplexity::Low,
+                status: Some(TaskStatus::InProgress),
+                external_refs: vec![ExternalRef::github_pr("9189").unwrap()],
+                ..Default::default()
+            })
+            .unwrap();
+        // The requeue back to backlog with a discarded candidate keeps the
+        // old ref; it does not clear `external_refs`.
+        runtime
+            .apply_task_automation_update(
+                &task.id.to_string(),
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Backlog),
+                    status_event: Some("status_changed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // The fresh run opens its own pull request, appended after the old one.
+        runtime
+            .apply_task_automation_update(
+                &task.id.to_string(),
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    job_run_id: Some("jrun-requeue-fresh-pr".into()),
+                    external_refs: vec![ExternalRef::github_pr("9244").unwrap()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        task.id.to_string()
+    };
+
+    let shown = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        shown["external_refs"][0]["id"], "9244",
+        "show JSON presents the fresh pull request first: {shown}"
+    );
+    assert_eq!(
+        shown["external_refs"][1]["id"], "9189",
+        "the closed earlier pull request stays recorded: {shown}"
+    );
+
+    let human = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human.lines().any(|line| line.starts_with("PR: #9244")),
+        "show reports the fresh pull request:\n{human}"
+    );
+    assert!(
+        !human.lines().any(|line| line.starts_with("PR: #9189")),
+        "show must not report the closed earlier pull request:\n{human}"
+    );
+
+    let input = json!({"id": id}).to_string();
+    let tool = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.task.show",
+        "--full",
+        "--input",
+        &input,
+    ]);
+    assert_eq!(
+        tool["external_refs"][0]["id"], "9244",
+        "tool show agrees with the CLI on the current pull request: {tool}"
+    );
+    assert_eq!(
+        fixture.json(&["task", "show", &id, "--json"]),
+        shown,
+        "show is read-only"
+    );
+}

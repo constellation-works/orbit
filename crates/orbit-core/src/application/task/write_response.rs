@@ -34,7 +34,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskStatus, is_valid_orb_task_id, task_base_json};
+use orbit_types::task::{
+    Task, TaskStatus, is_valid_orb_task_id, ordered_external_refs_for_show, task_base_json,
+};
 use orbit_types::workflow::{
     FINAL_RECOVERY_CREWS_CONFIG_KEY, FINAL_RECOVERY_CREWS_KEY, JobRunState,
 };
@@ -399,10 +401,12 @@ fn with_dashboard_extras_from(
 }
 
 /// Fill the page of a `github-pr` ref recorded without one, so the
-/// dashboard can link every delivered pull request.
+/// dashboard can link every delivered pull request. The refs keep the show
+/// projection's current-delivery order (latest `github-pr` first).
 pub fn link_pull_requests(object: &mut Map<String, Value>, task: &Task, links: &PullRequestLinks) {
     let mut external_refs = task.external_refs.clone();
     links.link(&mut external_refs);
+    let external_refs = ordered_external_refs_for_show(&external_refs);
     object.insert("external_refs".to_string(), json!(external_refs));
 }
 

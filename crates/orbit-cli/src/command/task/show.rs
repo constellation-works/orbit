@@ -453,6 +453,9 @@ fn location_label_parts(machine_id: Option<&str>, machine_name: Option<&str>) ->
 }
 
 /// The PR's stored review status moves beside its number in the summary.
+/// The show record orders `external_refs` with the latest recorded `github-pr`
+/// first, so the first match is the task's current delivery (a requeued task
+/// that opened a fresh pull request no longer reports the closed earlier one).
 fn pr_summary(task: &Map<String, Value>) -> Option<String> {
     let pull_request = task
         .get("external_refs")

@@ -16,9 +16,9 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 
 use crate::task::{
-    ArtifactManifestFileV2, LazyTaskReferenceIndex, Task, TaskOsRequirement, TaskStatus,
-    resolve_task_dependencies, resolve_task_dependencies_lazily, resolve_task_relations_lazily,
-    task_readiness_json,
+    ArtifactManifestFileV2, GITHUB_PR_EXTERNAL_REF_SYSTEM, LazyTaskReferenceIndex, Task,
+    TaskOsRequirement, TaskStatus, resolve_task_dependencies, resolve_task_dependencies_lazily,
+    resolve_task_relations_lazily, task_readiness_json,
 };
 
 /// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
@@ -187,6 +187,35 @@ pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
             "source": {"tags": requirement.any_of.iter().map(|os| os.tag()).collect::<Vec<_>>()},
         })
     })
+}
+
+/// `external_refs` in the order `orbit task show` presents them: the latest
+/// recorded `github-pr` first, so the task's current delivery is the one the
+/// record reports. Storage appends (`push_external_ref_if_missing`), so the
+/// last recorded pull request is the current one; a requeued task that opened
+/// a fresh pull request would otherwise keep reporting the closed earlier one
+/// first. Non-PR refs keep their recorded order after the PRs, newest first
+/// among themselves only by their recorded positions reversed with the PRs.
+pub fn ordered_external_refs_for_show(
+    refs: &[crate::task::ExternalRef],
+) -> Vec<crate::task::ExternalRef> {
+    let mut prs: Vec<crate::task::ExternalRef> = refs
+        .iter()
+        .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        .cloned()
+        .collect();
+    prs.reverse();
+    let others: Vec<crate::task::ExternalRef> = refs
+        .iter()
+        .filter(|reference| reference.system != GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        .cloned()
+        .collect();
+    prs.into_iter().chain(others).collect()
+}
+
+/// `external_refs` as the show projection serves them: [`ordered_external_refs_for_show`].
+pub fn show_external_refs_json(task: &Task) -> Value {
+    json!(ordered_external_refs_for_show(&task.external_refs))
 }
 
 /// JSON for a Task-local (non-sidecar) projection field.
