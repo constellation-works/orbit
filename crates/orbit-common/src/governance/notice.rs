@@ -88,7 +88,7 @@ const POST_PARAMS: &[ParamSpec] = &[
     free_text(both(
         "body",
         ParamType::String,
-        "Plain text, at most 4096 UTF-8 bytes by default; Markdown is stored verbatim and never rendered as HTML.",
+        "Plain text, at most 4096 UTF-8 bytes; Markdown is stored verbatim and never rendered as HTML.",
         CliArgKind::flag("body"),
         "Plain-text body",
     )),

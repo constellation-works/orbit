@@ -1786,7 +1786,7 @@
       },
       {
         "name": "body",
-        "description": "Plain text, at most 4096 UTF-8 bytes by default; Markdown is stored verbatim and never rendered as HTML.",
+        "description": "Plain text, at most 4096 UTF-8 bytes; Markdown is stored verbatim and never rendered as HTML.",
         "param_type": "string",
         "required": false
       },
