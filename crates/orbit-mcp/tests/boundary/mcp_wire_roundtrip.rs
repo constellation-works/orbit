@@ -1055,6 +1055,69 @@ impl McpHost for CanonicalContractHost {
     }
 }
 
+struct FrictionTaxonomyHost;
+impl McpHost for FrictionTaxonomyHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        orbit_mcp::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+    }
+
+    fn friction_tag_taxonomy(
+        &self,
+        _: &ToolSessionContext,
+    ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
+        Ok(Some(vec![(
+            "workspace-only".into(),
+            "A tag defined by this workspace.".into(),
+        )]))
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        _: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Ok(json!({"name":name,"input":input}))
+    }
+}
+
+#[tokio::test]
+async fn tools_list_advertises_the_bound_workspace_friction_taxonomy() {
+    let server = OrbitToolServer::new(Arc::new(FrictionTaxonomyHost));
+    let (client_io, server_io) = duplex(128 * 1024);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(server_io)
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
+    });
+    let client = ClientConfig::default().serve(client_io).await.unwrap();
+    let listed = client.peer().list_all_tools().await.unwrap();
+    let friction = listed
+        .iter()
+        .find(|tool| tool.name == "orbit_friction")
+        .expect("friction family is listed");
+
+    assert_eq!(
+        friction.input_schema["properties"]["tags"]["items"]["enum"],
+        json!(["workspace-only"])
+    );
+    assert_eq!(
+        friction.input_schema["properties"]["tags"]["description"],
+        json!("Friction taxonomy tags.")
+    );
+    assert_eq!(
+        friction.input_schema["properties"]["title"]["maxLength"],
+        json!(120)
+    );
+    client.cancel().await.unwrap();
+    server_task.await.unwrap();
+}
+
 #[tokio::test]
 async fn client_handshake_does_not_advertise_retired_desktop_tools() {
     for legacy in [true, false] {

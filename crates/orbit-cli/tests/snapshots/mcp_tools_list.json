@@ -158,14 +158,27 @@
         },
         "title": {
           "type": "string",
-          "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body."
+          "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body.",
+          "maxLength": 120
         },
         "tags": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "automation",
+              "build",
+              "docs",
+              "history-diverged",
+              "lifecycle",
+              "naming",
+              "other",
+              "policy",
+              "skill-guidance",
+              "tooling"
+            ]
           },
-          "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other."
+          "description": "Friction taxonomy tags."
         },
         "during_task": {
           "type": "string",
