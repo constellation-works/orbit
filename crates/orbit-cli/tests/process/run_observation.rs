@@ -1088,7 +1088,7 @@ fn ps_lstart_utc(test: &str, pid: u32) -> Option<String> {
 fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
     use orbit_common::process::identity::{
         ProbeOutcome, STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace,
-        legacy_lstart_matches, probe_process_start_identity, stable_tokens_match,
+        probe_process_start_identity, stable_tokens_match,
     };
     const PID: &str = "ORBIT_TEST_LSTART_PID";
     const RAW: &str = "ORBIT_TEST_LSTART_RAW";
@@ -1107,8 +1107,6 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
             &token,
             &format!("{STABLE_TOKEN_PREFIX_V1}{raw}")
         ));
-        assert!(legacy_lstart_matches(pid, &raw));
-        assert!(!legacy_lstart_matches(pid, "different start time"));
         assert_eq!(
             probe_process_start_identity(u32::MAX),
             ProbeOutcome::NoProcess
@@ -1165,7 +1163,7 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
     };
     let fixture = Fixture::init();
-    for format in ["v2", "v1", "legacy"] {
+    for format in ["v2", "v1"] {
         let owner = test_env::spawn_unrelated_process();
         let Some(raw) = ps_lstart_utc(
             "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
@@ -1173,13 +1171,13 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         ) else {
             return;
         };
-        let token = match format {
-            "v2" => format!(
+        let token = if format == "v2" {
+            format!(
                 "{STABLE_TOKEN_PREFIX}pidns={}:{raw}",
                 current_pid_namespace().unwrap_or("-")
-            ),
-            "v1" => format!("{STABLE_TOKEN_PREFIX_V1}{raw}"),
-            _ => raw,
+            )
+        } else {
+            format!("{STABLE_TOKEN_PREFIX_V1}{raw}")
         };
         let run_id = format!("jrun-pre-change-{format}");
         let now = chrono::Utc::now().to_rfc3339();

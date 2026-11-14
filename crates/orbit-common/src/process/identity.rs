@@ -176,37 +176,31 @@ pub enum ProbeOutcome {
 
 #[cfg(unix)]
 use std::io;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Command;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::time::Duration;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use super::bounded::{BoundedRunError, run_bounded_capped_typed};
 
 /// A `ps -o lstart=` for one pid answers in milliseconds; a `ps` that does not
 /// is unreadable identity, which callers already treat as unavailable.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 const PS_TIMEOUT: Duration = Duration::from_secs(5);
 /// One `lstart` line is under 40 bytes.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 const PS_OUTPUT_LIMIT: usize = 4096;
 
-#[cfg(unix)]
-fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
-    #[cfg(target_os = "linux")]
-    if stable_env {
-        return linux_lstart_utc(pid);
-    }
+#[cfg(all(unix, not(target_os = "linux")))]
+fn lstart_raw(pid: u32) -> Result<Option<String>, io::Error> {
     #[cfg(target_os = "macos")]
-    if stable_env && let Some(lstart) = darwin_lstart_utc(pid) {
+    if let Some(lstart) = darwin_lstart_utc(pid) {
         return Ok(Some(lstart));
     }
     let mut cmd = Command::new("ps");
     cmd.args(["-o", "lstart=", "-p", &pid.to_string()]);
-    if stable_env {
-        cmd.env("TZ", "UTC").env("LC_ALL", "C").env("LANG", "C");
-    }
+    cmd.env("TZ", "UTC").env("LC_ALL", "C").env("LANG", "C");
     let output = run_bounded_capped_typed(&mut cmd, PS_TIMEOUT, PS_OUTPUT_LIMIT).map_err(
         |error| match error {
             BoundedRunError::Spawn(error) => error,
@@ -218,6 +212,12 @@ fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok((!token.is_empty()).then_some(token))
+}
+
+/// Linux reads the start time from `/proc` without executing `ps`.
+#[cfg(target_os = "linux")]
+fn lstart_raw(pid: u32) -> Result<Option<String>, io::Error> {
+    linux_lstart_utc(pid)
 }
 
 /// Linux uses the same integer-second calculation as procps `lstart`:
@@ -280,7 +280,7 @@ pub(crate) fn format_lstart_utc(seconds: i64) -> String {
 /// stable probe cannot produce a token for the current process, if any.
 #[cfg(unix)]
 pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
-    match lstart_raw(std::process::id(), true) {
+    match lstart_raw(std::process::id()) {
         Ok(Some(_)) => None,
         Ok(None) => Some(
             if cfg!(target_os = "linux") {
@@ -308,7 +308,7 @@ pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
 /// Probe a running process and classify the outcome.
 #[cfg(unix)]
 pub fn probe_process_start_identity(pid: u32) -> ProbeOutcome {
-    match lstart_raw(pid, true) {
+    match lstart_raw(pid) {
         Ok(Some(raw)) => {
             let namespace = current_pid_namespace().unwrap_or(UNKNOWN_PID_NAMESPACE);
             ProbeOutcome::Token(format!(
@@ -334,33 +334,6 @@ pub fn process_start_identity_token(pid: u32) -> Option<String> {
         ProbeOutcome::Token(s) => Some(s),
         ProbeOutcome::NoProcess | ProbeOutcome::Unavailable => None,
     }
-}
-
-/// Returns true when `persisted` is a legacy unversioned token whose value
-/// matches either the caller-environment `ps -o lstart=` output or the
-/// stable-environment one for this PID. Versioned tokens always return false
-/// here so callers route them through [`process_start_identity_token`].
-#[cfg(unix)]
-pub fn legacy_lstart_matches(pid: u32, persisted: &str) -> bool {
-    if is_stable_token(persisted) {
-        return false;
-    }
-    if let Ok(Some(stable_raw)) = lstart_raw(pid, true)
-        && stable_raw == persisted
-    {
-        return true;
-    }
-    if let Ok(Some(ambient)) = lstart_raw(pid, false)
-        && ambient == persisted
-    {
-        return true;
-    }
-    false
-}
-
-#[cfg(not(unix))]
-pub fn legacy_lstart_matches(_pid: u32, _persisted: &str) -> bool {
-    false
 }
 
 /// Liveness of a PID recorded earlier in a run, judged against the identity
