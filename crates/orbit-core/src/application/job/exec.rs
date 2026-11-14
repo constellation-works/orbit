@@ -432,28 +432,7 @@ impl OrbitRuntime {
                     other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
                 });
 
-        let (outcome_str, error_message) = match &outcome_res {
-            Ok(o) if o.parked.is_some() => ("parked", o.message.clone()),
-            Ok(o) if o.evidence_hold.is_some() => ("held", None),
-            Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
-            Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
-            Ok(o) if o.success => ("success", None),
-            Ok(o) if held_failure(&asset.name, None, o.message.as_deref()).is_some() => {
-                ("held", o.message.clone())
-            }
-            Ok(o) => ("failed", o.message.clone()),
-            Err(err)
-                if held_failure(
-                    &asset.name,
-                    delivery_refusal_code(err),
-                    Some(&err.to_string()),
-                )
-                .is_some() =>
-            {
-                ("held", Some(err.to_string()))
-            }
-            Err(err) => ("error", Some(err.to_string())),
-        };
+        let (outcome_str, error_message) = audit_terminal_outcome(&asset.name, &outcome_res);
         // A parked run has not finished: the worker that resumes it records
         // the run's end.
         if outcome_str != "parked" {
@@ -919,6 +898,49 @@ impl OrbitRuntime {
     }
 }
 
+/// The audit label of a finished v2 job, using the same typed failure code
+/// finalization holds on. A code-only hold whose message lacks the matching
+/// text is `held`, not `failed` or `error`.
+pub(crate) fn audit_terminal_outcome(
+    job_id: &str,
+    outcome: &Result<JobOutcome, OrbitError>,
+) -> (&'static str, Option<String>) {
+    let typed_code = outcome
+        .as_ref()
+        .err()
+        .and_then(OrbitError::step_failure_code);
+    match outcome {
+        Ok(o) if o.parked.is_some() => ("parked", o.message.clone()),
+        Ok(o) if o.evidence_hold.is_some() => ("held", None),
+        Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
+        Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
+        Ok(o) if o.success => ("success", None),
+        Ok(o)
+            if held_failure(
+                job_id,
+                o.failure_code.as_ref().map(|code| code.as_str()),
+                o.message.as_deref(),
+            )
+            .is_some() =>
+        {
+            ("held", o.message.clone())
+        }
+        Ok(o) => ("failed", o.message.clone()),
+        Err(err)
+            if held_failure(
+                job_id,
+                delivery_refusal_code(err)
+                    .or_else(|| typed_code.as_ref().map(|code| code.as_str())),
+                Some(&err.to_string()),
+            )
+            .is_some() =>
+        {
+            ("held", Some(err.to_string()))
+        }
+        Err(err) => ("error", Some(err.to_string())),
+    }
+}
+
 fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
     match outcome {
         Some("success" | "succeeded" | "finished") => JobRunState::Success,
@@ -928,7 +950,16 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
         Some("cancelled") => JobRunState::Cancelled,
         Some("interrupted") => JobRunState::Interrupted,
         Some("held") => JobRunState::Held,
-        _ => JobRunState::Success,
+        Some("retrying") => JobRunState::Retrying,
+        Some("pending") => JobRunState::Pending,
+        Some("running") => JobRunState::Running,
+        other => {
+            tracing::warn!(
+                outcome = other.unwrap_or("<missing>"),
+                "unrecognized audit step outcome persisted as failed",
+            );
+            JobRunState::Failed
+        }
     }
 }
 

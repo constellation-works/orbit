@@ -1065,3 +1065,64 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     assert_eq!(decided[0]["decision"], "resumed", "{decided:?}");
     assert_eq!(ctx.jobs.job_run_retries(&run_id, 10).unwrap().len(), 1);
 }
+
+#[test]
+fn clock_sweep_defers_one_unreadable_upgrade_run_and_resumes_the_later_page() {
+    let test_name =
+        "upgrade_resume::clock_sweep_defers_one_unreadable_upgrade_run_and_resumes_the_later_page";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    // This test binary cannot be re-executed as a worker; a resumed run's
+    // substitute exits at once, so submission itself succeeds.
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let ctx = setup_context();
+    let now = Utc::now();
+    // Recency scans the newer interruption first. Its pipeline state cannot
+    // be parsed, which used to abort the tick before the older run.
+    let older = upgrade_interrupted_run(&ctx, "test_pipeline", now - Duration::minutes(1), |_| {});
+    let newer = upgrade_interrupted_run(&ctx, "test_pipeline", now, |_| {});
+    let workspace = ctx.runtime.workspace_id().unwrap();
+    let changed = ctx
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_run_states SET pipeline_state_json = '{' \
+             WHERE workspace_id = ?1 AND run_id = ?2",
+            rusqlite::params![workspace, newer],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
+    };
+    let sweep =
+        run_sweep_at_with_providers(&ctx.global, SweepOptions::default(), machine, &provider)
+            .expect("one unreadable run does not fail the sweep");
+    assert!(!sweep.lock_busy);
+
+    assert!(
+        ctx.jobs.job_run_retries(&newer, 1).unwrap().is_empty(),
+        "an unreadable run is not resumed"
+    );
+    assert!(
+        decisions(&ctx, &newer).is_empty(),
+        "a store error is not a skip decision: {:?}",
+        decisions(&ctx, &newer)
+    );
+    assert_eq!(
+        ctx.jobs.job_run_retries(&older, 1).unwrap().len(),
+        1,
+        "a later run in the page is still resumed"
+    );
+    let decided = decisions(&ctx, &older);
+    assert_eq!(decided.len(), 1, "{decided:?}");
+    assert_eq!(decided[0]["decision"], "resumed", "{decided:?}");
+}

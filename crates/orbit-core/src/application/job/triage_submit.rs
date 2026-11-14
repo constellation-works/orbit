@@ -164,8 +164,25 @@ impl OrbitRuntime {
         &self,
         row: &TaskRow,
     ) -> Result<Option<Value>, OrbitError> {
-        let Some(base) = self.base_eligibility(row) else {
-            return Ok(None);
+        let base = match self.base_eligibility(row) {
+            Ok(Some(base)) => base,
+            Ok(None) => return Ok(None),
+            // A comment store failure is not "not warning-held". The detail
+            // stays up; submit still propagates the error.
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %row.task.id,
+                    error = %error,
+                    "pilot comments unreadable for escalation triage eligibility",
+                );
+                return Ok(Some(json!({
+                    "available": false,
+                    "subject": "pilot_warning",
+                    "reason": "comments_unreadable",
+                    "detail": format!("the task's pilot comments could not be read: {error}"),
+                    "run_id": Value::Null,
+                })));
+            }
         };
         // A live-run scan that cannot be read disables the action with its
         // reason rather than failing the detail read; the endpoint still
@@ -230,7 +247,7 @@ impl OrbitRuntime {
         }
         let row = self.get_task_row(task_id)?;
         let task = &row.task;
-        let Some(base) = self.base_eligibility(&row) else {
+        let Some(base) = self.base_eligibility(&row)? else {
             return Err(EscalationTriageSubmitError::Refused(match task.status {
                 // A proposed task with no held warnings: the readout hides
                 // the action, and the endpoint names the candidacy.
@@ -273,14 +290,13 @@ impl OrbitRuntime {
         )?)
     }
 
-    /// The candidacy half of eligibility: `None` when no action is shown.
-    fn base_eligibility(&self, row: &TaskRow) -> Option<BaseEligibility> {
+    /// The candidacy half of eligibility: `Ok(None)` when no action is shown.
+    /// An unreadable pilot comment is an error, not a missing hold.
+    fn base_eligibility(&self, row: &TaskRow) -> Result<Option<BaseEligibility>, OrbitError> {
         let task = &row.task;
         match task.status {
             TaskStatus::Proposed => {
-                let comments = self
-                    .resolve_task_pilot_comments(&task.id, &row.comments)
-                    .ok()?;
+                let comments = self.resolve_task_pilot_comments(&task.id, &row.comments)?;
                 let candidacy =
                     pilot_warning_candidacy(task, &comments, &row.history, &|id: &str| {
                         matches!(
@@ -289,16 +305,16 @@ impl OrbitRuntime {
                         )
                     });
                 match candidacy {
-                    PilotWarningCandidacy::NotHeld => None,
-                    other => Some(BaseEligibility {
+                    PilotWarningCandidacy::NotHeld => Ok(None),
+                    other => Ok(Some(BaseEligibility {
                         subject: "pilot_warning",
                         available: matches!(other, PilotWarningCandidacy::Qualifies(_)),
                         reason: other.as_str().to_string(),
                         detail: other.detail(),
-                    }),
+                    })),
                 }
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 

@@ -130,8 +130,14 @@ struct PassReads {
 
 /// What one pass does with one interrupted run.
 enum Verdict {
-    /// Resume it; its pull request number.
+    /// Resume it; its pull request number, before the resume is submitted.
     Adopt(u64),
+    /// The resume was submitted. `resumed_run_id` is the invoke id just
+    /// audited, so a later retry read cannot drop it from the report.
+    Submitted {
+        pull_request: u64,
+        resumed_run_id: String,
+    },
     /// Not this pass's to consider or report: it has a retry, an earlier pass
     /// decided it, or its worker still runs.
     Ignore,
@@ -238,14 +244,24 @@ impl OrbitRuntime {
             };
             match verdict {
                 Verdict::Ignore => {}
-                Verdict::Adopt(pull_request) => {
-                    let (resumed, task_ids) = self.adopted_retry(&run);
+                Verdict::Submitted {
+                    pull_request,
+                    resumed_run_id,
+                } => {
+                    let task_ids = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
                     adopted.push(json!({
                         "source_run_id": run.run_id,
-                        "resumed_run_id": resumed,
+                        "resumed_run_id": resumed_run_id,
                         "pr_number": pull_request,
                         "task_ids": task_ids,
                     }));
+                }
+                Verdict::Adopt(_) => {
+                    tracing::warn!(
+                        target: "orbit.core.drain",
+                        run_id = %run.run_id,
+                        "adoption stopped before the resume was submitted",
+                    );
                 }
                 Verdict::Skip(skip) => {
                     if skip.reason == "authority" {
@@ -455,24 +471,14 @@ impl OrbitRuntime {
                         "pr_number": pull_request,
                     }),
                 );
-                Verdict::Adopt(pull_request)
+                Verdict::Submitted {
+                    pull_request,
+                    resumed_run_id: invoke.run_id,
+                }
             }
             // Not a decision: the next pass tries again.
             Err(error) => Verdict::Skip(Skip::deferred("resume_failed", error.to_string())),
         }
-    }
-
-    /// The retry an adoption just submitted for `run`, and its tasks.
-    fn adopted_retry(&self, run: &JobRun) -> (Value, BTreeSet<String>) {
-        let resumed = self
-            .stores()
-            .jobs()
-            .job_run_retries(&run.run_id, 1)
-            .ok()
-            .and_then(|retries| retries.into_iter().next())
-            .map_or(Value::Null, |retry| Value::String(retry.run_id));
-        let task_ids = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-        (resumed, task_ids)
     }
 
     /// `Err` with the skip when one of `task_ids` no longer waits on its

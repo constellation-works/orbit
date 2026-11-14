@@ -170,6 +170,17 @@ impl Fixture {
         decision: FinalRecoveryDecision,
         resume_step_index: Option<u32>,
     ) -> FinalRecoveryApplied {
+        self.apply_result(run, task, decision, resume_step_index)
+            .unwrap()
+    }
+
+    fn apply_result(
+        &self,
+        run: &str,
+        task: &str,
+        decision: FinalRecoveryDecision,
+        resume_step_index: Option<u32>,
+    ) -> Result<FinalRecoveryApplied, orbit_core::OrbitError> {
         // Named through the trait: `OrbitRuntime` also has the applier's own
         // `apply_final_recovery`, which the host method calls after recording.
         RuntimeHost::apply_final_recovery(
@@ -189,7 +200,6 @@ impl Fixture {
                 infrastructure: None,
             },
         )
-        .unwrap()
     }
 
     /// Fail every run-state write that would record a final-recovery
@@ -406,6 +416,49 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
             FinalRecoveryAdmission::Skipped { .. }
         ));
     }
+}
+
+fn a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints() {
+    let fixture = fixture("[\"sol\"]");
+    let task = fixture.task();
+    let run = fixture.running_run(&task);
+    assert_eq!(fixture.admit(&run, &task), FinalRecoveryAdmission::Admitted);
+    fixture.apply(&run, &task, archive(), None);
+    assert_eq!(fixture.state(&run).step_states.len(), 3);
+
+    let refused = fixture.apply_result(
+        &run,
+        &task,
+        FinalRecoveryDecision::Resume {
+            step_id: "implement".to_string(),
+            rationale: "retry the failed step".to_string(),
+        },
+        Some(1),
+    );
+    let message = refused
+        .expect_err("resume must not replace archive")
+        .to_string();
+    assert!(
+        message.contains("already recorded")
+            && message.contains("archive")
+            && message.contains("resume"),
+        "{message}"
+    );
+    let state = fixture.state(&run);
+    assert!(
+        matches!(
+            state
+                .final_recovery
+                .and_then(|checkpoint| checkpoint.decision),
+            Some(FinalRecoveryDecision::Archive { .. })
+        ),
+        "the recorded decision stays archive"
+    );
+    assert_eq!(
+        state.step_states.keys().copied().collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "a refused resume does not drop step checkpoints"
+    );
 }
 
 fn a_local_decision_is_applied_to_the_task_through_the_applier() {
@@ -875,4 +928,9 @@ crate::scenario_table!(
     final_recovery_log_tail_reads_only_the_requested_runs_bounded_log,
     final_recovery_keeps_run_observers_and_every_declared_tool_write_denied,
     final_recovery_drops_a_required_tool_its_disallow_list_covers
+);
+
+crate::scenario_table!(
+    a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints_scenarios,
+    a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints,
 );

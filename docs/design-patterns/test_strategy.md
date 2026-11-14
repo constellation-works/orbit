@@ -955,6 +955,10 @@ and its child exits in 0.41s. With the match restored, a debug run spends
 
 Admitted unit tests:
 
+- `crates/orbit-core/src/application/job/tests/exec.rs::code_only_hold_is_audited_held_and_finalizes_held` (criterion 1, hold classification). A `JobOutcome` whose only hold signal is `failure_code` `owner_signoff_required`, and a remote-tool error whose only hold signal is code `baseline_red`, are audited `held`. Their messages do not contain the text tokens the classifier also accepts. The same outcome is finalized and the stored run is `Held`. A real job's error text usually embeds those tokens, so a crate-root run would not fail before the audit label used the typed code (ORB-24799, from ORB-18579).
+
+- `crates/orbit-core/src/application/job/tests/exec.rs::detached_worker_persists_unrecognized_audit_step_outcomes_as_failed` (criterion 1, audit-step state mapping). A detached worker's audit trail with a finished step whose outcome is not a run state, a finished step whose outcome is the projection's `finished` alias, and a step that only started, is persisted as failed, succeeded and failed. An unrecognized or missing outcome used to be stored as succeeded. The mapper is private to job execution, and this persist path runs only after an overall-success finalize, so the crate-root suites that drive failed runs do not reach a garbled per-step outcome (ORB-24799, from ORB-12255).
+
 - `orbit-store`'s
   `repository/task/coordination/tests/claim_index.rs::a_task_write_and_a_footprint_guard_decode_only_live_claims`
   is the ORB-24411 acceptance check (criterion 1). It seeds one thousand

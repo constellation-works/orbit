@@ -331,6 +331,88 @@ fn a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another
     );
 }
 
+fn unreadable_pilot_comments_are_not_reported_as_not_held() {
+    use orbit_core::application::job::{EscalationTriageRefusal, EscalationTriageSubmitError};
+    use orbit_types::workflow::JobRunTrigger;
+
+    let fx = triage_fixture("");
+    let task = proposed_task(&fx, "A task whose pilot comment cannot be read");
+    let audit = json!({
+        "assessment_artifact": "pilot/missing-assessment.json",
+        "assessment_sha256": "deadbeef",
+    });
+    OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit"))
+        .unwrap()
+        .with_actor(ActorIdentity::human("task-pilot"))
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task,
+                "comment": format!("operation_id={}\n{audit}", "c".repeat(64)),
+                "workspace": fx.repo.to_string_lossy(),
+            }),
+        )
+        .unwrap();
+
+    let row = fx.runtime.get_task_row(&task).unwrap();
+    let eligibility = fx
+        .runtime
+        .escalation_triage_eligibility_json(&row)
+        .unwrap()
+        .expect("the detail readout stays up");
+    assert_eq!(eligibility["available"], json!(false));
+    assert_eq!(eligibility["subject"], json!("pilot_warning"));
+    assert_eq!(eligibility["reason"], json!("comments_unreadable"));
+    let submitted =
+        fx.runtime
+            .submit_explicit_escalation_triage(&task, Some("operator"), JobRunTrigger::cli());
+    assert!(
+        matches!(submitted, Err(EscalationTriageSubmitError::Runtime(_))),
+        "an unreadable comment is a store failure, not a missing hold: {submitted:?}"
+    );
+
+    let plain = proposed_task(&fx, "A proposed task with no pilot warning");
+    let plain_row = fx.runtime.get_task_row(&plain).unwrap();
+    assert!(
+        fx.runtime
+            .escalation_triage_eligibility_json(&plain_row)
+            .unwrap()
+            .is_none()
+    );
+    let not_held = fx.runtime.submit_explicit_escalation_triage(
+        &plain,
+        Some("operator"),
+        JobRunTrigger::cli(),
+    );
+    match not_held {
+        Err(EscalationTriageSubmitError::Refused(EscalationTriageRefusal::NotEligible {
+            reason,
+            ..
+        })) => assert_eq!(reason, "not_held"),
+        other => panic!("a readable task with no warning stays not held: {other:?}"),
+    }
+}
+
+fn proposed_task(fx: &Fixture, title: &str) -> String {
+    fx.runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": title,
+                "description": "Escalation triage comment-read fixture.",
+                "acceptance_criteria": ["Diagnosed."],
+                "complexity": "low",
+                "type": "chore",
+                "workspace": fx.repo.to_string_lossy(),
+                "model": "codex",
+            }),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 fn a_pilot_warning_draws_its_author_when_the_pool_offers_no_other_member() {
     let fx = triage_fixture("pilot_warning_triage = [\"pilot_claude\", \"pilot_gemini\"]");
     let task = held_pilot_warning(&fx, Some("pilot_claude"));
@@ -349,4 +431,9 @@ crate::scenario_table!(
     a_capped_automatic_pass_reports_its_tail_as_unexamined,
     a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another,
     a_pilot_warning_draws_its_author_when_the_pool_offers_no_other_member,
+);
+
+crate::scenario_table!(
+    unreadable_pilot_comments_are_not_reported_as_not_held_scenarios,
+    unreadable_pilot_comments_are_not_reported_as_not_held,
 );
