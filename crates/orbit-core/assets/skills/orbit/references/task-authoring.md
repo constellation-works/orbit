@@ -609,7 +609,7 @@ still holds its tasks until that run settles.
 empty `context_files` while a drain is live.** File it `proposed`, run the
 pilot or set selectors, then promote. On 2026-10-10 three tasks filed into a
 live four-slot drain's backlog with no selectors all edited
-`website/src/styles/custom.css` concurrently, and two of their runs were
+the website's then-shared stylesheet concurrently, and two of their runs were
 cancelled. Creation, approval and readiness-field updates warn when they leave
 such a task in the backlog.
 
