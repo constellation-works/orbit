@@ -180,6 +180,11 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
                 assert!(row["queued_drains"].is_array());
                 assert!(row.get("top_wait_reason").is_some());
                 assert_eq!(row["counts_truncated"], false);
+                assert_eq!(
+                    row["baseline_red_hold"],
+                    serde_json::json!({"task_ids": [], "complete": true}),
+                    "no baseline-red holds in this fixture: {payload:#}"
+                );
             }
             // A waiting task gets a reason in the fleet, rather than looking
             // identical to an empty workspace.
