@@ -187,12 +187,6 @@ function view(payload) {
             text: `Showing ${getHost()} in the other views. This list is still ${local ? local.name : "the serving host"}'s host file, the one the host picker reads.`,
           })
         : null,
-      payload.legacy
-        ? el("div", {
-            class: "config-warning",
-            text: "Read from the legacy mcp-destinations.toml. The first add, rename or remove here migrates it to the host file, and needs every retained host to answer.",
-          })
-        : null,
       editable()
         ? null
         : el("div", {
@@ -275,7 +269,6 @@ function identityCell(row) {
     el("span", { class: "host-name" }, [
       el("span", { class: "host-name-text", text: row.name }),
       row.local ? el("span", { class: "config-source workspace", text: "local · edited here" }) : null,
-      row.legacy ? el("span", { class: "config-source unset", text: "legacy" }) : null,
       hostSwitch(row),
     ]),
     el("span", {
@@ -740,9 +733,7 @@ function submitAdd(ssh, name) {
   }
   const body = name ? { ssh, name } : { ssh };
   mutate(session, () => requestJson("/api/hosts", "POST", body), (change) => {
-    const migrated = (change.migrated || []).length;
-    const verb = change.action === "migrated" ? "Migrated" : "Added";
-    return `${verb} ${change.entry.name} (${change.entry.machine_id}, prefix ${change.entry.task_prefix}).${migrated ? ` Migrated ${migrated} legacy host${migrated === 1 ? "" : "s"}.` : ""}`;
+    return `Added ${change.entry.name} (${change.entry.machine_id}, prefix ${change.entry.task_prefix}).`;
   });
 }
 

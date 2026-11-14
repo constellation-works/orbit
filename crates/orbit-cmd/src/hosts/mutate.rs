@@ -1,30 +1,25 @@
-//! `orbit host add|rename|remove`, and the one-time migration of the legacy
-//! destinations file that the first of them performs.
+//! `orbit host add|rename|remove` over the registered host entries.
 
 use std::path::Path;
 
 use orbit_common::{HostRegistryCode, OrbitError};
-use orbit_registry::MachineIdentity;
-use orbit_registry::hosts::{
-    HostEntry, HostRegistry, LegacyHost, RegisteredHosts, ResolvedHost, legacy_destinations_path,
-    load_host_registry, validate_ssh_target,
-};
+use orbit_registry::hosts::{HostEntry, ResolvedHost, load_host_registry, validate_ssh_target};
 use orbit_types::identity::validate_machine_name;
 use serde::Serialize;
 
-use super::probe::{LiveHost, in_parallel, probe_ssh};
-use super::{HostDependents, HostRow, RemoteTarget, host_dependents, remote_row, require_local};
+use super::probe::{LiveHost, probe_ssh};
+use super::{HostDependents, HostRow, host_dependents, remote_row, require_local};
 
 /// What one `orbit host` mutation wrote.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostChange {
-    /// `added`, `migrated`, `renamed` or `removed`.
+    /// `added`, `renamed` or `removed`.
     pub action: &'static str,
     /// The entry as written, or as it was before removal.
     pub entry: HostChangeEntry,
     /// The previous name of a renamed entry.
     pub previous_name: Option<String>,
-    /// Legacy rows this mutation migrated into the host file.
+    /// Retained for JSON compatibility; always empty.
     pub migrated: Vec<HostEntry>,
     /// The live probe summary of an added host.
     pub host: Option<HostRow>,
@@ -35,13 +30,13 @@ pub struct HostChange {
 /// The cached identity reported by a host mutation.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostChangeEntry {
-    /// The registered name, or the SSH target of a removed legacy row.
+    /// The registered name.
     pub name: String,
     /// The registered machine identity.
     pub machine_id: String,
     /// The registered SSH target.
     pub ssh: String,
-    /// Unknown when removing a legacy row without probing it.
+    /// The registered task prefix, retained as optional for JSON compatibility.
     pub task_prefix: Option<String>,
 }
 
@@ -84,7 +79,6 @@ pub fn add_host(
             ),
         ));
     }
-    let migrated = migrated_entries(&registry, local, None)?;
     if let Some(existing) = registry
         .hosts()
         .entries()
@@ -98,22 +92,6 @@ pub fn add_host(
                 facts.machine_id, existing.name, existing.ssh
             ),
         ));
-    }
-    if let Some(entry) = migrated
-        .iter()
-        .find(|entry| entry.machine_id == facts.machine_id)
-        .cloned()
-    {
-        registry.commit(migrated.clone())?;
-        let host = remote_row_from(&entry, live);
-        return Ok(HostChange {
-            action: "migrated",
-            entry: entry.into(),
-            previous_name: None,
-            migrated,
-            host: Some(host),
-            orphaned: None,
-        });
     }
     let Some(task_prefix) = facts.task_prefix.clone() else {
         return Err(too_old(ssh, &live));
@@ -144,7 +122,7 @@ pub fn add_host(
         task_prefix,
         host_os: facts.host_os,
     };
-    let mut entries = registered(&registry, &migrated).to_vec();
+    let mut entries = registry.hosts().entries().to_vec();
     entries.push(entry.clone());
     registry
         .commit(entries)
@@ -154,7 +132,7 @@ pub fn add_host(
         action: "added",
         entry: entry.into(),
         previous_name: None,
-        migrated: newly_migrated(&registry, migrated),
+        migrated: Vec::new(),
         host: Some(host),
         orphaned: None,
     })
@@ -167,7 +145,7 @@ pub fn rename_host(
     new_name: &str,
 ) -> Result<HostChange, OrbitError> {
     let registry = load_host_registry(global_root)?;
-    let local = require_local(&registry)?;
+    require_local(&registry)?;
     let machine_id = match registry.resolve(selector)? {
         ResolvedHost::Local(_) => {
             return Err(OrbitError::host_registry(
@@ -180,8 +158,7 @@ pub fn rename_host(
     };
     let new_name = new_name.trim().to_string();
     validate_machine_name(&new_name)?;
-    let migrated = migrated_entries(&registry, local, None)?;
-    let mut entries = registered(&registry, &migrated).to_vec();
+    let mut entries = registry.hosts().entries().to_vec();
     let Some(entry) = entries
         .iter_mut()
         .find(|entry| entry.machine_id == machine_id)
@@ -197,7 +174,7 @@ pub fn rename_host(
         action: "renamed",
         entry: renamed.into(),
         previous_name: Some(previous_name),
-        migrated: newly_migrated(&registry, migrated),
+        migrated: Vec::new(),
         host: None,
         orphaned: None,
     })
@@ -211,7 +188,7 @@ pub fn remove_host(
     force: bool,
 ) -> Result<HostChange, OrbitError> {
     let registry = load_host_registry(global_root)?;
-    let local = require_local(&registry)?;
+    require_local(&registry)?;
     let removed = match registry.resolve(selector)? {
         ResolvedHost::Local(_) => {
             return Err(OrbitError::host_registry(
@@ -220,12 +197,6 @@ pub fn remove_host(
             ));
         }
         ResolvedHost::Entry(entry) => HostChangeEntry::from(entry.clone()),
-        ResolvedHost::Legacy(row) => HostChangeEntry {
-            name: row.ssh.clone(),
-            machine_id: row.machine_id.clone(),
-            ssh: row.ssh.clone(),
-            task_prefix: None,
-        },
     };
     let machine_id = &removed.machine_id;
     let dependents = host_dependents(global_root, machine_id)?;
@@ -239,8 +210,9 @@ pub fn remove_host(
             ),
         ));
     }
-    let migrated = migrated_entries(&registry, local, Some(machine_id))?;
-    let entries = registered(&registry, &migrated)
+    let entries = registry
+        .hosts()
+        .entries()
         .iter()
         .filter(|entry| entry.machine_id != *machine_id)
         .cloned()
@@ -250,109 +222,14 @@ pub fn remove_host(
         action: "removed",
         entry: removed,
         previous_name: None,
-        migrated: newly_migrated(&registry, migrated),
+        migrated: Vec::new(),
         host: None,
         orphaned: (!dependents.is_empty()).then_some(dependents),
     })
 }
 
-/// The entries a mutation starts from: the host file's, or — on the first
-/// mutation after the legacy file — every retained legacy row probed into an entry.
-///
-/// A retained legacy row that does not answer refuses the whole mutation and touches
-/// neither file. Each migrated row is named after the remote's
-/// `machine.name`, or after its SSH target when that name is taken, and gets a
-/// numeric suffix when the SSH target is taken too. A row for
-/// this machine was never a route and is dropped. Removal also excludes its
-/// selected row, whose cached identity suffices to drop it.
-fn migrated_entries(
-    registry: &HostRegistry,
-    local: &MachineIdentity,
-    removing: Option<&str>,
-) -> Result<Vec<HostEntry>, OrbitError> {
-    let rows = match registry.hosts() {
-        RegisteredHosts::None => return Ok(Vec::new()),
-        RegisteredHosts::Hosts(entries) => return Ok(entries.clone()),
-        RegisteredHosts::Legacy(rows) => rows
-            .iter()
-            .filter(|row| row.machine_id != local.id && Some(row.machine_id.as_str()) != removing)
-            .collect::<Vec<_>>(),
-    };
-    let legacy_path = legacy_destinations_path(registry.global_root());
-    let answers = in_parallel(&rows, |row| probe_ssh(&row.ssh, &local.id));
-    let mut entries: Vec<HostEntry> = Vec::with_capacity(rows.len());
-    for (row, answer) in rows.into_iter().zip(answers) {
-        let live = answer.map_err(|error| legacy_unreachable(row, &legacy_path, &error))?;
-        if live.facts.machine_id != row.machine_id {
-            return Err(OrbitError::host_registry(
-                HostRegistryCode::HostIdentityMismatch,
-                format!(
-                    "legacy row ssh {} in '{}' records {} but the host answered as {}; fix or \
-                     delete that row, then rerun",
-                    row.ssh,
-                    legacy_path.display(),
-                    row.machine_id,
-                    live.facts.machine_id
-                ),
-            ));
-        }
-        let Some(task_prefix) = live.facts.task_prefix.clone() else {
-            return Err(too_old(&row.ssh, &live));
-        };
-        let taken = |name: &str| {
-            name.eq_ignore_ascii_case(&local.name)
-                || entries
-                    .iter()
-                    .any(|entry| entry.name.eq_ignore_ascii_case(name))
-        };
-        let name = live
-            .facts
-            .machine_name
-            .clone()
-            .filter(|name| validate_machine_name(name).is_ok() && !taken(name))
-            .or_else(|| (!taken(&row.ssh)).then(|| row.ssh.clone()))
-            .unwrap_or_else(|| unique_name(&row.ssh, taken));
-        entries.push(HostEntry {
-            name,
-            machine_id: row.machine_id.clone(),
-            ssh: row.ssh.clone(),
-            task_prefix,
-            host_os: live.facts.host_os,
-        });
-    }
-    Ok(entries)
-}
-
-/// `base` with the first numeric suffix (`base-2`, `base-3`, …) that `taken`
-/// does not reject.
-fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
-    let mut suffix = 2;
-    loop {
-        let candidate = format!("{base}-{suffix}");
-        if !taken(&candidate) {
-            return candidate;
-        }
-        suffix += 1;
-    }
-}
-
-/// The host file's entries, or the migrated legacy rows standing in for them.
-fn registered<'a>(registry: &'a HostRegistry, migrated: &'a [HostEntry]) -> &'a [HostEntry] {
-    match registry.hosts() {
-        RegisteredHosts::Hosts(entries) => entries,
-        RegisteredHosts::None | RegisteredHosts::Legacy(_) => migrated,
-    }
-}
-
-fn newly_migrated(registry: &HostRegistry, migrated: Vec<HostEntry>) -> Vec<HostEntry> {
-    match registry.hosts() {
-        RegisteredHosts::Legacy(_) => migrated,
-        RegisteredHosts::None | RegisteredHosts::Hosts(_) => Vec::new(),
-    }
-}
-
 fn remote_row_from(entry: &HostEntry, live: LiveHost) -> HostRow {
-    let mut row = remote_row(&RemoteTarget::Entry(entry), "", false);
+    let mut row = remote_row(entry, "", false);
     row.reachable = Some(true);
     row.skew_fields = super::skew_fields(&live.facts);
     row.skew = !row.skew_fields.is_empty();
@@ -393,21 +270,6 @@ fn too_old(ssh: &str, live: &LiveHost) -> OrbitError {
         ),
     };
     OrbitError::host_registry(HostRegistryCode::HostTooOld, message)
-}
-
-fn legacy_unreachable(row: &LegacyHost, legacy_path: &Path, error: &OrbitError) -> OrbitError {
-    OrbitError::host_registry(
-        HostRegistryCode::LegacyHostUnreachable,
-        format!(
-            "migrating '{}' needs every retained row to answer, and ssh {} ({}) did not: {error}. \
-             Make it reachable, or remove it with `orbit host remove {}`, then rerun; neither \
-             file was changed",
-            legacy_path.display(),
-            row.ssh,
-            row.machine_id,
-            row.machine_id
-        ),
-    )
 }
 
 fn vanished(machine_id: &str) -> OrbitError {

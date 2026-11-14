@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use orbit_common::OrbitError;
-use orbit_registry::hosts::{
-    HostRegistry, RegisteredHosts, ResolvedHost, hosts_path, load_host_registry,
-};
+use orbit_registry::hosts::{HostRegistry, ResolvedHost, hosts_path, load_host_registry};
 use orbit_registry::workspace_registry::{
     WorkspaceRegistryMachineContext, find_workspace_by_id, parse_workspace_registry,
     registry_file_fingerprint, registry_path_for,
@@ -17,7 +15,7 @@ use orbit_types::workspace::WorkspaceCheckoutRole;
 
 use super::dependents::host_dependents;
 use super::probe::{in_parallel, local_binary_version, local_protocol_fingerprint};
-use super::remote::{RemoteTarget, remote_row, remote_targets};
+use super::remote::remote_row;
 use super::{HostDetail, HostList, HostRow, HostWorkspace};
 
 /// `orbit host list`.
@@ -31,14 +29,14 @@ pub fn list_registered_hosts(registry: &HostRegistry, probe: bool) -> Result<Hos
     let global_root = registry.global_root();
     let local = require_local(registry)?;
     let mut hosts = vec![local_row(global_root, local)];
-    let mut remotes = remote_targets(registry.hosts());
-    remotes.sort_by_key(|target| target.name().to_ascii_lowercase());
+    let mut remotes = registry.hosts().entries().iter().collect::<Vec<_>>();
+    remotes.sort_by_key(|target| target.name.to_ascii_lowercase());
     hosts.extend(in_parallel(&remotes, |target| {
         remote_row(target, &local.id, probe)
     }));
     Ok(HostList {
         host_file: hosts_path(global_root),
-        legacy: matches!(registry.hosts(), RegisteredHosts::Legacy(_)),
+        legacy: false,
         hosts,
     })
 }
@@ -62,12 +60,8 @@ pub fn show_registered_host(
             dependents: None,
         },
         ResolvedHost::Entry(entry) => HostDetail {
-            host: remote_row(&RemoteTarget::Entry(entry), &local.id, true),
+            host: remote_row(entry, &local.id, true),
             dependents: Some(host_dependents(global_root, &entry.machine_id)?),
-        },
-        ResolvedHost::Legacy(row) => HostDetail {
-            host: remote_row(&RemoteTarget::Legacy(row), &local.id, true),
-            dependents: Some(host_dependents(global_root, &row.machine_id)?),
         },
     })
 }

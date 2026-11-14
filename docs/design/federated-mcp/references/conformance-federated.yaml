@@ -15,7 +15,7 @@ source_of_truth:
 
 launch:
   destinations_file: ~/.orbit/hosts.toml (written by `orbit host add`)
-  legacy_destinations_file: ~/.orbit/mcp-destinations.toml, read only while it is the sole file; both present is host_file_conflict
+  legacy_destinations_file: ~/.orbit/mcp-destinations.toml, refused whenever present with host_file_conflict
   local_membership: implicit; the accepting machine is always included and needs no host entry
   missing_or_empty_destinations_file: valid local-only federated server
   explicit_local_row: legacy rows collapse to one in-process route for that machine_id; the host file refuses an entry for the local machine

@@ -1,6 +1,6 @@
 ---
 type: design
-summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Settings › Hosts, live identity probe, migration from mcp-destinations.toml"
+summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Settings › Hosts, live identity probe, retired destinations file recovery"
 last_validated: 2026-10-20
 title: Spec — Host commands
 owner: opus
@@ -23,7 +23,7 @@ when the host is registered; that snapshot supports creation-time crew-pool sele
 Orbit version, pull protocol and workspaces are read live from the host and never persisted.
 The OS snapshot is not refreshed by probes; remove and add the host again to refresh it.
 Operators manage entries from the CLI or from the dashboard's Settings › Hosts view. Status:
-the host file, `orbit host`, the envelope fields, the doctor row and the migration are
+the host file, `orbit host`, the envelope fields, the doctor row and retired-file recovery are
 implemented ([ORB-14448]), and so is the dashboard view ([ORB-14451]).
 
 ## Why This Exists
@@ -151,10 +151,6 @@ writes nothing, when:
 Adding a host writes nothing on that host. Registration is one-directional: a follower needs
 an entry for its owner, and the owner needs none for the follower.
 
-When the target's identity is already in the legacy file, `add` commits the migration and
-exits 0 with action `migrated`, the entry and live summary, and the migrated rows. It preserves
-the legacy SSH target and the migration's chosen name; `--name` applies only to new hosts.
-
 ### `orbit host list [--no-probe]`
 
 The local host comes first, marked `local` and read in-process. Then each entry, sorted by
@@ -168,10 +164,10 @@ when the remote reports it; `--no-probe` uses the stored snapshot.
 - The skew flag is set when `binary_version` or `protocol_fingerprint` differs from the local
   host's.
 - `--no-probe` prints cached fields only and opens no session.
-- The human form is a table, one host per row: name (with its `local`, `legacy` and `SKEW`
+- The human form is a table, one host per row: name (with its `local` and `SKEW`
   marks), machine_id, ssh, prefix, reachable, version, protocol, workspaces and error.
   `--format json` and `--json` print the object `{host_file, legacy, hosts}`, and
-  `--format ndjson` prints one host per line. A while-legacy notice goes to stderr.
+  `--format ndjson` prints one host per line. The list and each row retain `legacy: false` for JSON compatibility.
 - With a probe, `reachable` reports whether the host answered. With `--no-probe`, remote rows
   have `reachable: null`; the local row stays `reachable: true`. A host that answers with
   another identity is reachable and carries `host_identity_mismatch` as its error.
@@ -198,11 +194,6 @@ running `orbit run auto --pull` drain targets it. The error lists the dependents
 removes the entry anyway and prints which dependents will lose their route. Removing the
 local host is `host_is_local`.
 
-A legacy row can be removed by SSH target or machine_id without contacting that host,
-with or without `--force`. Every retained row must still answer to migrate. The removed
-entry reports its cached SSH target as its name and `task_prefix: null`, because the legacy
-file does not store a prefix. Registered entries retain their existing JSON fields.
-
 ## Dashboard
 
 Orbit Web manages the serving host's host file with the same operations as the CLI.
@@ -219,13 +210,13 @@ Status: implemented ([ORB-14451], on the [ORB-14448] operations).
 | `DELETE /api/hosts/:host[?force=true]` | `orbit host remove [--force]` |
 
 - Each route calls the orbit-cmd host operation the CLI calls. There is no second
-  implementation of validation, migration or writes.
+  implementation of validation or writes.
 - Answers are the CLI's `--json` output, and so are the errors: `{error, code}` with the CLI's
   code. The HTTP status follows the code: `invalid_input` 400, `unknown_host` 404, a refusal
   about the file or its entries (`host_exists`, `host_name_conflict`, `task_prefix_conflict`,
   `host_is_local`, `host_in_use`, `host_identity_mismatch`, `host_too_old`,
   `host_file_conflict`, `ambiguous_destination`) 409, and a host that did not answer
-  (`unreachable_destination`, `legacy_host_unreachable`, `outcome_unknown`,
+  (`unreachable_destination`, `outcome_unknown`,
   `process_timeout`) 502. Add answers 201.
 - A body with a missing, mistyped or unknown field is `invalid_input`.
 - A `host_in_use` refusal also carries `dependents`, shaped as in `orbit host show`, so the
@@ -308,39 +299,19 @@ caller's.
   `workspace init --role replica`. `workspace init --role replica` reports an owner
   `machine_id` with no entry and never adds one itself.
 - **`orbit doctor`** gains a `hosts` row:
-  - fail when the host file is invalid, when both files exist (see Migration), or when a
+  - fail when the host file is invalid, when the retired destinations file exists, or when a
     host this machine pulls from or holds a replica of has a different
     `protocol_fingerprint`, or a version the pull admission ladder would refuse;
-  - warn when an entry is unreachable, on any other version difference, and while only the
-    legacy file exists.
+  - warn when an entry is unreachable, on any other version difference.
 
-## Migration from `mcp-destinations.toml`
+## Retired destinations file
 
-One release of compatibility:
-
-1. **Only the legacy file exists.** Federated serve, pull drains and worktree GC load its
-   rows as today. `host list` shows them marked `legacy`, with live-probed fields. Prefix
-   routing treats them as having no prefix, so they contribute nothing to the prefix table.
-2. **First mutation.** The first `host add`, `rename` or `remove` probes every retained
-   legacy row. `remove` excludes the selected row from probing, even without `--force`;
-   `--force` only overrides local dependents. If all retained rows answer, the command writes
-   `hosts.toml`, applies the mutation, and deletes the legacy file. Each migrated row is named
-   after the remote's `machine.name`, or after its SSH target when that name is taken. Adding
-   a host whose machine_id is already a legacy row commits the migration and reports it with
-   exit 0, preserving that row's SSH target and migrated name. A duplicate in `hosts.toml`
-   still refuses with `host_exists` without changing the file. If any retained row fails,
-   the command refuses with `legacy_host_unreachable`, naming the row, and touches neither
-   file. Make that host reachable, or remove its legacy row with `orbit host remove <host>`.
-   Doctor's legacy warning names `orbit host add <existing-ssh-target>` with a target from
-   the file; running it migrates the file when all retained hosts answer and clears the warning.
-3. **Both files exist.** Every consumer refuses with `host_file_conflict`, naming both paths.
-   Orbit doesn't pick one, because they are two answers to the same question. Every
-   `orbit host` command refuses too, so the error does the comparison itself. It lists each
-   legacy row whose `machine_id` has no host-file entry, with the `orbit host add <ssh>` that
-   registers it once the legacy file is deleted, or says that every row is already there.
-   Doctor's action points at that list.
-4. The next release drops the legacy reader and keeps the `host_file_conflict` check one
-   release longer.
+The retired `~/.orbit/mcp-destinations.toml` is never parsed. Its presence,
+alone or beside `hosts.toml`, fails every host-registry load with
+`host_file_conflict`, naming the file and the remedy. Move it aside, run
+`orbit host add <ssh-target>` for each `ssh` row, then delete the moved file.
+The JSON keys `legacy` on rows and lists remain constant `false`, and mutation
+results retain `migrated: []`; no mutation reports action `migrated`.
 
 The legacy `~/.orbit/host.toml`, singular and folded into `[machine]` by [ORB-12725], is
 unrelated to this file.
@@ -351,7 +322,7 @@ unrelated to this file.
 |---|---|
 | host file malformed, unknown key, future schema | load fails, bytes kept, actionable error |
 | duplicate name, machine_id or prefix (hand edit) | load fails (`host_name_conflict` / `ambiguous_destination` / `task_prefix_conflict`) |
-| both host file and legacy file | `host_file_conflict` on every consumer |
+| legacy destinations file present, alone or beside the host file | `host_file_conflict` on every consumer |
 | probe identity differs from entry | `host_identity_mismatch`; entry unchanged |
 | remote too old to report `task_prefix` | `host add` refuses `host_too_old`; `list` shows unknown |
 | host unreachable | `add` refuses; `list`/`show` report it; routed calls follow federated `unreachable_destination` |

@@ -620,20 +620,6 @@ fn array_of<'a>(value: &'a Value, key: &str) -> &'a Vec<Value> {
         .unwrap_or_else(|| panic!("{key} array: {value}"))
 }
 
-/// Write a fixture text file.
-fn write_text(path: &Path, contents: &str) {
-    std::fs::write(path, contents)
-        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-}
-
-/// Write the fixture's federated `mcp-destinations.toml`.
-fn write_destinations(workspace: &McpWorkspace, contents: &str) {
-    write_text(
-        &workspace.home.join(".orbit").join("mcp-destinations.toml"),
-        contents,
-    );
-}
-
 /// Assert a scenario spawned no SSH: the stub's invocation log is absent/empty.
 fn assert_no_ssh(ssh_log: &Path, why: &str) {
     assert!(
@@ -3957,11 +3943,6 @@ fn managed_mcp_config_updates_a_task_without_a_workspace_argument() {
 /// does not inherit the v1 id-only default in this namespace.
 fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
     let workspace = McpWorkspace::init();
-    write_destinations(
-        &workspace,
-        "[[destinations]]\nssh = \"orbit-linux\"\nmachine_id = \"hm_alpha\"\n",
-    );
-
     let mut client = federated_client(&workspace);
 
     let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
@@ -4101,65 +4082,43 @@ fn plant_ssh_stub(bin: &Path, log: &Path) {
     std::fs::write(bin.join("ssh"), script).expect("write ssh stub");
 }
 
-/// Local-only and explicit-local federation share process setup, not state.
-fn local_federation_row(explicit: bool) {
+/// Local-only federation routes in-process.
+fn local_federation_row() {
     let workspace = McpWorkspace::init();
     let (machine_id, machine_name) = machine_identity(&workspace.home);
-    if explicit {
-        write_destinations(
-            &workspace,
-            &format!("[[destinations]]\nssh = \"localhost\"\nmachine_id = \"{machine_id}\"\n"),
-        );
-    }
     let ssh_log = workspace.ssh_log();
     let mut client = federated_client(&workspace);
     let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
     let rows = array_of(&listed, "workspaces");
-    if explicit {
-        let local_rows: Vec<_> = rows
-            .iter()
-            .filter(|row| row["machine_id"] == machine_id)
-            .collect();
-        assert_eq!(
-            local_rows.len(),
-            1,
-            "explicit local SSH row must not duplicate selectors: {listed}"
-        );
-        assert_eq!(local_rows[0]["machine_name"], machine_name);
-        let selector = local_rows[0]["selector"].as_str().expect("selector");
-        client.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
-    } else {
-        assert_eq!(
-            rows.len(),
-            1,
-            "local-only membership lists this machine: {listed}"
-        );
-        let row = &rows[0];
-        assert_eq!(row["machine_id"], machine_id);
-        assert_eq!(row["machine_name"], machine_name);
-        assert_eq!(row["reachability"], "reachable");
-        assert_eq!(row["checkout_health"], "active");
-        assert!(
-            row["capabilities"]
-                .as_array()
-                .is_some_and(|caps| caps.iter().any(|cap| cap == "control_plane")),
-            "owner checkout advertises control_plane: {row}"
-        );
-        let selector = row["selector"].as_str().expect("selector");
-        assert_eq!(
-            selector,
-            format!("{machine_id}/{}", row["id"].as_str().expect("id"))
-        );
-        client.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
-        let with_crews =
-            client.call_tool_ok("orbit_workspace_list", json!({ "include": ["crews"] }));
-        let crews = &with_crews["workspaces"][0]["crews"];
-        assert_eq!(
-            crews["workspace_id"], row["id"],
-            "the local row carries crews its own machine resolved: {with_crews}"
-        );
-        assert!(crews["crews"].is_array(), "{with_crews}");
-    }
+    assert_eq!(
+        rows.len(),
+        1,
+        "local-only membership lists this machine: {listed}"
+    );
+    let row = &rows[0];
+    assert_eq!(row["machine_id"], machine_id);
+    assert_eq!(row["machine_name"], machine_name);
+    assert_eq!(row["reachability"], "reachable");
+    assert_eq!(row["checkout_health"], "active");
+    assert!(
+        row["capabilities"]
+            .as_array()
+            .is_some_and(|caps| caps.iter().any(|cap| cap == "control_plane")),
+        "owner checkout advertises control_plane: {row}"
+    );
+    let selector = row["selector"].as_str().expect("selector");
+    assert_eq!(
+        selector,
+        format!("{machine_id}/{}", row["id"].as_str().expect("id"))
+    );
+    client.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
+    let with_crews = client.call_tool_ok("orbit_workspace_list", json!({ "include": ["crews"] }));
+    let crews = &with_crews["workspaces"][0]["crews"];
+    assert_eq!(
+        crews["workspace_id"], row["id"],
+        "the local row carries crews its own machine resolved: {with_crews}"
+    );
+    assert!(crews["crews"].is_array(), "{with_crews}");
     assert_no_ssh(&ssh_log, "local federated routing must not spawn SSH");
 }
 
@@ -4207,36 +4166,6 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
     }
 }
 
-/// ORB-11044: mixed membership lists local workspaces beside configured remotes.
-fn federated_mcp_serve_lists_local_workspaces_beside_unreachable_remotes() {
-    let workspace = McpWorkspace::init();
-    write_destinations(
-        &workspace,
-        "[[destinations]]\nssh = \"orbit-missing-host\"\nmachine_id = \"hm_remote\"\n",
-    );
-    let ssh_log = workspace.ssh_log();
-
-    let mut client = federated_client(&workspace);
-    let (machine_id, _) = machine_identity(&workspace.home);
-    let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
-    let rows = array_of(&listed, "workspaces");
-    assert!(
-        rows.iter()
-            .any(|row| row["machine_id"] == machine_id && row["reachability"] == "reachable"),
-        "local workspace must stay listed: {listed}"
-    );
-    let remote = rows
-        .iter()
-        .find(|row| row["machine_id"] == "hm_remote")
-        .expect("configured remote is listed");
-    assert_eq!(remote["reachability"], "unreachable");
-    assert_eq!(remote["checkout_health"], "unknown");
-    assert!(
-        ssh_log.exists(),
-        "the unreachable remote should have attempted SSH"
-    );
-}
-
 /// ORB-14448: federated serve reads its remotes from the host file `orbit
 /// host` writes, and refuses to choose while the legacy file also exists.
 fn federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files() {
@@ -4276,23 +4205,6 @@ fn federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files() {
             && stderr.contains("hosts.toml")
             && stderr.contains("mcp-destinations.toml"),
         "the refusal names both files: {stderr}"
-    );
-}
-
-/// ORB-11044: a machine-id-only destination row still fails closed.
-fn federated_mcp_serve_rejects_a_machine_id_only_destination_row() {
-    let workspace = McpWorkspace::init();
-    write_destinations(&workspace, "[[destinations]]\nmachine_id = \"hm_alpha\"\n");
-
-    let output = workspace.run(&["mcp", "serve", "--mode", "federated"]);
-    assert!(
-        !output.status.success(),
-        "machine-id-only rows must fail closed"
-    );
-    let stderr = stderr(&output);
-    assert!(
-        stderr.contains("ssh") || stderr.contains("invalid"),
-        "the configuration error must be actionable: {stderr}"
     );
 }
 
@@ -6238,28 +6150,16 @@ fn worktree_and_federated_routing() {
 
 #[test]
 fn federated_local_destinations() {
-    for (name, explicit) in [
-        (
-            "federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations",
-            false,
-        ),
-        (
-            "federated_mcp_serve_collapses_an_explicit_local_destination_row",
-            true,
-        ),
-    ] {
-        run_case(name, || local_federation_row(explicit));
-    }
+    run_case(
+        "federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations",
+        local_federation_row,
+    );
     rows!(direct_and_federated_local_calls_record_equivalent_audit_contexts);
 }
 
 #[test]
 fn federated_host_configuration() {
-    rows!(
-        federated_mcp_serve_lists_local_workspaces_beside_unreachable_remotes,
-        federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files,
-        federated_mcp_serve_rejects_a_machine_id_only_destination_row
-    );
+    rows!(federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files);
 }
 
 #[test]

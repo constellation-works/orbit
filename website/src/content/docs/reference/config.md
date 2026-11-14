@@ -320,35 +320,13 @@ one-way and stores no SSH credentials.
 
 ### Legacy migration
 
-`~/.orbit/mcp-destinations.toml` is the legacy destination file. Its reader
-remains for one release. Use `orbit host` to migrate it; do not add new rows
-to the legacy file.
+`~/.orbit/mcp-destinations.toml` is no longer read. Its presence, alone or
+beside `hosts.toml`, fails every host-registry load with `host_file_conflict`;
+`orbit doctor` reports an error. Move it aside, run `orbit host add <ssh-target>`
+for each `ssh` row to register the hosts in `hosts.toml`, then delete the moved
+file. Automatic migration is no longer available.
 
-- **Only the legacy file exists:** federated MCP, pull drains, and replica
-  worktree cleanup still read it. `orbit host list` marks rows **legacy**.
-  They have no stored task prefix, so they cannot supply prefix routes.
-- **First add, rename, or remove:** Orbit probes every retained legacy host,
-  writes `hosts.toml`, applies the operation, and deletes the legacy file.
-  `orbit host add <existing-ssh-target>` migrates an already-listed host
-  successfully, preserving its SSH target and chosen migration name;
-  `--name` applies only to a new host. Migrated names use the remote's
-  `machine.name`, falling back to its SSH target when the name is taken.
-- **A retained host does not answer:** `legacy_host_unreachable` refuses the
-  mutation and neither file changes. Restore SSH access or remove the
-  decommissioned row with `orbit host remove <ssh-target-or-machine-id>`.
-  The removed legacy host is never contacted; all remaining hosts must
-  answer. `--force` only overrides replica and pull-drain dependents.
-- **Both files exist:** every consumer, including `orbit host`, refuses
-  with `host_file_conflict`. The diagnostic compares them by machine ID
-  and lists missing routes with their `orbit host add` commands. Preserve
-  a backup, retire the legacy file, then run those commands to register
-  any missing hosts. Orbit does not choose one file for you.
-
-`orbit doctor` warns while only the legacy file exists and gives an
-`orbit host add` command using an existing SSH target. The next release
-drops the legacy reader and retains the both-files conflict check for one
-additional release. The older singular `host.toml` identity file is
-unrelated to this migration.
+The older singular `host.toml` identity file is unrelated to this retirement.
 
 ## Crews
 
