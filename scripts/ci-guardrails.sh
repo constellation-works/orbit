@@ -719,6 +719,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   run_guard "$repo_root/scripts/test-path-leases-listener-sudo.py"
   run_guard "$repo_root/scripts/test-bench-build-budget.py"
+  run_guard "$repo_root/scripts/test-web-memory-soak.py"
   drain_pool
   reap_waiting_guard
   exit "$failed"

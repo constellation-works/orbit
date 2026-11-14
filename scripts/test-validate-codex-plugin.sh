@@ -62,6 +62,7 @@ python3 - "$repo_root" "$validator" "$base_fixture" "$fixture_root" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -74,12 +75,13 @@ fixture_root = Path(sys.argv[4])
 errors: list[str] = []
 
 
-def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(root: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(validator), str(root)],
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -89,8 +91,8 @@ def clone_fixture(name: str) -> Path:
     return dest
 
 
-def expect_failure(root: Path, needle: str, label: str) -> None:
-    result = run_validator(root)
+def expect_failure(root: Path, needle: str, label: str, env: dict[str, str] | None = None) -> None:
+    result = run_validator(root, env)
     if result.returncode == 0:
         errors.append(f"{label}: expected validator failure")
         return
@@ -159,6 +161,30 @@ for field in ("websiteURL", "privacyPolicyURL", "termsOfServiceURL"):
 manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 for field in ("author.url", "interface.websiteURL", "interface.privacyPolicyURL", "interface.termsOfServiceURL"):
     expect_failure(broken, f"plugin.json.{field} must be an absolute https:// URL", field)
+
+# HOME=/ is not a user-specific home. A substring match would reject every
+# slash-containing value, including the @orbit-tools/cli pin.
+root_home = dict(os.environ)
+root_home["HOME"] = "/"
+root_result = run_validator(base_fixture, root_home)
+if root_result.returncode != 0:
+    errors.append(
+        "valid package when HOME is /: expected validator success, "
+        f"got {root_result.returncode}\n{root_result.stdout + root_result.stderr}"
+    )
+
+embedded_home = "/srv/orbit-plugin-home"
+embedded = clone_fixture("embedded-home")
+manifest_path = embedded / "plugin" / ".codex-plugin" / "plugin.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+pinned = manifest["mcpServers"]["orbit"]["args"]
+manifest["mcpServers"]["orbit"]["args"] = [
+    arg if "@orbit-tools/cli@" not in arg else arg + embedded_home for arg in pinned
+]
+manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+home_env = dict(os.environ)
+home_env["HOME"] = embedded_home
+expect_failure(embedded, "user-specific absolute home path", "embedded home in launch arg", home_env)
 
 if errors:
     print("test-validate-codex-plugin: failed", file=sys.stderr)
