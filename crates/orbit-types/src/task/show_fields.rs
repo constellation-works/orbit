@@ -17,8 +17,8 @@ use serde_json::{Map, Value, json};
 
 use crate::task::{
     ArtifactManifestFileV2, GITHUB_PR_EXTERNAL_REF_SYSTEM, LazyTaskReferenceIndex, Task,
-    TaskOsRequirement, TaskStatus, resolve_task_dependencies, resolve_task_dependencies_lazily,
-    resolve_task_relations_lazily, task_readiness_json,
+    TaskOsRequirement, TaskStatus, project_task_relations_lazily, resolve_task_dependencies_lazily,
+    task_readiness_json,
 };
 
 /// Defines the authoritative `orbit.task.show` `--fields` / `fields` / `field`
@@ -292,21 +292,9 @@ fn reference_field_json(
                 .map(|dependency| dependency.label())
                 .collect::<Vec<_>>()
         )),
-        "relations" => Some(json!(resolve_task_relations_lazily(task, reference_index))),
+        "relations" => Some(json!(project_task_relations_lazily(task, reference_index))),
         _ => None,
     }
-}
-
-/// The `resolved_dependencies` labels: each dependency with the status
-/// `status_by_id` gives it.
-pub fn task_dependency_labels(
-    task: &Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Vec<String> {
-    resolve_task_dependencies(task, status_by_id)
-        .into_iter()
-        .map(|dependency| dependency.label())
-        .collect()
 }
 
 /// The base task JSON every read surface shares: CLI `--json`, the tool host

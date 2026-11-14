@@ -158,7 +158,7 @@ pub struct ExecutorDef {
     /// should encode runtime model selection in `args`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_pair_override: Option<ModelPairOverride>,
-    /// CLI flag name used to pass `JobStep.model` to a direct-agent subprocess.
+    /// CLI flag name used to pass the step runtime model to a direct-agent subprocess.
     ///
     /// Carries only the flag name, for example `"-m"` or `"--model"`. At
     /// invocation time, when both `model_flag` and the step's runtime model are

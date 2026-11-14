@@ -55,7 +55,6 @@ pub use request::{
     PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource, RESIDENT_AUTHORITY_GRANT,
     RESIDENT_AUTHORITY_REJECT, SCRIPT_GRANT_GRANT, SCRIPT_GRANT_REJECT, current_candidate_identity,
     decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
-    open_decision_requests,
 };
 
 pub use review_settlement::{

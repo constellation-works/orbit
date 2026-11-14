@@ -607,19 +607,6 @@ pub enum CiRerunAdmission {
     Refused(String),
 }
 
-/// Legacy one-rerun admission for consumers without infrastructure policy.
-pub fn decide_ci_rerun(history: &[TaskHistoryEntry], plan: &CiRerunPlan) -> CiRerunAdmission {
-    decide_ci_rerun_with_policy(
-        history,
-        plan,
-        CiInfrastructureRetryPolicy {
-            max_attempts: 1,
-            backoff_seconds: 0,
-        },
-        u64::MAX,
-    )
-}
-
 /// Decide under the owning task/claim lock; unknown sends consume a reservation.
 /// Only a newly authenticated provider attempt can spend the next reservation.
 pub fn decide_ci_rerun_with_policy(

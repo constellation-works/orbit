@@ -62,7 +62,7 @@ pub use decision::{
     RecordedReviewFinding, RecordedReviewSettlement, ReviewSettlementGate, SCRIPT_GRANT_GRANT,
     SCRIPT_GRANT_REJECT, TaskDecision, agent_decision_answers, current_candidate_identity,
     decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
-    normalize_agent_decision_topic, open_decision_requests, recorded_review_settlements,
+    normalize_agent_decision_topic, recorded_review_settlements,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 pub use fields_updated::{
@@ -118,14 +118,13 @@ pub use model::{
     is_textual_artifact_media_type, labeled_or_unset, media_type_for_artifact_path,
     names_task_delivery_pull_request, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags, normalized_artifact_media_type, push_external_ref_if_missing,
-    resolve_task_dependencies, resolve_task_dependencies_with_index, resolve_task_relations,
-    resolve_task_relations_with_index, satisfy_completed_archived_dependencies,
-    task_dependencies_ready_with_index, task_matches_tags, unmet_task_dependencies,
-    unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
+    resolve_task_dependencies, resolve_task_dependencies_with_index,
+    satisfy_completed_archived_dependencies, task_dependencies_ready_with_index, task_matches_tags,
+    unmet_task_dependencies, unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies_with,
 };
 pub(crate) use model::{
-    LazyTaskReferenceIndex, resolve_task_dependencies_lazily, resolve_task_relations_lazily,
+    LazyTaskReferenceIndex, project_task_relations_lazily, resolve_task_dependencies_lazily,
 };
 pub use mutation_proposal::{
     MUTATION_PROPOSAL_ARTIFACT_DIR, MUTATION_PROPOSAL_SCHEMA_VERSION,
@@ -153,8 +152,8 @@ pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS, TASK_SHOW_PROJECTION_FIELDS_CSV,
     TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, ordered_external_refs_for_show,
     refuses_implementer_writes, task_artifact_manifest_json, task_base_json,
-    task_dependency_labels, task_os_requirement_json, task_show_record_field_json,
-    task_show_reference_field_json, unknown_task_show_field_message,
+    task_os_requirement_json, task_show_record_field_json, task_show_reference_field_json,
+    unknown_task_show_field_message,
 };
 pub use source_location::{
     SourceLocationEmptyComponents, SourceLocationParseError, parse_source_location,

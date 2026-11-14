@@ -39,5 +39,5 @@ pub use ci_rerun::{
     CiCheckRerunRecord, CiInfrastructureRetryBackoffClass, CiInfrastructureRetryBackoffField,
     CiInfrastructureRetryBackoffRecord, CiInfrastructureRetryPolicy, CiRerunAdmission, CiRerunPlan,
     CiRerunRoot, ci_handoff_step_matches, ci_handoff_step_signature, ci_rerun_is_infrastructure,
-    decide_ci_rerun, decide_ci_rerun_with_policy,
+    decide_ci_rerun_with_policy,
 };

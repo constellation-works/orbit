@@ -26,7 +26,7 @@ Family defaults were originally also used to pick activity role models, but that
 ## 2. Core Concepts
 
 - **Agent Family:** A stable identifier such as `claude`, `codex`, `gemini`, or `grok` used for routing, attribution, and legacy model inference.
-- **Model Inference:** `agent_from_model()` and `provider_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families and providers. `infer_agent_family_from_model()` remains for legacy artifact recovery.
+- **Model Inference:** `agent_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families. `infer_agent_family_from_model()` remains for legacy artifact recovery.
 - **Crew:** A named provider-model assignment loaded from `.orbit/config.toml` under `[crews.<name>]`; agent dispatch resolves an explicit override, then `task.crew`, then the layered default.
 - **Default Crew:** `[workflow].default_crew` supplies the workspace default tier when no explicit override or task crew is set. The resolved default can fall through to environment and system configuration.
 - **Executor:** A YAML definition in `crates/orbit-core/assets/executors/<name>.yaml` describing how to invoke an agent CLI. The file is named for the execution lane (`antigravity.yaml` for `agy`), which may differ from the model family (`gemini`).
