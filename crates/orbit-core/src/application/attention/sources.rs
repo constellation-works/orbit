@@ -55,6 +55,30 @@ impl SharedOpenTasks {
         }
     }
 }
+/// The task projection every attention item carries.
+pub(super) fn attention_task(task: &Task) -> AttentionTask {
+    AttentionTask {
+        status: task.status,
+        tags: task.tags.clone(),
+        crew: task.crew.clone(),
+        orchestrator: task.orchestrator.clone(),
+        title: task.title.clone(),
+    }
+}
+/// A degraded entry scoped to one workspace.
+pub(super) fn workspace_degraded(
+    workspace: &AttentionWorkspace,
+    kind: &str,
+    code: &str,
+    message: impl Into<String>,
+) -> AttentionDegraded {
+    AttentionDegraded {
+        scope: format!("workspace:{}", workspace.id),
+        kind: kind.into(),
+        code: code.into(),
+        message: message.into(),
+    }
+}
 pub(super) struct Subject<'a> {
     pub(super) runtime: &'a OrbitRuntime,
     pub(super) task: &'a Task,
@@ -71,25 +95,27 @@ impl Subject<'_> {
         detail: Value,
         next: AttentionNext,
     ) -> AttentionItem {
-        let identity = json!([kind, self.host.machine_id, self.workspace.id, self.task.id]);
+        self.item_for(kind, &json!(self.task.id), since, reason, detail, next)
+    }
+    /// Like [`Self::item`], with an explicit identity `subject` (a decision
+    /// request id) in place of the task id.
+    pub(super) fn item_for(
+        &self,
+        kind: AttentionKind,
+        subject: &Value,
+        since: DateTime<Utc>,
+        reason: &str,
+        detail: Value,
+        next: AttentionNext,
+    ) -> AttentionItem {
         AttentionItem {
-            id: format!(
-                "att_{}_{}",
-                kind.as_str(),
-                cursor::attention_digest(identity.to_string().as_bytes())
-            ),
+            id: cursor::attention_item_id(kind, &self.host.machine_id, &self.workspace.id, subject),
             kind,
             severity: AttentionSeverity::Medium,
             workspace: self.workspace.clone(),
             host: self.host.clone(),
             refs: json!({"task_id": self.task.id}),
-            task: Some(AttentionTask {
-                status: self.task.status,
-                tags: self.task.tags.clone(),
-                crew: self.task.crew.clone(),
-                orchestrator: self.task.orchestrator.clone(),
-                title: self.task.title.clone(),
-            }),
+            task: Some(attention_task(self.task)),
             since: Some(since),
             age_seconds: Some((self.now - since).num_seconds().max(0) as u64),
             expires_at: None,
@@ -623,14 +649,12 @@ pub(super) fn read_attention_sources(
         .iter()
         .filter(|kind| !AttentionKind::DEFAULT_NAMES.contains(&kind.as_str()))
     {
-        result.degraded.push(AttentionDegraded {
-            scope: format!("workspace:{}", workspace.id),
-            kind: kind.as_str().into(),
-            code: "source_unavailable".into(),
-            message:
-                "This source belongs to a later attention slice and is not implemented on this host"
-                    .into(),
-        });
+        result.degraded.push(workspace_degraded(
+            workspace,
+            kind.as_str(),
+            "source_unavailable",
+            "This source belongs to a later attention slice and is not implemented on this host",
+        ));
     }
     // A pending task commit makes every task-backed source unreadable
     // without recovery: degrade them instead of letting selection or
@@ -645,23 +669,23 @@ pub(super) fn read_attention_sources(
                 || *kind == K::ResidentStalled
                 || AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
         }) {
-            result.degraded.push(AttentionDegraded {
-                scope: format!("workspace:{}", workspace.id),
-                kind: kind.as_str().into(),
-                code: "source_unavailable".into(),
-                message: message.clone(),
-            });
+            result.degraded.push(workspace_degraded(
+                workspace,
+                kind.as_str(),
+                "source_unavailable",
+                message.clone(),
+            ));
         }
         if filter.selected(K::FrictionUntriaged) {
             let started = Instant::now();
             match friction_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
-                Err(error) => result.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: K::FrictionUntriaged.as_str().into(),
-                    code: "source_unavailable".into(),
-                    message: error.to_string(),
-                }),
+                Err(error) => result.degraded.push(workspace_degraded(
+                    workspace,
+                    K::FrictionUntriaged.as_str(),
+                    "source_unavailable",
+                    error.to_string(),
+                )),
             }
             result
                 .timings
@@ -676,21 +700,20 @@ pub(super) fn read_attention_sources(
         if runtime.coordination_task_reads_visible() {
             match notice_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
-                Err(error) => result.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: K::NoticeOpen.as_str().into(),
-                    code: "source_unavailable".into(),
-                    message: error.to_string(),
-                }),
+                Err(error) => result.degraded.push(workspace_degraded(
+                    workspace,
+                    K::NoticeOpen.as_str(),
+                    "source_unavailable",
+                    error.to_string(),
+                )),
             }
         } else if !filter.candidate_read {
-            result.degraded.push(AttentionDegraded {
-                scope: format!("workspace:{}", workspace.id),
-                kind: K::NoticeOpen.as_str().into(),
-                code: "source_unavailable".into(),
-                message: "Notices on a replica are not authoritative; read the workspace owner"
-                    .into(),
-            });
+            result.degraded.push(workspace_degraded(
+                workspace,
+                K::NoticeOpen.as_str(),
+                "source_unavailable",
+                "Notices on a replica are not authoritative; read the workspace owner",
+            ));
         }
         result
             .timings
@@ -709,12 +732,12 @@ pub(super) fn read_attention_sources(
             Ok(items) => result.items.extend(items),
             // The aggregator's candidate read asks the owner; a replica stays silent.
             Err(_) if filter.candidate_read && !runtime.coordination_task_reads_visible() => {}
-            Err(message) => result.degraded.push(AttentionDegraded {
-                scope: format!("workspace:{}", workspace.id),
-                kind: K::ResidentStalled.as_str().into(),
-                code: "source_unavailable".into(),
+            Err(message) => result.degraded.push(workspace_degraded(
+                workspace,
+                K::ResidentStalled.as_str(),
+                "source_unavailable",
                 message,
-            }),
+            )),
         }
         result
             .timings
@@ -727,22 +750,20 @@ pub(super) fn read_attention_sources(
         if runtime.coordination_task_reads_visible() {
             match friction_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
-                Err(error) => result.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: K::FrictionUntriaged.as_str().into(),
-                    code: "source_unavailable".into(),
-                    message: error.to_string(),
-                }),
+                Err(error) => result.degraded.push(workspace_degraded(
+                    workspace,
+                    K::FrictionUntriaged.as_str(),
+                    "source_unavailable",
+                    error.to_string(),
+                )),
             }
         } else if !filter.candidate_read {
-            result.degraded.push(AttentionDegraded {
-                scope: format!("workspace:{}", workspace.id),
-                kind: K::FrictionUntriaged.as_str().into(),
-                code: "source_unavailable".into(),
-                message:
-                    "Friction records on a replica are not authoritative; read the workspace owner"
-                        .into(),
-            });
+            result.degraded.push(workspace_degraded(
+                workspace,
+                K::FrictionUntriaged.as_str(),
+                "source_unavailable",
+                "Friction records on a replica are not authoritative; read the workspace owner",
+            ));
         }
         result
             .timings
@@ -763,14 +784,12 @@ pub(super) fn read_attention_sources(
         // so the replica stays silent; a direct read says where to look.
         if !filter.candidate_read {
             for kind in task_kinds {
-                result.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: kind.as_str().into(),
-                    code: "source_unavailable".into(),
-                    message:
-                        "Task records on a replica are not authoritative; read the workspace owner"
-                            .into(),
-                });
+                result.degraded.push(workspace_degraded(
+                    workspace,
+                    kind.as_str(),
+                    "source_unavailable",
+                    "Task records on a replica are not authoritative; read the workspace owner",
+                ));
             }
         }
         return Ok(result);
@@ -840,12 +859,12 @@ pub(super) fn read_attention_sources(
                     .copied()
                     .chain(wants_decisions.then_some(K::DecisionOpen))
                 {
-                    result.degraded.push(AttentionDegraded {
-                        scope: format!("workspace:{}", workspace.id),
-                        kind: kind.as_str().into(),
-                        code: "source_unavailable".into(),
-                        message: format!("{}: {error}", metadata.id),
-                    });
+                    result.degraded.push(workspace_degraded(
+                        workspace,
+                        kind.as_str(),
+                        "source_unavailable",
+                        format!("{}: {error}", metadata.id),
+                    ));
                 }
                 continue;
             }
@@ -873,12 +892,12 @@ pub(super) fn read_attention_sources(
                     .iter()
                     .any(|entry| entry.kind == kind.as_str() && entry.code == "source_timeout")
                 {
-                    result.degraded.push(AttentionDegraded {
-                        scope: format!("workspace:{}", workspace.id),
-                        kind: kind.as_str().into(),
-                        code: "source_timeout".into(),
-                        message: "Source read budget exhausted".into(),
-                    });
+                    result.degraded.push(workspace_degraded(
+                        workspace,
+                        kind.as_str(),
+                        "source_timeout",
+                        "Source read budget exhausted",
+                    ));
                 }
                 continue;
             }
@@ -893,12 +912,12 @@ pub(super) fn read_attention_sources(
                     }
                 }
                 Ok(None) => {}
-                Err(error) => result.degraded.push(AttentionDegraded {
-                    scope: format!("workspace:{}", workspace.id),
-                    kind: kind.as_str().into(),
-                    code: "source_unavailable".into(),
-                    message: format!("{}: {error}", task.id),
-                }),
+                Err(error) => result.degraded.push(workspace_degraded(
+                    workspace,
+                    kind.as_str(),
+                    "source_unavailable",
+                    format!("{}: {error}", task.id),
+                )),
             }
             *spent += started.elapsed();
         }
@@ -908,20 +927,13 @@ pub(super) fn read_attention_sources(
                 .iter()
                 .filter(|request| !folded.contains(&request.id))
             {
-                let mut item = subject.item(
+                let item = subject.item_for(
                     K::DecisionOpen,
+                    &json!(request.id),
                     request.raised_at,
                     request.summary.as_deref().unwrap_or(&task.title),
                     json!({"gate": request.gate}),
                     subject.show_next(),
-                );
-                item.id = format!(
-                    "att_decision_open_{}",
-                    cursor::attention_digest(
-                        json!([K::DecisionOpen, host.machine_id, workspace.id, request.id])
-                            .to_string()
-                            .as_bytes()
-                    )
                 );
                 result.items.push(finalize_attention_item(
                     item,

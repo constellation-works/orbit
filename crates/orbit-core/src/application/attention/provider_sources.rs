@@ -1,13 +1,15 @@
 //! Provider and record sources: `ci_red` from the provider read behind
 //! `github.run.list`, cached per workspace and bounded by the source timeout.
-use super::sources::{AttentionCandidates, SharedOpenTasks, attention_reason};
+use super::sources::{
+    AttentionCandidates, SharedOpenTasks, attention_reason, attention_task, workspace_degraded,
+};
 use crate::OrbitRuntime;
 use crate::application::contracts::ToolInvocationPort;
 use chrono::{DateTime, Utc};
 use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
 use orbit_types::tool::{
-    AttentionDegraded, AttentionHost, AttentionItem, AttentionKind, AttentionNext,
-    AttentionSeverity, AttentionTask, AttentionWorkspace, ToolSessionContext,
+    AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity, AttentionTask,
+    AttentionWorkspace, ToolSessionContext,
 };
 use serde_json::{Value, json};
 use std::{
@@ -156,18 +158,9 @@ fn build_repair_lookup(
             continue;
         };
         for source in &identity.sources {
-            lookup.entry(source.run_id.clone()).or_insert_with(|| {
-                (
-                    task.id.clone(),
-                    Some(AttentionTask {
-                        status: task.status,
-                        tags: task.tags.clone(),
-                        crew: task.crew.clone(),
-                        orchestrator: task.orchestrator.clone(),
-                        title: task.title.clone(),
-                    }),
-                )
-            });
+            lookup
+                .entry(source.run_id.clone())
+                .or_insert_with(|| (task.id.clone(), Some(attention_task(task))));
         }
     }
     lookup
@@ -192,27 +185,18 @@ pub(super) fn read_ci_attention(
     // provider, and its local CI state is not authoritative.
     if !runtime.coordination_task_reads_visible() {
         if !filter.candidate_read {
-            candidates.degraded.push(AttentionDegraded {
-                scope: format!("workspace:{}", workspace.id),
-                kind: AttentionKind::CiRed.as_str().into(),
-                code: "source_unavailable".into(),
-                message: "CI results on a replica are not authoritative; read the workspace owner"
-                    .into(),
-            });
+            candidates.degraded.push(workspace_degraded(
+                workspace,
+                AttentionKind::CiRed.as_str(),
+                "source_unavailable",
+                "CI results on a replica are not authoritative; read the workspace owner",
+            ));
         }
         candidates
             .timings
             .insert("ci_red".into(), started.elapsed().as_micros());
         return;
     }
-    let degraded = |candidates: &mut AttentionCandidates, message: String| {
-        candidates.degraded.push(AttentionDegraded {
-            scope: format!("workspace:{}", workspace.id),
-            kind: AttentionKind::CiRed.as_str().into(),
-            code: "source_unavailable".into(),
-            message,
-        });
-    };
     if workspace_remote(runtime).is_none() {
         return;
     }
@@ -222,12 +206,9 @@ pub(super) fn read_ci_attention(
         // No fetched remote-tracking head: freshness is unknown, so no
         // run can be shown to be on the current base head. Degrade
         // explicitly rather than treating any reported head as current.
-        degraded(
-            candidates,
-            format!(
-                "Current head of base branch '{base_branch}' is unavailable; fetch the branch and retry"
-            ),
-        );
+        candidates.degraded.push(workspace_degraded(workspace, AttentionKind::CiRed.as_str(), "source_unavailable", format!(
+            "Current head of base branch '{base_branch}' is unavailable; fetch the branch and retry"
+        )));
         candidates
             .timings
             .insert("ci_red".into(), started.elapsed().as_micros());
@@ -269,7 +250,12 @@ pub(super) fn read_ci_attention(
                     runs
                 }
                 Err(message) => {
-                    degraded(candidates, message);
+                    candidates.degraded.push(workspace_degraded(
+                        workspace,
+                        AttentionKind::CiRed.as_str(),
+                        "source_unavailable",
+                        message,
+                    ));
                     candidates
                         .timings
                         .insert("ci_red".into(), started.elapsed().as_micros());
@@ -335,10 +321,12 @@ pub(super) fn read_ci_attention(
         }
         if !repair_lookup_degraded && let Some(message) = &pending_commit {
             repair_lookup_degraded = true;
-            degraded(
-                candidates,
+            candidates.degraded.push(workspace_degraded(
+                workspace,
+                AttentionKind::CiRed.as_str(),
+                "source_unavailable",
                 format!("CI repair-task lookup unavailable: {message}"),
-            );
+            ));
         }
         let run_id = value_string(&run["run_id"]);
         // `since` is the failing run's `updated_at`, the nearest
@@ -410,18 +398,11 @@ pub(super) fn read_ci_attention(
             title
         };
         let mut item = AttentionItem {
-            id: format!(
-                "att_ci_red_{}",
-                cursor::attention_digest(
-                    json!([
-                        AttentionKind::CiRed,
-                        host.machine_id,
-                        workspace.id,
-                        workflow
-                    ])
-                    .to_string()
-                    .as_bytes()
-                )
+            id: cursor::attention_item_id(
+                AttentionKind::CiRed,
+                &host.machine_id,
+                &workspace.id,
+                &json!(workflow),
             ),
             kind: AttentionKind::CiRed,
             severity,
