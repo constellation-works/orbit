@@ -3,8 +3,8 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-11-03
-last_validated: 2026-10-14
+last_updated: 2026-11-14
+last_validated: 2026-11-14
 status: Draft
 feature: activity-job
 doc_role: decisions
@@ -36,7 +36,7 @@ Treat `schemaVersion: 2` as the only activity/job asset family, load seeded and 
 
 **Superseded in part by [Auto-task jobs declare schemaVersion 3](#auto-task-jobs-declare-schemaversion-3) ([ORB-20237]).** A job using the auto-task step extension declares `schemaVersion: 3`; every activity and every other job stays `schemaVersion: 2`.
 
-**Amended by [ORB-10801].** `backend: auto` is no longer resolved — agent backend selection was retired. The load-time normalization pass now *rejects* the retired declarations (`backend: http | auto`, any `session:` binding) instead of concretizing them, so nothing is silently reinterpreted. See [specs/backend-resolution.md](./specs/backend-resolution.md). Direct task-workflow admission remains a workflow-specific normalization path rather than a generic task-update rule.
+**Amended by [ORB-10801].** `backend: auto` is no longer resolved — agent backend selection was retired. The load-time normalization pass now *rejects* retired backend declarations (`backend: http | auto`) instead of concretizing them, so nothing is silently reinterpreted. See [specs/backend-resolution.md](./specs/backend-resolution.md). Direct task-workflow admission remains a workflow-specific normalization path rather than a generic task-update rule. Job-step `session:` bindings are ignored after [ORB-24590] removed the retired binding field and its refusal shim; each iteration starts cold.
 
 Folded instances:
 
@@ -78,7 +78,7 @@ Folded instances:
 
 | ADR | Instance folded into this rollup |
 |-----|----------------------------------|
-| [Cross-iteration `session:` binding is a loop-scoped HTTP-only feature](#cross-iteration-session-binding-is-a-loop-scoped-http-only-feature) | Retired by [ORB-10801]: the HTTP agent loop is gone, so any `session:` binding is refused at load. |
+| [Cross-iteration `session:` binding is a loop-scoped HTTP-only feature](#cross-iteration-session-binding-is-a-loop-scoped-http-only-feature) | The HTTP agent loop and binding refusal were retired; after [ORB-24590], a job-step `session:` key is ignored and iterations start cold. |
 | [Keep the retained CLI runtimes as the implementation of `backend: cli`](#keep-the-retained-cli-runtimes-as-the-implementation-of-backend-cli) | Retained CLI runtimes are the agent implementation. |
 | [Groundhog is a sibling activity kind, not an `agent_loop` mode bit](#groundhog-is-a-sibling-activity-kind-not-an-agent_loop-mode-bit) | Groundhog is a sibling activity kind, not an `agent_loop` mode bit. |
 | [CLI backend resolves executor args, not just provider commands](#cli-backend-resolves-executor-args-not-just-provider-commands) | CLI backend resolves executor args, not just provider commands. |
@@ -125,6 +125,10 @@ Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring featur
 
 **Superseded by:** [Host boundaries and agent dispatch stay explicit](#host-boundaries-and-agent-dispatch-stay-explicit) (folded)
 **Recorded:** 2026-04 · [T20260418-2018], [T20260419-0104], [T20260419-0623-2]
+
+The HTTP-only capability and its job-step binding refusal were later retired.
+Since [ORB-24590], `session:` is an unknown, ignored job-step key, and every
+loop iteration starts cold.
 
 Folded into [Host boundaries and agent dispatch stay explicit](#host-boundaries-and-agent-dispatch-stay-explicit)'s rollup for explicit agent dispatch boundaries.
 

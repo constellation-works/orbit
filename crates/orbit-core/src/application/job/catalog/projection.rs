@@ -102,7 +102,6 @@ pub(super) fn job_v2_step_to_json(step: &JobV2Step) -> Value {
                 "target": target.target.clone(),
                 "default_input": target.default_input,
                 "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
             });
         }
         JobV2StepBody::Target(target) => {
@@ -110,7 +109,6 @@ pub(super) fn job_v2_step_to_json(step: &JobV2Step) -> Value {
                 "kind": "target",
                 "default_input": target.default_input,
                 "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
                 "spec": target.spec,
             });
         }

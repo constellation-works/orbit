@@ -122,7 +122,6 @@ fn single_step_job(activity: &str) -> JobV2 {
                 fs_profile: None,
                 default_input: None,
                 timeout_seconds: 0,
-                session: None,
             }),
         }],
     }

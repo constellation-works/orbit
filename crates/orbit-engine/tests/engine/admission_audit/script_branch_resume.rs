@@ -264,7 +264,6 @@ fn step(id: &str, target: &str, default_input: Option<Value>) -> JobV2Step {
             target: target.to_string(),
             default_input,
             timeout_seconds: 0,
-            session: None,
         }),
     }
 }

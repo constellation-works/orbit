@@ -20,7 +20,6 @@ use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::activity_job::{
     V2AuditEventKind, run_input_declares_trusted_host, strip_trusted_host_admission,
-    validate_job_retired_sessions,
 };
 use orbit_types::workflow::{
     HeldFailure, JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobTargetType,
@@ -371,8 +370,7 @@ impl OrbitRuntime {
         })?;
 
         // Phase 4: resolve `target: activity:<name>` refs before any other
-        // pass, so retired-feature rejection sees concrete specs. The
-        // workspace's script catalog rides along so a `target:
+        // pass. The workspace's script catalog rides along so a `target:
         // script:<name>` step loads (its manifest is validated and its
         // entry resolved inside the workspace) and runs at dispatch once
         // its grant checks out; a missing or invalid manifest fails this
@@ -384,10 +382,6 @@ impl OrbitRuntime {
         resolve_job_catalog_refs_with_scripts_for_execution(&mut asset.spec, &catalog, &scripts)
             .map_err(dispatch_error_to_orbit)?;
 
-        // [ORB-10801] Reject retired declarations at load time so a run never
-        // starts a DAG it cannot finish as written.
-        validate_job_retired_sessions(&asset.spec, &yaml_path.display().to_string())
-            .map_err(|err| OrbitError::InvalidInput(format!("{err}")))?;
         let run_id = run_id_override.unwrap_or_else(|| {
             format!(
                 "job-{}-{}",

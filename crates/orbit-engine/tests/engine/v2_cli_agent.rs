@@ -38,11 +38,9 @@ use orbit_engine::{
     dispatch_v2_activity, execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_store::{Store, V2AuditEventFilter};
-use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobKind, JobV2, JobV2Step,
-    JobV2StepBody, LoopBlock, Provider, RetiredFeatureError, TargetStep, ToolAllowlistError,
-    V2AuditEvent, validate_job_retired_sessions,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2StepBody, Provider,
+    ToolAllowlistError, V2AuditEvent,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -382,8 +380,7 @@ fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_a_cli_dispatch_emits_envelope_events()?;
     scenario_b_argv_redaction()?;
     scenario_c_wall_clock_timeout()?;
-    scenario_e_loader_rejection_retired_session()?;
-    scenario_f_loader_rejection_retired_backend_value()?;
+    scenario_e_loader_rejection_retired_backend_value()?;
     scenario_j_cli_executor_static_args_are_audited()?;
 
     Ok(())
@@ -736,32 +733,10 @@ fn scenario_c_wall_clock_timeout() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// E: [ORB-10801] a `session:` binding is refused at load time, so a run
-/// never starts a DAG whose cross-iteration semantics no longer exist.
-fn scenario_e_loader_rejection_retired_session() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  E) loader rejects a retired `session:` binding");
-    let job = synthetic_loop_session_job();
-    let err = validate_job_retired_sessions(&job, "synthetic/loop_session.yaml")
-        .expect_err("expected rejection");
-    let RetiredFeatureError::SessionBinding {
-        asset_path,
-        step_id,
-        session_name,
-    } = &err;
-    assert_eq!(asset_path, "synthetic/loop_session.yaml");
-    assert_eq!(step_id, "assess");
-    assert_eq!(session_name, "assessor");
-    assert!(
-        err.to_string().contains("CLI agent path"),
-        "rejection must carry the migration: {err}"
-    );
-    Ok(())
-}
-
-/// F: [ORB-10801] the removed `backend:` values are refused at parse time, and
+/// E: [ORB-10801] the removed `backend:` values are refused at parse time, and
 /// never quietly remapped onto the surviving CLI agent path.
-fn scenario_f_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  F) parser rejects retired backend values");
+fn scenario_e_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std::error::Error>> {
+    println!("  E) parser rejects retired backend values");
     for removed in ["http", "auto"] {
         let yaml = format!(
             "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: retired\nspec:\n  type: agent_loop\n  description: retired\n  instruction: hi\n  backend: {removed}\n"
@@ -1768,74 +1743,6 @@ pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn st
         _tempdir: tempdir,
         path,
     })
-}
-
-fn synthetic_loop_session_job() -> JobV2 {
-    let assess_step = JobV2Step {
-        id: "assess".to_string(),
-        stage: None,
-        when: None,
-        retry: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        wait_until: None,
-        expire_when: None,
-        reuse_when: None,
-        require_result: None,
-        body: JobV2StepBody::Target(TargetStep {
-            spec: ActivityV2Spec::AgentLoop(AgentLoopSpec::for_provider(
-                String::new(),
-                Provider::Claude,
-                30,
-            )),
-            activity_name: None,
-            input_schema_json: None,
-            fs_profile: None,
-            default_input: None,
-            timeout_seconds: 0,
-            session: Some("assessor".to_string()),
-        }),
-    };
-    let loop_step = JobV2Step {
-        id: "assess_fix".to_string(),
-        stage: None,
-        when: None,
-        retry: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        wait_until: None,
-        expire_when: None,
-        reuse_when: None,
-        require_result: None,
-        body: JobV2StepBody::Loop {
-            loop_: LoopBlock {
-                timeout_seconds: None,
-                interval_seconds: None,
-                items: None,
-                max_iterations: 3,
-                break_when: None,
-                steps: vec![assess_step],
-            },
-        },
-    };
-    JobV2 {
-        schema_version: 2,
-        state: JobScheduleState::Enabled,
-        owns_task_worktree: false,
-        task_delivery: None,
-        default_input: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        failure_activity: None,
-        resolved_failure_activity: None,
-        final_recovery_activity: None,
-        resolved_final_recovery_activity: None,
-        steering_gate: None,
-        max_active_runs: 1,
-        kind: JobKind::Workflow,
-        expire_when: None,
-        steps: vec![loop_step],
-    }
 }
 
 // Hosts --------------------------------------------------------------------

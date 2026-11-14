@@ -81,7 +81,6 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
                 fs_profile: asset.spec.fs_profile.clone(),
                 default_input: None,
                 timeout_seconds: 0,
-                session: None,
             }),
         }],
     };
