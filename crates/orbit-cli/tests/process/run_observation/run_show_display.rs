@@ -526,6 +526,58 @@ fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
     assert_eq!(step["step"]["outcome"], "interrupted", "{step}");
 }
 
+fn run_show_names_a_sigkilled_workers_rescue_candidate() {
+    const RESCUED: &str = "jrun-sigkill-rescue";
+    let fixture = Fixture::terminal();
+    seed_run_with_state(&fixture, RESCUED, "failed");
+    let rescue_ref = format!("refs/orbit/rescue/{RESCUED}");
+    let rescue_commit = "0123456789abcdef0123456789abcdef01234567";
+    let checkpoint = serde_json::json!({
+        "run_id": RESCUED,
+        "job_id": "fixture_job",
+        "initial_input": {},
+        "pipeline": {
+            "rescue_candidate": {
+                "run_id": RESCUED,
+                "rescue_ref": rescue_ref,
+                "rescue_commit": rescue_commit,
+                "partial_commit": rescue_commit,
+            },
+        },
+        "updated_at": "2026-10-08T00:26:00+00:00",
+    });
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+             VALUES (?1, ?2, ?3)",
+            params![fixture.workspace_id(), RESCUED, checkpoint.to_string()],
+        )
+        .expect("seed rescue candidate checkpoint");
+
+    let json = fixture.json(&["run", "show", RESCUED, "--no-reconcile", "--json"]);
+    assert_eq!(json["run"]["state"], "failed", "{json}");
+    assert_eq!(json["rescue_candidate"]["rescue_ref"], rescue_ref, "{json}");
+    assert_eq!(
+        json["rescue_candidate"]["rescue_commit"], rescue_commit,
+        "{json}"
+    );
+
+    let output = fixture
+        .orbit()
+        .args(["run", "show", RESCUED, "--no-reconcile"])
+        .output()
+        .expect("spawn orbit");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(&format!(
+            "Rescue candidate: {rescue_ref} (commit {rescue_commit})"
+        )),
+        "{text}"
+    );
+}
+
 fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     let fixture = Fixture::terminal();
     seed_interrupted_run(&fixture);
@@ -1386,6 +1438,10 @@ fn run_show_contracts() {
         (
             "run_show_lists_a_final_recovery_resume_with_its_rationale",
             run_show_lists_a_final_recovery_resume_with_its_rationale as fn(),
+        ),
+        (
+            "run_show_names_a_sigkilled_workers_rescue_candidate",
+            run_show_names_a_sigkilled_workers_rescue_candidate as fn(),
         ),
         (
             "run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint",

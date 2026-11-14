@@ -485,6 +485,8 @@ sys.exit(7)
 struct RescueHost {
     inner: Arc<dyn JobRunStoreBackend>,
     preserved: Arc<Mutex<Vec<String>>>,
+    provider_probes: Arc<AtomicUsize>,
+    defer_provider_probes: usize,
 }
 
 impl PipelineRunHost for RescueHost {
@@ -493,7 +495,7 @@ impl PipelineRunHost for RescueHost {
     }
 
     fn providers_stopped(&self, _run_id: &str) -> bool {
-        true
+        self.provider_probes.fetch_add(1, Ordering::SeqCst) >= self.defer_provider_probes
     }
 
     fn preserve_rescue_candidate(&self, run_id: &str) -> Option<String> {
@@ -545,6 +547,8 @@ fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
         Arc::new(RescueHost {
             inner: runs.clone(),
             preserved: preserved.clone(),
+            provider_probes: Arc::new(AtomicUsize::new(0)),
+            defer_provider_probes: 0,
         }),
     );
     let log_path = root.path().join("worker.log");
@@ -571,6 +575,94 @@ fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
         .last()
         .and_then(|step| step.error_message.as_deref())
         .unwrap_or("");
+    assert!(
+        message.contains(&format!(
+            "rescue candidate kept at `refs/orbit/rescue/{}`",
+            run.run_id
+        )),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing,
+    )) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let paths = WorkspacePaths::new(
+        root.path().to_path_buf(),
+        root.path().join(".orbit"),
+        root.path().join("global"),
+    );
+    let database = Store::open_in_memory().unwrap();
+    let runs = orbit_store::compose::workspace_job_run_store(database.clone(), "rescue-fixture");
+    let run = runs
+        .insert_job_run("rescue-fixture", 1, Utc::now(), None, None)
+        .unwrap();
+    let preserved = Arc::new(Mutex::new(Vec::new()));
+    let provider_probes = Arc::new(AtomicUsize::new(0));
+    let supervisor = PipelineWorkerSupervisor::new(
+        runs.clone(),
+        orbit_store::compose::audit_event_store_sqlite(database),
+        paths.clone(),
+        EventLog::default(),
+        WorkerCommandConfig::for_paths(&paths),
+        Arc::new(RescueHost {
+            inner: runs.clone(),
+            preserved: preserved.clone(),
+            provider_probes: provider_probes.clone(),
+            // The first probe still sees a provider: terminalization, and
+            // with it preservation, must wait for liveness to clear.
+            defer_provider_probes: 1,
+        }),
+    );
+    let log_path = root.path().join("worker.log");
+    std::fs::File::create(&log_path).unwrap();
+    let log_reader = std::fs::File::open(&log_path).unwrap();
+    let child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id();
+    runs.mark_job_run_running(&run.run_id, Utc::now(), pid)
+        .unwrap();
+    // SAFETY: SIGKILL to the child this test just spawned; plain integers.
+    // SIGKILL cannot be caught, so no sender is ever captured for it.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    supervisor
+        .monitor_startup(&run.run_id, child, &log_path, log_reader, None)
+        .unwrap();
+    assert!(
+        provider_probes.load(Ordering::SeqCst) > 1,
+        "preservation must wait until provider liveness clears"
+    );
+    assert_eq!(
+        preserved.lock().unwrap().as_slice(),
+        std::slice::from_ref(&run.run_id),
+        "an externally SIGKILLed worker's candidate is kept once, before terminalizing"
+    );
+    let settled = runs.get_job_run(&run.run_id).unwrap().unwrap();
+    assert_eq!(
+        settled.state,
+        JobRunState::Failed,
+        "an unknown-sender SIGKILL must not be reclassified as a host-manager stop"
+    );
+    let step = settled.steps.last().expect("diagnostic step");
+    assert_eq!(
+        step.error_code.as_deref(),
+        None,
+        "an unknown sender keeps its unclassified failure code: {:?}",
+        step.error_code
+    );
+    let message = step.error_message.as_deref().unwrap_or("");
+    assert!(
+        message.contains("sender unknown: the worker captured none"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("held because the host manager stopped the worker"),
+        "{message}"
+    );
     assert!(
         message.contains(&format!(
             "rescue candidate kept at `refs/orbit/rescue/{}`",
