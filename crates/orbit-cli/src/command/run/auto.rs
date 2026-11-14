@@ -8,7 +8,8 @@ use orbit_core::application::job::{
     AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopOutcome,
 };
 use orbit_core::{
-    CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
+    AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime,
+    WorkspacePullRequest,
 };
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -135,25 +136,26 @@ impl Execute for AutoCommand {
         } else {
             CompletionPolicy::Review
         };
-        let invoke = runtime.submit_workspace_auto_run_with_mode(
+        let invoke = runtime.submit_workspace_auto_run(AutoDrainRequest {
             for_seconds,
-            self.concurrency,
+            max_active_leaf_runs: self.concurrency,
             completion,
-            &self.allow_crew,
-            &complexity_crews,
-            None,
-            self.claim_token.as_deref(),
-            orbit_types::workflow::JobRunTrigger::cli(),
-            self.strict_worker_containment,
-            self.approve_proposed,
-            self.auto_fix,
-            self.auto_concurrency
+            allowed_crews: &self.allow_crew,
+            complexity_crews,
+            actor: None,
+            claim_token: self.claim_token.as_deref(),
+            trigger: orbit_types::workflow::JobRunTrigger::cli(),
+            strict_containment: self.strict_worker_containment,
+            approve_proposed: self.approve_proposed,
+            auto_fix: self.auto_fix,
+            auto_concurrency: self
+                .auto_concurrency
                 .as_deref()
                 .map(str::parse)
                 .transpose()
                 .map_err(|message: &str| orbit_core::OrbitError::InvalidInput(message.into()))?,
-            self.review,
-        )?;
+            review: self.review,
+        })?;
         let receipt = runtime.auto_drain_submission_receipt(
             &invoke,
             AutoDrainSubmissionSource::Local,

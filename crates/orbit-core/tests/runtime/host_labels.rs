@@ -154,16 +154,17 @@ fn a_host_without_the_labels_withholds_the_task_and_names_the_wait() {
     assert_eq!(row["placement_wait"], placement, "{listed}");
 
     let refused = plain
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            std::slice::from_ref(&labelled.id),
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: std::slice::from_ref(&labelled.id),
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("an unlabelled host refuses the ship");
     assert!(
         matches!(&refused, OrbitError::PolicyDenied(message) if message.contains(wait)),

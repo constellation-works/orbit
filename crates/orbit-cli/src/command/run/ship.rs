@@ -3,7 +3,8 @@
 use clap::{Args, ValueEnum};
 use orbit_core::application::job::SubmissionKind;
 use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipModeResolutionProfile, find_workflow,
+    CompletionPolicy, OrbitError, OrbitRuntime, ShipModeResolutionProfile, ShipRunRequest,
+    find_workflow,
 };
 
 use crate::command::{CommandOut, Execute};
@@ -94,19 +95,19 @@ impl Execute for ShipCommand {
         ensure_workflow_exists(SHIP_WORKFLOW)?;
         // Ship is the one workflow whose submission carries task-level
         // admission checks, so it must not use the generic CLI dispatcher.
-        let invoke = runtime.submit_ship_run_with_containment(
+        let invoke = runtime.submit_ship_run(ShipRunRequest {
             mode,
-            self.base.as_deref(),
-            &self.task_ids,
-            self.completion(),
-            &self.allow_crew,
-            None,
-            self.claim_token.as_deref(),
-            orbit_types::workflow::JobRunTrigger::cli(),
-            self.strict_worker_containment,
-            self.review,
-            self.ignore_schedule,
-        )?;
+            base_branch: self.base.as_deref(),
+            task_ids: &self.task_ids,
+            completion: self.completion(),
+            allowed_crews: &self.allow_crew,
+            actor: None,
+            claim_token: self.claim_token.as_deref(),
+            trigger: orbit_types::workflow::JobRunTrigger::cli(),
+            strict_containment: self.strict_worker_containment,
+            review: self.review,
+            ignore_schedule: self.ignore_schedule,
+        })?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,
             job_id: invoke.job_name,

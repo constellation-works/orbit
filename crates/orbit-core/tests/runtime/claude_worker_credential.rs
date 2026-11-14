@@ -21,21 +21,21 @@ const REMEDY_MARK: &str = "setup-token";
 
 fn submit(runtime: &OrbitRuntime, allowed: &[String]) -> Result<(), OrbitError> {
     runtime
-        .submit_workspace_auto_run_with_mode(
-            Some(600),
-            Some(1),
-            CompletionPolicy::Review,
-            allowed,
-            &Default::default(),
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-            false,
-            false,
-            false,
-            None,
-            None,
-        )
+        .submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+            for_seconds: Some(600),
+            max_active_leaf_runs: Some(1),
+            completion: CompletionPolicy::Review,
+            allowed_crews: allowed,
+            complexity_crews: Default::default(),
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            strict_containment: false,
+            approve_proposed: false,
+            auto_fix: false,
+            auto_concurrency: None,
+            review: None,
+        })
         .map(|_| ())
 }
 

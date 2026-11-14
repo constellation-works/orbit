@@ -93,23 +93,23 @@ fn ship(
     let actor = actor(runtime, agent.as_deref(), model.as_deref());
     let claim_token = optional_string(&input, "claim_token")?;
     let review = review_layer(&input)?;
-    let invoke = runtime.submit_ship_run_with_containment(
+    let invoke = runtime.submit_ship_run(crate::ShipRunRequest {
         mode,
-        base.as_deref(),
-        &task_ids,
+        base_branch: base.as_deref(),
+        task_ids: &task_ids,
         // [ORB-11187] Completion authority is an operator decision made at the
         // CLI; this tool surface does not advertise or accept it.
-        crate::application::workflow::CompletionPolicy::Review,
-        &allowed_crews,
-        Some(&actor),
-        claim_token.as_deref(),
+        completion: crate::application::workflow::CompletionPolicy::Review,
+        allowed_crews: &allowed_crews,
+        actor: Some(&actor),
+        claim_token: claim_token.as_deref(),
         trigger,
         // Strict worker containment is a CLI-only flag.
-        false,
+        strict_containment: false,
         review,
         // The schedule override is a CLI-only operator flag.
-        false,
-    )?;
+        ignore_schedule: false,
+    })?;
     let mut shipped = json!({
         "workflow": "ship",
         "job_id": invoke.job_name,

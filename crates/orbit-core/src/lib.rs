@@ -184,9 +184,9 @@ pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord}
 pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
 pub use application::distributed::WorkspacePullRequest;
 pub use application::job::{
-    CatalogReferenceLayer, DrainAdmissionsStopRequest, DrainWindowExtensionRequest,
-    DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitStatus,
-    ShipModeResolutionProfile,
+    AutoDrainRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
+    DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
+    PipelineWaitStatus, ShipModeResolutionProfile, ShipRunRequest,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
@@ -205,7 +205,7 @@ pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
     reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
-/// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
+/// The per-tier pool overrides `submit_workspace_auto_run` takes.
 pub use orbit_config::ComplexityCrewPools;
 pub use orbit_config::TaskTypeDefinition;
 pub use orbit_runtime::context::ActorIdentity;

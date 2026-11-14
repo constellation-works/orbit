@@ -163,16 +163,17 @@ fn running_drain(runtime: &OrbitRuntime) -> String {
 
 fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
     runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            &[task.to_string()],
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: &[task.to_string()],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("a fixture without job assets never submits a run")
 }
 
