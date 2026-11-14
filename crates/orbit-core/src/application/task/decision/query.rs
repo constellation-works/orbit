@@ -45,11 +45,14 @@ impl OrbitRuntime {
         }
         // Keep the row and its immutable payload checks in one task read
         // section, so an ordinary bundle rewrite cannot interleave them.
+        // Bypass the listed-row cache: decision scans reuse cross-process
+        // proofs and assert exact bundle reads, while readiness shares the
+        // in-process cache across requests.
         self.in_task_read_section(|| {
             let row = self
                 .stores()
                 .tasks()
-                .get_task_row(id, true)?
+                .get_task_row_uncached(id)?
                 .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?;
             // A lightweight row deliberately defers payload validation. Decisions
             // historically warn for any corrupt blob, including unrelated evidence,

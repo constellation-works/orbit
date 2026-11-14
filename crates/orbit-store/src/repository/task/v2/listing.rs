@@ -448,6 +448,15 @@ impl TaskV2Store {
         Ok(status_by_id)
     }
 
+    pub(crate) fn get_task_row_uncached(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
+        let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
+            return Ok(None);
+        };
+        self.row_from_bundle(bundle).map(Some)
+    }
+
     pub(crate) fn get_task_row(
         &self,
         id: &str,
