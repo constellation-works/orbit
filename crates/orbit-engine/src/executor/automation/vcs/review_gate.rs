@@ -175,15 +175,20 @@ pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitErro
         };
         // A rename or copy is followed by a second NUL-terminated field holding
         // the source path, which belongs to the record before it rather than
-        // starting a new record.
-        if matches!(index_state, 'R' | 'C') {
-            let _ = fields.next();
-        }
+        // starting a new record. Both names changed, so both are reported.
+        let source = if matches!(index_state, 'R' | 'C') {
+            fields.next().filter(|source| !source.is_empty())
+        } else {
+            None
+        };
         let Some(path) = entry.get(3..) else {
             continue;
         };
         if !path.is_empty() {
             paths.push(path.to_string());
+        }
+        if let Some(source) = source {
+            paths.push(source.to_string());
         }
     }
     paths.sort();
@@ -254,7 +259,7 @@ pub fn review_repair_at_head(
 
 /// Paths `commit` changed against its first parent, reported the way
 /// [`uncommitted_paths`] reports them before the commit: a rename or copy
-/// by its destination only.
+/// by both its source and destination.
 pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String>, OrbitError> {
     let raw = git_output_raw(
         workspace_path,
@@ -272,9 +277,12 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
     let mut paths = Vec::new();
     let mut fields = raw.split('\0').filter(|field| !field.is_empty());
     while let Some(status) = fields.next() {
-        // A rename or copy names its source before the destination.
-        if status.starts_with(['R', 'C']) {
-            let _ = fields.next();
+        // A rename or copy names its source before the destination; both
+        // names changed, so both are reported.
+        if status.starts_with(['R', 'C'])
+            && let Some(source) = fields.next()
+        {
+            paths.push(source.to_string());
         }
         if let Some(path) = fields.next() {
             paths.push(path.to_string());

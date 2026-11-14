@@ -52,6 +52,35 @@ fn a_timed_out_pre_push_probe_recovers_and_allows_publication() {
 }
 
 #[test]
+fn a_suffix_colliding_remote_ref_does_not_stand_in_for_the_exact_branch() {
+    git_fixture::isolated(
+        module_path!(),
+        "a_suffix_colliding_remote_ref_does_not_stand_in_for_the_exact_branch",
+        || {
+            let fixture = Fixture::new();
+            // Git's tail matching returns this unrelated ref for the
+            // `refs/heads/candidate` pattern; the exact branch is absent, so
+            // the publication must be performed, not reported current.
+            fixture.reset(
+                0,
+                &format!("{HEAD}\trefs/heads/aaa/refs/heads/candidate\n"),
+                "",
+                "",
+            );
+            let output = fixture.push().expect("an absent exact branch is published");
+            assert_eq!(output["decision"], "performed_create", "{output}");
+            assert_eq!(fixture.calls(), ["probe", "push"]);
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("published"))
+                    .unwrap()
+                    .trim(),
+                HEAD
+            );
+        },
+    );
+}
+
+#[test]
 fn exhausted_pre_push_timeouts_report_the_stage_budget_and_contention_evidence() {
     git_fixture::isolated(
         module_path!(),

@@ -242,6 +242,48 @@ fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
     }
 }
 
+/// A candidate that renames a file out of the rule's paths still owes the
+/// rule's evidence: the rename's source name is a changed path too.
+fn a_rename_out_of_a_rule_still_owes_its_evidence() {
+    let mut leaf = ReviewedLeaf::admit_with_configs(&codeql_rule("src/**"), "");
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    let repo = leaf.pair.follower_repo.clone();
+    // Replace the implementation commit with a pure rename of the unchanged
+    // file, so Git records it as a rename rather than a delete and an add.
+    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    git(
+        &repo,
+        &[
+            "restore",
+            "--source=HEAD",
+            "--staged",
+            "--worktree",
+            "src/f0.rs",
+        ],
+    );
+    std::fs::create_dir_all(repo.join("moved")).unwrap();
+    git(&repo, &["mv", "src/f0.rs", "moved/f0.rs"]);
+    git(&repo, &["commit", "-q", "-m", "Rename out of the rule"]);
+    let admitted = leaf.admit_review();
+    assert_eq!(
+        admitted["owed_evidence"],
+        json!([owed_codeql_requirement()]),
+        "a rename out of `src/**` still owes its evidence: {admitted}"
+    );
+    leaf.put_report(&claimed_review_report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![ci_fast()],
+        Some("Rust CodeQL cannot run on macOS; a Linux run is owed"),
+    ));
+    leaf.settle()
+        .expect_err("a held review opens no pull request");
+    let hold: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the gate holds for the owed check");
+    assert_eq!(hold.requirements, vec![owed_codeql_requirement()]);
+}
+
 /// An open finding is a verdict on the candidate: owed evidence never turns
 /// it into a hold.
 fn an_open_finding_on_a_mac_leaf_still_blocks() {
@@ -1140,7 +1182,8 @@ crate::scenario_table!(
     a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it_scenarios,
     a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it,
     a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping,
-    a_linux_leaf_or_an_unmatched_rule_owes_no_evidence
+    a_linux_leaf_or_an_unmatched_rule_owes_no_evidence,
+    a_rename_out_of_a_rule_still_owes_its_evidence
 );
 
 crate::scenario_table!(
