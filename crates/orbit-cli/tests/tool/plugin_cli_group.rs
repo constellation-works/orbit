@@ -1845,7 +1845,7 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
         .command(["plugin", "remove", "demo"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("pass --yes to proceed"));
+        .stderr(predicate::str::contains("pass --confirm to proceed"));
 
     let removed = fixture.json(["plugin", "remove", "demo", "--yes"]);
     assert_eq!(removed["name"], "demo");

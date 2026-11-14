@@ -172,7 +172,7 @@ Preserve evidence before cleanup. History is finite:
   reclaimable host-wide command-audit rows, the selected workspace's run
   audit (plus rows for workspace IDs no longer registered), and that
   workspace's unreferenced audit blobs. Another registered workspace
-  keeps its own retention window. Deletion requires `--apply` or an
+  keeps its own retention window. Deletion requires `--confirm` or an
   enabled `store-gc` routine; the setting alone does not delete history.
 - Archives of both operational and agent feeds are kept for seven days. Their separate size budgets can
   evict archives sooner. `log tail` merges active feeds, not every archive.
