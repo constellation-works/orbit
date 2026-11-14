@@ -840,7 +840,13 @@ its filter (as `covers_deferral` requires), else from the record's cargo scope
 (`cargo test -p <package> --test <target> <test>`, or `--lib <test>` for a
 package-wide record) — adds its required `not_run` record, clears the
 covered notice and holds as below instead of downgrading the accept to
-`validation_incomplete`. A Bubblewrap notice no such command can name
+`validation_incomplete`. When allocating the synthesized requirement's
+artifact locator, Orbit reserves both canonical result and derived log paths
+against named, rule-owed, and already synthesized requirements [ORB-24665]: if an
+independent requirement uses a matching locator or derived-log alias (such as
+`evidence/host-sandbox/bubblewrap-<slug>.log.json`), synthesis selects a
+disjoint suffixed locator (`...-<suffix>.json`) so that canonical requirement
+reservation succeeds without collision. A Bubblewrap notice no such command can name
 stays on its record and keeps blocking, as does an `incomplete` report's
 uncovered deferral.
 
