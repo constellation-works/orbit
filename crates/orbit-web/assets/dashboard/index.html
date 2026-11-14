@@ -929,24 +929,18 @@
            `orbit config show` prints, so a row's value, its layer, and the
            lower layer it shadows are the server's answer, not the client's. -->
       <main class="config-layout">
-        <section class="panel" id="config-panel">
-          <header>
-            <span>Configuration</span>
-            <span class="count" id="config-count">-</span>
-          </header>
-          <p class="config-explainer" id="config-explainer">
-            What this workspace actually runs on: every setting with the layer its value came from.
-            Select a key to see how it resolves, then write it to the workspace <span class="mono">.orbit/config.toml</span> (per-user, git-ignored) or the global file.
-          </p>
-          <div class="controls" id="config-controls"></div>
-          <div class="body" id="config-body">
+        <!-- Every Settings page: one shared bar, then top-level section
+             panels (settings-ui.js builds both). -->
+        <div class="settings-page" id="config-panel">
+          <div class="settings-bar" id="config-controls" hidden></div>
+          <div class="settings-body" id="config-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
               <div class="skeleton skeleton-row" style="width: 80%"></div>
               <div class="skeleton skeleton-row" style="width: 90%"></div>
             </div>
           </div>
-        </section>
+        </div>
       </main>
     </section>
       </div>

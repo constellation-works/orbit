@@ -22,6 +22,7 @@
 
 import { captureFocus, el, fetchJson, getHost, setRegisteredHosts, requestHostSwitch, requestJson, requestPanel } from './common.js';
 import { describeResource, fetchHostResourcePayloadFor, hostResources, hostVerdict } from './host-resources.js';
+import { renderSettingsBar, settingsSection } from './settings-ui.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -81,7 +82,6 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
         setRegisteredHosts(payload && payload.hosts);
         render();
       },
-      "config-count",
     );
   } catch (error) {
     if (pendingProbe === checking) pendingProbe = null;
@@ -140,26 +140,35 @@ function render() {
   if (!editable()) editing = null;
   const restoreBody = captureFocus(body);
   const restoreControls = captureFocus($("config-controls"));
-  renderControls();
+  renderControls(lastPayload);
   body.replaceChildren(...view(lastPayload));
-  const hosts = lastPayload.hosts || [];
-  const count = $("config-count");
-  if (count) count.textContent = `${Math.max(hosts.length - 1, 0)} remote host${hosts.length === 2 ? "" : "s"}`;
   restoreBody();
   restoreControls();
 }
 
-function renderControls() {
-  const controls = $("config-controls");
-  if (!controls) return;
-  controls.hidden = false;
-  const reload = actionButton("Reload", () => {
-    editing = null;
-    notice = "";
-    fetchAndRenderHosts({ probe: true }).catch((error) => console.error("Failed to reload hosts", error));
+/// The page bar: whose host file this is, Add host and Reload.
+function renderControls(payload) {
+  const local = (payload.hosts || []).find((row) => row.local);
+  const add = editable()
+    ? actionButton("Add host", () => openEditor({ kind: "add", id: null, draft: { ssh: "", name: "" } }), "host-add-open")
+    : null;
+  if (add) {
+    add.setAttribute("aria-expanded", String(editing?.kind === "add"));
+    add.disabled = add.disabled || editing?.kind === "add";
+  }
+  renderSettingsBar({
+    lead: [el("div", { class: "settings-bar-text" }, [
+      `Edits on this page write the host file of ${local ? local.name : "the serving host"} `,
+      el("span", { class: "mono", text: payload.host_file || "hosts.toml" }),
+    ])],
+    actions: [add],
+    reloadTitle: "Read the host file again and probe every host",
+    onReload: () => {
+      editing = null;
+      notice = "";
+      fetchAndRenderHosts({ probe: true }).catch((error) => console.error("Failed to reload hosts", error));
+    },
   });
-  reload.title = "Read the host file again and probe every host";
-  controls.replaceChildren(reload);
 }
 
 /// Edits are governed; a session without the operator capability sees the
@@ -173,40 +182,35 @@ function view(payload) {
   const local = hosts.find((row) => row.local);
   const nodes = [];
   if (payload.load_error) nodes.push(loadErrorBanner(payload));
-  nodes.push(
-    el("div", { class: "config-strip host-scope" }, [
-      el("div", {
-        class: "config-note",
-        text: `This dashboard edits the host file of ${local ? local.name : "the serving host"}: ${payload.host_file || "hosts.toml"}.`,
-      }),
-      // ORB-14680: these routes are never forwarded, so with another host
-      // selected the list is still the serving host's file, and says so.
-      getHost()
-        ? el("div", {
-            class: "config-note host-scope-selected",
-            text: `Showing ${getHost()} in the other views. This list is still ${local ? local.name : "the serving host"}'s host file, the one the host picker reads.`,
-          })
-        : null,
-      editable()
-        ? null
-        : el("div", {
-            class: "config-warning host-read-only",
-            text: `Read-only: ${payload.host_edit.reason || "editing the host file needs the operator capability"}`,
-          }),
-    ]),
-  );
+  // ORB-14680: these routes are never forwarded, so with another host
+  // selected the list is still the serving host's file, and says so.
+  if (getHost()) {
+    nodes.push(el("div", {
+      class: "settings-callout host-scope-selected",
+      text: `Showing ${getHost()} in the other views. This list is still ${local ? local.name : "the serving host"}'s host file, the one the host picker reads.`,
+    }));
+  }
+  if (!editable()) {
+    nodes.push(el("div", {
+      class: "settings-callout warn host-read-only",
+      text: `Read-only: ${payload.host_edit.reason || "editing the host file needs the operator capability"}`,
+    }));
+  }
   const status = el("div", { class: "host-notice", text: notice });
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   nodes.push(status);
-  if (editable()) nodes.push(addSection());
+  if (editing?.kind === "add") nodes.push(addSection());
+  const remote = Math.max(hosts.length - 1, 0);
+  const { section, body } = settingsSection("Hosts", { count: `${remote} remote host${remote === 1 ? "" : "s"}` });
   const list = el("div", { class: "host-list" });
   list.setAttribute("role", "table");
   list.setAttribute("aria-label", "Registered hosts");
   list.appendChild(headRow());
   const names = new Map(hosts.map((host) => [host.machine_id, host.name]));
   for (const row of hosts) list.appendChild(hostRow(row, names));
-  nodes.push(list);
+  body.appendChild(list);
+  nodes.push(section);
   return nodes;
 }
 
@@ -268,7 +272,7 @@ function identityCell(row) {
   return el("span", { class: "host-identity" }, [
     el("span", { class: "host-name" }, [
       el("span", { class: "host-name-text", text: row.name }),
-      row.local ? el("span", { class: "config-source workspace", text: "local · edited here" }) : null,
+      row.local ? el("span", { class: "host-local", text: "local · edited here" }) : null,
       hostSwitch(row),
     ]),
     el("span", {
@@ -524,17 +528,11 @@ function actionsCell(row) {
 function addSection() {
   const section = el("div", { class: "host-add" });
   section.dataset.key = "host-add";
-  if (editing?.kind !== "add") {
-    const open = actionButton("Add host", () => openEditor({ kind: "add", id: null, draft: { ssh: "", name: "" } }), "primary host-add-open");
-    open.setAttribute("aria-expanded", "false");
-    section.appendChild(open);
-    return section;
-  }
   const ssh = textInput("host-input-ssh", "SSH target", "alias or user@host", editing.draft, "ssh");
   const name = textInput("host-input-name", "Name (optional)", "defaults to the host's machine.name", editing.draft, "name");
   const form = el("form", { class: "config-editor host-editor" }, [
     el("div", { class: "config-editor-head" }, [
-      el("span", { class: "config-section-title", text: "Add a host" }),
+      el("span", { class: "settings-section-title", text: "Add a host" }),
       el("span", { class: "config-note", text: "Orbit logs in over SSH, reads the host's identity and writes the entry here. Nothing is written on that host." }),
     ]),
     el("div", { class: "host-fields" }, [ssh.label, name.label]),
@@ -620,7 +618,7 @@ function editorError() {
 }
 
 function textInput(cls, label, placeholder, draft, field) {
-  const input = el("input", { class: `config-input mono ${cls}` });
+  const input = el("input", { class: `settings-input mono ${cls}` });
   input.type = "text";
   input.placeholder = placeholder;
   input.value = draft[field] ?? "";
@@ -634,7 +632,7 @@ function textInput(cls, label, placeholder, draft, field) {
 }
 
 function actionButton(label, onClick, kind = "") {
-  const button = el("button", { class: `config-action ${kind}`.trim(), text: label });
+  const button = el("button", { class: `settings-btn ${kind}`.trim(), text: label });
   button.type = "button";
   button.disabled = Boolean(editing?.pending);
   button.addEventListener("click", (event) => {
@@ -645,7 +643,7 @@ function actionButton(label, onClick, kind = "") {
 }
 
 function submitButton(label) {
-  const button = el("button", { class: "config-action primary host-submit", text: label });
+  const button = el("button", { class: "settings-btn primary host-submit", text: label });
   button.type = "submit";
   button.disabled = Boolean(editing?.pending);
   return button;
@@ -686,7 +684,7 @@ function returnFocus(session) {
       return;
     }
   }
-  body?.querySelector(".host-add-open")?.focus();
+  $("config-controls")?.querySelector(".host-add-open")?.focus();
 }
 
 function cancelOnEscape(node) {

@@ -770,8 +770,17 @@ state and prints the error on the card:
 | **[Hosts](#hosts)** | The serving machine's registered SSH hosts. |
 | **Other** | Keys no other Settings page shows, workspace cleanup, and the raw TOML files. |
 
+Every page starts with one bar that holds its controls and **Reload**. On
+**Workflow** the bar jumps to a section, searches the settings, and expands
+or collapses every section. Each row shows the key and its description, the
+effective value with what the key accepts and the value underneath it, the
+source of the value (**Default**, **Unset**, **Workspace**, **Global**, or
+**Environment**), and **Edit**. A key you cannot change here shows
+**Read-only** with the reason.
+
 Routines, auto-task definitions, and the workspace registry (`base_branch`,
-`ship_mode`) are not editable here. Writes need an
+`ship_mode`) are not editable here; **Workflow** shows the registry values
+read-only. Writes need an
 [operator session](#authorization).
 
 ### Edit a value
