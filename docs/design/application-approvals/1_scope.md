@@ -1,7 +1,7 @@
 ---
 title: "Scope: bounded application approvals"
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-14
 last_validated: 2026-11-04
 status: Draft
 stage: building
@@ -210,10 +210,9 @@ None open. Daniel answered all three on 2026-11-01; his words are quoted verbati
 
 1. **Is a 30-day expiry cap right for constrained consents?** A shorter cap limits a
    stolen credential. A longer one avoids monthly operator renewal on a one-user host.
-   **Resolved:** "30 can be default but configurable". The cap on a constrained
-   consent's `expires_at` defaults to 30 days and is read from the host-only
-   `machine.application_consent_max_days` setting. Consent validation enforces the
-   configured value.
+   **Resolved:** "30 can be default but configurable". The cap defaulted to 30
+   days via host-only `machine.application_consent_max_days`. [ORB-22808] fixed
+   it at 30 days and ignores that key. Consent validation enforces 30 days.
 2. **Should a constrained scope carry a rate limit?** For example, at most N admissions
    per hour per scope. It would blunt bulk misuse of a stolen credential, but accept-all
    is legitimately bulk.
@@ -245,5 +244,6 @@ None open. Daniel answered all three on 2026-11-01; his words are quoted verbati
 - [ORB-20852] — this design.
 - [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041], [ORB-21042] — shipped Orbit slices 1-5.
 - [ORB-21043] — retire v1-only consent writing after the compatibility window.
+- [ORB-22808] — fixed the constrained-consent expiry cap at 30 days and ignores `machine.application_consent_max_days`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
