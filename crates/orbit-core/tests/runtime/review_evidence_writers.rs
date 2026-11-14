@@ -354,11 +354,68 @@ fn an_accepted_bubblewrap_deferral_the_reviewer_did_not_name_holds_for_host_evid
     assert_eq!(last_event(&fixture), "review_awaiting_evidence");
 }
 
+/// [ORB-24656] A reviewer-named Linux run of the same test name in another
+/// package covers no deferral: settlement owes the deferred test in the
+/// record's own `cargo test` scope, so a passing run of a different test
+/// never releases the hold.
+fn a_named_run_of_the_same_test_in_another_package_does_not_cover_a_bubblewrap_deferral() {
+    let mut fixture = Fixture::new();
+    fixture.admit();
+    let test = "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer";
+    let command = format!("cargo test -p orbit-cli --test tool {test}");
+    let elsewhere = format!("cargo test -p orbit-core --test runtime {test}");
+    fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept", "summary": "Checked the change; no findings.",
+        "findings": [],
+        "external_evidence": [{
+            "kind": "host_sandbox_test", "name": "orbit-core runtime", "command": elsewhere,
+            "artifact": "evidence/host-sandbox/elsewhere.json", "os": "linux",
+        }],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": command, "outcome": "passed", "role": "required",
+             "deferred": [format!(
+                 "DEFERRED: bubblewrap unavailable: {test}: \
+                 bwrap: No permissions to create a new namespace"
+             )]},
+            {"id": "V3", "command": elsewhere, "outcome": "not_run", "role": "required"},
+        ],
+    }));
+    let refused = fixture
+        .settle()
+        .expect_err("a deferred sandbox test holds for host evidence, not a pass")
+        .to_string();
+    assert!(
+        refused.contains("review_awaiting_evidence"),
+        "held, not blocked: {refused}"
+    );
+    let hold: ReviewEvidenceHold = artifact(&fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert!(
+        hold.requirements
+            .iter()
+            .any(|required| required.command == command),
+        "the deferred test is owed in its own scope, not the other package's run: {:?}",
+        hold.requirements
+    );
+    let certificate: ReviewCertificate = artifact(&fixture, REVIEW_GATE_ARTIFACT);
+    let broad = certificate
+        .validation
+        .iter()
+        .find(|record| record.id.as_deref() == Some("V2"))
+        .expect("the record stays on the certificate");
+    assert_eq!(broad.outcome, ValidationOutcome::NotRun, "{broad:?}");
+    assert!(broad.deferred.is_empty(), "{broad:?}");
+    assert_eq!(status(&fixture), TaskStatus::InProgress);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission_scenarios,
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission,
     agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold,
     mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity,
-    an_accepted_bubblewrap_deferral_the_reviewer_did_not_name_holds_for_host_evidence
+    an_accepted_bubblewrap_deferral_the_reviewer_did_not_name_holds_for_host_evidence,
+    a_named_run_of_the_same_test_in_another_package_does_not_cover_a_bubblewrap_deferral
 );

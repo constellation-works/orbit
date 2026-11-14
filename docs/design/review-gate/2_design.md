@@ -835,7 +835,8 @@ notice is a Bubblewrap deferral (`DEFERRED: bubblewrap unavailable:`),
 settlement itself routes it to the host-owed run [ORB-24656], whether or
 not the reviewer named it: it derives a Linux `host_sandbox_test`
 requirement for the test the notice names — from a reviewer-named Linux
-requirement whose filter is that test, else from the record's cargo scope
+requirement that runs the record's own package and target with that test as
+its filter (as `covers_deferral` requires), else from the record's cargo scope
 (`cargo test -p <package> --test <target> <test>`, or `--lib <test>` for a
 package-wide record) — adds its required `not_run` record, clears the
 covered notice and holds as below instead of downgrading the accept to

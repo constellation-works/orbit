@@ -196,15 +196,19 @@ impl Judgement {
     /// `incomplete` report keeps the strict named-requirement rules, and a
     /// failed required record is an answer, not missing evidence. A
     /// requirement is derived from the deferred test a notice names: a
-    /// reviewer-named Linux requirement whose filter is that test (or a
-    /// test path ending in it), else the record's own cargo scope —
+    /// reviewer-named Linux requirement that runs the record's own package
+    /// and target with that test as its filter (or a test path ending in
+    /// it), else the record's own cargo scope —
     /// `cargo test -p <package> --test <target> <test>` for an integration
     /// record and `cargo test -p <package> --lib <test>` for a
     /// package-wide one. A notice no such command can name stays on its
     /// record and keeps blocking. Each covered notice is cleared from its
     /// record with a note naming the owed command, so the broader pass is
     /// judged with the requirements [`Self::require_owed_evidence`] adds.
-    pub(super) fn synthesized_bubblewrap_requirements(&mut self) -> Vec<ReviewEvidenceRequirement> {
+    pub(super) fn synthesized_bubblewrap_requirements(
+        &mut self,
+        owed: &[ReviewEvidenceRequirement],
+    ) -> Vec<ReviewEvidenceRequirement> {
         if !self.verdict.passed() || self.has_open_findings() {
             return Vec::new();
         }
@@ -226,21 +230,45 @@ impl Judgement {
                 };
                 let filter_matches =
                     |filter: &str| filter == test || filter.ends_with(&format!("::{test}"));
+                // As `covers_deferral` requires, a named run covers the notice
+                // only in the record's own scope: the same package and target,
+                // or for a record outside the two shapes, the same command. A
+                // same-named test in another crate runs a different path.
+                let scope = recorded_cargo_scope(&record.command);
                 let mut requirement = named.iter().find_map(|candidate| {
                     if candidate.kind != ReviewEvidenceKind::HostSandboxTest
                         || candidate.os != Some(EvidenceHostOs::Linux)
                     {
                         return None;
                     }
-                    match HostSandboxCommand::admit(&candidate.command, &[]) {
-                        Ok(HostSandboxCommand::CargoTest { filter, .. })
-                        | Ok(HostSandboxCommand::CargoLibTest { filter, .. }) => filter
-                            .as_deref()
-                            .is_some_and(filter_matches)
-                            .then(|| candidate.clone()),
-                        _ => (candidate.command.trim() == record.command.trim())
-                            .then(|| candidate.clone()),
-                    }
+                    let admitted = HostSandboxCommand::admit(&candidate.command, &[]);
+                    let covers = match (&scope, admitted) {
+                        (
+                            Some(RecordedCargoScope::Integration { package, target }),
+                            Ok(HostSandboxCommand::CargoTest {
+                                package: named_package,
+                                target: named_target,
+                                filter,
+                            }),
+                        ) => {
+                            named_package == *package
+                                && named_target == *target
+                                && filter.as_deref().is_some_and(filter_matches)
+                        }
+                        (
+                            Some(RecordedCargoScope::Package { package }),
+                            Ok(HostSandboxCommand::CargoLibTest {
+                                package: named_package,
+                                filter,
+                            }),
+                        ) => {
+                            named_package == *package
+                                && filter.as_deref().is_some_and(filter_matches)
+                        }
+                        (None, _) => candidate.command.trim() == record.command.trim(),
+                        _ => false,
+                    };
+                    covers.then(|| candidate.clone())
                 });
                 if requirement.is_none() {
                     let command = match recorded_cargo_scope(&record.command) {
@@ -276,6 +304,11 @@ impl Judgement {
                     let mut artifact = format!("evidence/host-sandbox/bubblewrap-{slug}.json");
                     let mut suffix = 2;
                     while named.iter().any(|known| known.artifact == artifact)
+                        || owed.iter().any(|known| {
+                            known.artifact == artifact
+                                && (known.kind != ReviewEvidenceKind::HostSandboxTest
+                                    || known.command != command)
+                        })
                         || requirements
                             .iter()
                             .any(|known: &ReviewEvidenceRequirement| {
@@ -297,6 +330,15 @@ impl Judgement {
                 let Some(requirement) = requirement else {
                     continue;
                 };
+                // Settlement drops a requirement whose artifact a rule owes for
+                // another command. Keep the notice blocking rather than clear it
+                // for a requirement that is never owed.
+                if owed.iter().any(|known| {
+                    known.artifact == requirement.artifact
+                        && (known.kind != requirement.kind || known.command != requirement.command)
+                }) {
+                    continue;
+                }
                 covered.push((
                     index,
                     notice.clone(),

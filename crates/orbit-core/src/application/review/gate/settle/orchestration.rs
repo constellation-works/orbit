@@ -388,7 +388,7 @@ fn settle(
             let mut owed = owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?;
             // [ORB-24656] A Bubblewrap deferral in a required pass is owed
             // host evidence even when the reviewer named none.
-            for synthesized in judgement.synthesized_bubblewrap_requirements() {
+            for synthesized in judgement.synthesized_bubblewrap_requirements(&owed) {
                 if !owed.iter().any(|required| {
                     required.artifact == synthesized.artifact
                         || (required.kind == synthesized.kind

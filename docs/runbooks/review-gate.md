@@ -630,8 +630,9 @@ One exception: when the reviewer accepted with no open findings, settlement
 itself reads a `DEFERRED: bubblewrap unavailable:` notice in a required
 record and synthesizes the Linux `host_sandbox_test` requirement for the
 test it names (from the record's cargo scope, or a reviewer-named Linux
-requirement for that test), so the review holds for the host run instead of
-blocking as `validation_incomplete` [ORB-24656]. Reviewers should still name
+requirement for that test in the same package and target), so the review
+holds for the host run instead of blocking as `validation_incomplete`
+[ORB-24656]. Reviewers should still name
 each deferred test as above; settlement's synthesis is the backstop, and a
 Bubblewrap notice it cannot name a command for still blocks.
 
