@@ -25,8 +25,8 @@ orbit resident show <task id>
    it is off, and it ships off.
 4. Check the state, effective authority and latest checkpoint with `show`.
 
-The dashboard's **Automation › Residents** view does the same in its
-[**Start a resident**](/how-to/dashboard/#residents) flow, as up to three
+The dashboard's **Tasks dock > Residents** view does the same in its
+[**Start** dialog](/how-to/dashboard/#residents), as up to three
 writes: mandate, rights, routine. A refused mandate field creates nothing. If a
 later write is refused, the message names the step and what already exists.
 
