@@ -3,6 +3,7 @@
 //! Deferrals use [`DeferredReason`] in process; its display preserves the reason
 //! text stored in diagnostics and translated at the Core boundary.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 // Extracted legacy projections retain their existing documentation coverage.
 #![allow(missing_docs)]
 

@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! `orbit-web` — HTTP API, dashboard UI, and remote web connection.
 //!
 //! This crate isolates the axum-based dashboard (HTML/JS assets + `/api/*`

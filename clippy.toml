@@ -1,6 +1,8 @@
 # These are checked on production targets by make ci-lint and ci-guardrails.
-# The all-targets pass allows disallowed_methods because existing test-only
-# synchronization channels and filesystem fixtures are outside production rules.
+# Every lint pass allows disallowed_methods on the command line; each crate
+# root denies it again outside `test` and its test feature, because existing
+# test-only synchronization channels and filesystem fixtures are outside
+# production rules.
 disallowed-methods = [
     { path = "std::sync::mpsc::channel", reason = "production channels must have a bounded capacity" },
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "production channels must have a bounded capacity" },

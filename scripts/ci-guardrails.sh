@@ -508,23 +508,27 @@ run_exclusive_guard() {
   drain_pool
 }
 
-# Production Clippy's lint environment: what `cargo clippy --workspace --lib
-# --bins -- -D warnings -D clippy::disallowed_methods` sets for its `cargo
-# check`, spelled out the way with-test-build-lint.sh spells out the folded
-# build's. Documentation runs under it too. Cargo fingerprints it, so
-# documentation reuses Clippy's check of every workspace library instead of
-# checking the workspace again with plain rustc before rustdoc can start.
+# The one lint environment: what `cargo clippy --workspace --lib --bins --
+# -D warnings -A clippy::disallowed_methods` sets for its `cargo check`,
+# spelled out the way with-test-build-lint.sh spells out the folded build's
+# (the same string). Production code denies clippy::disallowed_methods
+# through the crate-root `deny` attributes, which override this `-A`;
+# test and test-feature code stays exempt. Documentation runs under it
+# too. Cargo fingerprints it, so documentation reuses Clippy's check of
+# every workspace library instead of checking the workspace again with
+# plain rustc before rustdoc can start.
 with_production_lint() {
   RUSTC_WORKSPACE_WRAPPER=clippy-driver \
-    CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__' \
+    CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__' \
     "$@"
 }
 
 # Production clippy, then documentation. Each takes the Cargo build
 # lock, so they run in sequence; a failure still reports the later phases, and
-# the first failure is the chain's status. Production clippy is the only pass
-# that denies clippy::disallowed_methods, so test-only channels stay exempt on
-# the folded build; it checks lib and bin targets and writes no test binary.
+# the first failure is the chain's status. The crate-root attributes deny
+# clippy::disallowed_methods in production code, so test-only channels stay
+# exempt on the folded build; it checks lib and bin targets and writes no
+# test binary.
 # Doctests are disabled workspace-wide (`[lib] doctest = false`), so there is
 # no doctest phase here or on the test-build runner: rustdoc has no runnable
 # fence to find (see scripts/check-doctest-fences.sh).

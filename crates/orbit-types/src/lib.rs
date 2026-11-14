@@ -2,6 +2,7 @@
 // Existing schema types lack caller-facing docs, so this crate opts out of `missing_docs`.
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Lowest internal Orbit contract crate.
 //!
 //! Domain-qualified modules only. `OrbitId` is the sole crate-root primitive.
