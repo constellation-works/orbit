@@ -560,18 +560,16 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
         self.assertIn("--cargo-metadata", run)
         # Repository guards never share the host with the workspace suites:
         # the last pool member and the last exclusive suite end before nextest
-        # starts. The production clippy, doctest and documentation chain starts
+        # starts. The production clippy and documentation chain starts
         # after the listing.
         self.assertLess(calls.index(["guard-end", "test-cpu-utilisation.py"]), calls.index(run), calls)
         self.assertLess(calls.index(["guard-end", "test-compiler-cache-namespaces.sh"]),
                         calls.index(run), calls)
         clippy = calls.index(production_clippy)
-        doctests = calls.index(["test", "--no-fail-fast", "--workspace", "--doc"])
         self.assertLess(calls.index(listing), clippy, calls)
-        self.assertLess(clippy, doctests, calls)
-        self.assertLess(doctests, calls.index(["doc", "--no-deps", "--workspace"]), calls)
-        for phase in ("doctests", "documentation"):
-            self.assertIn((phase, "0"), phases)
+        self.assertLess(clippy, calls.index(["doc", "--no-deps", "--workspace"]), calls)
+        self.assertIn(("documentation", "0"), phases)
+        self.assertFalse(any("--doc" in call for call in calls), calls)
         # A background check failure must keep its status and timing in the
         # final diagnostic tail, and the chain's later phases still report.
         original = (self.bin / "cargo").read_text()
@@ -584,8 +582,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertRegex(result.stderr, r"ci-guardrails-phase: clippy-production wall_seconds=\d+ exit=23")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
-        for phase in ("doctests", "documentation"):
-            self.assertIn((phase, "0"), phases)
+        self.assertIn(("documentation", "0"), phases)
         # A failed test build must keep its status and must not be followed by
         # tests.
         (self.bin / "cargo").write_text(original.replace(
@@ -1109,14 +1106,13 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         # The workspace test listing runs in the main shell; nextest keeps its priority.
         listed = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
         foreground = {key: listed[0][key] for key in ("idle", "nice", "nice_attempted")}
-        # Cargo fingerprints this environment. The nextest listing and the
-        # doctest build must see exactly the folded build's values, or each
-        # recompiles every workspace member before it can run.
+        # Cargo fingerprints this environment. The nextest listing must see
+        # exactly the folded build's values, or it recompiles every workspace
+        # member before it can run.
         listing = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
-        doctests = [row for row in observed if "--doc" in row["argv"]]
         self.assertEqual(len(listing), 1, observed)
-        self.assertEqual(len(doctests), 1, observed)
-        for row in (*listing, *doctests):
+        self.assertFalse(any("--doc" in row["argv"] for row in observed), observed)
+        for row in listing:
             self.assertEqual({key: row[key] for key in lint}, lint, row)
         # Documentation runs under the one lint environment, so it
         # reuses that pass's check of the workspace instead of repeating it.
@@ -1133,12 +1129,12 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual([row["argv"][0] for row in production], ["check", "doc"], observed)
         for row in production:
             self.assertEqual({key: row[key] for key in production_lint}, production_lint, row)
-        # The production clippy, doctest and documentation chain overlaps the
+        # The production clippy and documentation chain overlaps the
         # tests only at lowered priority, so it cannot take CPU time from their
         # deadline assertions; the tests themselves keep normal priority. The
         # workflow test build is lowered too: it overlaps the exclusive suites.
-        background = [*production, *doctests, *builds]
-        self.assertEqual(len(background), 4, observed)
+        background = [*production, *builds]
+        self.assertEqual(len(background), 3, observed)
         for row in background:
             self.assert_runs_lowered(row, foreground)
         runs = [row for row in observed if row["argv"][:2] == ["nextest", "run"]]
@@ -1243,27 +1239,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("ci-guardrails-phase: workspace-test-partitions wall_seconds=", result.stderr)
 
-        # Hosted doctests reuse the archive build's libraries on that runner,
-        # after upload, rather than compiling them again in the Check job.
-        self.log.write_text("")
-        env_log.write_text("")
-        result = self.run_guard("ci-guardrails.sh", "--test-doctests")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        doctest_call = ["test", "--no-fail-fast", "--workspace", "--doc"]
-        self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()],
-                         [doctest_call], "doctests must not trigger a separate production check or test build")
-        [doctests] = [json.loads(line) for line in env_log.read_text().splitlines()]
-        for key in ("RUSTC_WORKSPACE_WRAPPER", "CLIPPY_ARGS"):
-            self.assertEqual(doctests[key], archived[0][key],
-                             "doctests must reuse the folded build's Cargo fingerprint")
-        self.assertIn("ci-guardrails-phase: doctests wall_seconds=", result.stderr)
-        result = self.run_guard("ci-guardrails.sh", "--test-doctests",
-                                env_overrides={"GUARD_TEST_DOC_EXIT": "9"})
-        self.assertEqual(result.returncode, 9, result.stderr)
-        self.assertRegex(result.stderr, r"ci-guardrails-phase: doctests wall_seconds=\d+ exit=9")
-
         # --checks: formatting, production Clippy, documentation and the
-        # Apple-target type-check, with no guard, self-test, doctests, test
+        # Apple-target type-check, with no guard, self-test, test
         # build or nextest. The type-check uses plain rustc.
         for call in self.guard_calls.iterdir():
             call.unlink()
@@ -1310,7 +1287,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
         formatting = next(row for row in observed if row["argv"][:1] == ["fmt"])
         for row in observed:
-            if row["argv"][:1] in (["check"], ["doc"]) or "--doc" in row["argv"]:
+            if row["argv"][:1] in (["check"], ["doc"]):
                 self.assert_runs_lowered(row, formatting)
 
         # The two hosted routes must execute the same guard set exactly once.
