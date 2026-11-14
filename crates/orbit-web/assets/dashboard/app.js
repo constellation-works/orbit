@@ -12,7 +12,7 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, setDockMode, setDockRouteShown } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, noticesDockShown, setDockMode, setDockRouteShown } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -1795,7 +1795,23 @@ function fetchAndRenderTaskLocks() {
 // polls only on its safety net: each panel below refetches on the notice kinds
 // it shows, quietly, as a poll would. Other pages keep their 30 s poll; the
 // in-flight count, drain chip and host chips follow notices on every page.
+// Fleet notices are not a change-stream kind, so the visible Notices dock keeps
+// its own 30 s read while the stream stretches the Tasks poll.
+const NOTICES_DOCK_REFRESH_MS = 30_000;
+
+function watchNoticesDock() {
+  const tick = () => {
+    const stale = activeTab === "tasks" && !isAggregateView() && !document.hidden
+      && changeStreamLive() && noticesDockShown();
+    // Every other state is polled at its normal cadence by the Tasks refresh.
+    const read = stale ? fetchAndRenderNotices({ shareRecent: true }) : Promise.resolve();
+    read.catch(error => console.error("Notices refresh failed", error)).finally(() => setTimeout(tick, NOTICES_DOCK_REFRESH_MS));
+  };
+  setTimeout(tick, NOTICES_DOCK_REFRESH_MS);
+}
+
 function wireChangeStream() {
+  watchNoticesDock();
   setStreamCoverage(() => activeTab === "tasks" && !isAggregateView() && changeStreamLive());
   onChangeStreamLive((live) => {
     reschedulePolling();

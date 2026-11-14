@@ -175,6 +175,11 @@ function shownDockMode() {
   return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
 }
 
+/// Whether the Tasks dock is showing its Notices tab.
+export function noticesDockShown() {
+  return shownDockMode() === "notices";
+}
+
 export function chooseDockMode(mode) {
   setDockMode(mode);
   const url = new URL(window.location.href);
