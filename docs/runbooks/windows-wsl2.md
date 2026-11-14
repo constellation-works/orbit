@@ -359,6 +359,14 @@ It never initializes Orbit state on that Windows drive. The script leaves the ho
 credentials and existing Orbit state untouched; its temporary contents are
 removed after all children stop.
 
+The foreground Python dashboard checker owns its server group throughout
+termination. It observes an early leader exit without reaping, sends TERM,
+waits up to two seconds on group liveness, then sweeps with KILL before
+reaping the leader. INT and TERM enter that same cleanup path. The shell
+waits for the checker and removes scratch on EXIT; it never signals a saved
+PGID. An uncatchable kill of the checker needs the enclosing job's descendant
+containment, rather than a stale numeric process reference in a later trap.
+
 ```bash
 bash scripts/wsl2-smoke.sh > wsl2-smoke-result.json
 ```
@@ -377,9 +385,11 @@ Bubblewrap, AppArmor uid-map failures and other misconfiguration still fail;
 no sandbox fallback is enabled. A Windows verification needs all automated
 steps to pass without skips.
 
-Run the regression checks for this classification with
+Run the regression checks for classification and dashboard ownership with
 `python3 scripts/test-wsl2-smoke.py`. They use disposable command fixtures and
-do not install packages or contact a provider.
+do not install packages or contact a provider. Deterministic lifecycle cases
+cover success, early leader exit, readiness failure and interruption, including
+a surviving descendant through the TERM grace period and a stale PGID file.
 
 The smoke test does not install WSL, test Windows MCP clients or run the clock;
 follow the manual checks in sections 2, 3, 8 and 9 for those matrix rows.

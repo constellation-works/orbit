@@ -27,33 +27,17 @@ scratch=$(mktemp -d "${ORBIT_SMOKE_PARENT:-${TMPDIR:-/tmp}}/orbit-wsl2-smoke.XXX
 }
 cleanup() {
   python3 - "$scratch" <<'PY'
-import os, shutil, signal, sys, time
-scratch = sys.argv[1]
-# If the dashboard checker was itself interrupted before its finally block
-# could reap the server, kill the recorded process group here so no process
-# started by this script survives its exit.
-try:
-    with open(os.path.join(scratch, "dashboard.pgid"), encoding="utf-8") as handle:
-        pgid = int(handle.read().strip())
-except (OSError, ValueError):
-    pgid = None
-if pgid is not None:
-    for sig, wait in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.0)):
-        try:
-            os.killpg(pgid, sig)
-        except (ProcessLookupError, PermissionError):
-            break
-        deadline = time.monotonic() + wait
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(pgid, 0)
-            except (ProcessLookupError, PermissionError):
-                break
-            time.sleep(0.05)
-shutil.rmtree(scratch)
+import shutil, sys
+# Process ownership stays with the foreground checker. The shell never uses
+# a persisted PID/PGID as signalling authority, including after a reap.
+shutil.rmtree(sys.argv[1])
 PY
 }
 trap cleanup EXIT
+# Bash waits for its foreground checker before running these traps; the
+# checker finishes its bounded group cleanup before scratch is removed.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 results="$scratch/results.jsonl"
 : > "$results"
 record() {
@@ -286,7 +270,7 @@ PYSHIP
           fi
         fi
         if python3 - "$scratch/repo" "$is_wsl" "$ORBIT_SMOKE_POWERSHELL" >"$scratch/dashboard.log" 2>&1 <<'PYWEB'
-import os, pathlib, signal, socket, subprocess, sys, time, urllib.request
+import os, signal, socket, subprocess, sys, time, urllib.request
 with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -294,13 +278,25 @@ with socket.socket() as sock:
 # does not forward signals. Start it in its own session so the finally block
 # can signal the whole process group; terminating only the shim would orphan
 # the native server past this script's exit.
-process = subprocess.Popen(["orbit", "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"], cwd=sys.argv[1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-# Record the group for the script's EXIT trap in case this checker is killed
-# before its finally block runs. start_new_session makes pgid == pid.
-pathlib.Path(sys.argv[1]).parent.joinpath("dashboard.pgid").write_text(str(process.pid), encoding="utf-8")
+interrupted = 0
+def remember_signal(signum, _frame):
+    # Do not raise between Popen's fork and assigning its owner. Check the
+    # flag inside the guarded body, and keep cleanup immune to more signals.
+    global interrupted
+    interrupted = signum
+previous_handlers = {sig: signal.signal(sig, remember_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
+process = None
+def check_interruption():
+    if interrupted:
+        raise SystemExit(128 + interrupted)
 try:
+    process = subprocess.Popen(["orbit", "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"], cwd=sys.argv[1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     for _ in range(100):
-        if process.poll() is not None:
+        check_interruption()
+        # Observe exit without reaping: the owned PID pins the process-group
+        # identity until all signalling is complete, even if the shim exits
+        # first and leaves a native descendant behind.
+        if os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
             raise RuntimeError("dashboard exited before it was ready")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
@@ -309,6 +305,7 @@ try:
             time.sleep(.1)
     else:
         raise RuntimeError("dashboard did not become ready")
+    check_interruption()
     if sys.argv[2] == "true":
         if not sys.argv[3]:
             raise RuntimeError("powershell.exe is unavailable; Windows localhost forwarding was not checked")
@@ -322,21 +319,38 @@ try:
             if response.status != 200:
                 raise RuntimeError(f"dashboard returned HTTP {response.status}")
         print(f"Linux fetched http://127.0.0.1:{port}/ (HTTP 200); Windows forwarding skipped")
+    check_interruption()
 finally:
-    # Reap the whole process group (shim plus its native child), not just the
-    # shim, so no server survives this script on pass, fail or interrupt.
-    def signal_group(sig):
-        try:
-            os.killpg(process.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
-    if process.poll() is None:
-        signal_group(signal.SIGTERM)
-        try:
+    try:
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    pass  # Unknown survival requires the final sweep.
+                time.sleep(.05)
+            # Sweep BEFORE wait/poll can reap the leader. A leader exit alone
+            # says nothing about surviving descendants. Never signal afterward.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # Match the shared script supervisor's owned-child fallback
+                # (also needed for zombie-only groups on macOS fixtures).
+                # Popen.kill may reap, so this is after the LAST group signal.
+                process.kill()
             process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            signal_group(signal.SIGKILL)
-            process.wait()
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 PYWEB
           then
             record dashboard pass "$(cat "$scratch/dashboard.log")"

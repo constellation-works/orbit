@@ -93,6 +93,84 @@ else:
     sys.exit("unexpected npm command")
 '''
 
+# Execute the real checker and EXIT cleanup with deterministic kernel/process
+# substitutes in a child. No real PID reuse, group signals or timing load.
+LIFECYCLE_PROBE = r'''
+import contextlib, io, os, pathlib, signal, socket, subprocess, sys, time, types, urllib.request
+from unittest import mock
+script, scratch, scenario = sys.argv[1:]
+source = pathlib.Path(script).read_text()
+checker = source.split("<<'PYWEB'\n", 1)[1].split("\nPYWEB", 1)[0]
+cleanup = source.split('python3 - "$scratch" <<\'PY\'\n', 1)[1].split("\nPY", 1)[0]
+events = []
+reaped = False
+clock = 0
+handlers = {}
+class Process:
+    pid = 123456789
+    def poll(self):
+        global reaped
+        if scenario == 'early_exit':
+            reaped = True
+            events.append('reaped')
+            return 1
+        return None
+    def wait(self, timeout=None):
+        global reaped
+        assert not reaped, events
+        assert timeout == 10, timeout
+        reaped = True
+        events.append('reaped')
+        return 1 if scenario == 'early_exit' else -signal.SIGTERM
+def killpg(pid, sig):
+    assert not reaped, f'signal {sig} after reap: {events}'
+    assert pid == Process.pid
+    events.append(('signal', sig))
+    # The stubborn descendant keeps the group alive through the grace period.
+def waitid(*args):
+    assert not reaped
+    return types.SimpleNamespace(si_pid=Process.pid) if scenario == 'early_exit' else None
+def sleep(seconds):
+    global clock
+    clock += seconds
+def connect(*args, **kwargs):
+    if scenario == 'interrupt':
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+    if scenario == 'failure':
+        raise OSError('injected connection failure')
+    return contextlib.nullcontext()
+def install(sig, handler):
+    previous = handlers.get(sig, signal.SIG_DFL)
+    handlers[sig] = handler
+    return previous
+with mock.patch.object(subprocess, 'Popen', return_value=Process()), \
+     mock.patch.object(os, 'killpg', side_effect=killpg), \
+     mock.patch.object(os, 'waitid', side_effect=waitid, create=True), \
+     mock.patch.object(os, 'P_PID', 1, create=True), \
+     mock.patch.object(os, 'WNOWAIT', 0x1000000, create=True), \
+     mock.patch.object(time, 'sleep', side_effect=sleep), \
+     mock.patch.object(time, 'monotonic', side_effect=lambda: clock), \
+     mock.patch.object(signal, 'signal', side_effect=install), \
+     mock.patch.object(socket, 'create_connection', side_effect=connect), \
+     mock.patch.object(urllib.request, 'urlopen', return_value=contextlib.nullcontext(types.SimpleNamespace(status=200))):
+    sys.argv = ['checker', str(pathlib.Path(scratch) / 'repo'), 'false', '']
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(checker, script + ':PYWEB', 'exec'), {})
+    except (RuntimeError, SystemExit):
+        assert scenario != 'normal'
+    else:
+        assert scenario == 'normal', f'{scenario} did not fail'
+    assert reaped, events
+    pathlib.Path(scratch, 'dashboard.pgid').write_text(str(Process.pid))
+    sys.argv = ['cleanup', scratch]
+    exec(compile(cleanup, script + ':cleanup', 'exec'), {})
+    signals = [event[1] for event in events if isinstance(event, tuple)]
+    assert signal.SIGTERM in signals and signal.SIGKILL in signals, events
+    assert clock <= (13 if scenario == 'failure' else 3), clock
+print(events)
+'''
+
 
 def provider(detail, ready=False):
     return {"name": "codex", "sandbox": "linux-bwrap", "sandbox_ready": ready,
@@ -100,12 +178,26 @@ def provider(detail, ready=False):
 
 
 class NestedSandboxRegression(unittest.TestCase):
+    def test_dashboard_owner_sweeps_before_reap_on_every_exit(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for scenario in ("normal", "early_exit", "failure", "interrupt"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                scratch = Path(tmp) / "smoke"
+                (scratch / "repo").mkdir(parents=True)
+                result = subprocess.run(
+                    [os.sys.executable, "-c", LIFECYCLE_PROBE, str(SCRIPT), str(scratch), scenario],
+                    capture_output=True, text=True, timeout=20, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def run_smoke(self, rows, orbit_fixture=ORBIT_FIXTURE, extra_env=None):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="wsl2-regression-", dir=SCRATCH) as tmp:
             root = Path(tmp)
             bin_dir = root / "bin"
             bin_dir.mkdir()
+            # Keep the script and command fixtures on the interpreter running
+            # this suite (the macOS system Python can lack waitid/WNOWAIT).
+            (bin_dir / "python3").symlink_to(os.sys.executable)
             for name, text in {
                 "node": "#!/bin/sh\nexit 0\n",
                 "uname": "#!/bin/sh\ncase $1 in -r) echo 6.8.0-fixture ;; -s) echo Linux ;; -m) echo x86_64 ;; esac\n",

@@ -31,7 +31,153 @@ PERMIT_RELEASE_DEADLINE_S = 3
 SEQUENTIAL_LOG_STREAMS = NATIVE_LOG_STREAM_CAP + 3
 
 
+def fixture_git_env():
+    """Build every fixture Git child without inherited locators or config."""
+    return {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(SCRATCH), "XDG_CONFIG_HOME": str(SCRATCH),
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1", "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
 class VisualFixtureServerTest(unittest.TestCase):
+    def test_git_setup_and_provenance_ignore_inherited_authority(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            root = Path(tmp)
+            sentinel = root / "sentinel"
+            sentinel.mkdir()
+            clean = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            clean.update(HOME=tmp, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=sentinel, env=clean,
+                                      check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            (sentinel / "sentinel").write_text("preserve these bytes\n")
+            git("add", ".")
+            git("-c", "user.name=sentinel", "-c", "user.email=sentinel@example.invalid",
+                "commit", "-qm", "sentinel")
+            before = {str(path.relative_to(sentinel)): path.read_bytes()
+                      for path in sentinel.rglob("*") if path.is_file()}
+            locators = {
+                "GIT_DIR": str(sentinel / ".git"), "GIT_WORK_TREE": str(sentinel),
+                "GIT_COMMON_DIR": str(sentinel / ".git"),
+                "GIT_INDEX_FILE": str(sentinel / ".git/index"),
+                "GIT_OBJECT_DIRECTORY": str(sentinel / ".git/objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(sentinel / ".git/objects"),
+                "GIT_CONFIG_GLOBAL": str(sentinel / ".git/config"),
+                "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "init.defaultBranch",
+                "GIT_CONFIG_VALUE_0": "hostile-branch",
+            }
+            # Re-execute the helper: hostile environment never enters the test
+            # runner, and even an unfixed helper can only damage this sentinel.
+            probe = (
+                "import importlib.util, pathlib, sys; "
+                "spec=importlib.util.spec_from_file_location('fixture', sys.argv[1]); "
+                "m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
+                "case=m.VisualFixtureServerTest(); repo=pathlib.Path(sys.argv[2]); "
+                "case._mini_checkout(repo); print(case._head(repo))"
+            )
+            for index, hostile in enumerate(({"GIT_DIR": locators["GIT_DIR"]},
+                                             {"GIT_COMMON_DIR": locators["GIT_COMMON_DIR"]}, locators)):
+                with self.subTest(locators=list(hostile)):
+                    repo = root / f"repo-{index}"
+                    env = {**clean, **hostile}
+                    result = subprocess.run([os.sys.executable, "-c", probe, __file__, str(repo)],
+                                            env=env, capture_output=True, text=True, timeout=30)
+                    after = {str(path.relative_to(sentinel)): path.read_bytes()
+                             for path in sentinel.rglob("*") if path.is_file()}
+                    self.assertEqual(after, before, "fixture Git modified sentinel repository bytes")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue((repo / ".git/HEAD").is_file())
+                    self.assertNotIn("hostile-branch", (repo / ".git/HEAD").read_text())
+                    expected = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                              env=clean, check=True, capture_output=True, text=True).stdout.strip()
+                    self.assertEqual(result.stdout.strip(), expected)
+                    launch = root / f"launch-{index}"
+                    launch.mkdir()
+                    wrapper, record = self._stale_backend(launch, "present", fixture_cli=True)
+                    launch_env = {**self._fixture_env(str(launch), wrapper, record, "present"), **hostile}
+                    server, output, diagnostics = self._start(
+                        repo / "scripts/visual-fixture-server.sh", ["remote-host-workspaces:empty"], repo, launch_env)
+                    try:
+                        self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                        protocol = self._protocol(output)
+                        provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                        self.assertEqual(provenance["source_revision"], expected)
+                        self.assertFalse(provenance["source_dirty"])
+                        fixture = next(launch.glob("visual-fixture-remote-host-workspaces-*"))
+                        for workspace in (fixture / "work", fixture / "work-extra-1"):
+                            self.assertTrue((workspace / ".git/HEAD").is_file(), workspace)
+                        # Launch the front directly too: the shell's scrub
+                        # must not conceal a broken gitText child boundary.
+                        direct = launch / "direct"
+                        direct.mkdir()
+                        (repo / "dirty-marker").write_text("uncommitted source\n")
+                        front_launcher = direct / "front"
+                        front_launcher.write_text(
+                            "#!/bin/sh\nexec node " + shlex.quote(str(repo / "scripts/visual-fixture-front.mjs")) + "\n")
+                        front_launcher.chmod(0o755)
+                        front_env = {
+                            **launch_env, "ORBIT_SCRATCH_DIR": str(direct),
+                            "ORBIT_FIXTURE_REPO": str(repo),
+                            "ORBIT_FIXTURE_UPSTREAM": self._backend_url(launch),
+                            "ORBIT_FIXTURE_BACKEND": str(wrapper),
+                            "ORBIT_FIXTURE_PROVENANCE": str(direct / "provenance.json"),
+                        }
+                        front, front_output, front_diagnostics = self._start(front_launcher, [], repo, front_env)
+                        try:
+                            self.assertIn("ORBIT_VISUAL_URL=", front_output, front_diagnostics)
+                            identity = json.loads((direct / "provenance.json").read_text())
+                            self.assertEqual(identity["source_revision"], expected)
+                            self.assertTrue(identity["source_dirty"])
+                        finally:
+                            self._stop(front)
+                    finally:
+                        self._stop(server)
+                    self.assertEqual({str(path.relative_to(sentinel)): path.read_bytes()
+                                      for path in sentinel.rglob("*") if path.is_file()}, before)
+
+    def test_dot_segments_never_proxy_candidate_static_bytes(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            repo = self._mini_checkout(Path(tmp) / "repo")
+            wrapper, record = self._stale_backend(Path(tmp), "present", fixture_cli=True)
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["experiments"], repo,
+                self._fixture_env(tmp, wrapper, record, "present"))
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                for target in ("/./static/app.js", "/%2e/static/app.js", "/static/./app.js",
+                               "/static/%2E/app.js", "/./", "/%2e/", "/%73tatic/app.js",
+                               "/static%2fapp.js"):
+                    with self.subTest(target=target):
+                        status, body = self._raw_request(url, target)
+                        self.assertEqual(status, 200, body)
+                        self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                        self.assertIn(b"CANDIDATE-JS-MARKER" if "app.js" in target else b"Candidate", body)
+                self.assertNotIn("GET /static", record.read_text())
+                self.assertNotIn("GET / ", record.read_text())
+                for target in ("/static/../scripts/visual-fixture-server.sh", "/%2e%2e/private",
+                               "/.%2e/private", "/%2f%2flocalhost/private", "/static/%5capp.js",
+                               "/static/%00app.js", "/static/%ZZ", "/.%2fstatic/app.js",
+                               "/%2e%2fstatic/app.js", "/static%2f.%2fapp.js"):
+                    status, body = self._raw_request(url, target)
+                    self.assertEqual(status, 400, (target, body))
+                    self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                status, body = self._raw_request(url, "/./static/missing.js")
+                self.assertEqual(status, 404, body)
+                status, body = self._raw_request(url, "/./api/tasks?next=//example.invalid/x&keep=%2e")
+                self.assertEqual(status, 200, body)
+                self.assertIn("GET /api/tasks?next=//example.invalid/x&keep=%2e\n", record.read_text())
+                status, body = self._raw_request(url, "/%2e/api/diagnostics/experiments/exp-visual-fixture")
+                self.assertEqual(status, 200, body)
+                self.assertEqual(json.loads(body)["id"], "exp-visual-fixture")
+            finally:
+                self._stop(server)
+
     def test_seed_readback_and_runner_protocol(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
@@ -314,7 +460,7 @@ class VisualFixtureServerTest(unittest.TestCase):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
             repo = self._mini_checkout(Path(tmp) / "repo")
-            wrapper, record = self._stale_backend(Path(tmp), "absent")
+            wrapper, record = self._stale_backend(Path(tmp), "absent", fixture_cli=True)
             env = self._fixture_env(tmp, wrapper, record, "absent")
             result = subprocess.run(
                 [str(repo / "scripts/visual-fixture-server.sh"), "experiments:empty"],
@@ -333,7 +479,7 @@ class VisualFixtureServerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
             tmp_path = Path(tmp)
             repo = self._mini_checkout(tmp_path / "repo")
-            wrapper, record = self._stale_backend(tmp_path, "present")
+            wrapper, record = self._stale_backend(tmp_path, "present", fixture_cli=True)
             server, output, diagnostics = self._start(
                 repo / "scripts/visual-fixture-server.sh", ["experiments"], repo,
                 self._fixture_env(tmp, wrapper, record, "present"),
@@ -375,7 +521,7 @@ class VisualFixtureServerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
             tmp_path = Path(tmp)
             repo = self._mini_checkout(tmp_path / "repo")
-            wrapper, record = self._stale_backend(tmp_path, "present")
+            wrapper, record = self._stale_backend(tmp_path, "present", fixture_cli=True)
             decoy_script = tmp_path / "decoy.mjs"
             decoy_record = tmp_path / "decoy.record"
             decoy_script.write_text(
@@ -488,7 +634,7 @@ class VisualFixtureServerTest(unittest.TestCase):
                 porcelain = subprocess.run(
                     ["git", "-C", str(ROOT), "status", "--porcelain"],
                     check=True, capture_output=True, text=True,
-                    env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+                    env=fixture_git_env(),
                 ).stdout
                 self.assertEqual(provenance["source_dirty"], bool(porcelain.strip()))
                 self.assertFalse(provenance["static_backend_identity_compared"])
@@ -595,15 +741,15 @@ class VisualFixtureServerTest(unittest.TestCase):
             "experiment": {"id": "exp-visual-fixture", "name": "Fixture"},
             "readout": {"verdict": {"state": "collecting"}},
         }))
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, env=fixture_git_env(), check=True)
         commit = ["git", "-c", "user.email=fixture@example.com", "-c", "user.name=fixture"]
-        subprocess.run([*commit, "add", "."], cwd=repo, check=True)
-        subprocess.run([*commit, "commit", "-q", "-m", "fixture"], cwd=repo, check=True)
+        subprocess.run([*commit, "add", "."], cwd=repo, env=fixture_git_env(), check=True)
+        subprocess.run([*commit, "commit", "-q", "-m", "fixture"], cwd=repo, env=fixture_git_env(), check=True)
         if asset_case == "unreadable":
             app_css.chmod(0)
         return repo
 
-    def _stale_backend(self, directory, mode):
+    def _stale_backend(self, directory, mode, fixture_cli=False):
         record = Path(directory) / "stale.record"
         server = Path(directory) / "stale-server.mjs"
         server.write_text(
@@ -626,8 +772,31 @@ class VisualFixtureServerTest(unittest.TestCase):
             "  console.log('Dashboard listening on http://127.0.0.1:' + this.address().port);\n"
             "});\n"
         )
-        real = shutil.which("orbit")
-        self.assertIsNotNone(real, "orbit on PATH is the CLI half of the disposable backend")
+        if fixture_cli:
+            # The containment regressions need only shell setup and raw HTTP;
+            # never invoke a managed/live Orbit CLI or install a package.
+            real = Path(directory) / "seed-cli.mjs"
+            real.write_text(
+                "#!/usr/bin/env node\n"
+                "import fs from 'node:fs';\n"
+                "import path from 'node:path';\n"
+                "const args = process.argv.slice(2);\n"
+                "const root = args[args.indexOf('--root') + 1];\n"
+                "if (args.includes('init') && !args.includes('workspace')) {\n"
+                "  fs.mkdirSync(root, {recursive:true});\n"
+                "  fs.writeFileSync(path.join(root, 'config.toml'), 'default_crew = \\\"fixture\\\"\\n');\n"
+                "} else if (args.includes('workspace') && args.includes('init')) {\n"
+                "} else if (args.includes('task') && args.includes('add')) {\n"
+                "  console.log(JSON.stringify({id:'FIX-1'}));\n"
+                "} else if (args.includes('task') && args.includes('show')) {\n"
+                "  console.log(JSON.stringify({status:'proposed'}));\n"
+                "} else { throw new Error('unexpected fixture CLI args: ' + args); }\n"
+            )
+            real.chmod(0o755)
+            real = str(real)
+        else:
+            real = shutil.which("orbit")
+            self.assertIsNotNone(real, "orbit on PATH is the CLI half of the disposable backend")
         wrapper = Path(directory) / "orbit-stub"
         wrapper.write_text(
             "#!/bin/sh\n"
@@ -728,7 +897,7 @@ class VisualFixtureServerTest(unittest.TestCase):
         return subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             check=True, capture_output=True, text=True,
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+            env=fixture_git_env(),
         ).stdout.strip()
 
     def _sha256(self, path):
