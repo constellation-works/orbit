@@ -21,6 +21,8 @@ mod oversized_lines;
 mod role_surface;
 mod scripted_destination;
 #[cfg(unix)]
+mod ssh_pool;
+#[cfg(unix)]
 mod ssh_reuse;
 mod storage_access;
 mod task_route;
