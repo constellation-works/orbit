@@ -112,17 +112,17 @@ by themselves. On a large store, `retention.runs_days = 30` can reclaim more ter
 run state than the default. Values below 30, including the `--older-than-days` override,
 are refused: Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter
 shares still read 30 days of run state. Audit retention can stay at 60.
-`orbit gc audit --apply` prunes old
+`orbit gc audit --confirm` prunes old
 command-audit rows, this workspace's run-audit rows, run-audit rows whose workspace id is
 no longer registered, and audit blobs no remaining row or pending write references.
-Another registered workspace keeps its own window. `orbit gc runs --apply` drops pipeline
+Another registered workspace keeps its own window. `orbit gc runs --confirm` drops pipeline
 state for terminal runs past the run window, including those unregistered ids, while
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
 against it (`admission_forecasts`) older than 30 days, except rows kept at any age by
 count: the newest 200 deliveries per
 workspace, work class and complexity, the newest 10,000 forecasts, and host minutes
-from the oldest kept forecast onward. `orbit gc journal --apply` deletes
+from the oldest kept forecast onward. `orbit gc journal --confirm` deletes
 applied rows of the task commit journal (`task_commit_journal`) older than
 14 days, for this workspace and unregistered ids. Recovery
 replays only prepared and committed rows, so those, aborted rows and each task's newest
