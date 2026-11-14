@@ -209,6 +209,184 @@ fn json_text(value: &Value) -> Option<String> {
     value.as_str().map(str::to_string)
 }
 
+/// Evidence that a failure may be inherited from the base: the durable
+/// `ci_base_suspect` history note.
+pub const CI_BASE_SUSPECT_EVENT: &str = "ci_base_suspect";
+
+/// One legacy field of a [`CiBaseSuspectRecord`], keeping a key that was
+/// absent, an explicit `null`, a readable value and an unreadable value
+/// apart. The producer shape writes every key, so `Missing` and `Null`
+/// both serialize as `null` (the shape the job-evidence observations the
+/// producers project already wrote); an unreadable value round-trips its
+/// original bytes instead of being silently defaulted.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum CiBaseSuspectLegacy<T> {
+    /// The note omitted the key, or the job carried no such field.
+    #[default]
+    Missing,
+    /// The note or the job carried an explicit `null`.
+    Null,
+    /// A readable value.
+    Known(T),
+    /// A present value of the wrong shape, preserved verbatim.
+    Unreadable(Value),
+}
+
+impl<T> CiBaseSuspectLegacy<T> {
+    /// The readable value, when there is one.
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Self::Known(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for CiBaseSuspectLegacy<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Missing | Self::Null => serializer.serialize_none(),
+            Self::Known(value) => value.serialize(serializer),
+            Self::Unreadable(value) => value.serialize(serializer),
+        }
+    }
+}
+
+fn ci_base_suspect_legacy_field<T>(
+    note: &Value,
+    key: &str,
+    parse: fn(&Value) -> Option<T>,
+) -> CiBaseSuspectLegacy<T> {
+    match note.as_object().and_then(|object| object.get(key)) {
+        None => CiBaseSuspectLegacy::Missing,
+        Some(Value::Null) => CiBaseSuspectLegacy::Null,
+        Some(value) => match parse(value) {
+            Some(parsed) => CiBaseSuspectLegacy::Known(parsed),
+            None => CiBaseSuspectLegacy::Unreadable(value.clone()),
+        },
+    }
+}
+
+/// The deduplication identity of a [`CiBaseSuspectRecord`]: the exact
+/// failure a task records base suspicion for at most once, even when the
+/// base advances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CiBaseSuspectIdentity<'a> {
+    pub head: &'a str,
+    pub check: &'a str,
+    pub signature: &'a str,
+}
+
+/// The `ci_base_suspect` history note: the base and head, the failed
+/// check and signature, and the provider run, job, attempt, PR, event and
+/// timing the suspicion was observed on, with its reason.
+///
+/// [`Self::from_history_note`] is the one compatibility decoder. It never
+/// requires today's complete producer shape: absent or malformed text
+/// reads as `None`, unreadable legacy fields stay
+/// [`CiBaseSuspectLegacy::Unreadable`], and PR numbers an older note named
+/// under an alias key or shape are read into
+/// [`Self::legacy_pull_requests`]. Serialization writes the producer shape
+/// unchanged, every key in its historical order.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct CiBaseSuspectRecord {
+    pub base: Option<String>,
+    pub head: Option<String>,
+    pub check: Option<String>,
+    pub signature: Option<String>,
+    pub run_id: CiBaseSuspectLegacy<u64>,
+    pub job_id: CiBaseSuspectLegacy<u64>,
+    pub run_attempt: CiBaseSuspectLegacy<u64>,
+    pub pr_number: Option<u64>,
+    pub event: CiBaseSuspectLegacy<String>,
+    pub started_at: CiBaseSuspectLegacy<String>,
+    pub completed_at: CiBaseSuspectLegacy<String>,
+    pub reason: Option<String>,
+    /// PR numbers an older note named under another key or shape. Read
+    /// only; never written.
+    #[serde(skip)]
+    pub legacy_pull_requests: Vec<u64>,
+}
+
+impl CiBaseSuspectRecord {
+    /// Decode a history note. `None` when the note is missing or is not
+    /// JSON (an unreadable record); fields that are absent or of the wrong
+    /// shape read as missing.
+    pub fn from_history_note(note: Option<&str>) -> Option<Self> {
+        let note = serde_json::from_str::<Value>(note?).ok()?;
+        let number = |value: &Value| {
+            value
+                .as_u64()
+                .or_else(|| value["number"].as_u64())
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        };
+        let mut legacy_pull_requests = Vec::new();
+        for key in ["pull_request_numbers", "pull_requests"] {
+            if let Some(list) = note[key].as_array() {
+                legacy_pull_requests.extend(list.iter().filter_map(number));
+            }
+        }
+        for key in ["pull_request_number", "pr"] {
+            legacy_pull_requests.extend(number(&note[key]));
+        }
+        let legacy_number = |key: &str| ci_base_suspect_legacy_field(&note, key, Value::as_u64);
+        let legacy_text = |key: &str| ci_base_suspect_legacy_field(&note, key, json_text);
+        Some(Self {
+            base: json_text(&note["base"]),
+            head: json_text(&note["head"]),
+            check: json_text(&note["check"]),
+            signature: json_text(&note["signature"]),
+            run_id: legacy_number("run_id"),
+            job_id: legacy_number("job_id"),
+            run_attempt: legacy_number("run_attempt"),
+            pr_number: number(&note["pr_number"]),
+            event: legacy_text("event"),
+            started_at: legacy_text("started_at"),
+            completed_at: legacy_text("completed_at"),
+            reason: json_text(&note["reason"]),
+            legacy_pull_requests,
+        })
+    }
+
+    /// The history note the producer writes.
+    pub fn to_history_note(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// The deduplication identity, when head, check and signature are all
+    /// recorded text. The base is deliberately absent: an advanced base
+    /// does not create a new key.
+    pub fn dedupe_identity(&self) -> Option<CiBaseSuspectIdentity<'_>> {
+        Some(CiBaseSuspectIdentity {
+            head: self.head.as_deref()?,
+            check: self.check.as_deref()?,
+            signature: self.signature.as_deref()?,
+        })
+    }
+
+    /// Whether `prior` already records this record's exact failure. A
+    /// record without a complete identity duplicates nothing.
+    pub fn same_dedupe_identity(&self, prior: &Self) -> bool {
+        self.dedupe_identity()
+            .is_some_and(|identity| prior.dedupe_identity() == Some(identity))
+    }
+
+    /// Every PR number the note names, current key and legacy aliases.
+    pub fn pull_request_numbers(&self) -> impl Iterator<Item = u64> + '_ {
+        self.pr_number
+            .into_iter()
+            .chain(self.legacy_pull_requests.iter().copied())
+    }
+
+    /// When the suspicious attempt completed, if recorded as RFC 3339. A
+    /// recorded timestamp that does not parse reads as no completion.
+    pub fn completed_time(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        self.completed_at
+            .value()
+            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+    }
+}
+
 /// Owner-configured budget for logged infrastructure/transient failures.
 /// Conclusion-only cancellations/timeouts, a failure whose log is only a
 /// `ci-await` timeout, and flaky failures retain one rerun.
