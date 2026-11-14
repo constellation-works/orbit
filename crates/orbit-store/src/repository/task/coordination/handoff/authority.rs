@@ -16,11 +16,7 @@ impl TaskCommitBoundary {
         params: &mut TaskCoordinationCommitParams,
     ) -> Result<(), OrbitError> {
         let id = &accepted.handoff_id;
-        if self
-            .coordination_rows(AUTHORIZATION)?
-            .iter()
-            .any(|r| &r.row_id == id)
-        {
+        if self.coordination_row(AUTHORIZATION, id)?.is_some() {
             return Ok(()); // One immutable authorization and one start per exact handoff.
         }
         let authorization = HandoffAuthorization {
@@ -99,11 +95,7 @@ impl TaskCommitBoundary {
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
-        if !self
-            .coordination_rows(HANDOFF)?
-            .iter()
-            .any(|r| r.row_id == auth.claim_id)
-        {
+        if self.coordination_row(HANDOFF, &auth.claim_id)?.is_none() {
             return Ok(());
         }
         let accepted = self.accepted_handoff(&auth.claim_id)?;
@@ -164,9 +156,8 @@ impl TaskCommitBoundary {
             return Err(invalid("completion authorization scope mismatch"));
         }
         if self
-            .coordination_rows(REVOCATION)?
-            .iter()
-            .any(|r| r.row_id == accepted.handoff_id)
+            .coordination_row(REVOCATION, &accepted.handoff_id)?
+            .is_some()
         {
             return Err(OrbitError::claim_refused(
                 ClaimRefusalKind::LandingAuthorityRevoked,

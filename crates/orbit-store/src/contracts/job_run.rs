@@ -8,9 +8,14 @@ use orbit_types::workflow::{
     JobRun, JobRunStartOutcome, JobRunState, KnowledgeRunMetrics, PipelineState, RunStateUpdate,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::params::*;
+
+/// Top-level run-input keys the dashboard's run list and run detail use
+/// for task labels (`task_id` and `task_ids`). A steps-free row read keeps
+/// only these.
+pub(crate) const JOB_RUN_TASK_INPUT_KEYS: &[&str] = &["task_id", "task_ids"];
 
 pub trait JobRunStoreBackend: Send + Sync {
     /// Read-only keyset page, including live runs so a later terminal state is
@@ -268,6 +273,35 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// its `limit`.
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError>;
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
+    /// Steps-free run rows for `run_ids`.
+    ///
+    /// Missing ids are omitted. Each `input` keeps only the task-label keys
+    /// `task_id` and `task_ids`. The SQLite backend reads these in chunks of
+    /// 500 ids (`run_id IN (...)`, the same bound-parameter chunk as step
+    /// hydration) and never selects `job_run_steps`. This default, for a
+    /// backend without that read, loads each id through [`Self::get_job_run`]
+    /// and then drops steps and every other input key. Neither path
+    /// reconciles a stale run.
+    fn get_job_runs_by_id(&self, run_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        let mut runs = Vec::new();
+        let mut seen = HashSet::new();
+        for run_id in run_ids {
+            if !seen.insert(run_id.clone()) {
+                continue;
+            }
+            let Some(mut run) = self.get_job_run(run_id)? else {
+                continue;
+            };
+            run.steps.clear();
+            if let Some(input) = run.input.as_mut()
+                && let Some(object) = input.as_object_mut()
+            {
+                object.retain(|key, _| JOB_RUN_TASK_INPUT_KEYS.contains(&key.as_str()));
+            }
+            runs.push(run);
+        }
+        Ok(runs)
+    }
     /// Only the run's lifecycle state: no step rows, no input and no pipeline
     /// state. The default hydrates the whole run; persistent backends read
     /// the one column.
