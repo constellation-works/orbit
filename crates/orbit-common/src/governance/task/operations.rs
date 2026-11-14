@@ -197,7 +197,7 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
 ];
 
 /// The statuses a task can be eligible from: work nobody has taken yet.
-const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
+pub(crate) const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
     &[EnumValue::plain("backlog"), EnumValue::plain("proposed")];
 
 /// `--help` for the `--host` flag every id-routed task command takes.

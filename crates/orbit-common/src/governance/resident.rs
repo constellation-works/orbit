@@ -54,7 +54,7 @@ pub const RESIDENT: NounSpec<ResidentVerb> = NounSpec {
     operations: RESIDENT_OPERATIONS,
 };
 
-const RIGHTS: &[EnumValue] = &[
+pub(crate) const RIGHTS: &[EnumValue] = &[
     EnumValue::plain("dispatch"),
     EnumValue::plain("promote"),
     EnumValue::plain("merge"),
@@ -328,7 +328,7 @@ const RELAY: OperationSpec<ResidentVerb> = OperationSpec {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
-const CONTROL_ACTIONS: &[EnumValue] = &[
+pub(crate) const CONTROL_ACTIONS: &[EnumValue] = &[
     EnumValue::plain("pause"),
     EnumValue::plain("resume"),
     EnumValue::plain("stop"),

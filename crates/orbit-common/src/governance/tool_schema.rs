@@ -4,27 +4,11 @@ use serde_json::{Map, Value, json};
 
 use orbit_types::tool::{ToolParam, ToolSchema};
 
-const TASK_TYPE_ENUM: &[&str] = &["feature", "bug", "refactor", "chore"];
-const TASK_STATUS_ENUM: &[&str] = &[
-    "proposed",
-    "backlog",
-    "someday",
-    "in-progress",
-    "review",
-    "done",
-    "blocked",
-    "rejected",
-];
-const AGENT_ROLE_ENUM: &[&str] = &["implementers", "reviewers", "pilots"];
-const AGENT_WINDOW_ENUM: &[&str] = &[
-    "1h", "24h", "7d", "30d", "90d", "all", "last50", "last200", "last500", "last1000",
-];
-const AGENT_EXECUTION_ENUM: &[&str] = &["managed", "all", "interactive"];
-const CI_FAILURE_CLASS_ENUM: &[&str] = &["code", "flaky", "infrastructure", "unknown"];
-const ELIGIBLE_STATUS_ENUM: &[&str] = &["backlog", "proposed"];
-const RESIDENT_RIGHT_ENUM: &[&str] = &["dispatch", "promote", "merge", "plugin_upgrade"];
-const RESIDENT_CONTROL_ACTION_ENUM: &[&str] =
-    &["pause", "resume", "stop", "wake", "takeover", "release"];
+use super::agents::{CI_FAILURE_CLASSES, EXECUTIONS, ROLES, WINDOWS};
+use super::operation::EnumValue;
+use super::resident::{CONTROL_ACTIONS, RIGHTS};
+use super::task::TASK_UPDATE_STATUS_VALUES;
+use super::task::operations::{ELIGIBLE_STATUS_VALUES, TASK_TYPE_VALUES};
 /// JSON Schema `pattern` for a provenance `model` value.
 ///
 /// Mirrors `infer_agent_family_from_model` in `orbit-types`: a canonical
@@ -57,6 +41,7 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
     for param in params {
         let mut property = tool_parameter_schema(&param.param_type);
         if let Some(values) = tool_parameter_enum_values(tool_name, &param.name) {
+            let values: Vec<&str> = values.iter().map(|value| value.name).collect();
             if property.get("type").and_then(Value::as_str) == Some("array") {
                 // A list of enumerated values carries its set on the items.
                 let items = property
@@ -171,19 +156,19 @@ pub fn tool_parameter_schema(param_type: &str) -> Map<String, Value> {
 pub fn tool_parameter_enum_values(
     tool_name: &str,
     param_name: &str,
-) -> Option<&'static [&'static str]> {
+) -> Option<&'static [EnumValue]> {
     match (tool_name, param_name) {
-        ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
-        ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
+        ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_VALUES),
+        ("orbit.task.update", "status") => Some(TASK_UPDATE_STATUS_VALUES),
         // Value lists that MCP descriptions shorten move here whole, so a
         // shortened description never invents a closed set (ORB-23869).
-        ("orbit.agents.scorecard" | "orbit.agents.show", "role") => Some(AGENT_ROLE_ENUM),
-        ("orbit.agents.scorecard" | "orbit.agents.show", "window") => Some(AGENT_WINDOW_ENUM),
-        ("orbit.agents.scorecard" | "orbit.agents.show", "execution") => Some(AGENT_EXECUTION_ENUM),
-        ("orbit.agents.ci_failures", "class") => Some(CI_FAILURE_CLASS_ENUM),
-        ("orbit.task.eligible", "status") => Some(ELIGIBLE_STATUS_ENUM),
-        ("orbit.resident.grant", "add" | "remove") => Some(RESIDENT_RIGHT_ENUM),
-        ("orbit.resident.control", "action") => Some(RESIDENT_CONTROL_ACTION_ENUM),
+        ("orbit.agents.scorecard" | "orbit.agents.show", "role") => Some(ROLES),
+        ("orbit.agents.scorecard" | "orbit.agents.show", "window") => Some(WINDOWS),
+        ("orbit.agents.scorecard" | "orbit.agents.show", "execution") => Some(EXECUTIONS),
+        ("orbit.agents.ci_failures", "class") => Some(CI_FAILURE_CLASSES),
+        ("orbit.task.eligible", "status") => Some(ELIGIBLE_STATUS_VALUES),
+        ("orbit.resident.grant", "add" | "remove") => Some(RIGHTS),
+        ("orbit.resident.control", "action") => Some(CONTROL_ACTIONS),
         // No MCP tool advertises `model`. A parameter that is still named
         // `model` (a CLI filter, or the unadvertised identity key) accepts
         // families and full model strings, so it has no finite enum.

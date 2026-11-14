@@ -837,6 +837,7 @@
             "review",
             "done",
             "blocked",
+            "archived",
             "rejected"
           ],
           "description": "New task status."

@@ -280,10 +280,12 @@ pub fn mcp_surface_report(selection: &McpToolsetSelection) -> Result<McpSurfaceR
         selection.enables_definition(&definition.rules, &definition.schema.name)
     }) {
         let input_schema = definition.input_schema.clone().unwrap_or_else(|| {
-            Value::Object(orbit_common::protocol::tool_schema::tool_input_schema_for(
-                &definition.schema.name,
-                &definition.schema.parameters,
-            ))
+            Value::Object(
+                orbit_common::governance::tool_schema::tool_input_schema_for(
+                    &definition.schema.name,
+                    &definition.schema.parameters,
+                ),
+            )
         });
         let advertised = json!({
             "name": mcp_advertised_tool_name(&definition.schema.name),

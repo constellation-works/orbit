@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_schema::tool_input_schema_for;
+use orbit_common::governance::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
     McpIdRouteDeclaration, TOOL_ACTION_FIELD, TOOL_MODE_FIELD, ToolFamily, ToolFamilyAction,
     ToolParam, ToolSchema, tool_family, tool_family_action,

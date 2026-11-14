@@ -22,3 +22,4 @@ pub use operations::{
     TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskOperation, TaskVerb,
 };
 pub use write_operations::TASK_CLI_OPTIONS_PARAM;
+pub(crate) use write_operations::TASK_UPDATE_STATUS_VALUES;
