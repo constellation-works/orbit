@@ -36,6 +36,7 @@ use crate::crew_task_types::TaskTypeDefinition;
 use crate::lock_modes::RawLockModeEntry;
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
+use crate::regression_layers::RegressionLayerDefinition;
 
 macro_rules! define_config_settings {
     ($(

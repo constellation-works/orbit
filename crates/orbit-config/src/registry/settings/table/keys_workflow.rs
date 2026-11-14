@@ -338,6 +338,14 @@ macro_rules! with_workflow_keys {
         allowed: format("path globs"),
         resolve: resolve_test_paths,
     },
+    workflow_regression_layers: Vec<RegressionLayerDefinition> => Vec<RegressionLayerDefinition> {
+        key: "workflow.regression_layers", value_type: "array<table>",
+        description: "Ordered path layers a regression fix is classified into in codebase regression analytics.",
+        section: ConfigSection::Delivery, order: 74,
+        tier: ConfigKeyTier::Advanced,
+        detail: "Each entry has a name and prefixes, dirs and suffixes path rules; the first matching entry wins.",
+        resolve: |raw: Option<Vec<RegressionLayerDefinition>>| crate::regression_layers::admit_regression_layers(raw),
+    },
     workflow_non_code_paths: Vec<String> => Vec<String> {
         key: "workflow.non_code_paths", value_type: "array<string>",
         description: "Path globs whose changes count as other (docs, config, assets) in landed-diff analytics.",

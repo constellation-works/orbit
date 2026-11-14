@@ -3,11 +3,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::InvocationQuery;
-use orbit_types::task::{TaskHistoryEntry, TaskRelationType};
+use orbit_types::task::TaskRelationType;
 
 use super::super::attribution;
 use super::super::candidates::Candidates;
-use super::super::records::block_cause;
 use super::super::roles::pilots::grade_all;
 use super::attempts::implementation_runs;
 use super::implementer::mark_implementer_less_attempts;
@@ -15,7 +14,7 @@ use super::invocations::AgentInvocationFacts;
 use super::launches::AgentLaunchFacts;
 use super::model::{AgentFacts, RegressionLink, Runner, SCAN_DAYS};
 use super::review::judge_rejects;
-use super::task::task_facts;
+use super::stored::StoredFacts;
 use crate::OrbitRuntime;
 use crate::application::codebase::{
     PilotEvidence, PilotRuns, failed_claim_settlements_of, pilot_evidence,
@@ -76,6 +75,7 @@ pub(in crate::application::agents) fn scan(
         }))
         .collect();
     let candidates = Candidates::open(runtime);
+    let mut stored = StoredFacts::load(runtime, &pulled);
     let mut facts = Vec::new();
     for task in tasks {
         if task.created_at < horizon && task.updated_at < horizon {
@@ -87,31 +87,31 @@ pub(in crate::application::agents) fn scan(
             continue;
         }
         let id = task.id.to_string();
-        let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
-            tracing::warn!(task_id = %id, %error, "agent scorecards: task history unreadable");
-            Vec::new()
-        });
-        let comments = runtime
-            .get_task_pilot_comments(&id)
-            .unwrap_or_else(|error| {
-                tracing::warn!(task_id = %id, %error, "agent scorecards: task comments unreadable");
-                Vec::new()
-            });
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
-        let classify = |entry: &TaskHistoryEntry| block_cause(entry, &history, task_settlements);
         let task_runs = runs.remove(&id).unwrap_or_default();
-        let mut task_facts = task_facts(
+        let entry = stored.entry(
+            runtime,
             &task,
-            &history,
-            &comments,
+            task_settlements,
             &task_runs,
             &pulled,
-            &classify,
             computed_at,
         );
+        stored.keep(&id, &entry);
+        let mut task_facts = entry.facts;
         judge_rejects(&mut task_facts.reviews, &candidates);
         facts.push(task_facts);
     }
+    stored.save(
+        runtime,
+        facts
+            .iter()
+            .filter(|task| {
+                task.status.is_terminal()
+                    && task.attempts.iter().all(|attempt| attempt.end.is_some())
+            })
+            .map(|task| task.id.as_str()),
+    );
 
     let mut pilot_runs = None;
     let mut pilots = grade_all(pilot_scan(runtime, &mut pilot_runs));

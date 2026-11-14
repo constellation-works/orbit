@@ -15,6 +15,7 @@ mod launches;
 mod model;
 mod review;
 mod scan;
+mod stored;
 mod task;
 
 pub(crate) use attempts::task_execution_modes;

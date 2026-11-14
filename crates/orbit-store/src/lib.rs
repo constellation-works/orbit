@@ -90,6 +90,21 @@ pub mod test_support {
     pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
     pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
     pub use crate::repository::task::coordination::task_write_hold_hook::with_task_commit_write_hold;
+
+    /// Canonical (artifact-hashing) task-bundle reads on this thread.
+    pub fn canonical_bundle_reads() -> u64 {
+        crate::repository::task::v2_bundle::CANONICAL_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+
+    /// Lightweight task-bundle reads on this thread, listing or by id.
+    pub fn lightweight_bundle_reads() -> u64 {
+        crate::repository::task::v2_bundle::LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+
+    /// Listing-path task-bundle reads on this thread.
+    pub fn listing_bundle_reads() -> u64 {
+        crate::repository::task::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
+    }
 }
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {

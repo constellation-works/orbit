@@ -259,7 +259,7 @@ The owner enforces what it is owed in two places:
   landing waits within its deadline for a newer passing base and updates
   again, at most three updates per handoff, recording each wait and update
   in task history. A logged transient one uses the configured bounded
-  infrastructure reruns, and one the candidate caused gets the claim's one automatic repair
+  infrastructure reruns, and one classified as caused by the candidate returns the task to the backlog with its candidate for repair
   ([distributed drain runbook](distributed-drain.md)). A new failure whose
   log cites only files the candidate did not change is base-suspect: it waits
   for a successful same-check push run on the accepted base ancestry, then
@@ -278,9 +278,9 @@ The owner enforces what it is owed in two places:
   changed-file citation, and no transient, inherited, unknown or inconclusive
   job) on a head with no prior rerun first gets one eligible classification
   rerun on the unchanged head. `ci_check_rerun_reserved` spends the shared
-  once-per-head budget before sending; a repeat failure takes the one automatic
-  repair route, or requeue if repair is spent. Candidate failures otherwise
-  keep their candidate repair/requeue route, and inherited failures keep their
+  once-per-head budget before sending; a repeated candidate failure returns the
+  task to the backlog for repair. Other candidate failures take the same route,
+  and inherited failures keep their
   base update/wait route. Other
   failure classes with unreadable rerun evidence stop naming the read failure.
   Logged infrastructure/transient failures use

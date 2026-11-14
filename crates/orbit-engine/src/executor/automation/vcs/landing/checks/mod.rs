@@ -47,21 +47,16 @@
 //!   authentication or a log it reads) cannot be read for
 //!   `max_base_ci_cycles` consecutive polls, a same-check base pass sends a
 //!   flaky failure to repair (or requeue once spent). Candidate failures keep
-//!   their candidate repair/requeue route, and inherited failures keep their
+//!   their backlog requeue route, and inherited failures keep their
 //!   base update/wait route. Other failure classes whose rerun evidence stays
 //!   unreadable stop in review naming the read failure; a provider throttle
 //!   keeps its paced hold. Base-suspect failures awaiting a same-check base
 //!   result wait for base evidence until their cycle limit or deadline; a
 //!   same-signature base failure remains **inherited**.
 //! - **candidate**: the failed step names a diagnostic, and the base's own
-//!   jobs were read and do not explain it. The landing stops for the same
-//!   single automatic repair a conflicting base gets, with the failed step's
-//!   signature and log excerpt in the stop evidence the repair leaf reads.
-//!   [ORB-16890] Once that repair is spent — the claim is the repair, or the
-//!   task already returned to the backlog for one — it stops for a requeue
-//!   instead: the owner ends the claim and returns the task to the backlog,
-//!   keeping the candidate and this evidence for the task's next run, within
-//!   the task's landing repair budget.
+//!   jobs were read and do not explain it. The owner ends the claim and
+//!   returns the task to the backlog, keeping the candidate and failed check
+//!   evidence for its next repair run, within the landing repair budget.
 //! - **dependency waiter**: a failed job whose only diagnostic is an
 //!   authenticated `orbit-dependency-evidence:` dependency record (the same
 //!   authentication the rerun planner uses) takes no class of its own: it is
