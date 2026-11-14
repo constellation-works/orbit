@@ -9,8 +9,8 @@
 // from the shared selector; chart drawing and tooltips stay in metrics.js,
 // which passes its helpers in.
 
-import { el, fetchJson, getWorkspaceRevision } from './common.js';
-import { undatedNote } from './metrics-running.js';
+import { el } from './common.js';
+import { COMPLEXITIES, axisScale, option, trendSource, undatedNote } from './metrics-running.js';
 
 const FAMILIES = [
   { key: "step_recovery", label: "Step recoveries", swatch: "c1" },
@@ -21,7 +21,6 @@ const FAMILIES = [
   { key: "cost", label: "Cost", swatch: "c6" },
   { key: "tokens", label: "Tokens", swatch: "c7" },
 ];
-const COMPLEXITIES = [["", "All complexities"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"], ["unassessed", "Unassessed"]];
 const MEASURES = [["count", "Count"], ["rate", "Per done task"]];
 const PART_LABELS = {
   recovered: "recovered", failed: "failed", resume: "resumed", settled: "settled", escalated: "escalated", other: "other",
@@ -32,45 +31,25 @@ const PART_LABELS = {
 const filters = { families: ["step_recovery", "final_recovery", "auto_fix", "merge_conflict", "failed_ci"], complexity: "", crew: "" };
 /// Local view state.
 export const frictionView = { measure: "count" };
-let sequence = 0;
+
+const source = trendSource({
+  path: "/api/diagnostics/delivery_friction",
+  params(windowKey) {
+    const query = new URLSearchParams({ since: windowKey, families: filters.families.join(",") });
+    if (filters.complexity) query.set("complexity", filters.complexity);
+    if (filters.crew) query.set("crew", filters.crew);
+    return query;
+  },
+  accepts: (payload) => payload && payload.window && Array.isArray(payload.families),
+  missingText: "This host answered without a delivery-friction trend.",
+  notYetText: "This host's Orbit does not chart delivery friction yet. Upgrade it to see this trend.",
+});
 
 /// The endpoint query for `windowKey` under the current filters.
-export function frictionQuery(windowKey) {
-  const query = new URLSearchParams({ since: windowKey, families: filters.families.join(",") });
-  if (filters.complexity) query.set("complexity", filters.complexity);
-  if (filters.crew) query.set("crew", filters.crew);
-  return `/api/diagnostics/delivery_friction?${query}`;
-}
-
-/// Fetch the trend for `windowKey`. A failed read, or a host whose Orbit
-/// predates the endpoint, answers `{ unavailable }` so the other trends still
-/// render. Every result carries a fence (generation, visit revision, window
-/// and query) captured at request time, as the tokens trend does.
-export function fetchFriction(windowKey) {
-  const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: frictionQuery(windowKey) };
-  const query = fence.query;
-  return fetchJson(query).then(
-    (payload) => (payload && payload.window && Array.isArray(payload.families)
-      ? { ...payload, query, frictionFence: fence }
-      : { query, unavailable: "This host answered without a delivery-friction trend.", frictionFence: fence }),
-    (error) => ({
-      query,
-      unavailable: error.status === 404 ? "This host's Orbit does not chart delivery friction yet. Upgrade it to see this trend." : error.message,
-      frictionFence: fence,
-    }),
-  );
-}
-
-/// True only when `payload` is the newest friction request and its visit,
-/// window and query still match current state.
-export function isCurrentFrictionPayload(payload, windowKey) {
-  const fence = payload && payload.frictionFence;
-  if (!fence) return false;
-  return fence.generation === sequence
-    && fence.revision === getWorkspaceRevision()
-    && fence.windowKey === windowKey
-    && fence.query === frictionQuery(windowKey);
-}
+export const frictionQuery = source.query;
+/// Fetch the trend for `windowKey`, fenced by metrics-running.js `trendSource`.
+export const fetchFriction = source.fetch;
+export const isCurrentFrictionPayload = source.isCurrent;
 
 function compact(n) {
   const abs = Math.abs(n);
@@ -104,22 +83,13 @@ function tasksDone(n) {
   return `${n} ${n === 1 ? "task" : "tasks"} done`;
 }
 
-function option(value, text, selected) {
-  const node = el("option", { text });
-  node.value = value;
-  node.selected = selected;
-  return node;
-}
-
 /// The filter row: the family multi-select, complexity and crew (each
 /// refetches) and the count/rate measure (local).
 export function frictionTools({ segGroup, windowKey, payload, rerender, onChange }) {
   const refetch = () => {
     // Clear to loading at once so the chart never shows the previous filter.
     onChange(null);
-    fetchFriction(windowKey).then((next) => {
-      if (isCurrentFrictionPayload(next, windowKey)) onChange(next);
-    });
+    source.refetch(windowKey, onChange);
   };
   const picker = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Metric families" }, FAMILIES.map((family) => {
     const on = filters.families.includes(family.key);
@@ -168,15 +138,6 @@ function partsText(unit, breakdown) {
   const entries = Object.entries(breakdown || {}).filter(([, value]) => value);
   if (entries.length < 2) return "";
   return entries.map(([key, value]) => `${fmtAmount(unit, value)} ${PART_LABELS[key] || key}`).join(" · ");
-}
-
-/// A 1–2–5 axis from zero covering `max`, in about four steps.
-function scaleOf(max) {
-  const high = max > 0 ? max : 1;
-  const raw = high * 1.08 / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw);
-  return { step, max: Math.ceil(high * 1.08 / step) * step };
 }
 
 /// The trend model metrics.js draws: cards, chart, table, or an empty state.
@@ -240,7 +201,10 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
   const shared = units.size <= 1;
   const peak = (family) => Math.max(0, ...family.points.map((point) => valueOf(family, point) || 0));
   const sharedMax = Math.max(0, ...visible.map(peak));
-  const scale = scaleOf(shared ? sharedMax : 100);
+  // A non-positive peak draws a 0–1 axis; a peak below 1 keeps its own scale
+  // (per-task rates are often fractions), so the floor is 0.
+  const top = shared ? sharedMax : 100;
+  const scale = axisScale(0, top > 0 ? top : 1, 0);
   const y = (value) => 100 - Math.min(Math.max(value, 0), scale.max) / scale.max * 100;
   const yTicks = [];
   const unit = shared ? [...units][0] || "events" : null;

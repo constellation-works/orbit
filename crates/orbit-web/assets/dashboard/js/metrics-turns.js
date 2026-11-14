@@ -8,67 +8,34 @@
 // local and redraws from the cached payload. The window comes from the
 // shared selector. Chart drawing and tooltips stay in metrics.js.
 
-import { el, fetchJson, getWorkspaceRevision } from './common.js';
-import { TERMINAL_TIME_NOTE, undatedNote } from './metrics-running.js';
+import { el } from './common.js';
+import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
-const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
-const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
 const MEASURES = [["turns", "Turns"], ["bytes", "Result bytes"]];
-const MAX_TAGS = 8;
 
 const filters = { outcome: "done", provider: "", tags: [] };
 /// Local view state. metrics.js includes `measure` in the section hash so
 /// a toggle redraws; the endpoint is not read again.
 export const turnsView = { measure: "turns" };
-let sequence = 0;
+
+const source = trendSource({
+  path: "/api/diagnostics/turns_to_edit",
+  params(windowKey) {
+    const query = new URLSearchParams({ since: windowKey, outcome: filters.outcome });
+    if (filters.provider) query.set("provider", filters.provider);
+    if (filters.tags.length) query.set("tags", filters.tags.join(","));
+    return query;
+  },
+  accepts: (payload) => payload && payload.window && Array.isArray(payload.series),
+  missingText: "This host answered without a turns-to-first-edit trend.",
+  notYetText: "This host's Orbit does not report turns to first edit yet. Upgrade it to see this trend.",
+});
 
 /// The endpoint query for `windowKey` under the current filters.
-export function turnsQuery(windowKey) {
-  const query = new URLSearchParams({ since: windowKey, outcome: filters.outcome });
-  if (filters.provider) query.set("provider", filters.provider);
-  if (filters.tags.length) query.set("tags", filters.tags.join(","));
-  return `/api/diagnostics/turns_to_edit?${query}`;
-}
-
-/// Fetch the trend for `windowKey`. A failed read, or a host whose Orbit
-/// predates the endpoint, answers `{ unavailable }` so the other trends still
-/// render. Every result carries a fence (generation, workspace/host visit
-/// revision, window and complete query) captured at request time; both the
-/// filter refetch and the full-panel refresh share `sequence`, so whichever
-/// starts later retires the other.
-export function fetchTurns(windowKey) {
-  const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: turnsQuery(windowKey) };
-  const query = fence.query;
-  return fetchJson(query).then(
-    (payload) => (payload && payload.window && Array.isArray(payload.series)
-      ? { ...payload, query, turnsFence: fence }
-      : { query, unavailable: "This host answered without a turns-to-first-edit trend.", turnsFence: fence }),
-    (error) => ({
-      query,
-      unavailable: error.status === 404 ? "This host's Orbit does not report turns to first edit yet. Upgrade it to see this trend." : error.message,
-      turnsFence: fence,
-    }),
-  );
-}
-
-/// True only when `payload` is the newest turns request and its visit,
-/// window and complete filter query still match current state. Unavailable
-/// and error replies carry the fence too, so they are gated the same way.
-export function isCurrentTurnsPayload(payload, windowKey) {
-  const fence = payload && payload.turnsFence;
-  if (!fence) return false;
-  return fence.generation === sequence
-    && fence.revision === getWorkspaceRevision()
-    && fence.windowKey === windowKey
-    && fence.query === turnsQuery(windowKey);
-}
-
-/// Refetch after a filter change; `apply` runs only for a current request.
-function refetch(windowKey, apply) {
-  fetchTurns(windowKey).then((payload) => {
-    if (isCurrentTurnsPayload(payload, windowKey)) apply(payload);
-  });
-}
+export const turnsQuery = source.query;
+/// Fetch the trend for `windowKey`, fenced by metrics-running.js `trendSource`.
+export const fetchTurns = source.fetch;
+export const isCurrentTurnsPayload = source.isCurrent;
 
 /// "2.5" or "2". A non-finite value is an em dash.
 export function fmtTurns(value) {
@@ -78,29 +45,7 @@ export function fmtTurns(value) {
 }
 
 /// "1.24M", "860k", "412".
-export function fmtBytes(value) {
-  if (value == null || !Number.isFinite(Number(value))) return "—";
-  const n = Number(value);
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
-  return String(Math.round(n));
-}
-
-function tasks(n) {
-  return `${n} ${n === 1 ? "task" : "tasks"}`;
-}
-
-function seriesKey(series) {
-  return series.cohort === "all" ? series.complexity : `${series.complexity}-${series.cohort}`;
-}
-
-function seriesLabel(series) {
-  const name = COMPLEXITY_LABELS[series.complexity] || series.complexity;
-  if (series.cohort === "with") return `${name} · with tag`;
-  if (series.cohort === "without") return `${name} · without`;
-  return name;
-}
+export const fmtBytes = fmtCompactTotal;
 
 function excluded(cell) {
   return (cell.excluded_empty_trace || 0)
@@ -148,20 +93,12 @@ function providerCoverageNote(payload) {
   }).join(" · ")}.`;
 }
 
-/// A 1–2–5 axis from zero past `max`, in about four steps.
-function axisScale(max) {
-  const raw = Math.max(max, 1) * 1.08 / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw);
-  return { step, max: Math.ceil(Math.max(max, 1) * 1.08 / step) * step };
-}
-
 /// The filter row: outcome, provider, the tag picker, and the local measure.
 export function turnsTools({ segGroup, windowKey, payload, rerender, onChange }) {
   const apply = (update) => {
     Object.assign(filters, update);
     onChange(null);
-    refetch(windowKey, onChange);
+    source.refetch(windowKey, onChange);
   };
   const providers = (payload && payload.available_providers) || [];
   const provider = el("select", { class: "mx-select", "aria-label": "Provider" }, [
@@ -176,40 +113,16 @@ export function turnsTools({ segGroup, windowKey, payload, rerender, onChange })
   ]);
   provider.addEventListener("change", () => apply({ provider: provider.value }));
 
-  const atTagLimit = filters.tags.length >= MAX_TAGS;
-  const available = atTagLimit ? [] : ((payload && payload.available_tags) || []).filter((entry) => !filters.tags.includes(entry.tag));
-  const picker = el("select", { class: "mx-select", "aria-label": "Compare a tag" }, [
-    option("", atTagLimit ? `Maximum of ${MAX_TAGS} tags selected` : filters.tags.length ? "Add a tag…" : "Compare a tag…", true),
-    ...available.map((entry) => option(entry.tag, `${entry.tag} (${entry.tasks})`, false)),
-  ]);
-  picker.addEventListener("change", () => {
-    if (picker.value && filters.tags.length < MAX_TAGS && available.some((entry) => entry.tag === picker.value)) {
-      apply({ tags: [...filters.tags, picker.value].sort() });
-    }
-  });
-  const chips = filters.tags.map((tag) => {
-    const chip = el("button", { class: "mx-chip", type: "button", title: `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
-    chip.addEventListener("click", () => apply({ tags: filters.tags.filter((other) => other !== tag) }));
-    return chip;
-  });
-
   return [
     segGroup("Task outcome", OUTCOMES, filters.outcome, (key) => key !== filters.outcome && apply({ outcome: key })),
     provider,
-    el("div", { class: "mx-tags", role: "group", "aria-label": "Tag cohorts" }, [picker, ...chips]),
+    tagPicker({ tags: filters.tags, offered: payload && payload.available_tags, apply }),
     segGroup("Measure", MEASURES, turnsView.measure, (key) => {
       if (key === turnsView.measure) return;
       turnsView.measure = key;
       rerender();
     }),
   ];
-}
-
-function option(value, text, selected) {
-  const node = el("option", { text });
-  node.value = value;
-  node.selected = selected;
-  return node;
 }
 
 /// The trend model metrics.js draws: cards, chart, table, or an empty state.
@@ -271,7 +184,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const visible = series.filter((entry) => isShown(entry.key));
   let max = 0;
   for (const entry of visible) for (const point of entry.points) if (point.n) max = Math.max(max, point[meanKey]);
-  const scale = axisScale(max);
+  const scale = axisScale(0, max);
   const y = (value) => 100 - Math.min(value, scale.max) / scale.max * 100;
   const yTicks = [];
   for (let v = 0; v <= scale.max + scale.step / 2; v += scale.step) yTicks.push({ top: 100 - v / scale.max * 100, label: format(v) });
