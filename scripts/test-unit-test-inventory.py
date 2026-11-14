@@ -96,6 +96,36 @@ class UnitTestRatchetTests(unittest.TestCase):
             "lib.rs::same_line_duplicate",
         ])
 
+    def test_separated_test_attribute_fails_with_first_location(self):
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nmake_test!();\n"
+            "#[test]\nfn real() {}\n"
+        ))
+        result = self.run_inventory()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("lib.rs:1: test attribute has no function name", result.stderr)
+        self.assertNotIn("real", result.stdout)
+
+    def test_extern_test_function_is_inventoried(self):
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nextern \"C\" fn ext_test() {}\n"
+            "#[test]\nconst fn ok() {}\n"
+        ))
+        result = self.run_inventory()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["crates"]["alpha"]["test_function_paths"], [
+            "lib.rs::ext_test", "lib.rs::ok",
+        ])
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nfn ok() {}\n"
+            "#[test]\nextern \"C\" fn ext_test() {}\n"
+        ))
+        swapped = self.run_inventory()
+        self.assertEqual(swapped.returncode, 0, swapped.stderr)
+        self.assertEqual(json.loads(swapped.stdout)["crates"]["alpha"]["test_function_paths"], [
+            "lib.rs::ext_test", "lib.rs::ok",
+        ])
+
     def test_raw_test_attribute_survives_print_check_and_baseline(self):
         self.write("crates/alpha/src/lib.rs", "#[r#test]\nfn real_test() {}\n")
         source = self.root / "crates/alpha/src/lib.rs"
