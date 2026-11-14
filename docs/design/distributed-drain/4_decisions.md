@@ -817,6 +817,7 @@ forge read can clear. Per code:
 | `delivery_requirements_unsatisfied` | yes | A gate that clears is visible to the next read. |
 | `delivery_base_checks_pending` | yes | The base's own result arrives with time. |
 | `delivery_forge_observation_unavailable` | yes | Its documented next step is a resume that reads the forge again. |
+| `delivery_check_runs_absent` | yes, once the unchanged head reports a required check run | Until then the pass lists it under the code and spends no hand-back or repair ledger. A queued workflow run is not this hold. |
 | `delivery_head_changed` | no | Another head than the one the run published; a new attempt adopts it. |
 | `delivery_repair_dispatched` | no | Needs a new head and a new delivery attempt. |
 | `delivery_pr_draft` | no | A person keeps the PR in draft; marking it ready is their decision. |

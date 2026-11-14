@@ -1888,15 +1888,20 @@ For the full persisted pass, including every skip and any `pass_error`, run
   for a person;
 - a delivery hold code, such as `delivery_check_evidence_inconclusive`: a held
   leaf is waiting out its backoff, or has been handed back 3 times on this head
-  for this hold (the detail says which). Once spent, resolve it as the
+  for this hold (the detail says which). The same code is also the reason while
+  a `delivery_check_runs_absent` head still reports no required check run; that
+  detail says the hand-back ceiling is not spent. Once spent, resolve it as the
   run-debugging delivery-refusal table describes.
 
 **Held leaves.** A task in `review` whose newest leaf ended `held` with its pull
 request open is handed back the same way when the hold is one a fresh forge
 read can clear: `delivery_check_evidence_inconclusive`,
 `delivery_completion_budget_expired`, `delivery_evidence_stale`,
-`delivery_requirements_unsatisfied`, `delivery_base_checks_pending` or
-`delivery_forge_observation_unavailable`. Completion reruns with a fresh budget
+`delivery_requirements_unsatisfied`, `delivery_base_checks_pending`,
+`delivery_forge_observation_unavailable`, or `delivery_check_runs_absent`
+once the unchanged head reports a pending or passed required check. Until
+that check exists, the pass lists `delivery_check_runs_absent` under that
+code and spends no hand-back. Completion reruns with a fresh budget
 and repairs only what its own watcher then finds. A conflict or failed
 required check on the pull request goes through the ledger above; otherwise
 the hand-back spends no repair budget, and the record, started entry and

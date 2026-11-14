@@ -1105,9 +1105,10 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 An `--auto-fix` drain pass (or dashboard **Fix PR**) hands a `review` task held
 on `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
 `delivery_base_checks_pending`, `delivery_completion_budget_expired`,
-`delivery_check_evidence_inconclusive` or
-`delivery_forge_observation_unavailable` back to its completion step, within a
-backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
+`delivery_check_evidence_inconclusive`,
+`delivery_forge_observation_unavailable` or, once the unchanged head reports a
+required check run, `delivery_check_runs_absent` back to its completion step,
+within a backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 
 | Code | Decision |
 | --- | --- |
@@ -1126,7 +1127,7 @@ backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 | `delivery_forge_observation_unavailable` | Completion's read-only forge reads (PR status, required checks, merge policy, prerequisite evidence) kept failing with a transport error before any completion mutation: after the one authenticated completion retry, when the run has no final recovery, past the completion budget, or after repair provenance that rules the retry out. Nothing changed on the forge and the task stays in review; `orbit job resume` reads the forge again and continues completion from its checkpoints. The owner's landing also holds this way when GitHub rate-limits its failed-check job or log reads past its bounded waits or its deadline; the reason names the reset ([landing a handoff](runbooks/distributed-drain.md#let-the-owner-land-follower-deliveries)). |
 | `delivery_origin_unavailable` | `worktree_setup` could not reach origin during pre-admission base fetch while every task being admitted was still in backlog, including a fetch-lock wait whose bounded origin probe confirms a transport outage. The run is held without changing those tasks; a later admission retries after origin recovers. If any task is already in progress, the outage follows ordinary run failure handling (or claim settlement for a claimed leaf) instead of a hold with no generic resume path. Authentication, permission and missing-ref refusals remain failures. |
 | `delivery_check_repair_activity_absent` | An in-budget `--auto-fix` check repair was admitted, and the job has no `step_failure_recovery` to run it. The run holds, no repair agent runs, and the pull request stays open. The admission remains in the per-PR ledger and spends one repair attempt. Adding recovery and retrying the same head holds again as `delivery_repair_dispatched`; it does not run the repair. Configure that recovery activity for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run. |
-| `delivery_check_runs_absent` | The head completion is delivering, which this run pushed, reported no run of any required check (not even a queued or pending one) for five minutes. Completion re-requested its hosted checks once through the forge adapter, recording `pr_checks_retrigger_requested` with the pull request and head in the task history before the request; the GitHub adapter closes and reopens the pull request, which changes neither the head, the branch nor its reviews and leaves it open and ready, and asks nothing when a workflow run already exists for the head. Checks that start afterwards are watched as usual. When none has started five minutes after the request, the run holds: the task stays in review and no repair attempt is spent. One re-trigger is allowed per pull request head, so a later completion attempt on the same head holds without asking again. Start the required checks on that head by hand, or push a new head, then start a new delivery attempt. |
+| `delivery_check_runs_absent` | The head this run pushed reported no workflow run at all, and no run of any required check, for five minutes. A workflow run the forge reports for that head, including one that is `queued`, `pending`, `waiting`, `requested` or `in_progress`, is checks still pending: completion keeps watching under its normal budget and does not re-request checks or hold. When the forge reports no workflow run, completion re-requests hosted checks once through the forge adapter, recording `pr_checks_retrigger_requested` with the pull request and head in the task history before the request; the GitHub adapter closes and reopens the pull request, which changes neither the head, the branch nor its reviews and leaves it open and ready, and asks nothing when a workflow run already exists for the head. Checks that start afterwards are watched as usual. When none has started five minutes after the request, the run holds: the task stays in review and no repair attempt is spent. One re-trigger is allowed per pull request head, so a later completion attempt on the same head holds without asking again. An auto-fix pass hands the hold back to completion once the unchanged head reports a required check run; until then the pass lists it under this code and spends no hand-back. If no check run appears, confirm the forge runs workflows for the repository, then start the required checks on that head by hand or push a new head. |
 
 **Stopped owner landing retries.** The owner clock sweep also consumes pending
 landing requests. A stopped handoff with typed waiting-gate evidence resumes
@@ -1946,7 +1947,10 @@ The same pass hands back a `review` task whose newest leaf ended `held` with
 its pull request open on a delivery hold a fresh forge read can clear:
 `delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired`,
 `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
-`delivery_base_checks_pending` or `delivery_forge_observation_unavailable`. The
+`delivery_base_checks_pending`, `delivery_forge_observation_unavailable` or,
+once the unchanged head reports a pending or passed required check,
+`delivery_check_runs_absent`. Until that check exists the pass lists
+`delivery_check_runs_absent` under its code and spends no hand-back. The
 leaf reruns its completion step with a fresh completion budget and `auto_fix`
 granted, under every rule above. A conflict or failed required check is
 repaired through the ledger; otherwise the hand-back spends no repair budget

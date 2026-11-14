@@ -175,8 +175,62 @@ fn a_lineage_that_keeps_holding_on_the_same_head_stops_at_the_ceiling() {
     assert!(started(&pass, &leaf.task).is_some(), "{pass}");
 }
 
+fn a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check() {
+    let fx = fixture();
+    let code = "delivery_check_runs_absent";
+    let leaf = fx.delivered_leaf(410, "done", Shelf::Review, LeafEnd::Held(code));
+    let head = "absent-head";
+    fx.blocked(&leaf, head, "orbit-bot", false, &[]);
+    let drain = fx.drain();
+
+    // No required check run yet: the hold stays visible and spends nothing.
+    let waiting = fx.pass(&drain, "done", true);
+    let skip = waiting["auto_fix"]["skipped"]
+        .as_array()
+        .and_then(|skipped| skipped.iter().find(|entry| entry["task_id"] == leaf.task))
+        .unwrap_or_else(|| panic!("{waiting}"));
+    assert_eq!(skip["reason"], code, "{skip}");
+    assert_eq!(skip["hold_code"], code, "{skip}");
+    assert!(
+        skip["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("no required check run")),
+        "{skip}"
+    );
+    assert!(started(&waiting, &leaf.task).is_none(), "{waiting}");
+    assert!(fx.retries(&leaf.run).is_empty(), "{waiting}");
+    assert!(out_of_run_records(&fx, &leaf.task).is_empty(), "{waiting}");
+
+    // The same head later reports a required check. Completion is handed
+    // the pull request; the source leaf stays held and the task stays in review.
+    fx.report_required_checks(&leaf, head, "orbit-bot", &["Protected (rust)"], &[]);
+    let pass = fx.pass(&drain, "done", true);
+    let entry = started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(entry["hold_code"], code, "{pass}");
+    assert_eq!(entry["blocker"], Value::Null, "{pass}");
+    let retries = fx.retries(&leaf.run);
+    assert_eq!(retries.len(), 1, "{code}: the held leaf is resumed once");
+    let input = retries[0].input.as_ref().unwrap();
+    assert_eq!(input["out_of_run_auto_fix"]["hold_code"], code, "{input}");
+    assert_eq!(input["out_of_run_auto_fix"]["head_sha"], head, "{input}");
+    let seeded = fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap();
+    assert_eq!(seeded.next_step_index, 4, "completion reruns");
+    let records = out_of_run_records(&fx, &leaf.task);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["hold_code"], code);
+    assert_eq!(
+        fx.runtime.get_task(&leaf.task).unwrap().status,
+        TaskStatus::Review
+    );
+    assert_eq!(
+        fx.jobs.get_job_run(&leaf.run).unwrap().unwrap().state,
+        JobRunState::Held
+    );
+}
+
 crate::scenario_table!(
     held_handback_scenarios,
     held_delivery_leaves_are_handed_back_to_completion,
     a_lineage_that_keeps_holding_on_the_same_head_stops_at_the_ceiling,
+    a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check,
 );

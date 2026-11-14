@@ -1026,7 +1026,10 @@ It cannot be combined with `--pull` or `--stop`.
   back the same way when its hold is one a fresh forge read can clear:
   `delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired`,
   `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
-  `delivery_base_checks_pending` or `delivery_forge_observation_unavailable`.
+  `delivery_base_checks_pending`, `delivery_forge_observation_unavailable`, or
+  `delivery_check_runs_absent` once the unchanged head reports a pending or
+  passed required check. Until that check exists the pass lists
+  `delivery_check_runs_absent` under its code and spends no hand-back.
   Completion reruns with a fresh budget and repairs only what its own watcher
   then finds; the record and started entry carry `hold_code`. A blocker on the
   PR goes through the ledger as above; otherwise the hand-back spends no

@@ -349,6 +349,10 @@ pub(in crate::executor::automation::vcs) struct UnreportedChecks {
     /// [ORB-23812] The last observation found no run, queued or otherwise,
     /// of any check current branch policy requires on the head.
     no_required_check_run: bool,
+    /// [ORB-24457] The forge adapter reported a workflow run for this head,
+    /// in any state. A missing answer is false, so a scripted host that omits
+    /// the field keeps the dropped-event path.
+    head_workflow_present: bool,
     /// Adapter-verified workflow failures whose protected checks never ran.
     pub(super) failed_workflow_runs: Vec<orbit_types::workflow::PrInfrastructureEvidence>,
     /// Last head-verified required-check answer, reused only to answer
@@ -370,6 +374,7 @@ impl UnreportedChecks {
             unsettled_polls: 0,
             lagging_blocked_polls: 0,
             no_required_check_run: false,
+            head_workflow_present: false,
             failed_workflow_runs: Vec::new(),
             cached_required_checks: None,
             cached_required_observation: json!({"state":"not_collected"}),
@@ -382,6 +387,13 @@ impl UnreportedChecks {
     /// are pending, queued, failed or reported skipped is never this state.
     pub(in crate::executor::automation::vcs) fn no_required_check_run(&self) -> bool {
         self.no_required_check_run
+    }
+
+    /// [ORB-24457] Whether the last current-gates answer reported a workflow
+    /// run for this head. Any state counts: a queued run has no check runs
+    /// yet, and that is checks still pending, not a dropped event.
+    pub(in crate::executor::automation::vcs) fn head_workflow_present(&self) -> bool {
+        self.head_workflow_present
     }
 
     /// Whether the last observation waits for checks readable policy names.
@@ -520,6 +532,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
 ) -> Result<PrMergeState, CheckWaitRefusal> {
     unreported.last = UnreportedWait::None;
     unreported.no_required_check_run = false;
+    unreported.head_workflow_present = false;
     unreported.failed_workflow_runs.clear();
     unreported.required_observation = json!({"state":"not_collected"});
     unreported.policy_observation = json!({"state":"not_collected"});
@@ -769,6 +782,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
             }
         }
         Ok(assessment) => {
+            unreported.head_workflow_present = assessment.head_workflow_present;
             unreported.no_required_check_run = assessment.every_required_missing
                 && assessment.pending.is_empty()
                 && assessment.failed.is_empty()
@@ -812,6 +826,8 @@ struct PolicyRequiredAssessment {
     /// Policy requires at least one check, and the head reported none of
     /// them in any state [ORB-23812].
     every_required_missing: bool,
+    /// The forge adapter reported a workflow run for this head [ORB-24457].
+    head_workflow_present: bool,
 }
 
 /// The checks current branch policy requires that the observed head has not
@@ -870,6 +886,12 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
         && required
             .iter()
             .all(|context| missing.iter().any(|name| name == context));
+    // A missing field is "no run": scripted hosts that omit it keep the
+    // dropped-event path. The engine does not read provider status strings.
+    let head_workflow_present = gates
+        .pointer("/head_workflow_run/present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(PolicyRequiredAssessment {
         failed_workflow_runs: gates
             .get("failed_workflow_runs")
@@ -883,6 +905,7 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
         pending,
         failed,
         every_required_missing,
+        head_workflow_present,
     })
 }
 

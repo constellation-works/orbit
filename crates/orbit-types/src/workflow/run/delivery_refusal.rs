@@ -173,7 +173,7 @@ impl DeliveryRefusal {
                 "Adding step_failure_recovery and retrying the same head holds again as delivery_repair_dispatched; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run.".into()
             }
             Self::CheckRunsAbsent => {
-                "Start the required checks on that head by hand, or push a new head, then start a new delivery attempt.".into()
+                "An auto-fix pass hands this task back to completion once the head reports a required check run. If none appear, confirm the forge runs workflows for this repository, then start the required checks on that head by hand or push a new head.".into()
             }
             Self::LandingRepairRequeue => {
                 "The automatic repair is spent, the claim ended, and the task returned to the backlog with this candidate kept (or it is blocked once the landing repair budget is spent). The next run repairs that candidate. Do not resume this held run.".into()

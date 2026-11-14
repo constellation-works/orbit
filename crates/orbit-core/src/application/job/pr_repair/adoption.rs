@@ -56,7 +56,11 @@
 //! `delivery_requirements_unsatisfied`, `delivery_base_checks_pending`,
 //! `delivery_forge_observation_unavailable`) is handed back too [ORB-23809],
 //! under every other rule above except the blocker: completion reads the
-//! forge again, and repairs only what its own watcher then finds. A held
+//! forge again, and repairs only what its own watcher then finds.
+//! `delivery_check_runs_absent` is handed back the same way once the
+//! unchanged head reports a pending or passed required check [ORB-24457].
+//! Until that check exists the pass lists the hold under its code and spends
+//! no hand-back. A held
 //! leaf whose task a `completion.hold` rule keeps in review is not handed
 //! back. Its pull request is repaired through the ledger when the forge
 //! reports a blocker; otherwise the hand-back spends none of the ledger and
@@ -786,6 +790,23 @@ impl OrbitRuntime {
                 None
             }
             (None, Some(refusal)) => {
+                // [ORB-24457] A head that still reports no required check run
+                // has nothing for completion to watch. Keep the hold visible
+                // under its code and do not spend a hand-back on it.
+                if refusal == DeliveryRefusal::CheckRunsAbsent
+                    && blockers.pending_required_checks.is_empty()
+                    && blockers.passed_required_checks.is_empty()
+                {
+                    return skip(
+                        refusal.error_code(),
+                        format!(
+                            "#{number} head {} still reports no required check run, so the {} \
+                             hold stays until one does; this pass spends no hand-back",
+                            blockers.head_sha,
+                            refusal.error_code()
+                        ),
+                    );
+                }
                 let handed_back = held_handbacks(&history, &number, &blockers.head_sha, refusal);
                 if handed_back >= HELD_HANDBACK_CEILING {
                     return skip(
