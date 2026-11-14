@@ -341,13 +341,16 @@ impl ToolRegistry {
         {
             let aliases = declared_aliases(name);
             let retired_fields = declared_retired_fields(name);
+            let guarded_fields = is_guarded_task_write(name, &input)
+                .then(|| crate::builtin::orbit::task::guarded::shape_checked_fields(name, &input))
+                .flatten();
             validate_task_arguments(
                 &input,
                 &tool.tool.schema(),
                 cli_fields(name, ctx),
                 &aliases,
                 &retired_fields,
-                is_guarded_task_write(name, &input),
+                guarded_fields.as_deref(),
             )?;
         }
         // A family action's required fields are checked after the
@@ -600,12 +603,8 @@ fn spec_aliases<V>(
 /// refuse its unknown fields first: the handler names the selector that chose
 /// the mode (ORB-24434).
 fn is_guarded_task_write(name: &str, input: &Value) -> bool {
-    if name != "orbit.task.add" && name != "orbit.task.update" {
-        return false;
-    }
-    ["request_id", "expected_revision", "verdict", "complete"]
-        .iter()
-        .any(|key| input.get(*key).is_some())
+    crate::builtin::orbit::task::guarded::is_guarded(input)
+        && (name == "orbit.task.add" || name == "orbit.task.update")
 }
 
 /// Retired names that must reach `OperationSpec::parse_input`.
@@ -626,18 +625,24 @@ fn declared_retired_fields(name: &str) -> Vec<&'static str> {
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
 /// guarded modes remain the handler's responsibility.
+///
+/// A guarded write owns its unknown-field contract, so the registry must not
+/// refuse its unknown fields first: the handler names the selector that chose
+/// the mode (ORB-24434). `guarded_fields` is `Some` for a guarded write with
+/// the envelope and the selected mode's accepted fields; only those are
+/// checked here, strictly as sent, so a mistyped field outside the mode
+/// reaches the handler's selector remedy instead of this refusal.
 fn validate_task_arguments(
     input: &Value,
     schema: &ToolSchema,
     cli_fields: &[&str],
     aliases: &[(&str, &str)],
     retired_fields: &[&str],
-    guarded: bool,
+    guarded_fields: Option<&[&str]>,
 ) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::{
         TOOL_INPUT_IDENTITY_KEYS, reject_unknown_tool_fields,
     };
-    use orbit_common::protocol::tool_schema::tool_parameter_schema;
 
     let object = input
         .as_object()
@@ -655,10 +660,18 @@ fn validate_task_arguments(
         .collect::<Vec<_>>();
     // The guarded handler names the selector and accepted fields in its
     // refusal; known parameter shapes must still be checked here.
-    if !guarded {
+    if guarded_fields.is_none() {
         reject_unknown_tool_fields(input, &allowed)?;
     }
     for parameter in &schema.parameters {
+        // On a guarded write only the envelope and the selected mode's
+        // accepted fields are checked; the rest reach the handler's selector
+        // refusal.
+        if let Some(fields) = guarded_fields
+            && !fields.contains(&parameter.name.as_str())
+        {
+            continue;
+        }
         // A call that sets both spellings is refused by the handler; check
         // the canonical one here.
         let Some(value) = object.get(&parameter.name).or_else(|| {
@@ -671,37 +684,43 @@ fn validate_task_arguments(
         };
         // Existing optional parsers treat null as absence, and accept numeric
         // strings and string booleans. Check their normalized shape without
-        // changing the value passed to the handler.
+        // changing the value passed to the handler. Guarded values are
+        // forwarded verbatim to the desktop host, so they are checked strictly
+        // as sent: a lenient ordinary shape would otherwise leak an `invalid
+        // desktop operation` host error.
         if value.is_null() && !parameter.required {
             continue;
         }
+        let guarded = guarded_fields.is_some();
         let mut normalized = value.clone();
-        // The persisted relation parser also accepts one relation object.
-        if parameter.name == "relations" && value.is_object() {
-            normalized = Value::Array(vec![value.clone()]);
-        }
-        if let Some(raw) = value.as_str() {
-            match parameter.param_type.as_str() {
-                "boolean" | "bool" => match raw.trim().to_ascii_lowercase().as_str() {
-                    "true" => normalized = Value::Bool(true),
-                    "false" => normalized = Value::Bool(false),
-                    _ => {}
-                },
-                "integer" | "u64" => {
-                    if let Ok(number) = raw.trim().parse::<u64>() {
-                        normalized = Value::from(number);
+        if !guarded {
+            // The persisted relation parser also accepts one relation object.
+            if parameter.name == "relations" && value.is_object() {
+                normalized = Value::Array(vec![value.clone()]);
+            }
+            if let Some(raw) = value.as_str() {
+                match parameter.param_type.as_str() {
+                    "boolean" | "bool" => match raw.trim().to_ascii_lowercase().as_str() {
+                        "true" => normalized = Value::Bool(true),
+                        "false" => normalized = Value::Bool(false),
+                        _ => {}
+                    },
+                    "integer" | "u64" => {
+                        if let Ok(number) = raw.trim().parse::<u64>() {
+                            normalized = Value::from(number);
+                        }
                     }
+                    // MCP advertises string lists as arrays. A single string is
+                    // still a list for the handler; check it as one element and
+                    // leave the value the handler sees unchanged.
+                    "string_list" | "string[]" | "strings" => {
+                        normalized = Value::Array(vec![Value::String(raw.to_string())]);
+                    }
+                    _ => {}
                 }
-                // MCP advertises string lists as arrays. A single string is
-                // still a list for the handler; check it as one element and
-                // leave the value the handler sees unchanged.
-                "string_list" | "string[]" | "strings" => {
-                    normalized = Value::Array(vec![Value::String(raw.to_string())]);
-                }
-                _ => {}
             }
         }
-        let shape = Value::Object(tool_parameter_schema(&parameter.param_type));
+        let shape = Value::Object(guarded_wire_shape(&parameter.param_type, guarded));
         let validator = jsonschema::JSONSchema::compile(&shape).map_err(|error| {
             OrbitError::Execution(format!("invalid task parameter schema: {error}"))
         })?;
@@ -713,6 +732,24 @@ fn validate_task_arguments(
         }
     }
     Ok(())
+}
+
+/// The JSON-Schema fragment `validate_task_arguments` checks a parameter
+/// against. Guarded values are forwarded verbatim, so a guarded `object` is
+/// checked as one JSON object rather than the ordinary object-or-list shape.
+fn guarded_wire_shape(param_type: &str, guarded: bool) -> serde_json::Map<String, Value> {
+    use orbit_common::protocol::tool_schema::tool_parameter_schema;
+    if guarded
+        && matches!(
+            param_type.trim().to_ascii_lowercase().as_str(),
+            "object" | "map" | "json"
+        )
+    {
+        let mut shape = serde_json::Map::new();
+        shape.insert("type".to_string(), Value::String("object".to_string()));
+        return shape;
+    }
+    tool_parameter_schema(param_type)
 }
 
 /// Whether a definition's tool addresses exactly one id with an optional

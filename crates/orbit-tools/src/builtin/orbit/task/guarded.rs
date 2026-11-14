@@ -15,10 +15,79 @@ pub(crate) fn param(name: &str, ty: &str, description: &str) -> ToolParam {
         required: false,
     }
 }
-pub(super) fn is_guarded(input: &Value) -> bool {
+pub(crate) fn is_guarded(input: &Value) -> bool {
     ["request_id", "expected_revision", "verdict", "complete"]
         .iter()
         .any(|key| input.get(*key).is_some())
+}
+
+/// The guarded mode a write selects, shared by the handler and the registry's
+/// shape check so both agree on which fields the mode accepts.
+///
+/// For creation the mode is always creation; for updates a present `verdict`
+/// selects review, else a present `comment` selects comment, else the write is
+/// an edit. The returned slice is the mode's accepted fields, without the
+/// envelope.
+pub(crate) fn guarded_mode(create: bool, input: &Value) -> (&'static [&'static str], &'static str) {
+    if create {
+        (
+            &[
+                "title",
+                "description",
+                "acceptance_criteria",
+                "priority",
+                "crew",
+            ],
+            "creation",
+        )
+    } else if input.get("verdict").is_some() {
+        (&["verdict", "complete"], "review")
+    } else if input.get("comment").is_some() {
+        (&["comment"], "comment")
+    } else {
+        (
+            &[
+                "status",
+                "title",
+                "description",
+                "acceptance_criteria",
+                "priority",
+                "crew",
+            ],
+            "edit",
+        )
+    }
+}
+
+/// Fields the registry shape-checks on a guarded write: the mode envelope
+/// plus the selected mode's accepted fields, strictly as sent.
+///
+/// Returns `None` for an ordinary write, where the registry checks every
+/// declared parameter with its lenient ordinary shapes. For a guarded write it
+/// returns the envelope and accepted fields only, so a mistyped field outside
+/// the mode reaches the handler's selector/accepted-fields remedy instead of
+/// the registry's `must have type` refusal (ORB-24499 F1).
+pub(crate) fn shape_checked_fields(tool: &str, input: &Value) -> Option<Vec<&'static str>> {
+    if tool != "orbit.task.add" && tool != "orbit.task.update" {
+        return None;
+    }
+    if !is_guarded(input) {
+        return None;
+    }
+    let create = tool == "orbit.task.add";
+    let (allowed, _) = guarded_mode(create, input);
+    let envelope: &[&str] = if create {
+        CREATE_ENVELOPE_KEYS
+    } else {
+        UPDATE_ENVELOPE_KEYS
+    };
+    Some(
+        envelope
+            .iter()
+            .copied()
+            .chain(allowed.iter().copied())
+            .collect(),
+    )
 }
 
 const GUARDED_SELECTOR_KEYS: &[&str] = &["request_id", "expected_revision", "verdict", "complete"];
@@ -190,18 +259,9 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
     let workspace = guarded_required_string(&input, "workspace", create)?;
     let request_id = guarded_required_string(&input, "request_id", create)?;
     let mut operation = serde_json::Map::new();
-    let (allowed, mode): (&[&str], &str) = if create {
+    let (allowed, mode) = guarded_mode(create, &input);
+    if create {
         operation.insert("kind".into(), json!("create"));
-        (
-            &[
-                "title",
-                "description",
-                "acceptance_criteria",
-                "priority",
-                "crew",
-            ],
-            "creation",
-        )
     } else {
         operation.insert(
             "id".into(),
@@ -215,26 +275,12 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
                 create
             )?),
         );
-        if input.get("verdict").is_some() {
-            operation.insert("kind".into(), json!("review"));
-            (&["verdict", "complete"], "review")
-        } else if input.get("comment").is_some() {
-            operation.insert("kind".into(), json!("comment"));
-            (&["comment"], "comment")
-        } else {
-            operation.insert("kind".into(), json!("edit"));
-            (
-                &[
-                    "status",
-                    "title",
-                    "description",
-                    "acceptance_criteria",
-                    "priority",
-                    "crew",
-                ],
-                "edit",
-            )
-        }
+        let kind = match mode {
+            "review" => "review",
+            "comment" => "comment",
+            _ => "edit",
+        };
+        operation.insert("kind".into(), json!(kind));
     };
     let mut keys = vec!["workspace", "request_id", "model"];
     if !create {

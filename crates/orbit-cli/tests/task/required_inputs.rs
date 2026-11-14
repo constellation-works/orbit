@@ -428,3 +428,169 @@ fn guarded_missing_envelope_names_selector_and_remedy() {
         assert!(create.contains(expected), "missing {expected}: {create}");
     }
 }
+
+#[test]
+fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
+    if crate::isolated_test::run_in_child(
+        "required_inputs::guarded_writes_reject_mistyped_known_fields_before_dispatch",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let refuse = |tool: &str, input: Value| -> Value {
+        let output = fixture
+            .command(&["tool", "run", tool, "--input", &input.to_string(), "--json"])
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        error
+    };
+    let base_guarded_create = || {
+        json!({
+            "workspace": fixture.repo, "request_id": "guarded-type-regression",
+            "title": "Guarded", "description": "Guarded",
+            "acceptance_criteria": ["Guarded"], "model": "codex",
+        })
+    };
+
+    // [ORB-24499] A mistyped known field on a guarded write gets the same
+    // field-and-type refusal as an ordinary write, before the desktop host.
+    for (input, field, ty) in [
+        (
+            {
+                let mut input = base_guarded_create();
+                input["title"] = json!(123);
+                input
+            },
+            "title",
+            "string",
+        ),
+        (
+            {
+                let mut input = base_guarded_create();
+                input["priority"] = json!(7);
+                input
+            },
+            "priority",
+            "string",
+        ),
+        (
+            {
+                let mut input = base_guarded_create();
+                input["acceptance_criteria"] = json!(42);
+                input
+            },
+            "acceptance_criteria",
+            "string_list",
+        ),
+    ] {
+        let error = refuse("orbit.task.add", input);
+        let message = error["error"].as_str().unwrap();
+        let expected = format!("`{field}` must have type {ty}");
+        assert!(
+            message.contains(&expected),
+            "ORB-24499 guarded create mistyped {field}: expected {expected}: {message}"
+        );
+        assert!(
+            !message.contains("invalid desktop operation"),
+            "ORB-24499 guarded create mistyped {field} must not reach the host: {message}"
+        );
+    }
+
+    let task_id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let error = refuse(
+        "orbit.task.update",
+        json!({
+            "workspace": fixture.repo, "id": task_id, "request_id": "guarded-type-regression",
+            "expected_revision": "test-revision", "verdict": "approve", "model": "codex",
+        }),
+    );
+    let message = error["error"].as_str().unwrap();
+    assert!(
+        message.contains("`verdict` must have type object"),
+        "ORB-24499 guarded update mistyped verdict: {message}"
+    );
+    assert!(
+        !message.contains("invalid desktop operation"),
+        "ORB-24499 guarded update mistyped verdict must not reach the host: {message}"
+    );
+
+    // [ORB-24499 F1] A mistyped field outside the mode's accepted set keeps the
+    // ORB-24434 selector refusal, not the registry type refusal.
+    let mut out_of_set = base_guarded_create();
+    out_of_set["complexity"] = json!(7);
+    let error = refuse("orbit.task.add", out_of_set);
+    let message = error["error"].as_str().unwrap();
+    for expected in [
+        "unknown field 'complexity'",
+        "'request_id'",
+        "guarded creation",
+        "ordinary create",
+    ] {
+        assert!(
+            message.contains(expected),
+            "ORB-24499 F1 out-of-set mistype must keep selector refusal, missing {expected}: {message}"
+        );
+    }
+    assert!(
+        !message.contains("must have type"),
+        "ORB-24499 F1 out-of-set mistype must not get a type refusal: {message}"
+    );
+
+    // [ORB-24499 F2] Guarded values are forwarded verbatim, so lenient ordinary
+    // shapes must not let them through to the host.
+    let mut single_string = base_guarded_create();
+    single_string["acceptance_criteria"] = json!("a");
+    let error = refuse("orbit.task.add", single_string);
+    let message = error["error"].as_str().unwrap();
+    assert!(
+        message.contains("`acceptance_criteria` must have type string_list"),
+        "ORB-24499 F2 single-string criteria must be refused strictly: {message}"
+    );
+    assert!(
+        !message.contains("invalid desktop operation"),
+        "ORB-24499 F2 single-string criteria must not reach the host: {message}"
+    );
+
+    let error = refuse(
+        "orbit.task.update",
+        json!({
+            "workspace": fixture.repo, "id": task_id, "request_id": "guarded-type-regression",
+            "expected_revision": "test-revision", "verdict": {"outcome": "approve"},
+            "complete": "true", "model": "codex",
+        }),
+    );
+    let message = error["error"].as_str().unwrap();
+    assert!(
+        message.contains("`complete` must have type boolean"),
+        "ORB-24499 F2 string complete must be refused strictly: {message}"
+    );
+    assert!(
+        !message.contains("invalid desktop operation"),
+        "ORB-24499 F2 string complete must not reach the host: {message}"
+    );
+
+    let error = refuse(
+        "orbit.task.update",
+        json!({
+            "workspace": fixture.repo, "id": task_id, "request_id": "guarded-type-regression",
+            "expected_revision": "test-revision", "verdict": [{"outcome": "approve"}],
+            "model": "codex",
+        }),
+    );
+    let message = error["error"].as_str().unwrap();
+    assert!(
+        message.contains("`verdict` must have type object"),
+        "ORB-24499 F2 list verdict must be refused strictly: {message}"
+    );
+    assert!(
+        !message.contains("invalid desktop operation"),
+        "ORB-24499 F2 list verdict must not reach the host: {message}"
+    );
+}
