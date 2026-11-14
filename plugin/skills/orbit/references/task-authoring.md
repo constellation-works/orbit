@@ -23,6 +23,12 @@ pickup. Do not confuse a task description with a design document or a transcript
   implementer can make. Include compatibility, authority, rollout or resource
   constraints only where they affect this task. Ask for a consequential missing
   decision; do not ask for permission to make ordinary implementation choices.
+- **Data and contract semantics:** for analytics or listing tasks, state in the
+  acceptance criteria the denominator (or eligible record set), how absent, null
+  and empty values differ for relevant fields, and how legacy records are
+  treated. Example: “Completion rate uses all non-archived tasks; an absent or
+  null owner is unknown, an empty owner is unassigned, and legacy rows without
+  the owner field are unknown.”
 - **Acceptance:** define observable behavior and evidence, including important
   refusal/negative cases. Commands are validation methods, not substitutes for an
   expected result. Distinguish implemented, tested, merged and deployed when those
