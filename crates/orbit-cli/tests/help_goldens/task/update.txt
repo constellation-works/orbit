@@ -93,7 +93,7 @@ Options:
           Named crew responsible for orchestration attribution (empty string clears)
 
       --origin <ORIGIN>
-          Replacement task origin (operator_request, orchestrator_initiative, automation)
+          Replacement provenance category, not free text: operator_request, orchestrator_initiative, automation
 
           Possible values:
           - operator_request:        A human operator asked for the work

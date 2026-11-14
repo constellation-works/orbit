@@ -177,18 +177,17 @@ impl TaskV2Store {
                 )?;
             }
             let now = Utc::now();
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
+            let mut pending_comments: Vec<TaskCommentRowV2> = Vec::new();
             if let Some(v) = &p.comment {
-                self.bundle_store.append_comment(
-                    id,
-                    &TaskCommentRowV2 {
-                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                        comment_id: format!("C-{:04}", next_sequence(&b.comments, "C-")),
-                        at: now,
-                        by: p.actor.clone(),
-                        body: v.clone(),
-                        operation_id: None,
-                    },
-                )?;
+                pending_comments.push(TaskCommentRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    comment_id: format!("C-{:04}", next_sequence(&b.comments, "C-")),
+                    at: now,
+                    by: p.actor.clone(),
+                    body: v.clone(),
+                    operation_id: None,
+                });
             }
             let approval =
                 old_status == TaskStatus::Proposed && b.envelope.status == TaskStatus::Backlog;
@@ -205,7 +204,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
-                self.bundle_store.append_event(id, &approval)?;
+                pending_events.push(approval.clone());
                 b.events.push(approval);
             }
             for entry in &p.append_history {
@@ -221,7 +220,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: entry.decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 b.events.push(event);
             }
             let event = TaskEventRowV2 {
@@ -243,17 +242,19 @@ impl TaskV2Store {
                     payload_digest: p.payload_digest.clone(),
                 })),
             };
-            self.bundle_store.append_event(id, &event)?;
+            pending_events.push(event.clone());
             b.events.push(event);
             let context_files = b.envelope.context_files.clone();
             append_creation_grant(
-                &self.bundle_store,
                 &mut b,
                 &context_files,
                 &[],
                 &p.actor,
                 now,
+                &mut pending_events,
             )?;
+            self.bundle_store.append_events(id, &pending_events)?;
+            self.bundle_store.append_comments(id, &pending_comments)?;
             b.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;
             pending.finish();

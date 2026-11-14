@@ -140,6 +140,9 @@ pub(crate) fn run_show_payload(
         }
     }
 
+    let rescue_candidate = state
+        .as_ref()
+        .and_then(|state| state.pipeline.get("rescue_candidate").cloned());
     let mut run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
     // [ORB-13899] The same audit scan holds the invocation's child: its live
@@ -201,6 +204,7 @@ pub(crate) fn run_show_payload(
             .map(CatalogReferenceLayer::to_json)
             .collect::<Vec<_>>(),
         "pipeline_state": state,
+        "rescue_candidate": rescue_candidate,
         // The steps the view below renders, whichever source answered. The
         // record's own `run.steps` stay exactly as stored, so a caller can
         // still tell the two apart [ORB-12113].
@@ -280,6 +284,16 @@ pub(crate) fn run_show_payload(
                 .unwrap_or("unknown crew"),
             launch.model.as_deref().unwrap_or("unknown model"),
             effort
+        ));
+    }
+    if let Some(record) = &rescue_candidate
+        && let Some(reference) = record["rescue_ref"].as_str()
+    {
+        header.push_str(&format!(
+            "\n{} {} (commit {})",
+            crate::output::color::bold("Rescue candidate:"),
+            reference,
+            record["rescue_commit"].as_str().unwrap_or_default(),
         ));
     }
     if let Some(line) = review_layer_line(&doc["run"]["review_layer"]) {

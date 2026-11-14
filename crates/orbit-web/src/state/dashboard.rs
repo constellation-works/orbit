@@ -76,6 +76,11 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/diagnostics/friction`, keyed by month and
     /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
     diagnostics_friction: RuntimeMemo<(String, usize)>,
+    /// Per-server memo for the Analytics › Metrics trends, keyed by endpoint
+    /// and normalized query string. Collapses overlapping Metrics-tab polls
+    /// (implement_one, completions, defects, task_tokens, turns_to_edit,
+    /// diff_stats, delivery_friction) into one aggregation per query.
+    metrics_trends: RuntimeMemo<(String, String)>,
     /// Per-server cache of the codebase analytics scan, one per workspace
     /// runtime: history-only analytics or related delivery facts per window.
     codebase: RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts>,
@@ -542,6 +547,7 @@ impl DashboardState {
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
+                metrics_trends: RuntimeMemo::new("metrics trends aggregation"),
                 codebase: RuntimeMemo::new("codebase analytics scan"),
                 riskiness: RuntimeMemo::new("task riskiness model"),
                 agents: RuntimeMemo::new("agent scorecard scan"),
@@ -691,6 +697,11 @@ impl DashboardState {
     /// Process-local `/api/diagnostics/friction` memo for this server instance.
     pub(crate) fn diagnostics_friction_memo(&self) -> &RuntimeMemo<(String, usize)> {
         &self.inner.diagnostics_friction
+    }
+
+    /// Process-local Analytics › Metrics trends memo for this server instance.
+    pub(crate) fn metrics_trends_memo(&self) -> &RuntimeMemo<(String, String)> {
+        &self.inner.metrics_trends
     }
 
     /// Whether this server was started with `--operator`, granting operator

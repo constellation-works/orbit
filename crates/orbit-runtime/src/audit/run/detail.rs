@@ -30,16 +30,10 @@ use super::projection::{
 };
 use super::trail::{
     MAX_PROVIDER_PROCESSES, RunAuditEvent, RunAuditStep, RunCliInvocationRecord,
-    RunExecutionProgress,
+    RunExecutionProgress, STEP_LIFECYCLE_KINDS,
 };
 
 const SOURCE: &str = "v2_envelope";
-const STEP_LIFECYCLE_KINDS: [&str; 4] = [
-    "step_started",
-    "step_finished",
-    "step_skipped",
-    "step_denied",
-];
 /// Rows that decide which provider child a later row belongs to.
 const PROVIDER_STRUCTURAL_KINDS: [&str; 3] = [
     "cli_invocation_process",

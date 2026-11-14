@@ -107,13 +107,16 @@ impl CommitTestHost {
         self
     }
 
-    /// Record a legacy comment-only settlement with the supplied final candidate.
-    pub fn with_legacy_settled_review(self, task_id: &str, final_commit: &str) -> Self {
+    /// Record a legacy comment-only settlement with stored author `by`.
+    ///
+    /// Authentic gate comments are stamped `system`. Any other author is
+    /// ordinary prose and must not authorize a moved HEAD.
+    pub fn with_legacy_settled_review(self, task_id: &str, by: &str, final_commit: &str) -> Self {
         self.comments.lock().unwrap().push((
             task_id.to_string(),
             TaskComment {
                 at: Utc::now(),
-                by: "reviewer".to_string(),
+                by: by.to_string(),
                 message: format!(
                     "before-landing review settled attempt `review-1`: verdict **reject**\n\
                      - Final candidate: `{final_commit}`"

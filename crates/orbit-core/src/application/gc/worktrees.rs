@@ -49,6 +49,7 @@ impl OrbitRuntime {
         }
         let runs = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         }) {
             Ok(runs) => runs,
@@ -101,6 +102,7 @@ impl OrbitRuntime {
         self.reconcile_stale_job_runs(None)?;
         self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         })
     }

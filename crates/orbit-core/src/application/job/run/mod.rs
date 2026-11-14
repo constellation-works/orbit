@@ -15,6 +15,7 @@
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `queued_cancel` — cancelling a run only while it is still queued, refusing one that started.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
+//! - `rescue_candidate` — keeping a stopped run's candidate under a rescue ref.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
 //! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
@@ -40,6 +41,7 @@ mod query;
 mod queued_cancel;
 mod reconcile;
 mod recorded;
+mod rescue_candidate;
 mod root_cause;
 #[cfg(feature = "test-support")]
 pub use root_cause::with_run_root_cause_write_hook;

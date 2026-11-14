@@ -4,7 +4,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{JobRun, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -692,24 +692,48 @@ pub(super) fn drain_progress(
         .and_then(drain_deadline)
         .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
     let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
-        let mut running = 0;
+        let created_since = active_drain
+            .map(|drain| drain.created_at)
+            .or_else(|| recent_drain.as_ref().map(|run| run.created_at));
+        let states = [
+            JobRunState::Pending,
+            JobRunState::Running,
+            JobRunState::Success,
+            JobRunState::Failed,
+            JobRunState::Timeout,
+            JobRunState::Skipped,
+            JobRunState::Retrying,
+            JobRunState::Cancelled,
+            JobRunState::Interrupted,
+            JobRunState::Held,
+        ]
+        .into_iter()
+        .filter(|state| !state.is_terminal())
+        .collect();
+        let running_ids: BTreeSet<_> = runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(LEAF_JOB_NAME.to_string()),
+                states,
+                created_since,
+                include_steps: false,
+                input_keys: Some(&[]),
+                ..JobRunQuery::default()
+            })?
+            .into_iter()
+            .map(|run| run.run_id)
+            .collect();
         let workers = state
             .child_dispatches
             .iter()
-            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME);
-        let mut admitted = 0;
-        for dispatch in workers {
-            admitted += 1;
-            if runtime
-                .stores()
-                .jobs()
-                .get_job_run(&dispatch.child_run_id)?
-                .is_some_and(|child| !child.state.is_terminal())
-            {
-                running += 1;
-            }
-        }
-        (admitted, running)
+            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME)
+            .collect::<Vec<_>>();
+        let running = workers
+            .iter()
+            .filter(|dispatch| running_ids.contains(&dispatch.child_run_id))
+            .count();
+        (workers.len(), running)
     } else {
         (0, 0)
     };

@@ -203,7 +203,10 @@ impl Store {
                  WHERE {}
                    AND reservation_id = ?3
                    AND released_at IS NULL",
-                reservation_scope_clause(TaskReservationScope::WorkspaceClaim),
+                reservation_scope_clause(
+                    TaskReservationScope::WorkspaceClaim,
+                    params.workspace_id.as_deref(),
+                ),
             );
             let affected = tx
                 .tx
@@ -316,7 +319,7 @@ fn load_active_claim(
            AND expires_at > ?3
          ORDER BY created_at ASC, reservation_id ASC
          LIMIT 1",
-        reservation_scope_clause(TaskReservationScope::WorkspaceClaim),
+        reservation_scope_clause(TaskReservationScope::WorkspaceClaim, workspace_id),
     );
     let row = tx
         .tx

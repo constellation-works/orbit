@@ -225,28 +225,37 @@ pub fn attention_query(
                 }
             }
         };
-        let mut candidates =
-            match sources::read_attention_sources(selected, &workspace, &host, &filter, now) {
-                Ok(candidates) => candidates,
-                Err(error) => {
-                    for kind in filter.kinds.iter().filter(|kind| {
-                        AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
-                            || **kind == AttentionKind::NoticeOpen
-                    }) {
-                        degraded.push(AttentionDegraded {
-                            scope: format!("workspace:{}", workspace.id),
-                            kind: kind.as_str().into(),
-                            code: "source_unavailable".into(),
-                            message: error.to_string(),
-                        });
-                    }
-                    sources::AttentionCandidates {
-                        items: Vec::new(),
-                        degraded: Vec::new(),
-                        timings: BTreeMap::new(),
-                    }
+        // One open-task listing shared by every task-backed source for
+        // this workspace, loaded lazily by whichever source needs it first.
+        let open_tasks = sources::SharedOpenTasks::default();
+        let mut candidates = match sources::read_attention_sources(
+            selected,
+            &workspace,
+            &host,
+            &filter,
+            now,
+            &open_tasks,
+        ) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                for kind in filter.kinds.iter().filter(|kind| {
+                    AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
+                        || **kind == AttentionKind::NoticeOpen
+                }) {
+                    degraded.push(AttentionDegraded {
+                        scope: format!("workspace:{}", workspace.id),
+                        kind: kind.as_str().into(),
+                        code: "source_unavailable".into(),
+                        message: error.to_string(),
+                    });
                 }
-            };
+                sources::AttentionCandidates {
+                    items: Vec::new(),
+                    degraded: Vec::new(),
+                    timings: BTreeMap::new(),
+                }
+            }
+        };
         runtime_sources::read_runtime_attention(
             selected,
             &workspace,
@@ -255,6 +264,7 @@ pub fn attention_query(
             now,
             operator,
             &mut candidates,
+            &open_tasks,
         );
         provider_sources::read_ci_attention(
             selected,
@@ -264,6 +274,7 @@ pub fn attention_query(
             now,
             session_context,
             &mut candidates,
+            &open_tasks,
         );
         if reads_host_health {
             let owner = selected.coordination_task_reads_visible();

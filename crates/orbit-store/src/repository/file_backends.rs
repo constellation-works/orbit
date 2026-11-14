@@ -20,6 +20,23 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn task_decision_snapshots(
+        &self,
+    ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
+        self.task_decision_snapshots()
+    }
+
+    fn record_task_decision_snapshots(
+        &self,
+        records: &[crate::contracts::TaskDecisionSnapshot],
+    ) -> Result<bool, OrbitError> {
+        self.record_task_decision_snapshots(records)
+    }
+
+    fn decision_request_task_id(&self, request_id: &str) -> Result<Option<String>, OrbitError> {
+        self.decision_request_task_id(request_id)
+    }
+
     fn find_accepted_handoff(
         &self,
         claim_id: &str,
@@ -274,8 +291,9 @@ impl TaskStoreBackend for TaskV2Store {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
         residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
     ) -> Result<crate::contracts::TaskPage, OrbitError> {
-        self.in_boundary(|| self.query_task_rows(filter, limit, residual))
+        self.in_boundary(|| self.query_task_rows(filter, limit, residual, hydration))
     }
     fn get_task_row(
         &self,
@@ -562,6 +580,14 @@ impl TaskHistoryStoreBackend for TaskV2Store {
 }
 
 impl TaskArtifactStoreBackend for TaskV2Store {
+    fn task_artifact_from_manifest(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        self.in_boundary(|| self.task_artifact_from_manifest(id, file))
+    }
+
     fn get_task_artifact_manifest(
         &self,
         id: &str,

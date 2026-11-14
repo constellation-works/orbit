@@ -286,6 +286,10 @@ impl OrbitRuntime {
         // [ORB-15314] Keep a stopped reviewer's repair locally; reconciling
         // also runs when a workspace opens, so it pushes nothing.
         self.keep_interrupted_review(&current, false);
+        // Keep the stopped worker's candidate under its rescue ref before
+        // finalization, while its worktree still exists; a later sweep may
+        // remove that worktree, and the ref is what survives it.
+        let rescue_clause = self.keep_rescue_candidate(&current);
         // A host-manager stop is classified only from an exit row already
         // recorded. Reconciliation that wins before that row exists still
         // writes `interrupted` / `worker_terminated`. The supervisor can name
@@ -297,11 +301,11 @@ impl OrbitRuntime {
         // recorded below, only once the terminal write has won.
         // The same call freezes a claimed leaf's settlement. Supply the exit
         // evidence now: enriching only the later step cannot amend the outbox.
-        let settlement_message =
-            match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
-                Some(clause) => format!("{message}; {clause}"),
-                None => message.clone(),
-            };
+        let settlement_message = append_run_clauses(
+            &message,
+            reconciled_worker_exit_clause(self.stores().audit_events(), &current),
+            rescue_clause.as_deref(),
+        );
         let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
             state,
@@ -323,10 +327,11 @@ impl OrbitRuntime {
 
         // [ORB-17179] Read only now that the terminal write has won, so an
         // exit the worker's supervisor recorded meanwhile is still named.
-        let message = match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
-            Some(clause) => format!("{message}; {clause}"),
-            None => message,
-        };
+        let message = append_run_clauses(
+            &message,
+            reconciled_worker_exit_clause(self.stores().audit_events(), &current),
+            rescue_clause.as_deref(),
+        );
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);
         log_best_effort(
             "record reconciliation diagnostic",
@@ -535,6 +540,19 @@ impl OrbitRuntime {
         }
         Ok(None)
     }
+}
+
+/// `message` with each present clause appended, in order.
+fn append_run_clauses(
+    message: &str,
+    exit_clause: Option<String>,
+    rescue_clause: Option<&str>,
+) -> String {
+    let mut message = message.to_string();
+    for clause in exit_clause.as_deref().into_iter().chain(rescue_clause) {
+        message = format!("{message}; {clause}");
+    }
+    message
 }
 
 /// `held` / `operator_stopped` when `run`'s recorded exit is a host-manager

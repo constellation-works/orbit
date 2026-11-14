@@ -3,9 +3,9 @@
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    DecisionAction, DecisionAnswer, DecisionGate, DecisionOption, DecisionRequest,
-    DecisionRequestState, DecisionResolution, DecisionRiskTier, ExternalRef, Task, TaskComment,
-    TaskDecision, TaskHistoryEntry, TaskStatus, push_external_ref_if_missing,
+    ArtifactManifestFileV2, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
+    DecisionRequest, DecisionRequestState, DecisionResolution, DecisionRiskTier, ExternalRef, Task,
+    TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus, push_external_ref_if_missing,
 };
 use orbit_types::workflow::COMPLETION_HELD_EVENT;
 
@@ -33,6 +33,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         requests: &mut [DecisionRequest],
+        manifest: Option<&[ArtifactManifestFileV2]>,
     ) -> Result<(), OrbitError> {
         for request in requests {
             if request.gate != DecisionGate::BlockTriage {
@@ -73,7 +74,11 @@ impl OrbitRuntime {
                 let Some(receipt) = self.handoff_receipt(task)? else {
                     continue;
                 };
-                if !self.handoff_landing_review_ready(task, Some(receipt.head_sha.as_str()))? {
+                if !self.handoff_landing_review_ready(
+                    task,
+                    Some(receipt.head_sha.as_str()),
+                    manifest,
+                )? {
                     continue;
                 }
             }
@@ -153,7 +158,7 @@ impl OrbitRuntime {
         }) {
             return Err(handoff_answer_refused("the candidate was discarded"));
         }
-        if !self.handoff_landing_review_ready(&task, Some(&receipt.head_sha))? {
+        if !self.handoff_landing_review_ready(&task, Some(&receipt.head_sha), None)? {
             return Err(handoff_answer_refused(
                 "required pre-landing review has not settled for this candidate; requeue it",
             ));

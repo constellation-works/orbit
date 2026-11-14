@@ -2,7 +2,7 @@
 
 use super::admission::admit;
 use super::observe::{
-    CAPACITY, absorb, compact_failed, observed, retire_superseded, retire_unobserved,
+    CAPACITY, HostMemo, absorb, compact_failed, observed, retire_superseded, retire_unobserved,
 };
 use super::reconcile::reconcile;
 use super::{MemberAdmission, MemberEvaluation, MemberHost};
@@ -150,12 +150,19 @@ pub fn evaluate(
     // still does not fit waits for a later pass, while the scan and the
     // retained members keep moving.
     let batch_size = trigger.effective_batch_size();
-    if absorb(host, &mut members.clone(), &page)?.deferred > 0
+    // The trial fold exists only to read `deferred`; the real fold then
+    // applies the same page. Both folds share one per-evaluation host memo
+    // so each candidate's `accepted_assessment`/`carries_forward` verdicts
+    // are computed once and seen identically by both folds. The
+    // retire-then-absorb order stays: the real fold still runs after the
+    // retire below.
+    let mut memo = HostMemo::default();
+    if absorb(host, &mut members.clone(), &page, &mut memo)?.deferred > 0
         || members.failed.len() + batch_size > CAPACITY
     {
         retire_unobserved(host, members, observed(&page))?;
     }
-    let absorbed = absorb(host, members, &page)?;
+    let absorbed = absorb(host, members, &page, &mut memo)?;
     retire_superseded(members, &BTreeSet::new());
     compact_failed(members);
     members.scan_after = page.next;

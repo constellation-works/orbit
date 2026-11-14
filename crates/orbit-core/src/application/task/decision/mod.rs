@@ -27,6 +27,7 @@ mod answering;
 mod handoff_landing;
 mod listing;
 mod precedent;
+mod query;
 pub(super) mod raise;
 mod rendering;
 pub(crate) mod rules;

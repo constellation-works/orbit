@@ -335,12 +335,13 @@ impl OrbitRuntime {
 
         loop {
             let exits_seen = worker_exits_seen();
-            // One stale-run pass per poll tick; collect then reads awaited
-            // rows without repeating per-run owner probes.
+            // One stale-run pass per poll tick; the cheap check then reads
+            // awaited states without repeating per-run owner probes.
             self.reconcile_stale_job_runs(None)?;
-            let snapshot = self.collect_pipeline_wait_entries(run_ids, false)?;
-            if snapshot.iter().all(|entry| entry.status.is_settled()) {
-                let result = PipelineWaitResult { results: snapshot };
+            if self.pipeline_wait_runs_settled(run_ids)? {
+                let result = PipelineWaitResult {
+                    results: self.collect_pipeline_wait_entries(run_ids, false)?,
+                };
                 self.record_pipeline_wait_finished(actor, &result)?;
                 return Ok(result);
             }
@@ -369,6 +370,22 @@ impl OrbitRuntime {
     pub fn normalize_pipeline_wait_poll_interval(raw: Option<u64>) -> u64 {
         raw.unwrap_or(PIPELINE_WAIT_DEFAULT_POLL_SECONDS)
             .max(PIPELINE_WAIT_MIN_POLL_SECONDS)
+    }
+    /// The cheap poll: whether every awaited run is settled, reading only
+    /// each run's lifecycle state. A missing run hydrates as `failed` in
+    /// [`Self::collect_pipeline_wait_entries`], so it counts as settled.
+    /// The full entry list is built once by the caller, when this returns
+    /// true or the deadline passes.
+    fn pipeline_wait_runs_settled(&self, run_ids: &[String]) -> Result<bool, OrbitError> {
+        for run_id in run_ids {
+            let Some(state) = self.get_job_run_state_backend(run_id)? else {
+                continue;
+            };
+            if !PipelineWaitStatus::from(state).is_settled() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     fn collect_pipeline_wait_entries(
         &self,

@@ -40,7 +40,7 @@ impl Store {
                    AND expires_at > ?3
                  ORDER BY created_at ASC, reservation_id ASC",
                 select_reservation_columns(),
-                reservation_scope_clause(TaskReservationScope::Files),
+                reservation_scope_clause(TaskReservationScope::Files, workspace_id),
             );
             let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
@@ -75,7 +75,7 @@ impl Store {
                  WHERE {}
                    AND {TASK_RESERVATION_ROWS}
                  ORDER BY created_at ASC, reservation_id ASC",
-                reservation_scope_clause(TaskReservationScope::Files),
+                reservation_scope_clause(TaskReservationScope::Files, workspace_id),
             );
             let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
@@ -129,7 +129,7 @@ impl Store {
                    AND released_at IS NULL
                    AND expires_at > ?3",
                 select_reservation_columns(),
-                reservation_scope_clause(TaskReservationScope::Files),
+                reservation_scope_clause(TaskReservationScope::Files, workspace_id),
             );
             conn.query_row(
                 &sql,
@@ -166,7 +166,7 @@ impl Store {
                    AND expires_at > ?3
                  ORDER BY created_at ASC, reservation_id ASC",
                 select_reservation_columns(),
-                reservation_scope_clause(TaskReservationScope::Files),
+                reservation_scope_clause(TaskReservationScope::Files, workspace_id),
             );
             let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
@@ -272,7 +272,10 @@ impl Store {
                    AND {TASK_RESERVATION_ROWS}
                    AND reservation_id = ?3
                    AND released_at IS NULL",
-                reservation_scope_clause(TaskReservationScope::Files),
+                reservation_scope_clause(
+                    TaskReservationScope::Files,
+                    params.workspace_id.as_deref(),
+                ),
             );
             let affected = tx
                 .tx
@@ -350,7 +353,10 @@ impl Store {
                  WHERE {}
                    AND owner_run_id = ?3
                    AND released_at IS NULL",
-                reservation_scope_clause(TaskReservationScope::Files),
+                reservation_scope_clause(
+                    TaskReservationScope::Files,
+                    params.workspace_id.as_deref(),
+                ),
             );
             tx.tx
                 .execute(

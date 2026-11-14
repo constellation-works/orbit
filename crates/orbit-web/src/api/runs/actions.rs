@@ -12,7 +12,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::distributed::PullStartOptionsSupplied;
 use orbit_core::application::job::{
     AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopRequest,
-    SubmissionKind,
+    ShipModeResolutionProfile, SubmissionKind,
 };
 use orbit_core::{DrainEntryPoint, WorkspacePullRequest};
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
@@ -75,13 +75,18 @@ pub(in crate::api) async fn ship_workflow_action(
     Ws(runtime): Ws,
     OptionalJson(body): OptionalJson<ShipBody>,
 ) -> Response {
-    let mode = match body.mode.as_deref() {
+    let explicit = match body.mode.as_deref() {
         Some(raw) => match orbit_core::ShipMode::parse(raw) {
-            Ok(mode) => mode,
+            Ok(mode) => Some(mode),
             Err(e) => return bad_request(e.to_string()),
         },
-        None => workspace_default_ship_mode(&runtime),
+        None => None,
     };
+    let mode =
+        match runtime.resolve_ship_mode(explicit, ShipModeResolutionProfile::BoundRuntimeOnly) {
+            Ok(mode) => mode,
+            Err(e) => return bad_request(e.to_string()),
+        };
     match blocking("ship workflow", move || {
         let invoke = runtime.submit_ship_run_with_containment(
             mode,
@@ -121,15 +126,6 @@ pub(in crate::api) async fn ship_workflow_action(
         Ok(shipped) => Json(shipped).into_response(),
         Err(response) => *response,
     }
-}
-
-/// The selected workspace's configured ship mode, or `pr` when this runtime was
-/// built without a registry binding (single/embedded serving mode), which is the
-/// default the endpoint has always applied to a body with no `mode`.
-fn workspace_default_ship_mode(runtime: &OrbitRuntime) -> orbit_core::ShipMode {
-    runtime
-        .workspace_runtime_binding()
-        .map_or(orbit_core::ShipMode::Pr, |binding| binding.ship_mode)
 }
 
 #[derive(serde::Deserialize, Default)]

@@ -291,6 +291,13 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
         && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
 }
 
+/// Persisted author of a host system write (`ActorIdentity::System`).
+///
+/// Ordinary task updates stamp the caller's identity instead, so this label
+/// is the provenance of a legacy settlement comment, not a string the
+/// subject can choose.
+const SYSTEM_STAMPED_AUTHOR: &str = "system";
+
 /// Accept HEAD only when a settled before-landing review recorded it as its
 /// final commit and it descends from the pinned base.
 ///
@@ -302,6 +309,11 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
 /// gains no permission from any settlement: before-PR settlements must not
 /// authorize another run's HEAD, or the original owner without a final
 /// recovery receipt would also be admitted (ORB-24328 follow-up).
+///
+/// Trusted evidence is the gate's typed history receipt, or a legacy comment
+/// whose stored author is `SYSTEM_STAMPED_AUTHOR`. The public task update
+/// accepts the same display prose from an implementer; that prose is not
+/// provenance (STD-05 §R1).
 pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
@@ -314,7 +326,11 @@ pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
     }
     let history = host.get_task_history(task_id)?;
     let comments = host.get_task_comments(task_id)?;
-    let settlements = orbit_types::task::recorded_review_settlements(&history, &comments);
+    let trusted_comments: Vec<_> = comments
+        .into_iter()
+        .filter(|comment| comment.by == SYSTEM_STAMPED_AUTHOR)
+        .collect();
+    let settlements = orbit_types::task::recorded_review_settlements(&history, &trusted_comments);
     for (_, settlement) in settlements {
         if settlement.gate != orbit_types::task::ReviewSettlementGate::BeforeLanding {
             continue;

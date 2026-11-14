@@ -522,7 +522,12 @@ pub(super) fn readiness_approvals(
     } else {
         Vec::new()
     };
-    let snapshot = approval_snapshot(runtime, proposed, &pilot_children(runtime, run_id)?, false)?;
+    let snapshot = approval_snapshot(
+        runtime,
+        proposed,
+        &pilot_children(runtime, run_id, false)?,
+        false,
+    )?;
     let mut value = held_json(&snapshot);
     value["closed"] = json!(report.closed);
     value["closed_total"] = json!(report.closed_total);

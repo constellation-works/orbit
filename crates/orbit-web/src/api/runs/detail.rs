@@ -1,12 +1,44 @@
 //! Run detail JSON and supplementary audit projections.
 
+use std::cell::RefCell;
+
 use orbit_core::application::job::{
     JobRunProjectionEvidence, JobRunProjectionProfile, RecordedJobRun,
     display_steps_with_agent_execution_to_json, project_job_run, run_display_steps,
 };
-use orbit_core::runtime::audit::run::RunProviderProcess;
+use orbit_core::runtime::audit::run::{RunAuditView, RunProviderProcess};
 use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
+
+/// One lazy scan of a run's audit trail, shared by the steps and
+/// provider-process halves of a single run-detail response.
+///
+/// The view is computed at most once: whichever half asks first pays for
+/// the scan, and a failure is cached too, so an unreadable trail is not
+/// scanned twice. A run whose record steps are already activity-level
+/// never triggers the steps half, so it pays only for the scan the
+/// provider-process half needs. Nothing is cached across requests, so
+/// provider-process liveness is still probed on every fetch.
+struct LazyRunAuditView<'a> {
+    runtime: &'a OrbitRuntime,
+    run_id: &'a str,
+    cached: RefCell<Option<Result<RunAuditView, String>>>,
+}
+
+impl LazyRunAuditView<'_> {
+    fn load_run_audit_view(&self) -> Result<RunAuditView, String> {
+        let mut cached = self.cached.borrow_mut();
+        if let Some(result) = cached.as_ref() {
+            return result.clone();
+        }
+        let computed = self
+            .runtime
+            .collect_run_audit_view(self.run_id)
+            .map_err(|error| error.to_string());
+        *cached = Some(computed.clone());
+        computed
+    }
+}
 
 pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Value {
     // [ORB-10971] Read the run's pipeline state. This projection used to drop
@@ -75,23 +107,30 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // The failure chain and the cancel record are detail-only. One response
     // carries both, so the page does not fetch each child to find the cause.
     super::failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
-    let steps = run_display_steps(run, || {
-        or_warn(
-            runtime.collect_run_audit_steps(run_id),
-            run_id,
-            "audit steps",
-        )
+    let audit_view = LazyRunAuditView {
+        runtime,
+        run_id,
+        cached: RefCell::new(None),
+    };
+    let steps = run_display_steps(run, || match audit_view.load_run_audit_view() {
+        Ok(view) => view.steps,
+        Err(error) => {
+            tracing::warn!(run_id, section = "audit steps", %error, "run detail omitted a section");
+            Vec::new()
+        }
     });
 
     // [ORB-10496] Provider subprocesses for this run's agent steps, with a
     // liveness verdict for any that have not reported an exit. Without this a
     // healthy long-running ship-pipeline implementation agent is
     // indistinguishable from a dead child without shell access to the host.
-    let provider_processes = or_warn(
-        runtime.collect_run_provider_processes(run_id),
-        run_id,
-        "provider processes",
-    );
+    let provider_processes = match audit_view.load_run_audit_view() {
+        Ok(view) => view.provider_processes,
+        Err(error) => {
+            tracing::warn!(run_id, section = "provider processes", %error, "run detail omitted a section");
+            Vec::new()
+        }
+    };
 
     // A claimed follower leaf names the owner task and claim it works for;
     // every other run has none. The dashboard's cancel confirmation reads this,

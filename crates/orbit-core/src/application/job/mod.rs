@@ -82,7 +82,7 @@ pub use pilot_submit::{
 pub use pipeline::{
     AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt, AutoDrainSubmissionSource,
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
-    PipelineWorkerLogSnapshot, SubmissionKind, SubmissionNotices,
+    PipelineWorkerLogSnapshot, ShipModeResolutionProfile, SubmissionKind, SubmissionNotices,
 };
 pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;

@@ -180,6 +180,7 @@ fn fleet_drain_row(
         "slots_ceiling": null,
         "eligible_count": null,
         "top_wait_reason": null,
+        "baseline_red_hold": null,
         "holds": [],
         "queued_drains": [],
         "task_pilot_warning": null,
@@ -290,6 +291,21 @@ fn fleet_drain_row(
             row["slots_used"] = capacity["active_leaf_runs"].clone();
             row["slots_ceiling"] = capacity["max_active_leaf_runs"].clone();
             row["eligible_count"] = json!(eligible);
+            // Only the held task ids leave the row, never task detail text.
+            // `complete` is false when the bounded listing truncated the
+            // backlog, so a consumer needing the observed-id set must fall
+            // back to the full readiness read.
+            let mut hold_seen = HashSet::new();
+            let baseline_red_hold_ids: Vec<&str> = tasks
+                .iter()
+                .filter(|task| task["reason"] == "baseline_red_hold")
+                .filter_map(|task| task["task_id"].as_str())
+                .filter(|id| !id.is_empty() && hold_seen.insert(*id))
+                .collect();
+            row["baseline_red_hold"] = json!({
+                "task_ids": baseline_red_hold_ids,
+                "complete": payload["total"].as_u64().unwrap_or(0) <= tasks.len() as u64,
+            });
             row["counts_truncated"] =
                 json!(payload["total"].as_u64().unwrap_or(0) > tasks.len() as u64);
             row["top_wait_reason"] = json!(top);

@@ -15,6 +15,8 @@
 //! (task-id allocation and prefix authority).
 //! `envelope_stamps` persists the freshness scan's envelope stamps, a derived
 //! cache that spares a cold listing from parsing every envelope.
+//! `decision_snapshots` persists stamp-bound closed decisions and the request
+//! owner index; open requests are always re-read from their bundles.
 //! `relations` validates task relations: target existence, dangling targets, and cycles.
 //! `listing` contains the index reads behind bounded task listing: freshness rows,
 //! filtered selection, and the workspace-scoped status projection.
@@ -26,6 +28,8 @@ use std::path::{Path, PathBuf};
 mod allocator;
 mod baseline;
 mod bindings;
+mod decision_snapshots;
+mod decision_snapshots_schema;
 mod envelope_stamps;
 mod index;
 mod index_snapshot;

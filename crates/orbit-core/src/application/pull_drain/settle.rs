@@ -61,7 +61,7 @@ use crate::OrbitRuntime;
 use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome};
 use crate::application::distributed::{PendingPullSettlements, is_owner_transport_failure};
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
+use orbit_engine::{RuntimeHost, WORKTREE_IDENTITY_INPUT_KEYS, run_worktree_has_reclaim_output};
 use orbit_store::contracts::{
     JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
@@ -589,6 +589,7 @@ impl OrbitRuntime {
         // Every run, so the collector still sees a path two runs share.
         let runs = match jobs.list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         }) {
             Ok(runs) => runs,

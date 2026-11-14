@@ -161,8 +161,8 @@ pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
 pub use listing::{
-    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListQuery, TaskPage,
-    TaskRow,
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
+    TaskListQuery, TaskPage, TaskRow,
 };
 pub(crate) use listing::{TaskEligibilityQuery, metadata_task};
 pub(in crate::application) use notice_port::TaskNoticePort;

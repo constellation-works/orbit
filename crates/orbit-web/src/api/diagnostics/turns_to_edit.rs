@@ -15,17 +15,19 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::OrbitRuntime;
 use orbit_types::task::{TaskStatus, UNSET_BUCKET, complexity_bucket_ord};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// Complexities a request may name; `unassessed` is an alias of the unset
 /// bucket.
@@ -134,6 +136,7 @@ fn parse_filters(q: &TurnsToEditQuery) -> Result<Filters, orbit_core::OrbitError
 /// `GET /api/diagnostics/turns_to_edit` — turns and result bytes before the
 /// first file edit of each task's first implement invocation.
 pub(in crate::api) async fn diagnostics_turns_to_edit(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<TurnsToEditQuery>,
 ) -> Response {
@@ -150,13 +153,32 @@ pub(in crate::api) async fn diagnostics_turns_to_edit(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("turns to first edit", move || {
-        turns_to_edit_trend(&runtime, &range, &filters)
-    })
-    .await
+    let complexities = filters
+        .complexities
+        .as_ref()
+        .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let key = (
+        "turns_to_edit".to_string(),
+        format!(
+            "range={}|outcome={}|complexity={}|tags={}|provider={}",
+            range.key,
+            if filters.done_only { "done" } else { "all" },
+            complexities,
+            filters.tags.join(","),
+            filters.provider.as_deref().unwrap_or_default(),
+        ),
+    );
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            turns_to_edit_trend(&compute_runtime, &range, &filters)
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

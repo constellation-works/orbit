@@ -70,6 +70,17 @@ pub trait TaskHistoryStoreBackend: Send + Sync {
 }
 
 pub trait TaskArtifactStoreBackend: Send + Sync {
+    /// Read one immutable payload named by a manifest the caller already
+    /// loaded from this task. Verify its bytes without reopening the bundle.
+    /// Backends without a snapshot reader retain their ordinary artifact read.
+    fn task_artifact_from_manifest(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        self.get_task_artifact(id, &file.path)
+    }
+
     fn get_task_artifact_manifest(
         &self,
         _id: &str,

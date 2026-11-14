@@ -3,17 +3,19 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::{InvocationQuery, OrbitRuntime};
 use orbit_types::task::{UNSET_BUCKET, complexity_bucket_ord};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::{DiagnosticsRange, actor_label};
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 const ACTIVITY: &str = "implement_one";
 /// Rows read per request; reaching it sets `truncated` on the response.
@@ -27,6 +29,7 @@ const BUCKET_SERIES: [&str; 3] = ["low", "medium", "hard"];
 const TOTAL_SERIES: [&str; 5] = ["low", "medium", "hard", "xhard", UNSET_BUCKET];
 
 pub(in crate::api) async fn diagnostics_implement_one(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
@@ -44,13 +47,22 @@ pub(in crate::api) async fn diagnostics_implement_one(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("implement_one aggregation", move || {
-        implement_one_trend(&runtime, &range, succeeded_only)
-    })
-    .await
+    // Keyed by the parameters that change the result: the normalized outcome
+    // plus the trend window. Invalid outcomes return above and are not cached.
+    let key = (
+        "implement_one".to_string(),
+        format!("outcome={outcome}|range={}", range.key),
+    );
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            implement_one_trend(&compute_runtime, &range, succeeded_only)
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

@@ -12,11 +12,12 @@ use orbit_store::Store;
 use orbit_store::contracts::PluginStoreBackend;
 use orbit_tools::ProcSpawnBudget;
 use orbit_tools::plugin::{
-    CallbackResolution, PluginCallbackIdentity, load_plugin_dir, resolve_plugin_callback_session,
+    CallbackResolution, PluginCallbackIdentity, resolve_plugin_callback_session,
 };
 use orbit_types::plugin::{InstalledPlugin, PluginGrant, PluginProvenance};
 use orbit_types::workflow::{ActivityToolDenyPolicy, ActivityToolPolicyMode};
 
+use crate::runtime::plugin::cache::load_installed_plugin;
 use crate::runtime::plugin::grants::verify_install_path;
 
 thread_local! {
@@ -294,15 +295,19 @@ fn recorded_orbit_tools(
     // writable by the very backend this gate confines. The load pass checks
     // the same thing [ORB-12785], but a backend already running can relocate
     // its row without a reload, so the path is checked again here rather than
-    // reading an allowlist out of a manifest the backend wrote.
+    // reading an allowlist out of a manifest the backend wrote. The cached
+    // load keeps that property: the cache key is the full `InstalledPlugin`
+    // row plus the manifest stamp (or digest when the stamp moved), so a
+    // relocated row or a rewritten manifest misses the cache and reloads
+    // from the tree the current row names.
     verify_install_path(global_root, installed).map_err(OrbitError::PolicyDenied)?;
-    let loaded = load_plugin_dir(Path::new(&installed.install_path)).map_err(|error| {
+    let loaded = load_installed_plugin(installed).map_err(|error| {
         OrbitError::PolicyDenied(format!(
             "plugin '{}' callback allowlist cannot be read from the recorded install: {error}",
             installed.name
         ))
     })?;
-    Ok(loaded.manifest.spec.permissions.orbit_tools)
+    Ok(loaded.manifest.spec.permissions.orbit_tools.clone())
 }
 
 pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {

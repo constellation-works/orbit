@@ -181,6 +181,9 @@ fn completion_trend_keeps_tasks_at_their_durable_transition() {
             // has no time to count at.
             comment_on_task(&fixture, &stale);
 
+            // The Metrics trends memo serves the first response for 90 s, so
+            // the post-write read runs on a fresh server with a cold memo.
+            let server = fixture.server(false);
             let after = json_ok(server.get(&path));
             assert_eq!(after["current"], before["current"], "window totals");
             assert_eq!(after["previous"], before["previous"], "previous totals");
@@ -317,12 +320,25 @@ fn completion_trend_rereads_only_tasks_written_since_the_last_request() {
 
             let (warm, reads) = request();
             assert_eq!(
-                reads, 1,
-                "only the unreadable history is read again, so it stays undated"
+                reads, 0,
+                "the Metrics trends memo serves the repeat request without rereading"
             );
             for key in ["current", "previous", "undated", "previous_undated"] {
                 assert_eq!(warm[key], cold[key], "{key}");
             }
+
+            // A distinct window still computes, and reuses each clean history
+            // read while the task's bundle is unchanged: only the unreadable
+            // history is read again, so it stays undated.
+            let wider = format!("/api/diagnostics/completions?since=7d&{WS}");
+            let before = server.task_query_trace().len();
+            let week = json_ok(server.get(&wider));
+            assert_eq!(
+                history_reads(&server.task_query_trace()[before..]),
+                1,
+                "only the unreadable history is read again"
+            );
+            assert_eq!(week["undated"]["done"]["total"], 1);
 
             // Reconsidering the rejection and rejecting again enters it anew
             // now; a comment on the other task moves its log stamp, not its date.
@@ -341,6 +357,14 @@ fn completion_trend_rereads_only_tasks_written_since_the_last_request() {
             }
             comment_on_task(&fixture, &commented);
 
+            // The memo would serve the pre-write response for 90 s, so the
+            // post-write read runs on a fresh server with a cold memo.
+            let server = fixture.counted_task_server();
+            let request = || {
+                let before = server.task_query_trace().len();
+                let body = json_ok(server.get(&path));
+                (body, history_reads(&server.task_query_trace()[before..]))
+            };
             let (written, reads) = request();
             assert_eq!(reads, 3, "both written tasks and the unreadable one");
             assert_eq!(written["previous"]["rejected"], 0);

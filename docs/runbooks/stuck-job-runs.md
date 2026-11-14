@@ -271,7 +271,7 @@ worker; once it has, the two race to settle the run. A run interrupted with
 job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=4242, pid_start_time=…); worker exit: no supervisor observed or recorded its exit status; worker scope 'orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope' was already gone: no unit result or counters remain (see `journalctl --user -u orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope`)
 ```
 
-The clause names the exit. It does not decide which runs are finalized or when. One recorded sender does change the outcome: a terminating signal sent by `systemd` (an operator shutdown, a service stop, or a scope stop), with no recorded memory or task-limit breach, settles `held` under `operator_stopped` and is left out of failure counts. The supervisor and reconciliation apply that same rule. An unknown or unreadable sender, another command (including `orbit`), a crash exit, and a resource-limit breach stay failures (`interrupted` / `worker_terminated`, or `worker_resource_limit` when the scope records the breach). Reconciliation that finalizes before the exit row exists still writes `interrupted`; the later `afterwards` clause can name the sender and does not rewrite that terminal state.
+The clause names the exit. It does not decide which runs are finalized or when. A terminating signal sent by `systemd` (an operator shutdown, a service stop, or a scope stop), with no recorded memory or task-limit breach, settles `held` under `operator_stopped` when the exit row is available before finalization; that state is left out of failure counts. If stale-owner reconciliation finalizes before the exit row exists, it writes `interrupted` / `worker_terminated`, and a later `afterwards` clause does not rewrite that terminal state. A supervisor that finalizes a running worker's non-signal crash exit first writes `failed` without `worker_terminated`. Both crash outcomes count as failures. An unknown or unreadable sender, another command (including `orbit`), and a resource-limit breach also remain failures (`worker_resource_limit` when the scope records the breach).
 
 #### Who sent the signal
 
@@ -292,6 +292,8 @@ held because the host manager stopped the worker; pipeline worker for run '…' 
 ```
 
 That example is a host-manager stop: the run is `held` with `operator_stopped`. Resume it with `orbit job resume`.
+
+Before a stopped worker's run is finalized on either path — the supervisor for a worker it reaped with a terminating signal, reconciliation for a dead owner it found — it keeps the worker's candidate: `HEAD` plus any uncommitted changes, committed detached under `refs/orbit/rescue/<run-id>` in the worktree's repository. The run's diagnostic and its `rescue_candidate` pipeline record name that ref and commit, and `orbit run show` prints them, so the candidate survives the worktree's later removal; check it out from the ref to resume or salvage it. A clean worktree keeps just its `HEAD` under the same ref. When nothing could be kept, the diagnostic says so instead of naming a ref.
 
 Look the pid up in `journalctl --user` or `journalctl -b` around the exit time to find
 the unit or tool behind it. A signalled exit with no captured sender reads `sender

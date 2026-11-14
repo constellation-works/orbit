@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use super::index::IndexUsable;
 use super::*;
 use crate::contracts::{
-    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage,
-    TaskResidualFilter, TaskRow,
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
+    TaskPage, TaskResidualFilter, TaskRow,
 };
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
@@ -250,6 +250,7 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
         residual: TaskResidualFilter<'_>,
+        hydration: TaskListHydration,
     ) -> Result<TaskPage, OrbitError> {
         let filter = filter.normalized();
         let selection_filter = if residual.is_some() {
@@ -284,6 +285,22 @@ impl TaskV2Store {
         for candidate in selected {
             if items.len() >= limit {
                 break;
+            }
+            if hydration == TaskListHydration::EnvelopeOnly {
+                // Compact page: the candidate envelope is the whole row.
+                // No bundle read, so no body documents or sidecars, and a
+                // task a concurrent writer holds still lists from the
+                // envelope selection already validated.
+                let task = Self::metadata_task(&candidate);
+                if residual.is_none_or(|matches| matches(&task, &status_by_id)) {
+                    items.push(TaskRow {
+                        task,
+                        comments: Vec::new(),
+                        history: Vec::new(),
+                        artifacts: Vec::new(),
+                    });
+                }
+                continue;
             }
             let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
                 continue;
