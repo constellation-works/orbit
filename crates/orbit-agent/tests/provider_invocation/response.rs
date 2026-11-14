@@ -1575,12 +1575,9 @@ fn provider_schema_stays_in_claude_subset_and_parser_correlates_status() {
 
     // The Claude invocation boundary receives this schema as --json-schema.
     let cfg = AgentConfig::cli("claude").expect("claude provider config");
-    let (spec, _) = Agent::new(&cfg)
+    let spec = Agent::new(&cfg)
         .expect("claude provider adapter")
-        .invoke(AgentRequest::activity(
-            "fixture",
-            br#"{"prompt":"fixture"}"#.to_vec(),
-        ))
+        .invoke(AgentRequest::activity(br#"{"prompt":"fixture"}"#.to_vec()))
         .expect("claude invocation spec");
     let cli_schema = spec
         .args

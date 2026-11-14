@@ -11,7 +11,6 @@ pub(crate) mod copilot;
 pub(crate) mod gemini;
 pub(crate) mod grok;
 mod long_prompt;
-pub(crate) mod mock_agent;
 pub(crate) mod muse;
 pub(crate) mod ollama;
 mod usage_window;
@@ -31,20 +30,18 @@ use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
 use serde_json::Value;
 
 /// Builds the `AgentInvocationSpec` for a provider, combining CLI args and stdin.
-/// All three runtimes share this same structure; only the provider differs.
+/// Every runtime shares this structure; callers set provider-specific env and
+/// prompt-file fields afterward.
 pub(crate) fn build_invocation_spec(
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
     command: String,
     args: Vec<String>,
     stdin: Vec<u8>,
 ) -> AgentInvocationSpec {
     AgentInvocationSpec {
-        runtime_key,
         program: command,
         args,
         stdin,
-        stdout_schema_json: None,
         required_env_vars,
         fixed_env: &[],
         prompt_file_flag: None,

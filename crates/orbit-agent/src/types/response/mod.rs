@@ -108,13 +108,11 @@ pub fn provider_content_refusal(text: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInvocationSpec {
-    pub runtime_key: &'static str,
     pub program: String,
     pub args: Vec<String>,
     /// The prompt bytes the provider must receive: on stdin unless
     /// `prompt_file_flag` names a file transport.
     pub stdin: Vec<u8>,
-    pub stdout_schema_json: Option<Value>,
     pub required_env_vars: &'static [&'static str],
     /// Environment entries the provider pins for every invocation. They are
     /// applied over the `[execution.env]` allowlist, so an outer process

@@ -5,7 +5,6 @@ use crate::providers::codex::codex_cli::CodexCliTransport;
 use crate::runtime::{AgentRuntime, AgentRuntimeFactory};
 use crate::types::{AgentInvocationSpec, AgentRequest};
 use orbit_common::OrbitError;
-use orbit_types::telemetry::InvocationTrace;
 
 const RUNTIME_KEY: &str = "codex";
 /// `CODEX_HOME` is non-secret state-root context: the sandbox grants exactly
@@ -16,7 +15,6 @@ const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CODEX_HOME"];
 pub(crate) struct CodexRuntime {
     command: String,
     cli: CodexCliTransport,
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
 }
 
@@ -26,13 +24,11 @@ impl CodexRuntime {
     pub(crate) fn new(
         command: String,
         cli: CodexCliTransport,
-        runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
             cli,
-            runtime_key,
             required_env_vars,
         }
     }
@@ -102,7 +98,6 @@ impl AgentRuntimeFactory for CodexFactory {
                     writable_dirs.clone(),
                     *allow_login_shell,
                 ),
-                self.key(),
                 self.required_env_vars(),
             ))),
             _ => Err(OrbitError::InvalidInput(format!(
@@ -114,23 +109,12 @@ impl AgentRuntimeFactory for CodexFactory {
 }
 
 impl AgentRuntime for CodexRuntime {
-    fn invoke(
-        &self,
-        req: AgentRequest,
-    ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
-        // Note: stdout_schema_json is intentionally None — Codex rejects Orbit's
-        // generic envelope schema because open-ended object branches must be closed
-        // with additionalProperties=false. Orbit validates the returned envelope
-        // after execution instead.
-        Ok((
-            crate::providers::build_invocation_spec(
-                self.runtime_key,
-                self.required_env_vars,
-                self.command.clone(),
-                self.cli.args(req.conversation_ref.as_deref()),
-                self.cli.stdin(&req.envelope_json),
-            ),
-            InvocationTrace::default(),
+    fn invoke(&self, req: AgentRequest) -> Result<AgentInvocationSpec, OrbitError> {
+        Ok(crate::providers::build_invocation_spec(
+            self.required_env_vars,
+            self.command.clone(),
+            self.cli.args(req.conversation_ref.as_deref()),
+            self.cli.stdin(&req.envelope_json),
         ))
     }
 

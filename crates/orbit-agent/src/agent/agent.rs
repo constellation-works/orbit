@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::ReasoningEffort;
-use orbit_types::telemetry::InvocationTrace;
 
 use crate::runtime::{AgentRuntime, ProviderRegistry, resolve_runtime};
 use crate::types::{AgentInvocationSpec, AgentRequest};
@@ -24,7 +23,6 @@ pub enum ProviderOptions {
     Copilot,
     Ollama,
     Muse,
-    Mock,
 }
 
 impl ProviderOptions {
@@ -44,7 +42,6 @@ impl ProviderOptions {
             Self::Copilot => "copilot",
             Self::Ollama => "ollama",
             Self::Muse => "muse",
-            Self::Mock => "mock",
         }
     }
 }
@@ -138,10 +135,7 @@ impl Agent {
         })
     }
 
-    pub fn invoke(
-        &self,
-        req: AgentRequest,
-    ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
+    pub fn invoke(&self, req: AgentRequest) -> Result<AgentInvocationSpec, OrbitError> {
         self.runtime.invoke(req)
     }
 

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
+use orbit_agent::{Agent, AgentConfig, AgentRequest};
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_types::identity::CrewEnvVar;
 use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
@@ -92,13 +92,9 @@ pub fn run_auth_probe(
     .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let agent = Agent::new(&config)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-    let (invocation, _) = agent
+    let invocation = agent
         .invoke(AgentRequest {
-            operation: AgentOperation::Activity {
-                activity_id: "auth_probe".into(),
-            },
             envelope_json: probe.stdin.as_bytes().to_vec(),
-            verbose: false,
             conversation_ref: None,
         })
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;

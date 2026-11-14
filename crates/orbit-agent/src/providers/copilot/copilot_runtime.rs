@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
-use orbit_types::telemetry::InvocationTrace;
 
 use crate::agent::{AgentConfig, ProviderOptions};
 use crate::providers::copilot::copilot_cli::CopilotCliTransport;
@@ -34,7 +33,6 @@ const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "COPILOT_HOME", "XDG_CACHE_
 pub(crate) struct CopilotRuntime {
     command: String,
     cli: CopilotCliTransport,
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
 }
 
@@ -44,13 +42,11 @@ impl CopilotRuntime {
     pub(crate) fn new(
         command: String,
         model: Option<String>,
-        runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
             cli: CopilotCliTransport::new(model),
-            runtime_key,
             required_env_vars,
         }
     }
@@ -77,7 +73,6 @@ impl AgentRuntimeFactory for CopilotFactory {
             ProviderOptions::Copilot => Ok(Box::new(CopilotRuntime::new(
                 cfg.command.clone(),
                 cfg.model.clone(),
-                self.key(),
                 self.required_env_vars(),
             ))),
             _ => Err(OrbitError::InvalidInput(format!(
@@ -89,19 +84,12 @@ impl AgentRuntimeFactory for CopilotFactory {
 }
 
 impl AgentRuntime for CopilotRuntime {
-    fn invoke(
-        &self,
-        req: AgentRequest,
-    ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
-        Ok((
-            crate::providers::build_invocation_spec(
-                self.runtime_key,
-                self.required_env_vars,
-                self.command.clone(),
-                self.cli.args(),
-                self.cli.stdin(&req.envelope_json),
-            ),
-            InvocationTrace::default(),
+    fn invoke(&self, req: AgentRequest) -> Result<AgentInvocationSpec, OrbitError> {
+        Ok(crate::providers::build_invocation_spec(
+            self.required_env_vars,
+            self.command.clone(),
+            self.cli.args(),
+            self.cli.stdin(&req.envelope_json),
         ))
     }
 
