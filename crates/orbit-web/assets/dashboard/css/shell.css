@@ -163,11 +163,57 @@
    label. Keep the volume beside the label and the attention pill below it.
    The horizontal mobile rail has intrinsic-width buttons and needs no wrap. */
 @media (min-width: 761px) {
-  /* The sticky host block covers the bottom of the scrollport. The router
-     measures it as readings wrap; reserve that space and the 4px focus ring
-     when revealing a destination or a keyboard-focused view. */
-  .rail { scroll-padding-block: 4px calc(var(--rail-foot-height, 0px) + 4px); }
+  /* Short windows: the rail itself does not scroll. The selectors, every
+     destination and the foot stay put, and only the open destination's
+     views shrink into their own scrolling region. Tall windows are
+     unchanged: nothing grows, and the foot's margin-top:auto still takes
+     the spare room below the destinations. */
+  .rail { overflow-y: hidden; }
+  .rail-host, .rail-workspace, .rail-foot { flex: 0 0 auto; }
+  .rail .tabs { flex: 0 1 auto; min-height: 0; overflow: hidden; }
+  .rail-group { flex: 0 0 auto; min-height: 0; }
+  .rail-group:has(> .rail-subtabs:not(.dimmed)) { flex: 0 1 auto; }
+  .rail-group > .rail-group-label, .rail-group > .tab { flex: 0 0 auto; }
+  .rail-subtabs:not(.dimmed) {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-padding-block: 4px;
+    scrollbar-width: thin;
+  }
+  /* Views keep their 30px line and scroll out of the region; they never
+     squash to fit it. */
+  .rail-subtabs .subtab { flex: 0 0 auto; }
+  /* The fade cue the phone strips use, turned vertical: an edge fades
+     only while it hides more views (classes set by syncRailScrollCues). */
+  .rail-subtabs.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
+  }
+  .rail-subtabs.has-overflow-start {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  }
+  .rail-subtabs.has-overflow-start.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  }
   .rail .tab, .rail-subtabs .subtab { scroll-margin-block: 4px; }
+}
+/* On a short desktop window, fixed rail content plus a usable views
+   region can exceed the height even before any view is shown. Tighten
+   only the rail's spacing (not label or row heights) so at least two
+   views stay whole beside every destination and the foot. Taller
+   windows keep the spacing above. */
+@media (min-width: 761px) and (max-height: 800px) {
+  .shell > .rail { padding: 8px 12px 6px; }
+  .shell > .rail .tabs { gap: 6px; margin-top: 6px; margin-bottom: 4px; }
+  .shell > .rail .rail-group-label { padding-bottom: 2px; }
+  .shell > .rail .rail-foot { gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+  .shell > .rail .rail-subtabs:not(.dimmed) { min-height: 64px; }
+}
+@media (min-width: 761px) {
   .rail .tab:has(> .rail-count + .rail-count:not([hidden])) {
     display: grid;
     grid-template-columns: 17px minmax(0, 1fr) max-content;
