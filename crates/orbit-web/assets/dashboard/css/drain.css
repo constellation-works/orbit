@@ -33,21 +33,78 @@
 #auto-drain-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; min-width: 0; }
 
 /* The status card's header: title, phase pill, then the window's deadline. */
-#dock-pane-drain #auto-drain-panel > header { justify-content: flex-start; align-items: center; }
-.drain-when { margin-left: auto; color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; }
+/* One line at every card width (STD-07 R23): never wraps or scrolls; it
+   shrinks then drops members by importance in the container stages below. */
+#dock-pane-drain #auto-drain-panel > header {
+  position: relative; justify-content: flex-start; align-items: center; flex-wrap: nowrap;
+  overflow: hidden; white-space: nowrap; min-height: 51px; box-sizing: border-box;
+}
+#auto-drain-panel > header > * { flex: 0 1 auto; min-width: 0; }
+#auto-drain-panel .drain-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#auto-drain-panel #auto-drain-host { flex: 0 1 140px; min-width: 56px; text-overflow: ellipsis; }
+#auto-drain-panel .drain-phase { flex: 0 0 auto; }
+.drain-when { margin-left: auto; color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .drain-when:empty { display: none; }
+@container drain-card (max-width: 480px) {
+  #auto-drain-panel > header { gap: 4px 8px; }
+  #auto-drain-panel #auto-drain-host { flex-basis: 88px; max-width: 88px; }
+  /* The pill keeps its dot; its word lives in its name and title. */
+  #auto-drain-panel #auto-drain-phase-label {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  #auto-drain-panel .drain-phase { padding: 0 7px; }
+}
+@container drain-card (max-width: 340px) {
+  #auto-drain-panel .drain-title {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+}
+@container drain-card (max-width: 260px) {
+  #auto-drain-panel .drain-when {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+}
 
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;
    only the first load and a failed refresh show. */
 #auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
 #auto-drain-body .operations-readonly-note { margin: 0; }
 
-/* The live window: one row of figures, number then word. */
-.drain-window-stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin: 0; }
-.drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+/* The live window: one row of figures, number then word. One line at every
+   card width: shrinks, then drops held, admitted, approved (running stays). */
+.drain-window-stats { position: relative; display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 18px; margin: 0; overflow: hidden; white-space: nowrap; min-height: 24px; }
+.drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; flex: 0 0 auto; }
 .drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
-.drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); }
-.drain-window-stat-detail { order: 3; color: var(--warn-fg); font-size: 12px; font-weight: 500; }
+.drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); white-space: nowrap; }
+.drain-window-stat-detail { order: 3; color: var(--warn-fg); font-size: 12px; font-weight: 500; white-space: nowrap; }
+@container drain-card (max-width: 440px) {
+  .drain-window-stats { gap: 4px 10px; }
+  .drain-window-stat { gap: 4px; }
+  .drain-window-stat dd { font-size: 16px; }
+  .drain-window-stat dt { font-size: 11px; }
+  .drain-window-stat-detail { font-size: 11px; }
+}
+@container drain-card (max-width: 340px) {
+  .drain-window-stat-detail {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+}
+@container drain-card (max-width: 280px) {
+  .drain-window-stat[data-stat="admitted"] {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+}
+@container drain-card (max-width: 210px) {
+  .drain-window-stat[data-stat="approved"] {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+}
 .drain-window { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
 /* Workspace leaf slots: a bar of one segment per slot (or one fill past 24),
