@@ -19,7 +19,7 @@ pub use providers::{
     normalize_cli_stdout, project_cli_response, provider_long_prompt_requests,
     provider_supports_continuity, provider_usage_windows, recorded_tool_calls,
 };
-pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
+pub use types::{AgentRequest, AgentResponseStatus};
 pub use types::{
     DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
     ParsedStdout, is_missing_envelope_violation, is_success_carrying_error_violation,

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
-use orbit_types::telemetry::InvocationTrace;
 
 use crate::agent::{AgentConfig, ProviderOptions};
 use crate::providers::claude::claude_cli::{CLAUDE_CLI_FIXED_ENV, ClaudeCliTransport};
@@ -17,7 +16,6 @@ const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CLAUDE_CONFIG_DIR"];
 pub(crate) struct ClaudeRuntime {
     command: String,
     cli: ClaudeCliTransport,
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
 }
 
@@ -28,13 +26,11 @@ impl ClaudeRuntime {
         command: String,
         model: Option<String>,
         reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
-        runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
             cli: ClaudeCliTransport::new(model, reasoning_effort),
-            runtime_key,
             required_env_vars,
         }
     }
@@ -62,7 +58,6 @@ impl AgentRuntimeFactory for ClaudeFactory {
                 cfg.command.clone(),
                 cfg.model.clone(),
                 cfg.reasoning_effort,
-                self.key(),
                 self.required_env_vars(),
             ))),
             _ => Err(OrbitError::InvalidInput(format!(
@@ -74,19 +69,15 @@ impl AgentRuntimeFactory for ClaudeFactory {
 }
 
 impl AgentRuntime for ClaudeRuntime {
-    fn invoke(
-        &self,
-        req: AgentRequest,
-    ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
+    fn invoke(&self, req: AgentRequest) -> Result<AgentInvocationSpec, OrbitError> {
         let mut spec = crate::providers::build_invocation_spec(
-            self.runtime_key,
             self.required_env_vars,
             self.command.clone(),
             self.cli.args(req.conversation_ref.as_deref()),
             self.cli.stdin(&req.envelope_json),
         );
         spec.fixed_env = CLAUDE_CLI_FIXED_ENV;
-        Ok((spec, InvocationTrace::default()))
+        Ok(spec)
     }
 
     fn model_name(&self) -> Option<&str> {

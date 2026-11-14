@@ -94,14 +94,6 @@ const CLI_CASES: &[CliCase] = &[
         model_flag: "--model",
         effort_flag: Some("--reasoning-effort"),
     },
-    CliCase {
-        provider: "mock",
-        binary: "mock-agent",
-        model: "",
-        emitted_model: "",
-        model_flag: "",
-        effort_flag: None,
-    },
 ];
 
 /// State/cache root overrides each provider owns. Shared XDG names belong
@@ -180,10 +172,9 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         (configured && case.effort_flag.is_some()).then_some(ReasoningEffort::High);
                     let cfg = cfg.with_reasoning_effort(effort).expect("supported effort");
                     let envelope = json!({"prompt": "private-prompt-sentinel with spaces\nand a second line", "input": {"provider": case.provider}});
-                    let (spec, _) = Agent::new(&cfg)
+                    let spec = Agent::new(&cfg)
                         .expect("public provider adapter")
                         .invoke(AgentRequest::activity(
-                            "fixture",
                             serde_json::to_vec(&envelope).unwrap(),
                         ))
                         .expect("invocation");
@@ -262,10 +253,8 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                     } else {
                         stdin
                     };
-                    // The mock executor sends the bare envelope; every real CLI
-                    // provider prefixes the shared response contract.
                     assert!(
-                        case.provider == "mock" || prompt.contains("Never generate synthetic load"),
+                        prompt.contains("Never generate synthetic load"),
                         "{} prompt dropped the no-synthetic-load rule; a worker's CPU burners \
                          took a shared host to load 89.7 on 32 cores (ORB-15196)",
                         case.provider
@@ -435,9 +424,9 @@ fn continuity_resume_is_emitted_only_by_supporting_provider_adapters() {
         .unwrap();
         let agent = Agent::new(&cfg).unwrap();
         assert_eq!(agent.supports_continuity(), expected_pair.is_some());
-        let (spec, _) = agent
+        let spec = agent
             .invoke(
-                AgentRequest::activity("resident_cycle", envelope_bytes.clone())
+                AgentRequest::activity(envelope_bytes.clone())
                     .with_conversation_ref(Some("conv-live-42".to_string())),
             )
             .unwrap();

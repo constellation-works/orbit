@@ -1,7 +1,7 @@
 mod request;
 mod response;
 
-pub use request::{AgentOperation, AgentRequest};
+pub use request::AgentRequest;
 pub(crate) use response::request_usage;
 pub(crate) use response::tool_calls_in_documents;
 pub use response::{AgentInvocationSpec, AgentResponseStatus};

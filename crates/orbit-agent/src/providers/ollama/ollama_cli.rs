@@ -20,17 +20,13 @@ impl OllamaCliTransport {
         Ok(Self { model })
     }
 
-    pub(crate) fn args(&self, verbose: bool) -> Vec<String> {
-        let mut args = vec![
+    pub(crate) fn args(&self) -> Vec<String> {
+        vec![
             "run".to_string(),
             self.model.clone(),
             "--format".to_string(),
             "json".to_string(),
-        ];
-        if verbose {
-            args.push("--verbose".to_string());
-        }
-        args
+        ]
     }
 
     pub(crate) fn stdin(&self, envelope_json: &[u8]) -> Vec<u8> {

@@ -1,8 +1,8 @@
 # orbit-agent
 
 Provider CLI runtimes and audit contracts for Orbit. Provider adapters drive
-`claude`, `codex`, `copilot`, `gemini`, `agy`, `grok`, `ollama`,
-`muse`, and `mock-agent` through subprocess command
+`claude`, `codex`, `copilot`, `gemini`, `agy`, `grok`, `ollama` and
+`muse` through subprocess command
 descriptors. A descriptor sends the prompt on stdin, or, for a CLI that cannot
 read stdin (`muse`), names a prompt-file flag the engine fills with a private
 file path.
@@ -56,7 +56,7 @@ rollout supplies all current-turn requests, including those lost from stdout.
 
 `./scripts/build-budget.py -- cargo test -p orbit-agent --test provider_invocation`
 runs one integration binary on Unix. Recording shell executables exercise every
-CLI adapter's public `Agent` invocation, including the internal mock provider.
+CLI adapter's public `Agent` invocation.
 `Provider::ALL` requires a CLI fixture or a structured unsupported-provider
 error, including the persisted `openai_compat` provider value.
 

@@ -96,7 +96,7 @@ impl<'a> ParsedStdout<'a> {
             Ok(documents) => extract_invocation_trace(documents, duration_ms),
             Err(_) => InvocationTrace {
                 duration_ms,
-                ..InvocationTrace::default()
+                ..Default::default()
             },
         }
     }

@@ -165,8 +165,8 @@ mod copilot {
             "data": {"content": String::from_utf8(
                 Agent::new(&AgentConfig::cli("copilot").expect("Copilot config"))
                     .expect("Copilot adapter")
-                    .invoke(AgentRequest::activity("fixture", br#"{"schemaVersion":1,"input":{}}"#.to_vec()))
-                    .expect("Copilot invocation").0.stdin,
+                    .invoke(AgentRequest::activity(br#"{"schemaVersion":1,"input":{}}"#.to_vec()))
+                    .expect("Copilot invocation").stdin,
             ).expect("utf8 prompt")},
         });
         let stdout = format!("{prompt_echo}\n");

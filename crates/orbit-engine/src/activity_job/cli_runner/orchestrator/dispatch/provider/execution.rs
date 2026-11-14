@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use orbit_agent::{AgentOperation, AgentRequest};
+use orbit_agent::AgentRequest;
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::ActivityToolDenyPolicy;
@@ -146,17 +146,13 @@ pub(in super::super) fn dispatch_prepared_provider(
     )?;
 
     let agent_req = AgentRequest {
-        operation: AgentOperation::Activity {
-            activity_id: "v2_cli_backend".to_string(),
-        },
         envelope_json,
-        verbose: false,
         conversation_ref: active_conversation_ref.clone(),
     };
 
     // `invoke` only renders the argv/stdin for the subprocess (nothing has
     // executed yet) — failures here are deterministic request-shaping errors.
-    let (mut invocation, _trace) = agent
+    let mut invocation = agent
         .invoke(agent_req)
         .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent invoke: {err}")))?;
     let model = agent.model_name().map(str::to_string);
@@ -477,13 +473,9 @@ pub(in super::super) fn dispatch_prepared_provider(
             &activity_tools.effective_tools,
             crew_memory,
         )?;
-        let (fallback_invocation, _trace) = agent
+        let fallback_invocation = agent
             .invoke(AgentRequest {
-                operation: AgentOperation::Activity {
-                    activity_id: "v2_cli_backend".to_string(),
-                },
                 envelope_json: fallback_envelope_json,
-                verbose: false,
                 conversation_ref: None,
             })
             .map_err(|err| {
