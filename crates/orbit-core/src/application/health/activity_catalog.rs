@@ -140,9 +140,9 @@ fn spec_backend_value(raw: &str) -> Option<String> {
 }
 
 /// Linked `.yaml`/`.yml` file below a catalog root.
-const LINKED_FILE: &str = "symbolic link below the catalog root; activity health reads only regular files inside the catalog, so it was not inspected or rewritten";
+const LINKED_FILE: &str = "symbolic link below the catalog root; activity health reads only regular files inside the catalog, so it was not inspected";
 /// Linked directory below a catalog root.
-const LINKED_DIR: &str = "linked directory below the catalog root; activity health does not follow it, so activities beneath it were not inspected or rewritten";
+const LINKED_DIR: &str = "linked directory below the catalog root; activity health does not follow it, so activities beneath it were not inspected";
 /// FIFO, socket, device, or other special `.yaml`/`.yml` entry.
 const NOT_REGULAR: &str =
     "not a regular file; activity health does not read special files, so it was not inspected";
