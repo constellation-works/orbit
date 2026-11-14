@@ -12,8 +12,8 @@ use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
-    HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
-    execute_global_in_process_tool_dispatch, execute_global_plugin_tool,
+    GlobalAuditStoreCache, HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
+    execute_global_in_process_tool_dispatch_with_audit_writer, execute_global_plugin_tool,
 };
 use orbit_core::runtime::HostLifetime;
 use orbit_mcp::federated;
@@ -46,6 +46,9 @@ pub(super) struct ServerMcpHost {
     /// One task-registry handle for id-routed owner lookups, so a warm server
     /// does not reopen the registry on every `orbit.task.show`.
     task_owners: TaskOwnerLookup,
+    /// One writable audit store for global dispatches, reopened when the
+    /// `config.toml` stamp or the database file identity changes.
+    audit_store: GlobalAuditStoreCache,
 }
 
 /// The combined tool surface and the plugin snapshot it was built from.
@@ -79,6 +82,7 @@ impl ServerMcpHost {
             definitions: Mutex::new(None),
             owner_route_sessions: federated::RoutedSessionPool::default(),
             task_owners: TaskOwnerLookup::default(),
+            audit_store: GlobalAuditStoreCache::default(),
         }
     }
 
@@ -359,12 +363,16 @@ impl ServerMcpHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        execute_global_in_process_tool_dispatch(
+        execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.global_root,
             name,
             input,
             ToolEntryPoint::Mcp,
             context,
+            |params, invocation| {
+                self.audit_store
+                    .insert_audit_event_record(&self.global_root, params, invocation)
+            },
             |input| match name {
                 "orbit.workspace.list" => self.list_workspaces(&input),
                 orbit_mcp::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL => {
@@ -577,12 +585,16 @@ impl ServerMcpHost {
         context: ToolSessionContext,
         error: OrbitError,
     ) -> Result<Value, OrbitError> {
-        execute_global_in_process_tool_dispatch(
+        execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.global_root,
             name,
             input,
             ToolEntryPoint::Mcp,
             context,
+            |params, invocation| {
+                self.audit_store
+                    .insert_audit_event_record(&self.global_root, params, invocation)
+            },
             move |_| Err(error),
         )
         .map(|outcome| outcome.value)

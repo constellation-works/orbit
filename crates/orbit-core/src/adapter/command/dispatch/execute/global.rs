@@ -1,14 +1,17 @@
 //! Server-global and host-global tool dispatch: tools with no workspace
 //! runtime behind them, audited through the global audit store.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::Store;
+use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
+use crate::adapter::command::plugin::mcp_surface::{FileIdentity, FileStamp};
 use crate::runtime::tool_exec::{check_activity_tool_policy, check_tool_active};
 
 use super::super::audit::{activity_binding_from_env, managed_run_context};
@@ -40,6 +43,40 @@ pub fn execute_global_in_process_tool_dispatch<F>(
 where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
 {
+    execute_global_in_process_tool_dispatch_with_audit_writer(
+        global_root,
+        name,
+        input,
+        entry_point,
+        session_context,
+        |params, invocation| {
+            let audit_db = orbit_config::resolved_audit_db_path(
+                &orbit_config::ConfigRoots::global_only(global_root),
+            )?;
+            Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
+        },
+        dispatch,
+    )
+}
+
+/// Like [`execute_global_in_process_tool_dispatch`], but the caller supplies
+/// the audit writer. A long-lived host can therefore reuse one writable
+/// audit store across dispatches instead of opening it per call. The writer
+/// is invoked with the same params and invocation fields, and its result
+/// goes through the same fail-closed finalization as the open-per-call path.
+pub fn execute_global_in_process_tool_dispatch_with_audit_writer<F, S>(
+    global_root: &Path,
+    name: &str,
+    input: Value,
+    entry_point: ToolEntryPoint,
+    session_context: ToolSessionContext,
+    audit_writer: S,
+    dispatch: F,
+) -> Result<ToolDispatchOutcome, OrbitError>
+where
+    F: FnOnce(Value) -> Result<Value, OrbitError>,
+    S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
+{
     execute_tool_dispatch_with_audit_store(
         name,
         input,
@@ -53,12 +90,7 @@ where
             brokered: None,
             orchestrator_model: None,
         },
-        |params, invocation| {
-            let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_config::ConfigRoots::global_only(global_root),
-            )?;
-            Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
-        },
+        audit_writer,
         |input| {
             enforce_plugin_callback_allowlist_from_root(global_root, name)?;
             if session_context.application.is_some()
@@ -69,6 +101,75 @@ where
             dispatch(input)
         },
     )
+}
+
+/// One writable audit store shared across global dispatches on a long-lived
+/// host. Reopened when the `config.toml` stamp or the database file identity
+/// changes, as [`crate::adapter::command::HostPluginMcpCache`] does for its
+/// read-only store. A warm cache performs neither `ResolvedConfig::load` nor
+/// `Store::open`.
+#[derive(Default)]
+pub struct GlobalAuditStoreCache(Mutex<Option<CachedGlobalAuditStore>>);
+
+struct CachedGlobalAuditStore {
+    global_root: PathBuf,
+    config_stamp: FileStamp,
+    audit_db: PathBuf,
+    database_identity: Option<FileIdentity>,
+    store: Store,
+}
+
+impl GlobalAuditStoreCache {
+    /// Insert one audit row through the shared store, opening or reopening
+    /// it only when the stamps above say the cached handle is stale.
+    pub fn insert_audit_event_record(
+        &self,
+        global_root: &Path,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        self.store(global_root)?
+            .insert_audit_event_record_with_invocation(params, invocation)
+    }
+
+    fn store(&self, global_root: &Path) -> Result<Store, OrbitError> {
+        let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let config_stamp = FileStamp::read(&global_root.join("config.toml"));
+        if cached
+            .as_ref()
+            .is_none_or(|host| host.global_root != global_root || host.config_stamp != config_stamp)
+        {
+            *cached = None;
+            let audit_db = orbit_config::resolved_audit_db_path(
+                &orbit_config::ConfigRoots::global_only(global_root),
+            )?;
+            let store = Store::open(&audit_db)?;
+            let database_identity = FileIdentity::read(&audit_db).ok();
+            *cached = Some(CachedGlobalAuditStore {
+                global_root: global_root.to_path_buf(),
+                config_stamp,
+                audit_db,
+                database_identity,
+                store,
+            });
+        }
+        let Some(host) = cached.as_mut() else {
+            return Err(OrbitError::Store("audit store cache unavailable".into()));
+        };
+        match FileIdentity::read(&host.audit_db) {
+            Ok(current) if host.database_identity.as_ref() != Some(&current) => {
+                host.store = Store::open(&host.audit_db)?;
+                host.database_identity = Some(current);
+            }
+            Ok(_) => {}
+            Err(_) => {
+                let audit_db = host.audit_db.clone();
+                host.store = Store::open(&audit_db)?;
+                host.database_identity = FileIdentity::read(&audit_db).ok();
+            }
+        }
+        Ok(host.store.clone())
+    }
 }
 
 /// Execute one host-global plugin tool inside the audited dispatch boundary.

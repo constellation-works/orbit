@@ -102,13 +102,13 @@ impl PluginStamp {
 }
 
 #[derive(PartialEq, Eq)]
-struct FileStamp {
+pub(crate) struct FileStamp {
     link: Option<(SystemTime, u64, bool)>,
     target: Option<(SystemTime, u64)>,
 }
 
 impl FileStamp {
-    fn read(path: &Path) -> Self {
+    pub(crate) fn read(path: &Path) -> Self {
         Self {
             link: std::fs::symlink_metadata(path).ok().and_then(|metadata| {
                 Some((
@@ -126,14 +126,14 @@ impl FileStamp {
 
 /// Detect database replacement without treating every audit write as a change.
 #[derive(PartialEq, Eq)]
-struct FileIdentity {
+pub(crate) struct FileIdentity {
     created: Option<SystemTime>,
     #[cfg(unix)]
     device_inode: (u64, u64),
 }
 
 impl FileIdentity {
-    fn read(path: &Path) -> Result<Self, OrbitError> {
+    pub(crate) fn read(path: &Path) -> Result<Self, OrbitError> {
         let metadata = std::fs::metadata(path)?;
         Ok(Self {
             created: metadata.created().ok(),

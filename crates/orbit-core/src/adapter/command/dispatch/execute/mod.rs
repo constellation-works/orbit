@@ -12,5 +12,8 @@ pub use audit_store::ToolDispatchOutcome;
 pub use entry::{
     ToolEntryPoint, mark_tool_audit_recorded, take_tool_audit_recorded, tool_suggestion_context,
 };
-pub use global::execute_global_in_process_tool_dispatch;
 pub(in crate::adapter::command) use global::execute_global_plugin_dispatch;
+pub use global::{
+    GlobalAuditStoreCache, execute_global_in_process_tool_dispatch,
+    execute_global_in_process_tool_dispatch_with_audit_writer,
+};
