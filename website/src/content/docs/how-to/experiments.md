@@ -1,69 +1,42 @@
 ---
 title: Run an experiment
-description: "Compare agent treatments with orbit experiment: define control and treatment arms, enroll tasks, read the verdict, and conclude without changing configuration automatically."
-sidebar:
-  order: 8
+description: "Compare agent treatments with orbit experiment: define arms, enroll tasks, read the verdict and conclude."
 ---
 
-An experiment is a randomized comparison of agent treatments in one
-workspace. You define arms — one control and one or more treatments, each
-with a weight and an overlay — and Orbit assigns each enrolled task to an
-arm before its delivery crew is drawn. A readout then compares the arms on
-one primary metric, with guardrails, from the records Orbit already keeps.
-
 Run an experiment when you want evidence before you make a treatment the
-default: a different instruction file, a replaced skill, a changed tool
-grant, a different crew pool, or one admitted configuration value. Run it in
-`shadow` first when you only need the assignment and outcome records; run it
-`live` when the treatment itself must change what dispatched agents receive.
+default: a different instruction file, a replaced skill, a changed tool grant
+or a different crew pool. You define one control arm and one or more treatment
+arms. Orbit assigns each enrolled task to an arm, and a readout compares the
+arms on one primary metric, with guardrails.
 
-Every lifecycle write is the operator's. The CLI and the MCP tools reach the
-same governed operations, and an agent session is refused for every write
-below. `show`, `list`, and `readout` are read-only and any caller may use
-them. In MCP terms the tools are `orbit.experiment.create`, `update`,
-`clone`, `start`, `pause`, `resume`, `reweight`, `assign`, `conclude`,
-`abandon`, `show`, `list`, and `readout`; the writes carry the same
-operator-only refusal there. `delete` has no MCP tool: it is an operator
-CLI command only.
+Only an operator can create or change an experiment; an agent session is
+refused. `show`, `list` and `readout` are read-only and open to any caller.
+The same operations exist as `orbit.experiment.*` MCP tools, except `delete`,
+which is CLI only.
 
 ## Before you start
 
-- Set `experiments.enabled` to `true` in the workspace. Its built-in default
-  is `false`, but a new install's global config sets it to `true`, and a
-  workspace inherits that value unless it overrides it (see [What `orbit init`
-  seeds](../../reference/config/#what-orbit-init-seeds)). Check yours with
-  `orbit config get experiments.enabled`. While it is `false` you can still
-  define, edit, show, and abandon drafts, but `orbit experiment start` is
-  refused with an error naming the key, and forced assignment is refused too:
+- **Enable experiments.** A new install turns them on in the global config.
+  Check with `orbit config get experiments.enabled`, and set it if needed:
 
   ```bash
   orbit config set experiments.enabled true
   ```
 
-- Leave room: at most 3 experiments run at once in a workspace.
-  Starting or resuming past that is refused. A paused experiment does not
-  count. Conclude, pause, or abandon one first.
-- If a treatment sets a `config` overlay, list every key it sets under
-  `experiments.config_keys` (default `[]`). Starting refuses an arm that
-  sets any other key. The overlay itself only admits keys Orbit has opted
-  in for experiments. Both remaining keys are retained for historical
-  records and ignored: `workflow.explore.max_calls_per_run`, with its former
-  integer bounds of `1` to `100`, and `visual_review.reviewer` (boolean),
-  whose visual review feature has been removed.
-- Have the treatment ready at the base revision before you start, in either
-  mode: instruction files must exist there and pass the instruction admission
-  rules, skill bundle directories must exist there, added tools must be
-  registered, enabled, and agent-facing, and removed tools must be known
-  tools the agent contract does not require. Skill replacement supports
-  Claude on Unix only, so a live skill overlay needs a Claude-only
-  implementation crew pool or it is refused at start.
+  While it is `false` you can still define and edit drafts, but `start` and
+  forced assignment are refused.
+- **Leave room.** At most 3 experiments run at once in a workspace. A paused
+  experiment does not count.
+- **Have the treatment ready**, in either mode. Instruction files and skill
+  bundle directories must exist in the repository at the base revision, and
+  added tools must be registered, enabled and agent-facing. Skill replacement
+  supports Claude on Unix only, so a live skill overlay needs a Claude-only
+  implementation crew pool.
 
 ## Define the experiment
 
-This example compares the shipped instructions (control) with a treatment
-that gives implementers a different instruction file. The keys, names, and
-paths are illustrative; the treatment file must exist in your repository
-before you start the experiment, even in `shadow` mode.
+This example compares the shipped instructions (control) with a treatment that
+gives implementers a different instruction file:
 
 ```bash
 orbit experiment create brief-v2 \
@@ -81,111 +54,95 @@ orbit experiment create brief-v2 \
   --mode shadow
 ```
 
-`create` makes a draft. A draft assigns nothing. Names are unique in the
-workspace, for the experiment and for each arm: 1–64 characters of letters,
-digits, `-`, `_`, or `.`, starting with a letter or digit, and an experiment
-name may not start with `exp-`, which experiment IDs use.
+`create` makes a draft, which assigns nothing. Experiment and arm names are
+unique in the workspace: 1–64 letters, digits, `-`, `_` or `.`, starting with
+a letter or digit. An experiment name may not start with `exp-`.
 
-Edit a draft with `orbit experiment update <id>`, passing only the fields
-you change; a given `--arms` list replaces every arm. Only a draft can be
-edited. Once an experiment has started, its definition is frozen and it
-changes only through `pause`, `resume`, `reweight`, `conclude`, or
-`abandon` — or you `clone` it:
+In every command below, `<id>` is the experiment's ID or its name.
+
+To edit a draft, pass only the fields you change. A given `--arms` list
+replaces every arm:
+
+```bash
+orbit experiment update <id> --min-sample 30
+```
+
+Starting an experiment freezes its definition. To change a started
+experiment, clone it into a new draft:
 
 ```bash
 orbit experiment clone brief-v2 --name brief-v3
 ```
 
-`clone` copies the hypothesis, arms with their current weights and
-overlays, population, metrics, sample rules, and mode into a new draft
-under the new name, with a fresh assignment salt. Retired arms are not
-copied, and the source is unchanged. `<id>` everywhere below is the
-experiment's ID or its name.
+The clone copies the definition, with the arms' current weights and without
+retired arms. The source is unchanged.
 
 ### Population
 
-`--population` is a JSON object; omit a field to place no restriction on
-it, and omit the object to enroll every task.
+`--population` is a JSON object. Omit a field to place no restriction on it;
+omit the object to enroll every task. Unknown fields are refused.
 
 | Field | Matches |
 |---|---|
-| `complexity` | One of `low`, `medium`, `hard`, `xhard`. Any other value is refused. |
+| `complexity` | Any of `low`, `medium`, `hard`, `xhard`. |
 | `task_type` | The task's type, such as `feature` or `bug`. |
 | `tags_include` | Every listed tag must be on the task. |
-| `tags_exclude` | No listed tag may be on the task. A tag in both lists is refused. |
+| `tags_exclude` | No listed tag may be on the task. |
 | `origin` | The task's origin. |
-
-Unknown population fields are refused.
 
 ### Arms and overlays
 
-Each arm is `{name, control, weight, overlay}`. `control` defaults to
-`false`, `weight` to `1`, and `overlay` to empty. Weights are positive
-integers; a weight of `0` is refused on write, and at start exactly one
-arm must be the control (more than one `control: true` is already refused
-on write). Each overlay's digest is recorded when you write it, and
-`orbit experiment show` prints it per arm.
+Each arm is `{name, control, weight, overlay}`. `control` defaults to `false`,
+`weight` to `1` and `overlay` to empty. Weights are positive integers, and
+exactly one arm must be the control.
 
-An overlay is an object with any of these fields. Unknown fields are
-refused everywhere.
+An overlay is an object with any of these fields. Unknown fields are refused.
 
 | Field | Shape | Effect |
 |---|---|---|
-| `instructions` | Map of role to a repository file path, or `false` | Append the file's text after the selected tag instructions for that role. Set `false` to suppress Orbit's shipped default instructions for that role; file text does not replace the base activity instructions or selected tag instructions. Roles are `implement`, `review`, and `recovery`. Paths must be relative to the repository root, with no `..` and no surrounding whitespace. |
-| `skills` | `{"replace": {skill name: bundle directory}, "roles": [...]}` | Replace each named skill with the bundle at that repository directory. `replace` must name at least one skill. |
-| `tools` | `{"add": [...], "remove": [...], "roles": [...]}` | Add or remove tools for the listed roles. It must add or remove at least one tool, and no tool may be in both lists. |
-| `crew` | `{"pool": [{"crew": name, "weight": n}]}` | Draw the implementing crew from this weighted pool instead of the usual draw. The pool must name at least one crew, no crew twice, each with a positive weight. |
-| `config` | `{"values": {key: value}, "roles": [...]}` | Set task-local configuration values for the listed roles. It must set at least one key, with a non-blank key. |
-| `memory` | `{"roles": [...], "global": bool}` | Deliver the crew's model memory to these roles; `global: true` adds shared memory. Roles default to `implement`; `global` to `false`. See [Give models a memory](../crew-memory/). |
+| `instructions` | Map of role to a repository file path, or `false` | Appends the file's text after the role's selected tag instructions. `false` suppresses Orbit's shipped default instructions for that role. Paths are relative to the repository root, with no `..`. |
+| `skills` | `{"replace": {skill name: bundle directory}, "roles": [...]}` | Replaces each named skill with the bundle at that repository directory. |
+| `tools` | `{"add": [...], "remove": [...], "roles": [...]}` | Adds or removes tools. No tool may be in both lists. |
+| `crew` | `{"pool": [{"crew": name, "weight": n}]}` | Draws the implementing crew from this weighted pool instead of the usual draw. |
+| `config` | `{"values": {key: value}, "roles": [...]}` | Sets task-local configuration values. Each key must be listed in `experiments.config_keys`. The only keys Orbit admits, `workflow.explore.max_calls_per_run` and `visual_review.reviewer`, are kept for old experiments and ignored. |
+| `memory` | `{"roles": [...], "global": bool}` | Delivers the crew's model memory; `global: true` adds the shared memory. See [Give models a memory](/how-to/crew-memory/). |
 
-`roles` defaults to `["implement"]` on `skills`, `tools`, and `config`,
-and must name at least one role. A blank skill name, crew, tool, or config
-key is refused.
+Roles are `implement`, `review` and `recovery`. `roles` defaults to
+`["implement"]`.
+
+`orbit experiment show` prints each arm's overlay digest.
 
 ### Metrics, guardrails, and sample rules
 
-`--primary-metric` is the whole-task metric the verdict is read on. Choose
-`total_tokens`, `cost_usd`, `lead_time`, `first_pass_acceptance`,
-`review_repairs`, `step_recoveries`, `final_recoveries`, `failed_checks`,
-`merge_conflicts`, `delivery_done_rate`, `escaped_regressions`,
-`lines_changed`, `cost_per_line`, or `lead_time_per_line`. Lower is better
-except for `first_pass_acceptance` and `delivery_done_rate`.
+`--primary-metric` is the metric the verdict is read on. Lower is better for
+all of them except `first_pass_acceptance` and `delivery_done_rate`.
 
-`cost_per_line` and `lead_time_per_line` divide an arm's total cost, or its
-total lead time in hours, by that arm's total reviewable lines. Lead time
-is the whole task, not the implement step. The interval resamples tasks and
-recomputes that ratio; it is not an average of each task's own ratio. A run
-with zero reviewable lines is left out, and so is a landed row whose
-denominator was never recorded or could not be attributed to that task
-alone. The readout counts those two exclusions separately on each arm.
-Reviewable lines are the lines that task's own commits added and deleted,
-minus pure renames and minus paths in `workflow.non_reviewable_paths`.
-That list is empty unless you set it. It is not `workflow.non_code_paths`:
-docs and config stay reviewable, and Orbit does not ship a toolchain's
-generated-file list. History is forward-only: a row landed before the
-denominator existed is not recomputed from a shared landing range.
+| Scope | Metrics |
+|---|---|
+| Whole task | `total_tokens`, `cost_usd`, `lead_time`, `first_pass_acceptance`, `review_repairs`, `step_recoveries`, `final_recoveries`, `failed_checks`, `merge_conflicts`, `delivery_done_rate`, `escaped_regressions`, `lines_changed` |
+| Whole task, per line | `cost_per_line`, `lead_time_per_line` |
+| One step (not allowed as primary) | `implement_tokens`, `implement_duration`, `turns_before_first_edit`, `result_bytes_before_first_edit` |
 
-A per-line primary requires a `lines_changed` guardrail, for example
-`{"lines_changed": "+0"}`. You choose the threshold. An arm that improves
-the per-line metric while breaching that guardrail is not named the winner.
+The one-step metrics are exploratory, because a treatment can move work
+between steps without improving the whole task. Use them in guardrails and with
+`readout --metric`.
 
-The step-local metrics `implement_tokens`, `implement_duration`,
-`turns_before_first_edit`, and `result_bytes_before_first_edit` are
-exploratory: a treatment can move work between steps without improving the
-whole task. They cannot be primary, but remain available for guardrails and
-`readout --metric`. Existing experiments with a step-local primary retain
-all their data; their verdict is withheld. Unknown metrics are refused.
+The per-line metrics divide an arm's total cost, or total lead time in hours,
+by its total reviewable lines: the lines the task's own commits added and
+deleted, minus pure renames and paths in `workflow.non_reviewable_paths`
+(empty unless you set it). A run with zero reviewable lines, or with no
+recorded line count, is left out and counted on its arm. A per-line primary
+requires a `lines_changed` guardrail, for example `{"lines_changed": "+0"}`.
+You choose the threshold; an arm that breaches it is not named the winner.
 
-`--guardrails` maps a metric name to the threshold its difference from
-control may not pass, as a signed number with an optional `pt` or `%`
-unit, such as `"-5pt"` or `"+0"`. A threshold without a sign, or with any
-other unit, is refused. For a rate, `pt` means percentage points; `%`
-means that percent of the control's mean.
+`--guardrails` maps a metric to the threshold its difference from control may
+not pass: a signed number with an optional `pt` or `%` unit, such as `"-5pt"`
+or `"+0"`. For a rate, `pt` means percentage points and `%` means that percent
+of the control's mean.
 
-`--min-sample` is the tasks every arm needs before a verdict.
-`--max-days` is the days after start at which a verdict is given whatever
-the sample. Both are optional; set at least one, or the verdict stays
-`collecting`.
+`--min-sample` is the number of tasks every arm needs before a verdict.
+`--max-days` is the number of days after start at which a verdict is given
+whatever the sample. Set at least one, or the verdict stays `collecting`.
 
 ## Start it: shadow and live
 
@@ -193,80 +150,53 @@ the sample. Both are optional; set at least one, or the verdict stays
 orbit experiment start brief-v2
 ```
 
-`start` opens segment 1 and freezes the definition. It is refused unless
-`experiments.enabled` is true, a `max_running` slot is free, and the
-definition is complete: at least two arms with unique names, exactly one
-control, positive weights, a primary metric, and config overlays only for
-keys on `experiments.config_keys`. A memory overlay is also refused while
-`crew_memory.enabled` is false. It also checks the live prerequisites
-above — base-admissible instruction files and skill bundles, registered
-enabled agent-facing added tools, removal only of tools the handoff
-contract does not require, and resolvable overlay crews — and refuses
-with the arm and the reason.
+`start` freezes the definition and begins enrollment. It is refused, naming
+the arm and the reason, unless the definition is complete (at least two arms,
+exactly one control, a primary metric) and every prerequisite under
+[Before you start](#before-you-start) holds. A memory overlay also needs
+`crew_memory.enabled`.
 
-The experiment's `--mode`, set on `create` or `update`, decides what an
-assignment does:
+`--mode`, set on `create` or `update`, decides what an assignment does:
 
-- `shadow` (the default) assigns and records arms but applies no overlay.
-  Use it to validate the population, weights, and readout on real tasks
-  before any agent's behavior changes.
-- `live` applies overlays on matching dispatches for the roles they name:
-  the arm's instruction file joins that dispatch's instructions (or the
-  shipped default is suppressed), its tool delta applies after the
-  activity's own tool grant, its skill bundles are carried to the agent,
-  its crew pool replaces the crew draw, and its config values apply as
-  task-local overrides. Start and resume are supported in both modes;
-  skill replacement supports Claude on Unix only.
+| Mode | Effect |
+|---|---|
+| `shadow` (default) | Assigns and records arms but applies no overlay. Use it to check the population, weights and readout on real tasks before any agent's behaviour changes. |
+| `live` | Applies each arm's overlay to matching dispatches for the roles it names. |
 
 ## Assignment is sticky
 
 When Orbit admits a task, each running experiment whose population matches
-enrolls it once, before any delivery crew draw. The draw is a hash of the
-experiment's salt, its ID, and the task ID, taken against the arms'
-current weights, so the same task always lands in the same arm while the
-weights stand. The assignment records the arm, the current segment, and
-the arm's overlay digest, and it never changes afterwards: pausing,
-concluding, or abandoning stops new enrollment. Terminal tasks are never enrolled.
+enrolls it once, before the crew draw. The same task always lands in the same
+arm while the weights stand, and its assignment never changes afterwards.
+Tasks that are already finished are never enrolled.
 
-Historical enrollment does not authorize every future delivery. Once an experiment
-is concluded or abandoned, a fresh admission uses the task's current crew choice
-or normal routing and applies none of that experiment's overlays. Existing owner
-runs and follower claims keep the treatment they captured, including on resume.
-Pausing or retiring an arm keeps the existing treatment for already assigned tasks.
+What ends or overrides a treatment:
 
-For a fresh admission, an explicit run crew wins. A later explicit task crew also
-wins over its historical crew assignment. An operator force made after the task
-pin wins until another audited task crew change; assignment and crew-change times
-decide the order, with force winning a tie. Without a recoverable crew-change time,
-a pin supersedes ordinary enrollment but does not displace a force. When a crew
-choice overrides an arm, Orbit suppresses the whole crew-bearing treatment for
-that admission. The run records its intended overlay digest, actual crew and
-suppression; it does not rewrite enrollment or count the override as delivered.
+- **Pausing or retiring an arm** stops new enrollment. Tasks already assigned
+  keep their treatment.
+- **Concluding or abandoning** stops the treatment for fresh admissions. Runs
+  already admitted keep the treatment they captured, including on resume.
+- **An explicit crew** on the run or the task wins over an arm's crew
+  overlay. Orbit then suppresses the arm's crew treatment for that admission,
+  records the override on the run, and does not count it as delivered.
 
-Experiments reserve the surfaces their arms touch — `instructions`,
-`skills`, `tools`, `crew`, `config`, `memory` — counting retired arms too.
-The `memory` surface has a single owner: one experiment per task may own
-it, and a task a second experiment would enroll on it is excluded for that
-experiment with a surface conflict. A task a
-second experiment would enroll on an occupied surface is instead excluded
-for that experiment with a surface conflict, and that exclusion is final
-for the task. Give overlapping treatments one experiment with more arms,
-not two experiments.
+Two experiments cannot treat the same surface (`instructions`, `skills`,
+`tools`, `crew`, `config`, `memory`) of one task. A task that a second
+experiment would enroll on an occupied surface is excluded from that
+experiment with a surface conflict, for good. Give overlapping treatments one
+experiment with more arms.
 
-To place one task by hand, force it:
+### Place one task by hand
 
 ```bash
 orbit experiment assign brief-v2 --task <task-id> --arm brief-v2
 ```
 
-Forced assignment needs a running experiment in either mode (shadow or live),
-a nonterminal task without an arm assignment or with an `explicit_crew`
-exclusion for this experiment, and an active arm. It records `forced: true`.
-The force replaces only that `explicit_crew` exclusion; existing arm assignments
-and other exclusions for the experiment, including `surface_conflict`, stay
-sticky. A task whose surface another experiment owns is still refused.
-Forced assignments are left out of every readout estimate and counted
-separately (see below), so use them to smoke-test an arm, not to gather
+A forced assignment needs a running experiment, an active arm, and an
+unfinished task that has no arm in this experiment, or was excluded from it
+only for its explicit crew. A task whose surface another experiment owns is
+still refused. Forced assignments are left out of
+every readout estimate, so use them to smoke-test an arm, not to gather
 evidence.
 
 ## Pause, reweight, resume
@@ -277,20 +207,15 @@ orbit experiment reweight brief-v2 --weights '{"brief-v2": 2}' --reason "Shift t
 orbit experiment resume brief-v2
 ```
 
-`pause` stops new enrollment until you resume; assigned tasks keep their
-arm. `pause`, `reweight`, `conclude`, and `abandon` each require
-`--reason`; every lifecycle call records its reason on the event log that
-`show` prints.
+`pause` stops new enrollment until you resume. `pause`, `reweight`,
+`conclude`, `abandon` and `delete` require `--reason`; `show` prints the
+reasons in the event log.
 
-`reweight` changes arm weights, retires arms, or both, on a running or
-paused experiment. Each call opens a new segment, recorded with the
-weights before and after, so tasks assigned under different weights stay
-distinguishable in the readout. Arms you do not name keep their weight. A
-new weight must be a positive integer — retire an arm instead of giving
-it `0`. The control cannot be retired, and at least one treatment must
-remain; retiring or reweighting an arm that is not active is refused, as
-is naming one arm in both `--weights` and `--retire`. Retired arms take
-no new tasks; tasks already in them keep their arm.
+`reweight` works on a running or paused experiment and opens a new segment,
+so tasks assigned under different weights stay distinguishable in the
+readout. Arms you do not name keep their weight. A weight must be a positive
+integer: to stop an arm, retire it with `--retire <arm>` (repeatable). The
+control cannot be retired, and at least one treatment must remain.
 
 ## Read the readout
 
@@ -299,133 +224,93 @@ orbit experiment readout brief-v2
 orbit experiment readout brief-v2 --metric delivery_done_rate
 ```
 
-The readout is computed when you ask, from the experiment's assignments
-and the records Orbit already keeps. It is intention-to-treat by task:
-every enrolled, unforced task counts in its arm whatever its outcome.
-Forced assignments are left out and counted as `forced_excluded`;
-surface-conflict exclusions and unreadable task records are counted too.
-Only a job applies an arm's overlay, so a task worked in an interactive
-session (it reached review or done with no delivery run working it) was
-never treated: it is left out of every estimate and counted as
-`interactive_excluded`. A task not implemented yet stays in its arm with
-open outcomes.
-`--metric` reports only that metric, but the verdict is still read on the
-primary metric and the guardrails. The JSON carries `schema_version`.
+The readout is computed when you ask. It is intention-to-treat: every
+enrolled task counts in its arm whatever its outcome. `--metric` reports only
+that metric; the verdict is still read on the primary metric and the
+guardrails.
 
-Per arm and per segment you get `n`, the mean and median with 95%
-intervals, how many outcomes are still open and how many settled tasks
-have no measured value, and the crew mix. Intervals are percentile
-bootstrap with a fixed seed for means and medians, and Wilson intervals
-for rates. Each treatment's difference from control is post-stratified by
-complexity, overall and per complexity, so arms that drew harder tasks
-are compared on like work; a complexity cell only one side has values in
-is left out of the overall difference and named in `cells_dropped`.
+Per arm and per segment you get `n`, the mean and median with 95% intervals,
+the number of outcomes still open, and the crew mix. Each treatment's
+difference from control is adjusted for complexity, so an arm that drew harder
+tasks is compared on like work.
 
-The verdict is one of:
+Some tasks are left out of every estimate and counted separately:
 
-- `collecting` — not every active arm has reached `min_sample` on the
-  primary metric, and `max_days` has not passed since start. Retired arms
-  do not hold the verdict back.
-- `withheld` (label `no verdict`) — the sample-ratio check failed, or a
-  treatment arm's treatment did not reach enough of its runs (the reason
-  reads ``arm `<arm>` treatment delivered on <n>/<m> runs``); see below.
-  No winner is named however the differences look.
-- `winner <arm>` — an arm whose primary-metric interval excludes zero in
-  the better direction and that breaches no guardrail. When several arms
-  qualify, the largest improvement wins.
-- `no difference` — every arm was read and none qualifies, with nothing
-  left unread.
-- `inconclusive` — the horizon was reached but something cannot be read:
-  the primary metric is not measured, an arm has no interval, or a
-  qualifying arm's guardrail is breached, straddles its threshold, or
-  cannot be read.
+| Count | Tasks |
+|---|---|
+| `forced_excluded` | Forced assignments. |
+| `interactive_excluded` | Tasks worked in an interactive session. Only a job applies an overlay, so these were never treated. |
 
-Guardrails report `ok`, `breached` (the point estimate is past the
-threshold), `straddles` (the estimate is inside but its interval crosses
-the threshold), or `unknown` (there is no difference to read) per arm.
-Only `ok` lets an arm win.
+Surface-conflict exclusions are counted too. A complexity level that only one
+side has values in is left out of the overall difference and named in
+`cells_dropped`.
 
-Read the warnings before the verdict:
+### The verdict
 
-- **Treatment delivery.** An arm is only treated if its overlay reached
-  its runs. For each treatment arm whose overlay sets instructions, skills
-  or tools, the readout checks every role those target (`implement`,
-  `review`, `recovery`): a task counts as delivered when one of its runs
-  dispatched that role with the arm's overlay and the step then finished
-  successfully, as recorded in the run's audit trail. The arm's `delivery`
-  reports `assigned`, `delivered`, `pending` (in flight and not yet
-  delivered) and `rate`, the delivered share of its settled tasks; the CLI
-  prints it in the `DELIVERED` column and the dashboard's arm evidence card shows a
-  **Delivered** column, `<delivered> of <settled> (<rate>%)`, plus
-  `· <n> pending` while tasks are in flight. When any arm's rate is below
-  0.9, the readout adds an
-  `undelivered` warning and withholds the verdict, from the first settled
-  task on. Crew overlays also need the latest delivery's captured experiment
-  crew selection and overlay digest, without a deviation or suppression. An
-  explicit choice of the same crew does not count as treatment. Missing historical
-  or remote admission evidence leaves crew delivery unconfirmed. A later admission
-  that suppresses an arm cannot count an older run's dispatch as its treatment.
-  Config-only and empty arms have no delivery check.
-  Delivery shows the overlaid step ran and succeeded, not that the agent
-  followed the instruction; inspect recorded tool calls when interpreting
-  historical treatments.
-- **Per-protocol view.** `per_protocol` (CLI: `per-protocol (delivered runs
-  only)`; dashboard arm card: `Per-protocol`) is the primary metric with each
-  checked treatment arm reduced to its delivered tasks. The other metrics
-  and the verdict are intention-to-treat. When the two views disagree, the
-  difference depends on the treatment actually running.
+| Verdict | Meaning |
+|---|---|
+| `collecting` | Not every active arm has reached `min_sample`, and `max_days` has not passed. |
+| `withheld` (shown as `no verdict`) | The sample-ratio check failed, or a treatment did not reach enough of its runs. No winner is named, however the differences look. |
+| `winner <arm>` | The arm's primary-metric interval excludes zero in the better direction, and it breaches no guardrail. When several arms qualify, the largest improvement wins. |
+| `no difference` | Every arm was read and none qualifies. |
+| `inconclusive` | The horizon was reached but something cannot be read: the primary metric is unmeasured, an arm has no interval, or a qualifying arm's guardrail is not `ok`. |
 
-- **Sample ratio.** Per segment, a chi-square test compares the observed
-  arm counts with the weights. Below p = 0.001 the assignment is suspect
-  — the counts do not match the weights — and the verdict is withheld.
-  Check the population and any reweights before you trust the arms.
-- **Lagging (open) outcomes.** Enrolled tasks still in flight, and landed
-  tasks still inside the 14-day escaped-regression window, have open
-  outcomes. Their tasks count in `n` but contribute no settled value yet,
-  so early differences move as they settle. `escaped_regressions` is the
-  metric most affected.
-- **Drift.** An arm whose assignment rows or runs carry more than one
-  overlay digest received more than one treatment; its runs before and
-  after the change are not the same treatment. Conclude or clone rather
-  than reading through a drift warning.
-- **Unmeasured first edits.** `turns_before_first_edit` and
-  `result_bytes_before_first_edit` score each task's first implement
-  invocation from its recorded tool calls: the calls before the first
-  editor tool, with a first-call edit scoring zero. A settled task whose
-  first invocation has no recorded tool calls, no recognized editor tool
-  (a shell command such as `command_execution` is not an edit), or no
-  implement invocation at all is unmeasured and stays out of `n`. A task
-  still in flight is open. Older runs may lack tool-call traces, so their
-  `n` can be smaller than their settled tasks.
-  If the invocation scan is incomplete because of a record limit or pagination stall,
-  the readout reports a `first_edit_incomplete` coverage warning. The scan
-  cannot confirm which tasks' earliest invocations it holds, so both first-edit
-  metrics are unmeasured for every settled task in that readout; in-flight
-  outcomes remain open. These values contribute no samples to estimates,
-  comparisons, the primary metric's chart, or the verdict and its guardrails.
-  Other metrics remain available.
-  A provider stream that outgrows the output capture bound keeps only its
-  final lines, so its recorded tool calls are a suffix and a first edit in them
-  would be misplaced. Such an invocation is marked incomplete: a task whose
-  first implement invocation is incomplete is unmeasured for both first-edit
-  metrics, and the readout reports a `tool_trace_incomplete` warning. Raising
-  `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES` avoids truncation for later runs;
-  already-recorded invocations are not re-marked.
-- **Historical explorer uptake.** Explorer delegation has been removed. Concluded
-  experiment readouts retain their `tasks_with_explorer_call`,
-  `tasks_explorer_unobserved` and `explorer_trace_incomplete` fields for audit.
-- **Memory arms.** A live memory arm delivers a `crew_memory` field in the
-  agent envelope (never inside `instruction`) with one fixed sentence in the
-  instruction chain saying the notes are data and that the task, its
-  criteria, the instructions and the repository's guidance take precedence;
-  a delivered block holds at most 9 KiB of note text, and a larger one is
-  refused. The readout reports `memory_strata` for a live arm (tasks grouped
-  by the ISO week of the revision their first dispatch received),
-  `memory_captures` and `memory_capture_strata` for a shadow arm (the
-  captured digests and revisions that were not delivered, grouped by
-  revision week), and the arm's `dreaming_overhead` (the dreaming tasks'
-  cost spread over the arm's priced tasks). See
-  [Give models a memory](../crew-memory/).
+An older experiment whose primary metric is a one-step metric also gets
+`no verdict`.
+
+Each guardrail reports one status per arm. Only `ok` lets an arm win.
+
+| Status | Meaning |
+|---|---|
+| `ok` | The difference is inside the threshold. |
+| `breached` | The point estimate is past the threshold. |
+| `straddles` | The estimate is inside, but its interval crosses the threshold. |
+| `unknown` | There is no difference to read. |
+
+### Warnings to read before the verdict
+
+**Treatment delivery.** An arm is only treated if its overlay reached its
+runs. For an arm whose overlay sets instructions, skills or tools, a task
+counts as delivered when one of its runs dispatched the targeted role with
+the overlay and that step succeeded. The arm's `delivery` reports `assigned`,
+`delivered`, `pending` and `rate`; the CLI shows it in the `DELIVERED` column.
+When any arm's rate is below 0.9, the readout adds an `undelivered` warning
+and withholds the verdict. A crew overlay counts as delivered only when the
+run used the experiment's crew draw; an explicit choice of the same crew does
+not count. Config-only and empty arms have no delivery check. Delivery shows
+that the overlaid step ran, not that the agent followed the instruction.
+
+**Per-protocol view.** `per_protocol` is the primary metric with each checked
+arm reduced to its delivered tasks. The verdict stays intention-to-treat. When
+the two views disagree, the difference depends on the treatment actually
+running.
+
+**Sample ratio.** Per segment, Orbit tests the observed arm counts against the
+weights. Below p = 0.001 the assignment is suspect and the verdict is
+withheld. Check the population and any reweights.
+
+**Open outcomes.** Tasks still in flight, and landed tasks inside the 14-day
+escaped-regression window, count in `n` but have no settled value yet. Early
+differences move as they settle; `escaped_regressions` moves most.
+
+**Drift.** An arm whose tasks carry more than one overlay digest received more
+than one treatment. Conclude or clone instead of reading through the warning.
+
+**Unmeasured first edits.** `turns_before_first_edit` and
+`result_bytes_before_first_edit` are scored from the recorded tool calls of a
+task's first implement invocation. A settled task with no recorded tool calls
+or no recognized edit is unmeasured and stays out of `n`, so `n` can be
+smaller than the settled tasks. Two warnings mark gaps:
+
+- `first_edit_incomplete`: the scan of invocations was cut short. Both
+  metrics are unmeasured for every settled task in this readout. Other metrics
+  are unaffected.
+- `tool_trace_incomplete`: a provider's output outgrew the capture limit, so
+  its early tool calls were lost and its task is unmeasured. Raise
+  `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES` for later runs.
+
+**Memory arms.** A memory arm adds its own readout fields; see
+[Give models a memory](/how-to/crew-memory/#read-the-result).
 
 ## Conclude or abandon
 
@@ -435,24 +320,19 @@ orbit experiment abandon brief-v2 --reason "Population was wrong; superseded by 
 ```
 
 Both take a running or paused experiment; `abandon` also takes a draft.
-Concluding records the chosen arm (or none), your reason, and the readout
-JSON at that moment on the conclusion event, which
-`orbit experiment show` returns. Enrollment stops either way. Historical
-assignments and recorded results remain available, but fresh admissions apply
-none of the ended experiment's overlays. Runs and follower claims already
-admitted keep their captured treatment, including on resume.
+Enrollment stops either way, and the recorded assignments and results stay
+readable. `conclude` also stores the readout at that moment, which
+`orbit experiment show` returns.
 
-Concluding with an arm files one proposed task naming the experiment, the
-arm, the readout verdict, and the arm's overlay, asking an operator to
-make that overlay the workspace default. That is all it files. It changes
-no configuration and no repository file: the overlay becomes the default
-only when someone does that proposed task's work — editing the shipped
-instructions, skill, tool grant, crew, or configuration the overlay
-points at. Review the proposed task like any other before you approve it.
-Concluding with no `--arm` records no winner and files nothing, and
-concluding again with a different arm after a promotion task exists is
-refused until that task is removed. `abandon` files nothing and records
-no winner.
+Concluding changes no configuration and no repository file:
+
+- **With `--arm`**, it files one proposed task that asks an operator to make
+  that arm's overlay the workspace default. The overlay becomes the default
+  only when someone does that task's work. Review it like any other proposed
+  task.
+- **Without `--arm`**, it records no winner and files nothing.
+
+`abandon` files nothing and records no winner.
 
 ## Delete a finished experiment
 
@@ -460,49 +340,19 @@ no winner.
 orbit experiment delete hard-tier-by-model --reason "old shadow trial"
 ```
 
-`delete` removes a draft, concluded, or abandoned experiment along with its
-arms, event log, and assignments. It refuses an experiment that is still
-running or paused. It also refuses one that ran live and assigned tasks to
-arms, because those tasks' crews and runs refer to it, and one concluded with
-an arm, because its promotion task names it, including a shadow experiment.
-Shadow experiments concluded without an arm never changed a task, so a
-finished one can be deleted.
+`delete` removes a draft, concluded or abandoned experiment with its arms,
+event log and assignments. It refuses an experiment that:
+
+- is running or paused;
+- ran live and assigned tasks to arms, because their runs refer to it; or
+- was concluded with an arm, even in `shadow`, because its promotion task
+  names it.
 
 ## Watch it in the dashboard
 
-Open **Analytics → Experiments** (`#analytics/experiments`). Experiments
-are per workspace, so the **All workspaces** view shows the usual
-placeholder asking you to select one. See
-[Use the dashboard](../dashboard/#experiments).
-
-The list sorts running first, then paused, draft, concluded, and
-abandoned, newest first within a status. Each entry shows the hypothesis,
-status and mode badges, the current segment, the primary metric, the
-minimum sample and maximum days, and one progress bar per arm toward
-`min_sample`, with forced assignments left out and surface-conflict
-exclusions counted underneath.
-
-Open one experiment (`#analytics/experiments/<id>`) for its readout:
-status, mode, segment, primary metric, minimum sample, start and horizon,
-the verdict badge with its reasons, a health card, one card per arm, a
-forest plot of every measured metric's difference from control, the
-primary metric's cumulative per-arm series, the per-complexity table, the
-crew mix, and the event timeline. An operator session also gets the
-conclude form described in
-[Use the dashboard](../dashboard/#experiments), and can define, edit, and
-start drafts there with **New experiment**, **Edit**, and **Start**. The
-dashboard applies the same checks as `orbit experiment create`, `update`,
-and `start`, except that clearing the primary metric, minimum sample, or
-maximum days on a draft that already sets them is refused in the form:
-an omitted field leaves the stored value unchanged, so the form keeps the
-edit open and names each cleared field instead of saving. See
-[Create, edit, and start an experiment](../dashboard/#create-edit-and-start-an-experiment).
-
-## See also
-
-- [CLI commands: Experiments](../../reference/cli/#experiments) — every
-  verb and flag.
-- [Configuration](../../reference/config/) — `experiments.enabled` and
-  `experiments.config_keys`.
-- [Give models a memory](../crew-memory/) — the `memory` overlay, write
-  rules, dreaming and proposal review.
+Select a workspace and open **Analytics → Experiments**. The list shows each
+experiment's status, mode and per-arm progress toward `min_sample`. Open one
+for its readout: the verdict with its reasons, one card per arm, each
+metric's difference from control, and the event timeline. An operator session
+can also create, edit, start and conclude experiments there. See
+[Use the dashboard](/how-to/dashboard/#experiments).

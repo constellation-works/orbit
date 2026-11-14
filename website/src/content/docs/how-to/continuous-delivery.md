@@ -1,8 +1,6 @@
 ---
 title: Run a delivery window
-description: "Prepare and approve tasks, check readiness, start a bounded drain from the dashboard or CLI, retune or stop it, and recover failures."
-sidebar:
-  order: 3
+description: "Prepare and approve tasks, check readiness, run a time-bounded drain, retune or stop it, and recover failures."
 ---
 
 A delivery window drains your approved backlog for a set time. Orbit starts
@@ -10,9 +8,9 @@ backlog tasks in parallel until the window closes; work already in flight
 finishes. Starting a window returns a run ID, not finished work, so check each
 task's status before you treat it as delivered.
 
-A second machine can drain the same workspace as a replica
-(`orbit run auto --pull <selector>`) while the owner keeps landing authority.
-See [Set Up a Distributed Drain](../distributed-drain/).
+Each step gives the [dashboard](/how-to/dashboard/) or agent route, then the
+CLI. To drain the same workspace from a second machine, see
+[Set up a distributed drain](/how-to/distributed-drain/).
 
 :::tip[Let your agent run it]
 Ask your agent to run a delivery window. The `orbit-orchestrate` skill follows
@@ -20,107 +18,33 @@ these steps: it pilots and promotes the tasks you authorize, starts the drain,
 and diagnoses any run that fails.
 :::
 
-Each step shows the [dashboard](../dashboard/) or agent route first and the
-CLI as the fallback.
-
 ## 1. Prepare proposed work
 
 The task pilot fills in each task's `context_files` (the files and directories
-it will work in) and assesses its complexity. It does not approve or dispatch
-anything. For a bug a review filed, it can also reject the task with its
-evidence when the code disproves the finding.
+it will work in) and assesses its complexity. It never approves or dispatches
+a task. For a bug that a review filed, it can reject the task when the code
+disproves the finding.
+
+The `task-pilot` routine ships enabled and pilots eligible new tasks on the
+[host scheduler clock](/how-to/recurring-work/). To pilot now:
 
 - **Agent:** ask your agent to pilot the proposed tasks.
 - **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
-  `task_pilot_pipeline`. For automatic piloting of eligible new tasks, the
-  `task_pilot` routine is enabled by default, as is `worktree-gc`; both run on
-  the host scheduler clock.
+  `task_pilot_pipeline`.
 - **CLI:**
 
   ```bash
-  # Tasks that need a pilot.
-  orbit run task-pilot --wait
+  orbit run task-pilot --wait                              # every task that needs a pilot
   orbit run task-pilot "$TASK_ID" "$OTHER_TASK_ID" --wait  # exact tasks
   ```
 
 Without task IDs, the pilot picks up `proposed` and `backlog` tasks whose
-`context_files` is empty or whose complexity is unassessed. It skips a task it
-already found to have no in-workspace targets while that assessment is fresh;
-name its ID to audit it again.
+`context_files` is empty or whose complexity is unassessed. Name a task ID to
+audit it again.
 
-The routine selects eligible never-assessed tasks for their first automatic
-pilot. For a proposed or backlog task with an applied assessment, a
-description or acceptance-criteria edit can queue a fresh pilot after the
-debounce period. A live execution claim or unresolved failed-pilot hold keeps
-it from queueing. Other material or policy edits do not queue a pilot through
-the routine; request one explicitly. The drain and scheduled discovery also
-queue a fresh pilot when the description or criteria changed after the applied
-assessment and no live execution claim holds the task; a failed repilot holds
-it until its meaning changes again or an operator acts.
-Description or criteria edits can hold dispatch as
-`pilot_assessment_stale`. After a material edit, an operator on the owner can
-also request a fresh assessment for a proposed or backlog task:
-
-```bash
-orbit task repilot "$TASK_ID"
-# Request a full assessment explicitly instead:
-orbit task repilot "$TASK_ID" --full
-```
-
-When the latest assessment holds promotion and qualifies for re-check, the
-pilot re-examines its holding findings and changed fields, keeping unaffected
-fields. Otherwise it runs a full assessment: for example, when the receipt is
-too old or was itself a re-check, the footprint's source changed, or the scope
-changed substantially. `--full` always requests a full assessment. A pending
-or running pilot, live delivery, human crew, or replica checkout refuses the
-request. Repiloting neither approves nor dispatches the task.
-
-### Evidence access and start prerequisites
-
-Before approval, the pilot checks whether the implementing leaf can produce the
-evidence each criterion requires. Host placement says where the leaf runs; it
-does not grant access to owner-only records or operator tools. A leaf on the
-owner host still cannot produce an owner-only audit rescan unless its granted
-tools and authority allow it. The pilot reports inaccessible evidence as a
-holding `utility_warnings` finding. Candidate checks the leaf can repeat
-locally, and task records available through the workspace bridge, do not need
-that warning.
-
-- **Before:** “Verify the candidate with the owner's restricted audit rescan and
-  attach its report.” If that evidence is required, keep it as a separate
-  owner/operator validation. If the criterion is meant to check the candidate,
-  rewrite it to a repeatable check, for example: “Run `npm run check` and
-  `npm run build` from `website/` and record both outcomes.” The local check
-  does not stand in for an authoritative audit.
-- **Before:** “Do not start until the external contract verdict arrives.” If
-  that verdict belongs to a real task, record a dependency on that task; for a
-  known future start time, set `not_before`. If neither route applies, keep the
-  unresolved condition explicit so the pilot records a mandatory
-  `start_prerequisites` hold. Do not invent dependency IDs. A previous leaf's
-  refusal to produce evidence is a failed run to investigate, not a start
-  prerequisite.
-
-Inspect the detailed finding in the pilot run (`orbit run show
-"$PILOT_RUN_ID"`) or in the task details under the dashboard's
-[Tasks view](../dashboard/#tasks). When a prerequisite is satisfied, add the
-authoritative evidence to the task; if the criterion or scope was wrong, have
-the owner rewrite it to match the actual requirement. Then request a fresh
-assessment with `orbit task repilot "$TASK_ID"`. The pilot clears a start
-prerequisite only when evidence or an authoritative rewrite establishes that it
-is satisfied. For the backlog admission callout and its authorized evidence and
-override controls, see [Clear a pilot admission hold](../dashboard/#clear-a-pilot-admission-hold).
-
-An operator can instead skip pilot admission by adding `no-pilot`; see
-[Skip pilot in Readiness](../dashboard/#skip-pilot-in-readiness) for the
-authority boundary, history and other holds.
-
-When preparation selects no tasks, the run skips agent dispatch and applies
-an empty result collection successfully, retaining any held-task skip details.
-For a nonempty selection, at least one pilot partition must succeed before
-apply runs; valid partitions can still apply when a sibling pilot fails.
-
-Before you approve, check the pilot run (in **Jobs › History**) and the selectors it
-applied (the task's **context files** in **Tasks**). From the CLI:
+Before you approve, check the pilot run and the context files it applied: in
+the dashboard, **Jobs › History** and the task's **context files** in
+**Tasks**; from the CLI:
 
 ```bash
 orbit run history -j task_pilot_pipeline
@@ -128,11 +52,42 @@ orbit run show "$PILOT_RUN_ID"
 orbit task show "$TASK_ID" --fields status,context_files
 ```
 
+### If you edit a piloted task
+
+Editing the description or acceptance criteria makes the assessment stale.
+Dispatch holds the task as `pilot_assessment_stale` until a fresh pilot
+completes. The routine and the drain queue that pilot themselves; other edits
+do not, so request one on the owner:
+
+```bash
+orbit task repilot "$TASK_ID"
+orbit task repilot "$TASK_ID" --full   # reassess everything, not only the held findings
+```
+
+The request is refused while a pilot or a delivery holds the task, for a
+human crew, and on a replica checkout.
+
+### If the pilot holds a task
+
+The pilot holds a task whose criteria the implementing agent cannot satisfy.
+Read the finding in the pilot run (`orbit run show "$PILOT_RUN_ID"`) or in the
+task details under the dashboard's [Tasks view](/how-to/dashboard/#tasks).
+
+| Finding | Cause | Fix |
+|---|---|---|
+| `utility_warnings` | A criterion needs evidence the agent cannot produce, such as an owner-only audit report. | Rewrite it to a check the agent can repeat, for example "Run `npm run check` and record the outcome". Keep owner-only evidence as a separate operator validation. |
+| `start_prerequisites` | The task says not to start until something else happens. | Record a dependency on the real task, or set `not_before` for a known start time. |
+
+After you add the evidence or rewrite the criterion, run
+`orbit task repilot "$TASK_ID"`. To clear the hold from the dashboard, see
+[Clear a pilot admission hold](/how-to/dashboard/#clear-a-pilot-admission-hold).
+An operator can skip pilot admission with the `no-pilot` tag; see
+[Skip pilot in Readiness](/how-to/dashboard/#skip-pilot-in-readiness).
+
 ## 2. Authorize the backlog
 
 Approving a `proposed` task moves it to `backlog`, where a window can start
-it. The task pilot alone does not approve work; approve tasks individually or
-authorize a local drain to approve qualifying proposals.
+it. The pilot does not approve work.
 
 - **Dashboard:** in **Tasks**, click **Approve** on the task under **Awaiting
   approval**.
@@ -143,45 +98,39 @@ authorize a local drain to approve qualifying proposals.
   orbit task update "$TASK_ID" --approve --note "Pilot context reviewed."
   ```
 
-Do not approve a task that is already in `backlog`. Once its pilot has
-applied the context it needs, it is ready.
+A task already in `backlog` needs no approval.
 
-To authorize approval throughout a local window:
+### Let the window approve
 
 ```bash
 orbit run auto --for 4h --approve-proposed
 ```
 
-While the window is open, the drain pilots proposed tasks with the
-`no-diff-expected` tag, or with context files and an assessed complexity. It
-approves those with no duplicate, already-landed, conflict or warning
-finding, including tasks filed while the window is open. Each pilot runs in
-the background, so backlog work keeps starting meanwhile, and the drain
-admits what a pilot approved as soon as it finishes. Tasks tagged `no-auto-approve` stay
-proposed until a human approves them. Other held tasks also stay proposed;
-`orbit run show` and `orbit run readiness` report approval counts and hold
-reasons. A `warnings` hold also names each finding: under `Approved:` in
-`orbit run show`, and as `findings` (`kind` and the finding's first line) on
-each held task in `orbit run readiness --json`. The dashboard shows that same
-text on the live window's approval hold. Each approval's history note names the drain run.
+While the window is open, the drain pilots and approves `proposed` tasks,
+including tasks filed after it starts. A task qualifies when it has context
+files and an assessed complexity, or the `no-diff-expected` tag, and its pilot
+reports no duplicate, already-landed, conflict or warning finding.
 
-`--approve-proposed` is off by default and conflicts with `--pull`, since
-only the owner approves work. Approval still respects dependencies, file
-locks, and crew restrictions when the drain admits a task. Add `--complete`
-separately if the window should also finish delivery.
+- Tasks tagged `no-auto-approve` stay `proposed` until a human approves them.
+- `orbit run show` and `orbit run readiness` report approval counts and hold
+  reasons, including each warning finding. The dashboard shows the same on the
+  live window.
+- The flag is off by default and conflicts with `--pull`: only the owner
+  approves work.
+- Approval does not complete delivery. Add `--complete` for that.
 
 ## 3. Check what will actually start
 
 Readiness is a read-only snapshot of what a window would start now and why the
-rest would wait. It reserves and submits nothing, so an eligible task is not
-guaranteed to start.
+rest would wait. It reserves nothing, so an eligible task is not guaranteed to
+start.
 
-- **Dashboard:** the Tasks dock's **Drain** tab shows how many tasks are eligible or waiting and a bar of slots in use against the limit. The task list's
-  **Backlog** card sorts the backlog into **Eligible now**, **Waiting on
-  locks**, **Waiting on capacity**, and **Waiting, other**, and each row's
-  tooltip names what it waits on. **Locks held** in the Tasks dock shows held
-  locks (`orbit task locks list`).
-- **CLI**, for the reason behind each task:
+- **Dashboard:** the Tasks dock's **Drain** tab shows eligible and waiting
+  counts and the slots in use. The task list's **Backlog** card sorts tasks
+  into **Eligible now**, **Waiting on locks**, **Waiting on capacity** and
+  **Waiting, other**; each row's tooltip names what it waits on. **Locks
+  held** lists the held file locks.
+- **CLI:**
 
   ```bash
   orbit run readiness
@@ -189,102 +138,56 @@ guaranteed to start.
   orbit run readiness "$TASK_ID" --json
   ```
 
-  With no `--concurrency`, the ceiling is the live local drain's, including a
-  later `orbit run concurrency --set`, otherwise a live pull drain's, otherwise
-  5. `--json` names that choice as `capacity.limit_source` (`run_input`,
-  `run_control`, `pull_run_input`, `pull_run_control`, or `default`). Text adds
-  a `Leaf ceiling:` line only when the pull drain supplies the ceiling.
+Without `--concurrency`, readiness uses the live local drain's ceiling, else a
+live pull drain's, else 5. `--json` names the choice in
+`capacity.limit_source`.
 
-Common reasons a backlog task waits:
+### Why a backlog task waits
 
-- **Unsatisfied dependencies.**
-- **An active file lock.** Two tasks whose selectors overlap on a locked path
-  cannot run at once. `orbit task locks contention` shows which files the
-  backlog collides on, which is what really limits your parallelism.
-- **`surface_reserved`**: a critical or high-priority task ahead of it in the
-  queue is waiting on file locks, and this task overlaps the files it needs.
-  It waits so the higher-priority task gets each lock as it frees, instead of
-  losing it to smaller tasks one lock at a time. It starts once that task
-  starts. Unrelated work is not held.
-- **`awaiting_footprint`** or **`awaiting_exclusive_slot`**: the task has no
-  `context_files`, so it holds no file lock and could collide with anything.
-  A drain with more than one slot waits for the task pilot to fill them in,
-  then starts the task only when nothing else is running. File such tasks as
-  `proposed` and let the pilot prepare them before promoting them.
-- **`crew_not_allowed`**, when you preview a
-  [crew restriction](#restrict-a-window-to-some-crews) or a running window
-  has one.
-- **`human_crew`**: the task is assigned to a
-  [human crew](../../reference/config/#human-crews), so it waits for that
-  person. No drain admits it, even one whose `--allow-crew` names that crew.
-  Reassign it to an agent crew to dispatch it.
-- **`no_drain_tag`**: the task carries the `no-drain` tag, so no drain admits
-  it automatically; it still ships when you ship it explicitly. Remove the
-  tag to make it eligible on the next admission pass. A proposed `no-drain`
-  task is also held from drain auto-approval.
-- **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied
-  task-pilot assessment found duplicate work or work already landed. This
-  also holds tasks filed directly into backlog. Read the finding in the task
-  comments. Run task-pilot again to reassess it; a new assessment without
-  either finding releases the hold. To approve the work anyway or clear a
-  mistaken finding, append an explicit human decision from your CLI:
+Unsatisfied dependencies and file locks are the common reasons. Two tasks
+whose `context_files` overlap cannot run at once;
+`orbit task locks contention` shows which files the backlog collides on.
 
-  ```bash
-  orbit task update "$TASK_ID" \
-    --comment 'task-pilot-admission: approve-anyway'
-  # Or clear a mistaken finding:
-  orbit task update "$TASK_ID" \
-    --comment 'task-pilot-admission: clear'
-  ```
+| Reason | Meaning | What to do |
+|---|---|---|
+| `surface_reserved` | A critical or high-priority task ahead in the queue is waiting on file locks this task overlaps. | Nothing. It starts once that task starts. |
+| `awaiting_footprint`, `awaiting_exclusive_slot` | The task has no `context_files`, so it holds no lock. The drain waits for the pilot to fill them in, then runs the task alone. | File such tasks as `proposed` so the pilot prepares them first. |
+| `pilot_assessment_stale` | The description or criteria changed after the last assessment. | [Repilot the task](#if-you-edit-a-piloted-task). |
+| `pilot_duplicate`, `pilot_already_landed` | The latest pilot assessment found duplicate or already-landed work. | Read the finding in the task comments, then repilot or [record a decision](#override-a-pilot-admission-hold). |
+| `native_os_required` | The criteria need native-host evidence this host cannot produce. | Route the task to a capable host, re-scope the criteria, or [record a decision](#override-a-pilot-admission-hold). |
+| `crew_not_allowed` | A [crew restriction](#restrict-a-window-to-some-crews) excludes the task's crew. | Change the task's crew or widen the restriction. |
+| `human_crew` | The task is assigned to a [human crew](/reference/config/#human-crews), so no drain admits it. | Reassign it to an agent crew. |
+| `no_drain_tag` | The task carries `no-drain`: it ships only when you ship it explicitly, and a drain does not auto-approve it. | Remove the tag. |
+| `delivery_job_unavailable` | The task's `delivery:<job>` tag names a plugin delivery job that is disabled, uninstalled, or lacks the drain's ship mode. | Enable the plugin the detail names, or remove the tag. |
+| `pr_forge_remote_missing` | The workspace ships through pull requests, but the checkout has no Git remote on a network host. | Run `orbit workspace ship-mode local`, add a forge remote, or tag the task `delivery:task_local_pipeline`. |
+| `local_route_before_pr`, `local_route_before_landing` | `review.timing` is `before_pr` or `before_landing`, but the task ships locally, where neither review runs. | Set `review.timing` to `off`, or ship through the PR route. |
 
-  The first line must match exactly; put any explanation on later lines.
-  Both decisions release the current assessment's admission hold while
-  preserving its audit evidence. A later pilot assessment supersedes the
-  decision. Ordinary edits, unrelated comments, and agent-authored decisions
-  do not release it. All other admission checks still apply.
-- **`native_os_required`**: the pilot found native-host evidence requirements
-  this host cannot satisfy. Route to a capable host, re-scope the criteria, or
-  record an evidenced human `task-pilot-admission: clear` or `approve-anyway`
-  decision. This decision stays valid across later pilot passes with the same
-  criteria digest, OS requirement set and machine requirement; requirement
-  order does not matter. Changed criteria or requirements supersede it.
-  A new assessment still supersedes operator-validation and host-operational
-  decisions.
-- **`delivery_job_unavailable`**: the task's `delivery:<job>` tag selects a
-  plugin delivery job whose plugin is disabled or uninstalled, or that does not
-  declare the drain's ship mode. The detail names the plugin. Enable it or
-  remove the tag.
-- **`pr_forge_remote_missing`**: the workspace ships through pull requests,
-  but no Git remote of the checkout names a network host (only a local bare
-  repository, say), so `pr_open` could never succeed. The detail names the
-  remotes. Run `orbit workspace ship-mode local`, add a remote on the forge
-  host, or tag the task `delivery:task_local_pipeline` to deliver it locally.
-  `orbit doctor` reports the same verdict on its `forge-remote` row.
-- **`local_route_before_pr`**: `review.timing` is `before_pr` and this workspace
-  ships locally, or the task's `delivery:task_local_pipeline` tag routes it
-  locally. Before-PR review holds pull-request creation and does not run
-  on the local-only route, so the task stays in the backlog instead of failing
-  after dispatch. The detail names whether the global or workspace config
-  set it. Set `review.timing` to `off`, or ship through the PR route.
-  `orbit doctor` names the same combination.
-- **`local_route_before_landing`**: the same hold for `review.timing` at
-  `before_landing`, which reviews an open pull request before it lands; a local
-  delivery opens none. Set `review.timing` to `off`, or ship through the PR
-  route.
+`orbit doctor` also reports a missing forge remote, on its `forge-remote` row.
 
-Neither approval nor the drain bypasses dependencies or locks, so a window may
-end with some tasks still in the backlog.
+Neither approval nor the drain bypasses dependencies or locks, so a window can
+end with tasks still in the backlog.
+
+### Override a pilot admission hold
+
+To approve the work anyway, or to clear a mistaken finding, append a human
+decision as a task comment:
+
+```bash
+orbit task update "$TASK_ID" --comment 'task-pilot-admission: approve-anyway'
+orbit task update "$TASK_ID" --comment 'task-pilot-admission: clear'
+```
+
+The first line must match exactly; put any explanation on later lines. The
+decision releases the hold and keeps the finding as audit evidence. A later
+pilot assessment supersedes it, except that a `native_os_required` decision
+stays valid until the criteria or requirements change. Agent-authored
+decisions release nothing, and all other admission checks still apply.
 
 ## 4. Start a bounded window
 
-- **Dashboard:** on **Drain → Start**, use the **Window length** stepper to select
-  whole hours from 1 to 24 (default `1h`), shown as `<n>h` and submitted as
-  `for_duration: <n>h`; set **Parallel tasks**, and turn on **Mark shipped tasks done** to
-  complete them (off stops at review). Optionally turn on **Approve qualifying
-  proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
-  window's blocked PRs. Click **Start … window** and
-  confirm.
-  See [Auto-drain](../dashboard/#auto-drain).
+- **Dashboard:** on **Drain → Start**, set **Window length** (1 to 24 hours)
+  and **Parallel tasks**, choose the options below, then click **Start …
+  window** and confirm. See [Auto-drain](/how-to/dashboard/#auto-drain).
 - **Agent:** ask for a window and say how long, how many tasks at once, and
   whether to complete them.
 - **CLI:**
@@ -295,58 +198,23 @@ end with some tasks still in the backlog.
   orbit run auto --for 3h --complete
   ```
 
-The window length bounds only when new work may start; a task in flight when
-it expires still finishes. **Parallel tasks** (`--concurrency`, default 5) is
-not a batch size: the drain refills each free slot from the whole backlog.
+| Flag | Dashboard control | Effect |
+|---|---|---|
+| `--for <duration>` | **Window length** | How long new work may start. A task in flight when it expires still finishes. |
+| `--concurrency <n>` | **Parallel tasks** | Tasks in flight at once (default 5). Not a batch size: the drain refills each free slot from the whole backlog. |
+| `--complete` | **Mark shipped tasks done** | Moves every task the window ships from `review` to `done`; without it they stop at `review`. See [Completing work with `--complete`](/getting-started/workflows/#completing-work-with---complete). |
+| `--approve-proposed` | **Approve qualifying proposals** | [Lets the window approve](#let-the-window-approve) qualifying `proposed` tasks. |
+| `--auto-fix` | **Auto-fix PR blockers** | [Repairs the window's blocked pull requests](#repair-blocked-pull-requests). |
+| `--allow-crew <crews>` | None | [Restricts the window to some crews](#restrict-a-window-to-some-crews). |
+| `--auto-concurrency <mode>` | None | Forecast-based admission: `off`, `shadow` (record what the forecast would admit) or `enforce` (fit new work within measured CPU and memory capacity, under the `--concurrency` ceiling). Omitted, the host's configured mode applies. |
 
-`--auto-concurrency off|shadow|enforce` selects forecast-based admission for
-this window (`off` disables it): `shadow` records what the forecast would admit, while `enforce` uses
-measured CPU and memory profiles to fit new work within host capacity. The
-concurrency ceiling still applies. Omit the flag to use the host's configured
-mode.
+In the dashboard, the three optional controls need an operator session.
 
-**Mark shipped tasks done** (`--complete`) authorizes this window to move every task it
-ships from `review` to `done`, including tasks admitted later in the window. It
-never approves `proposed` tasks. In the dashboard it needs an operator
-session. See [Completing work with
-`--complete`](../../getting-started/workflows/#completing-work-with---complete).
+### Follow the window
 
-### Repair blocked pull requests
-
-`--auto-fix` lets the window repair the pull requests it opened when a required
-check fails or the branch conflicts with its base. It is off by default. In the
-dashboard, check **Auto-fix PR blockers** when starting a window; this requires
-an operator session on the owner machine and is disabled on pull replicas.
-Completion and proposed-task approval remain separate choices. The receipt
-reports whether repair was enabled. From the CLI:
-
-```bash
-orbit run auto --for 4h --auto-fix
-orbit run auto --for 4h --auto-fix --complete
-```
-
-The drain keeps watching each PR. Pending checks wait. Logged
-infrastructure/transient failures are rerun within the configured
-`workflow.ci_infrastructure_retry.max_attempts` budget per PR head (default 3),
-with exponential backoff. This shared rerun requires a complete authenticated
-failed-job set of eligible root jobs and dependency-only waiters; any candidate
-failure in the set vetoes it. Flaky failures and sets transient only because
-jobs concluded `cancelled` or `timed_out` retain their single rerun. A check
-that cites only files the PR did not change waits for base evidence. A failed
-required check or a conflict then goes to the existing repair step, which runs
-as a crew from
-`workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`
-(narrowed by `--allow-crew`). The repair then
-passes your required validation and is pushed, and the drain checks the new
-head. Approvals, permissions, admin rules, unknown status and optional-check
-failures launch no agent. Each PR gets at most one repair per head and blocker,
-and three in total; the attempts are recorded in the task's history.
-`--auto-fix` never merges. Add `--complete` to also merge and finish tasks.
-See [System work](../../reference/config/#system-work).
-
-To follow the window, open its run from the **Drain** card header; the run
-detail lists the child runs it started. A task in progress has **View run** on
-its row. From the CLI, record the returned ID as `$AUTO_RUN_ID`:
+Open the run from the **Drain** card header; its detail lists the child runs.
+A task in progress has **View run** on its row. From the CLI, record the
+returned ID as `$AUTO_RUN_ID`:
 
 ```bash
 orbit run show "$AUTO_RUN_ID"
@@ -355,101 +223,119 @@ orbit run logs "$CHILD_RUN_ID"
 orbit task show "$TASK_ID" --fields status,job_run_id,comments
 ```
 
-A task's submitted run is not its status; check the task itself.
+A submitted run is not a delivered task; check the task itself.
+
+### Repair blocked pull requests
+
+`--auto-fix` lets the window repair the pull requests it opened when a required
+check fails or the branch conflicts with its base. It is off by default and
+never merges; add `--complete` to also merge and finish tasks.
+
+```bash
+orbit run auto --for 4h --auto-fix
+orbit run auto --for 4h --auto-fix --complete
+```
+
+In the dashboard, **Auto-fix PR blockers** needs an operator session on the
+owner machine and is disabled on pull replicas.
+
+The drain watches each pull request it opened:
+
+- Pending checks wait.
+- Infrastructure and transient failures are rerun, up to
+  `workflow.ci_infrastructure_retry.max_attempts` times per PR head
+  (default 3).
+- A failed required check or a conflict goes to a repair agent, drawn from
+  `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`, and
+  narrowed by `--allow-crew`. The repair must pass your required validation
+  before it is pushed, and the drain then checks the new head.
+- Missing approvals, permissions, admin rules, unknown status and failed
+  optional checks start no agent.
+
+Each PR gets at most one repair per head and blocker, and three in total,
+recorded in the task's history. For the crew settings, see
+[System work](/reference/config/#system-work).
 
 ### Restrict a window to some crews
 
 `--allow-crew` limits one drain to the crews you name, for example when a
-provider is down, rate-limited, or out of budget. Ask your agent or use the
-CLI; the dashboard's **Start a window** card has no crew restriction.
+provider is down, rate-limited or out of budget. The dashboard's start card
+has no crew restriction.
 
 ```bash
 orbit run auto --for 4h --allow-crew opus,sonnet
-# Preview what readiness would skip.
-orbit run readiness --allow-crew opus,sonnet
+orbit run readiness --allow-crew opus,sonnet   # preview what would be skipped
 ```
 
-- **For this run only.** Without it, the drain runs every crew. No
-  configuration is changed. An unknown or empty crew name fails before
-  anything is dispatched.
-- **Enforced throughout.** Every activity in the run is checked against the
-  crew that actually resolved, including a recovery crew drawn from a
-  complexity pool. The check
-  permits the named crews and aliases with the same effective provider,
-  model, and provider account. A crew with its own `env` has a separate
-  account and must be explicitly allowed even when its provider and model
-  match. The allowlist gates the crew that normal precedence picks;
-  it never picks one.
-- **Skips, never remaps.** A task whose crew is excluded stays in `backlog`,
-  and readiness reports it as `crew_not_allowed`, also without
-  `--allow-crew` while the window runs. The dashboard's Drain card lists the
-  window's allowed crews and the tasks they leave out. **There is no automatic
-  fallback to another provider.** To move the task, change its crew in
-  **Tasks** or with `orbit task update <id> --crew <name>`.
-- **Leaves other work alone.** Work another invocation already started keeps
-  running.
+- The restriction applies to this run only and changes no configuration. An
+  unknown or empty crew name fails before anything is dispatched.
+- Every activity in the run is checked, including recovery steps. Aliases
+  with the same provider, model and account pass; a crew with its own `env`
+  is a separate account and must be named.
+- An excluded task stays in `backlog` as `crew_not_allowed`. Orbit never
+  falls back to another provider. To move the task, change its crew in
+  **Tasks** or with `orbit task update "$TASK_ID" --crew <name>`.
 
 ## 5. Retune a running drain
 
-To change how many tasks a live drain keeps in flight, retune it rather than
-cancel it. Ask your agent or use the CLI; the dashboard has no retune control.
+Change a live drain in place instead of cancelling it. Cancelling mints a new
+run ID, restarts the window, and makes you restate `--complete` and
+`--allow-crew`. Ask your agent or use the CLI; the dashboard has no retune
+control.
 
 ```bash
-# Show the current ceiling and who last set it.
-orbit run show "$AUTO_RUN_ID"
+orbit run show "$AUTO_RUN_ID"                       # current ceiling and who set it
 orbit run concurrency "$AUTO_RUN_ID" --set 7
-# Reduce the ceiling after a provider rate limit.
 orbit run concurrency "$AUTO_RUN_ID" --set 3 --reason 'provider rate limited'
+orbit run extend "$AUTO_RUN_ID" --for 2h            # keep admitting for 2h from now
 ```
 
-Retuning keeps the run ID, deadline, completion authorization, and every child
-already dispatched. Cancelling and starting again mints a new run ID, restarts
-the window, and makes you restate `--complete` and `--allow-crew`.
-
-- **Raising** the ceiling fills the extra slots on the next admission pass,
-  usually within a poll interval.
-- **Lowering** it pauses admissions until enough children finish. Tasks in
-  flight are never cancelled or cut short.
-- The ceiling cannot exceed the leaf pipeline's own active-run limit. A run
-  that is not a drain, has not started, or has finished is refused.
-- `--if-revision N` applies the change only while the ceiling is still the one
-  you read, so two operators cannot silently overwrite each other.
+- Raising the ceiling fills the extra slots on the next admission pass.
+- Lowering it pauses admissions until enough children finish. Tasks in flight
+  are never cancelled or cut short.
+- `--if-revision N` applies the change only while the ceiling is still at the
+  revision `orbit run show` reported, so two operators cannot overwrite each
+  other.
+- `orbit run extend` never shortens a drain or reopens a finished one.
 
 ## 6. Stop admissions, or cancel work
 
 These are different actions.
 
 **Stop new admissions.** Click **Stop** on the **Drain** card (it needs an
-operator session), or run `orbit run auto --stop` (no run ID needed). Children already started keep
-running under the completion authority they were admitted with, and the
-coordinator is not cancelled. Stopping again, or with no active window, does
-nothing. Other workspaces and jobs are untouched. `orbit run show
-"$AUTO_RUN_ID"` then reports who stopped admissions. `--stop` cannot be
-combined with flags that start a drain, including `--for`, `--concurrency`,
-`--complete`, `--approve-proposed`, or `--allow-crew`.
+operator session), or run:
+
+```bash
+orbit run auto --stop
+```
+
+Tasks already started keep running with the completion authority they were
+admitted under. Other workspaces and jobs are untouched, and stopping twice
+does nothing. `--stop` cannot be combined with the flags that start a drain.
 
 **Cancel work in flight.** Cancel each child you want to abandon: open it in
 **Jobs** and click **cancel**, or:
 
 ```bash
-orbit run trace "$AUTO_RUN_ID"           # find the child run IDs
+orbit run trace "$AUTO_RUN_ID"                  # find the child run IDs
 orbit run cancel "$CHILD_RUN_ID" --confirm
 ```
 
-Cancelling a task leaf returns its task to `backlog` with the reason and keeps
-its candidate available to resume. Add `--block` to keep the task blocked for
-manual recovery instead.
+A cancelled task returns to `backlog` with the reason, and its candidate stays
+available to resume. Add `--block` to keep the task `blocked` for manual
+recovery instead.
 
-A plain cancel of a local drain leaves its children running. Stop admissions
-first, then cancel only the children you want to abandon, or use
-`orbit run cancel "$AUTO_RUN_ID" --confirm --force` to stop the drain and all
-the task runs it started. A child whose stop cannot be confirmed is reported
-and makes the command exit 1.
+Cancelling a local drain's own run leaves its children running. To stop the
+drain and every task run it started:
 
-Cancelling a [pull drain](../distributed-drain/#stop-cancel-and-settle) is
-graceful: unlaunched claims return to the owner's backlog while launched
-leaves finish and settle. `--force` stops those leaves too and returns their
-claims to the owner's backlog once their stop is confirmed.
+```bash
+orbit run cancel "$AUTO_RUN_ID" --confirm --force
+```
+
+The command exits 1 when a child's stop cannot be confirmed. Cancelling a
+[pull drain](/how-to/distributed-drain/#stop-cancel-and-settle) is graceful:
+unlaunched claims return to the owner's backlog and launched tasks finish.
+`--force` stops those too.
 
 ## 7. Recover from a failed delivery
 
@@ -457,82 +343,82 @@ Ask your agent first. The `orbit-orchestrate` skill reads the run evidence,
 matches it to a known failure, and files a repair task when the code needs
 fixing.
 
-By hand, find out why the run failed before you retry. Fix a real code,
-review, or dependency problem first; do not rerun blindly.
+By hand, find out why the run failed before you retry. Fix a real code, review
+or dependency problem first.
 
-1. **Find the failure.** In **Jobs › History**, filter to **Failed** and open the run;
-   it opens on the failed step and its error. From the CLI,
-   `orbit run history --failures` groups failures by task and root cause;
-   `orbit run show "$AUTO_RUN_ID"` lists the window's failed children, and
-   `orbit run show` or `orbit run logs` on a child gives the detail.
-2. **Check recovery steps.** A failure the agent declares itself goes through
-   step recovery before the task is sent to `blocked`, so check those steps
-   before deciding what a blocked task needs.
-3. **Retry deliberately.** A task blocked by its own failure stays blocked.
-   Missing-launcher and transient-infrastructure blocks can instead be
-   rechecked with `orbit task recheck-blocked --confirm` after their cause
-   clears; transient recovery requires an authenticated published candidate
-   and is bounded. Otherwise, once the cause is fixed, either:
-   - click **Resume** on the failed run in **Jobs** (`orbit job resume
-     <run-id>`) to continue from its first unsuccessful step; or
-   - move the task back to `backlog` with its status dropdown in **Tasks**
+1. **Find the failure.** In **Jobs › History**, filter to **Failed** and open
+   the run; it opens on the failed step and its error. From the CLI:
+
+   ```bash
+   orbit run history --failures      # one row per task and root cause
+   orbit run show "$AUTO_RUN_ID"     # the window's failed children
+   orbit run logs "$CHILD_RUN_ID"
+   ```
+
+2. **Check the recovery steps.** A failure the agent declares itself goes
+   through step recovery before the task becomes `blocked`. Read those steps
+   before you decide what the task needs.
+3. **Retry deliberately.** `orbit task show "$TASK_ID"` prints the exact
+   command on its `Next:` line. Once the cause is fixed, either:
+   - click **Resume** on the failed run in **Jobs**
+     (`orbit job resume <run-id>`) to continue from its first unsuccessful
+     step; or
+   - move the task back to `backlog` in **Tasks**
      (`orbit task update "$TASK_ID" --status backlog`) so a later window runs
-     it again, resuming any saved candidate.
+     it again and resumes any saved candidate.
 
-   `orbit task show "$TASK_ID"` prints the exact command on its `Next:` line. A
-   show routed to another host prints the same line, and the dashboard task
-   detail carries the same `next_step`.
+A task that you cancelled with `--block` also needs the move back to
+`backlog`.
 
-   When a blocked task has a failure-handoff receipt, and any required
-   pre-landing review has settled for that exact candidate, its block decision
-   offers **Approve and land** (`orbit decision answer <request-id> land`).
-   The offer does not check the pull request's state. When you apply the answer,
-   Orbit requires the handoff pull request to be open, non-draft, still at the
-   handed-off head, free of merge conflicts, and free of failed or pending
-   required checks. If any of these fails, the answer is refused, nothing
-   changes, and the request stays open. When they all pass, Orbit merges the
-   reviewed head and completes the task. Agents, drains, and automatic rules
-   cannot choose it.
+### If the block was infrastructure
 
-A cancelled task leaf is already back in `backlog` by default, with its
-candidate resumable on the next delivery. If you cancelled with `--block`,
-return it to `backlog` when it is ready to run again.
+A task blocked by a missing provider launcher or a transient infrastructure
+failure can return to the backlog once the cause clears:
+
+```bash
+orbit task recheck-blocked             # report which blocks have cleared
+orbit task recheck-blocked --confirm   # return those tasks to backlog
+```
+
+A task blocked by its own failure stays blocked. Each published candidate is
+requeued this way at most twice; after that, use `orbit task requeue`. A host
+or environment failure that keeps recurring needs the host fixed, not another
+attempt.
+
+### If the blocked task offers Approve and land
+
+A blocked task whose failed run handed off a pull request can offer **Approve
+and land** on its block decision (`orbit decision answer <request-id> land`).
+Only an operator can choose it. Orbit merges and completes the task only when
+the pull request is open, not a draft, still at the handed-off head, free of
+conflicts, and free of failed or pending required checks. Otherwise it refuses
+and leaves the request open.
+
+### If a run is stuck pending
+
+A run stuck `pending` with no live worker still holds its task reservations.
+Cancel it in **Jobs** or with `orbit run cancel "$RUN_ID" --confirm`. The
+[stuck job runs runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md)
+explains how to tell a stuck run from a slow one.
 
 ### Repair a cancelled owner-local published PR
 
-Generic resume still refuses cancelled runs. When an owner-local task PR run
-was deliberately cancelled after publication and its task remains in review,
-an operator on the owning host can explicitly authorize remaining source work
-on that same task, branch and PR. This does not admit claimed leaves or foreign
-runs, and does not release a draft/evidence hold.
+`orbit job resume` refuses cancelled runs. When you cancelled an owner-local
+PR run after it published, and its task is still in `review`, an operator on
+the owning host can authorize the remaining work on the same branch and pull
+request. The pull request must be open and unmerged, with automatic merge
+disabled.
 
-First make the canonical task description, criteria, plan and complete context
-selectors describe the work you now authorize. Restore any temporarily released
-selectors before inspection. The cancelled worker must have conclusively stopped;
-its successful host commit, prepare, sync, push and PR checkpoints, retained Git
-objects and exact local and remote branch must still be available. The PR must
-be open, unmerged and have automatic merge disabled. Unreadable or uncertain
-merge intent refuses admission.
-
-Run these public tool requests as the operator (a model session cannot confer
-this authority). Use a deployment whose `orbit tool show
-orbit.run action resume` schema advertises `source_repair`; the owner, worker
-and any long-lived client must be on the compatible executable generation and
-store schema before use. Existing resume callers need no new argument. This
-feature adds a version-1 binding and append-only repair ledger, with no store
-schema migration. Installation and client restart remain operator actions.
+First update the task so its description, criteria and context files describe
+the work you authorize. Then inspect:
 
 ```bash
 orbit tool run orbit.run --input \
   '{"action":"resume","id":"<cancelled-run-id>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```
 
-If the workspace has an exclusive claim, include its authorized `claim_token`
-as a top-level field in both requests; operator authority does not bypass it.
-
-Inspection returns `binding`, current `review`, and prior `reservations`.
-Copy the entire returned `binding` object verbatim into a local request file;
-do not construct a head or digest yourself:
+Copy the whole returned `binding` object into a request file, unchanged, and
+submit it:
 
 ```json
 {
@@ -543,7 +429,7 @@ do not construct a head or digest yourself:
     "task_id": "<task-id>",
     "request_key": "published-source-repair-1",
     "binding": { "<replace with the entire inspected binding>": "" },
-    "diagnosis": "Name the failing CI run/job or observed source defect, its published head, and the remaining source edits explicitly authorized."
+    "diagnosis": "Name the failing CI job or source defect, its published head, and the source edits you authorize."
   }
 }
 ```
@@ -552,74 +438,36 @@ do not construct a head or digest yourself:
 orbit tool run orbit.run --input-file source-repair-request.json
 ```
 
-The binding pins the workspace, owner machine, source run and checkpoints,
-repository and origin URL, task meaning/tools/crew and footprint, PR, branch,
-published head and recorded base. A successful host rebase is authenticated by
-the complete prepare/sync/push/PR chain; the pre-rebase commit need not be an
-ancestor of the published head. Changed evidence or scope requires a fresh
-inspection; a changed payload under an existing request key is refused.
+Repeating the identical request returns the same run, so a lost reply is safe
+to retry. A changed payload under the same `request_key` is refused, and each
+pull request has a bounded repair budget. If the workspace has an exclusive
+claim, add its `claim_token` as a top-level field in both requests.
 
-A request key contains 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`.
-Submission durably reserves the bounded per-PR repair budget before admitting
-one linked run. Repeat the identical request after a lost reply: it returns the
-same run without spawning another worker, even after that run stops. A new key
-cannot recharge the same head, and cancellation does not refund a reservation.
-The new attempt continues the saved candidate with today's authorized task
-specification under normal footprint locks, crew/OS/capacity and build budget.
-It inherits no validation or review checkpoint and reruns required commands on
-the repaired source. It captures the current host's review schedule: none for
-an after-landing coverage setup, or before-landing review on the published head
-when configured (before-PR configuration also retains its normal meaning).
-No configuration change or additional review gate is needed. Independent review
-uses that captured schedule; after-landing coverage remains the configured
-`delivery-code-review` automation.
-
-The attempt always requests `completion: review` and `auto_fix: false`.
-Inspect its resulting PR and validation/review evidence before separately
-requesting completion or automatic repair authority. This operator diagnosis
-path does not depend on automatic CI annotation classification.
-
-A host-specific or environmental failure that keeps recurring needs the host
-fixed, not another attempt.
-
-A run stuck `pending` with no live worker holds its task reservations; cancel
-it in **Jobs** or with `orbit run cancel "$RUN_ID" --confirm`. The
+The new run continues the saved candidate, reruns your required validation,
+and stops at `review` with auto-fix off. The
 [stuck job runs runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md)
-explains how to tell a stuck run from a slow one.
+covers refusals and edge cases.
 
-Then check the workspace and reclaim worktrees left by settled tasks:
+## 8. Clean up and keep the record
+
+Check the workspace, then reclaim the worktrees that settled tasks left:
 
 ```bash
 orbit doctor
-# Report what it would reap.
-orbit gc worktrees
-# Remove the settled worktrees.
-orbit gc worktrees --confirm
-# Free build output while keeping checkouts.
-orbit gc worktrees --reclaim --confirm
+orbit gc worktrees                       # report what it would remove
+orbit gc worktrees --confirm             # remove settled worktrees
+orbit gc worktrees --reclaim --confirm   # free build output, keep checkouts
 ```
 
-`orbit gc worktrees` collects worktrees whose task is `done`, `rejected`, or
+`orbit gc worktrees` collects worktrees whose task is `done`, `rejected` or
 `archived`, or has been parked in `someday` for
-`worktree.parked_reclaim_after_hours` (default 336), and removes nothing without `--confirm`. On a replica it reads
-task status from the owner machine. `--reclaim` deletes declared
-`worktree.reclaim` paths (default
-`["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]`) only after terminal-run, worker,
-registration, confinement, symlink and Git content checks. The failed run's
-checkout and unmatched evidence stay available for rescue. The scheduled sweep
-also reclaims declared output in every kept terminal worktree. To limit it by age or to one run, see
-the [CLI reference](../../reference/cli/).
-
-The scheduled `worktree_gc_pipeline` run also prunes the checkout's
-`.orbit/tmp` scratch directory: a top-level entry goes once nothing inside it
-has changed for 24 hours. Pass `--input scratch_older_than_hours=<hours>` to
-`orbit run job worktree_gc_pipeline` to change the window for a run. Entries a
-live process holds open or an active run names are skipped and reported.
-
-## 8. Keep the task record durable
+`worktree.parked_reclaim_after_hours` (default 336). `--reclaim` deletes only
+the paths in `worktree.reclaim`. A failed run's checkout stays available for
+rescue. The [`worktree-gc` routine](/how-to/recurring-work/#2-turn-on-routines)
+does the same on a schedule, and also prunes entries in the checkout's
+`.orbit/tmp` that have not changed for 24 hours.
 
 A delivery window changes a lot of task state. To snapshot it somewhere you
-can restore from, see [Publish and Restore Tasks](../task-publication/). To
-operate across hosts, [federated MCP
-setup](../mcp-integration/#register-the-federated-mux) explains how to select
-the owning workspace, without implying automatic failover.
+can restore from, see [Publish and restore tasks](/how-to/task-publication/).
+To operate across hosts, see
+[federated MCP setup](/how-to/mcp-integration/#register-the-federated-mux).

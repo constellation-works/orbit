@@ -1,12 +1,10 @@
 ---
 title: Install Orbit
-description: "Install the Orbit CLI, then let the orbit-setup skill in your agent finish the setup. Each step is also here to do by hand."
-sidebar:
-  order: 2
+description: "Install the Orbit CLI, set up a repository with the orbit-setup skill or by hand, and keep the install current."
 ---
 
-Install the CLI, then let your agent's `orbit-setup` skill set up your
-repository. Every step is also below to do by hand.
+Install the CLI, then let your agent's `orbit-setup` skill set up the
+repository, or run each step yourself.
 
 ## Prerequisites
 
@@ -14,8 +12,8 @@ repository. Every step is also below to do by hand.
 - Node 18 or newer, for the npm install.
 - At least one signed-in agent CLI, such as Claude Code or Codex. Orbit runs
   every agent step through one. The
-  [setup explorer](../../concepts/agents/#set-up-an-executor) lists the
-  supported CLIs.
+  [setup explorer](/concepts/agents/#set-up-an-executor) lists the supported
+  CLIs.
 - The GitHub CLI (`gh`), signed in, if you want pull requests.
 
 ## Install
@@ -25,40 +23,35 @@ npm install -g @orbit-tools/cli
 orbit init
 ```
 
-The package downloads the matching native binary and puts `orbit` on your
-`PATH`. `orbit init` asks for a machine name and a task-ID prefix, detects
-your agent CLIs, links Orbit's skills into your agents, and on Linux prepares
-the sandbox.
+`orbit init` asks for a machine name and a task-ID prefix, detects your agent
+CLIs, links Orbit's skills into your agents, and on Linux prepares the
+sandbox.
 
-Releases also attach a desktop app, a native window for the dashboard, to the
-[GitHub release](https://github.com/constellation-works/orbit/releases): `.deb`
-and `.AppImage` bundles for Linux on x64 and arm64. The app starts
-`orbit web serve` from your installed `orbit`, so it needs the CLI install
-above. macOS bundles are attached only when the release was built with Apple
-signing credentials, so a release may have none. See
-[Use the desktop app](../../how-to/desktop/) for first launch, tray controls,
-and fleet notifications.
+Each [GitHub release](https://github.com/constellation-works/orbit/releases)
+also attaches a desktop app, a native window for the dashboard, as `.deb` and
+`.AppImage` bundles for Linux. A release may have no macOS bundle. The app
+needs this CLI install. See [Use the desktop app](/how-to/desktop/).
 
 ## Windows
 
-Open a WSL2 Linux shell first, then install Orbit inside it:
+Native Windows is not supported: the npm install fails there with
+`EBADPLATFORM`. Open a WSL2 Linux shell and install inside it:
 
 ```bash
 npm install -g @orbit-tools/cli
 ```
 
-Windows via WSL2 has not yet been verified on a Windows host. Native Windows
-is not supported; building from source does not change that. Running the npm
-command in a native Windows shell fails with `EBADPLATFORM` because the package
-supports macOS and Linux only. See the [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md) for setup.
+WSL2 has not yet been verified on a Windows host. The
+[Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md)
+covers setup.
 
 ## Install as an agent plugin
 
-To give a single agent Orbit's MCP tools and skills without installing the CLI
-on `PATH`, add the plugin. It launches the pinned npm CLI. The dashboard and
-cross-agent workspace setup still need the CLI install above.
+The plugin gives one agent Orbit's MCP tools and skills without `orbit` on
+your `PATH`. It launches the pinned npm CLI. The dashboard and setup across
+several agents still need the CLI install above.
 
-```bash
+```text
 # Claude Code
 /plugin marketplace add constellation-works/orbit
 /plugin install orbit
@@ -67,122 +60,107 @@ cross-agent workspace setup still need the CLI install above.
 codex plugin marketplace add constellation-works/orbit --ref agent-main
 codex plugin add orbit@orbit
 
-# Cursor (local plugin from a checkout)
+# Cursor, from a checkout of the Orbit repository
 mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
 ```
 
-In Claude Code, the plugin also adds an in-session UI with a live task band,
-interactive board, and ship view. See
-[Use the Claude Code mod](../../how-to/claude-code/) to learn how to use it.
-
-Want to be walked through setup? Ask your agent to **set up Orbit for this
-repo**; the bundled `orbit-setup` skill takes it from there.
+In Claude Code, the plugin also adds a live task band, an interactive board,
+and a ship view. See [Use the Claude Code mod](/how-to/claude-code/).
 
 ## Let your agent set it up
 
-:::tip[Recommended]
-Open your agent in the repository and ask it to **set up Orbit for this repo**.
-:::
+Open your agent in the repository and ask it to **set up Orbit for this
+repo**.
 
-The `orbit-setup` skill checks what is already in place, registers the
-repository, connects your agent over MCP, checks your agent CLIs and the
-sandbox, and runs `orbit doctor`. It asks only for choices it cannot infer, such
-as the branch pull requests should target. When it finishes, start a fresh
-agent session so the Orbit tools load.
+The `orbit-setup` skill registers the repository, connects your agent over
+MCP, checks your agent CLIs and the sandbox, and runs `orbit doctor`. It asks
+only for what it cannot infer, such as the branch pull requests should target.
+When it finishes, start a fresh agent session so the Orbit tools load.
 
-Use the same skill for later changes: adding a provider, scheduling work,
-upgrading, or fixing a failing `orbit doctor`.
+Use the same skill later to add a provider, schedule work, upgrade, or fix a
+failing `orbit doctor`.
 
 ## Set up by hand
 
-These are the steps the skill runs. Use them to set up by hand, or to see what
-the skill did.
-
-### Initialize state
+The steps the skill runs:
 
 ```bash
 orbit init
 cd <repo>
 orbit workspace init --mcp
+orbit doctor
 ```
 
-`orbit init` sets up this machine under `~/.orbit/`. It asks for a **machine
-name**, which you can rename later, and a **task-ID prefix** of 2–5 uppercase
-letters, such as `ABC`, which can never change (`ORB`, `ADR`, `L` and `F` are
-reserved). For an unattended setup, pass both:
+### Initialize the machine
+
+`orbit init` sets up this machine under `~/.orbit/`. It asks for:
+
+- a **machine name**, which you can change later;
+- a **task-ID prefix** of 2–5 uppercase letters, such as `ABC`, which can
+  never change. `ORB` and `ADR` are reserved.
+
+For an unattended setup, pass both:
 
 ```bash
 orbit init --non-interactive --machine-name build-01 --task-prefix ABC
 ```
 
-`orbit init` also adds a [human crew](../../reference/config/#human-crews)
-for your own work: tasks Orbit tracks for you but never hands to an agent. It
-offers your OS user name and uses it as-is without a terminal or with
-`--non-interactive`. Pass `--human-name <name>` to choose another. Running
-init again keeps the existing human crew.
+`orbit init` also adds a [human crew](/reference/config/#human-crews) for
+tasks Orbit tracks for you but never hands to an agent. Its name defaults to
+your OS user name; pass `--human-name <name>` to choose another.
 
-On Linux, an unattended `orbit init` never waits for a password, so it prepares
-the sandbox only as root or with passwordless `sudo`. Otherwise it warns and
-still seeds Orbit, and agent runs stay blocked until `orbit doctor providers`
-reports the sandbox ready.
+### Register the repository
 
 `orbit workspace init` registers the repository and keeps its state under
-`.orbit/`. `--mcp` connects your agent clients with **operator** authority,
-which lets them ship tasks and run governed operations. Plain `orbit mcp init`
-registers an agent-only connection instead; see
-[Connect Your Agent](../../how-to/mcp-integration/).
+`.orbit/`. Its options:
 
-By default, pull requests target the branch checked out when you run
-`orbit workspace init`, or `main` if none is. Add `--base-branch <branch>` to
-choose another, or `--ship-mode local` to merge in place instead of opening
-pull requests.
-
-If a distribution supplies a workspace preset, apply it with
-`orbit workspace init --preset <file>`. The TOML preset selects shipped
-routines and auto-tasks, enables definitions from an already enabled plugin,
-and sets workspace config. Orbit validates the whole file before writing
-anything. See [Workspace presets](../../reference/config/#workspace-presets).
+| Option | Effect |
+|---|---|
+| `--mcp` | Connects your agent clients with **operator** authority, so they can ship tasks and run governed operations. For an agent-only connection, see [Connect your agent](/how-to/mcp-integration/). |
+| `--base-branch <branch>` | Sets the branch pull requests target. The default is the branch checked out when you run the command, or `main`. |
+| `--ship-mode local` | Merges in place instead of opening pull requests. |
+| `--preset <file>` | Applies a [workspace preset](/reference/config/#workspace-presets) that a distribution supplies. |
 
 ### Prepare the sandbox
 
-Orbit runs each agent in an OS-level sandbox: `sandbox-exec` on macOS, which
-needs no setup, and Bubblewrap on Linux, which fails closed without a trusted
-Bubblewrap that supports `--bind-fd`.
+Orbit runs each agent in an OS-level sandbox. macOS needs no setup. On Linux
+the sandbox is Bubblewrap, and runs stay blocked until
+`orbit doctor providers` reports it ready.
 
-On Linux, `orbit init` prepares the sandbox. It probes Bubblewrap as your
-account and, only if that fails, installs it through the distribution's
-package manager, asking for your password. Where the distribution's Bubblewrap
-is missing or too old for Orbit, as on Ubuntu 22.04, it installs the signed
-Bubblewrap published with each Orbit release to `/usr/local/libexec/orbit/bwrap`
-instead. On Ubuntu 24.04 it also loads the
-packaged AppArmor rule. Run `orbit init` as the account that will run Orbit,
-not through `sudo`.
+`orbit init` prepares it: if Bubblewrap is missing or does not work for your
+account, it installs one and asks for your password. Run `orbit init` as the
+account that will run Orbit, not through `sudo`.
+
+An unattended `orbit init` never waits for a password, so it prepares the
+sandbox only as root or with passwordless `sudo`. Otherwise it warns and sets
+up the rest. Fix the cause the warning names, then run
+`orbit init --host-prerequisites-only`.
 
 A run that fails with `bwrap: setting up uid map: Permission denied` points to
 this step, not your task. The
 [Linux sandbox runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/linux-sandbox.md)
-covers which distributions are prepared automatically, container images, and
-the fix for each failure.
+has the fix for each failure.
 
 ### Configure and check
 
-`orbit init` writes `~/.orbit/config.toml` with the built-in crews, enabling
-those whose agent CLI it detects. It picks a default from those available;
-with none detected, enable a crew before dispatching. It also seeds purpose
-pools and sets experiments, mid-run steering and machine auto-concurrency to
-values that differ from the built-in defaults; see [What `orbit init`
-seeds](../../reference/config/#what-orbit-init-seeds). To pick a different
-default, choose an enabled crew and set `workflow.default_crew`. Seed the
-workspace config on its first edit, then check the workspace:
+`orbit init` writes `~/.orbit/config.toml` with the built-in crews, enables
+those whose agent CLI it finds, and picks a default from them. If it finds
+none, enable a crew before you dispatch.
+[What `orbit init` seeds](/reference/config/#what-orbit-init-seeds) lists the
+other values it sets.
+
+To use a different default crew in this workspace:
 
 ```bash
 orbit config set --seed-from-global workflow.default_crew opus
-orbit doctor
 ```
 
-`orbit doctor` checks config, database, disk, indexes, locks, and runs, and
-`orbit doctor providers` shows whether each agent CLI and the sandbox are ready.
-[Configuration](../../reference/config/) lists every setting.
+`--seed-from-global` starts a workspace config that does not exist yet from
+the global one.
+
+`orbit doctor` checks the workspace, and `orbit doctor providers` shows
+whether each agent CLI and the sandbox are ready.
+[Configuration](/reference/config/) lists every setting.
 
 ## Stay current
 
@@ -192,18 +170,21 @@ Orbit processes first. To upgrade by hand, stop running Orbit sessions and
 
 ```bash
 npm install -g @orbit-tools/cli@latest
+orbit workspace sync --all
 ```
 
-`orbit update --check` tells you whether a newer release is out. npm owns this
-install, so `orbit update` prints the npm command instead of replacing the
-binary. Required state migrations apply the next time Orbit opens the
-workspace; `orbit migrate` lists any others, and `orbit migrate --confirm`
-applies them. After the upgrade, run `orbit workspace sync --all` once on each
-host to bring every registered workspace's managed defaults up to date (see
-[Synchronize shipped defaults](../../how-to/workspace-maintenance/#synchronize-shipped-defaults)).
-Upgrade every host together for distributed work, and restart long-lived MCP
-servers too. Workspace layout 9 (Orbit 0.44.0) fences older clients from
-workspaces a newer build has upgraded, so upgrade every host before any of them
-opens a shared workspace. An older binary also refuses an auto-task definition
-or settings file that sets `granted_tools`, so upgrade every host before
-setting a grant.
+- `orbit update --check` tells you whether a newer release is out. With an npm
+  install, `orbit update` prints the npm command instead of replacing the
+  binary.
+- `orbit workspace sync --all` brings every registered workspace's managed
+  defaults up to date. Run it once on each host. See
+  [Synchronize shipped defaults](/how-to/workspace-maintenance/#synchronize-shipped-defaults).
+- Required state migrations apply the next time Orbit opens a workspace.
+  `orbit migrate` lists the others, and `orbit migrate --confirm` applies
+  them.
+
+:::caution
+Upgrade every host before any of them opens a shared workspace: a workspace
+that a newer build has upgraded refuses older clients. Restart long-lived MCP
+servers too.
+:::

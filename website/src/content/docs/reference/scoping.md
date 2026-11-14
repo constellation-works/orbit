@@ -1,40 +1,26 @@
 ---
-title: Scoping rules
-description: "Where Orbit stores and merges tasks, activities, jobs, policies, skills, audit, and run data."
-sidebar:
-  order: 7
+title: Where state lives
+description: "What Orbit keeps per machine and per repository, and how global and workspace definitions merge."
 ---
 
-## Strategies
-
-Each artifact type follows one of three strategies. **Workspace only** keeps
-it per repository. **Global only** keeps one copy on the machine. **Merge by
-key** combines global defaults with workspace entries, and the workspace
-entry wins for the same key, except that shipped activities and jobs always
-keep their names (see the table).
-
-| Artifact | Strategy | Meaning |
-|----------|----------|---------|
-| Tasks | Workspace only | Each repository has its own backlog and lifecycle state. |
-| Activities and jobs | Merge by key | Workspace files add new names. A shipped default keeps its name: a workspace file with the same name is ignored when a run resolves it. |
-| Policies | Merge by key | Profiles override by name; global deny rules accumulate. |
-| Job runs | Workspace only | Runs belong to one workspace; their records share the global database, while checkout-local logs and worktrees live under `.orbit/state/`. |
-| Skills | Merge by key | Global defaults live in `~/.orbit/skills`; workspace entries override by skill name. |
-| Audit | Global only | One authoritative event trail. |
+Orbit keeps state in two places: one root per machine and one `.orbit/`
+directory per repository. Use this page to find a file, or to predict which
+definition wins when both places define one.
 
 ## Where state lives
 
 | Path | Holds |
 |---|---|
-| `~/.orbit/` | Machine state: task bundles, `orbit.db` (audit, runs, routines, frictions), workspace registry, shipped resources, skills, and `config.toml`. |
-| `<repo>/.orbit/` | Workspace identity, local config overrides, auto-tasks, routines, worktrees, and logs. This state is gitignored. |
+| `~/.orbit/` | Machine state: task bundles, `orbit.db` (audit, runs, routines, frictions), the workspace registry, shipped resources, skills and `config.toml`. |
+| `<repo>/.orbit/` | Workspace state: identity, local config overrides, auto-tasks, routines, worktrees and logs. Git ignores it. |
 
-Deleting workspace state gives that checkout a clean slate; it does not delete
-the task bundles or audit database in the global root. For backups, stuck runs,
-database recovery, and upgrades, see the
-[runbooks](https://github.com/constellation-works/orbit/blob/agent-main/docs/INDEX.md#runbooks).
+Task bundles are not under `.orbit/`. They live at
+`~/.orbit/tasks/workspaces/<workspace>/`, next to the audit database
+`~/.orbit/orbit.db`. Deleting a checkout's `.orbit/` gives that checkout a clean
+slate and leaves its tasks and audit history in place. To back either root up,
+see [Back up and move state](/how-to/state-and-backup/).
 
-## Typical workspace state
+## What a workspace directory contains
 
 ```text
 .orbit/
@@ -50,18 +36,18 @@ database recovery, and upgrades, see the
     worktrees/
     auto-tasks.json  # scheduler cursor
     layout.version
-    semantic.db      # lexical search index (historical file name)
+    semantic.db      # lexical search index
   config.toml
   config.yaml
 ```
 
-Task bundles are not under `.orbit/`. They live in the global root at
-`~/.orbit/tasks/workspaces/<workspace>/`, next to the audit database
-`~/.orbit/orbit.db`.
+## How global and workspace definitions merge
 
-## Rule of thumb
-
-Keep anything that describes this repository's work in the workspace. Keep
-reusable execution defaults as global assets. Override a policy profile or
-skill in the workspace when needed; for an activity or job, add one under a
-new name, because a shipped name is never replaced.
+| Artifact | Scope | Rule |
+|----------|----------|---------|
+| Tasks | Workspace | Each repository has its own backlog. |
+| Job runs | Workspace | A run belongs to one workspace. Its record is in the machine database; its logs and worktree are under `.orbit/state/`. |
+| Audit | Machine | One event trail for the machine. |
+| Activities and jobs | Merged by name | A workspace file adds a new name. A file that reuses a shipped name is ignored, so give your own a new name. |
+| Policies | Merged by name | A workspace profile replaces the machine profile of the same name. Deny rules accumulate. |
+| Skills | Merged by name | Machine defaults live in `~/.orbit/skills`; a workspace skill of the same name replaces one. |

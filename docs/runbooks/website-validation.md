@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379", "F2026-10-688"]
-last_validated: 2026-10-29
+last_validated: 2026-11-14
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -365,21 +365,6 @@ confirm playback pauses without advancing. Save the screenshots, decoded
 frame timestamps and browser measurements with the task evidence. Do not
 publish or access a live dashboard as part of this local regression check.
 
-### Project overview card navigation
-
-After `npm run build`, run this browser check through the foreground wrapper above. The
-wrapper owns preview on `PREVIEW_PORT` until the checker exits, and refuses to start the
-checker if that port is taken:
-
-```bash
-run_foreground_preview_check command node "$REPO/website/scripts/check-project.mjs" \
-  "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" .orbit/tmp/project-links-browser
-```
-
-The check opens `/project/`, activates the Contributing and Privacy cards, and verifies
-that each navigation reaches the expected root route and renders its destination heading.
-It saves the visited URLs, response statuses, and headings under the evidence directory.
-
 ### Inline code layout checks
 
 Run this built-site leg only from a genuinely authorized operator or validator
@@ -411,10 +396,10 @@ The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
 code clipping, delimiter-only line breaks, single-line desktop keys, and table
 and page width. On `/reference/cli/`, it checks every table for code clipping,
 preserved copy text, and first-line alignment between the command/option and
-its description. It opens disclosures, selects each provider panel, measures
+its description. It opens disclosures, measures
 glyph line breaks and code/container bounds, checks that `.`, `,`, `;`, `:` or
 `)` after a code stays on the code's last line, checks that links containing
-only code keep their underline (painted, for four known links at 1280px),
+only code keep their underline (painted, for the known links at 1280px),
 checks mobile page overflow, and
 verifies the agents provider table's width and borders. It saves measurements
 and failure screenshots in the evidence directory.

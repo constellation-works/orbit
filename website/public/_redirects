@@ -8,3 +8,17 @@
 # Run a Task Lifecycle was folded into First Task on 2026-10-04.
 /how-to/task-lifecycle   /getting-started/first-task/  301
 /how-to/task-lifecycle/  /getting-started/first-task/  301
+
+# Pages merged or removed in the 2026-11 revamp.
+/project                      /changelog/                 301
+/project/                     /changelog/                 301
+/contributing/local-dev       /contributing/              301
+/contributing/local-dev/      /contributing/              301
+/contributing/crate-layout    /contributing/              301
+/contributing/crate-layout/   /contributing/              301
+/contributing/pr-workflow     /contributing/              301
+/contributing/pr-workflow/    /contributing/              301
+/how-to/scoping-rules         /reference/scoping/         301
+/how-to/scoping-rules/        /reference/scoping/         301
+/concepts/policies            /reference/policy-format/   301
+/concepts/policies/           /reference/policy-format/   301

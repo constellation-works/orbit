@@ -1,113 +1,56 @@
 ---
 title: Executor YAML
-description: "Overriding a shipped executor: file location, envelope, sandbox, host_os, inspection, image input and auth probes."
-sidebar:
-  order: 6
+description: "Override a shipped executor: file location, envelope, fields, sandbox, host_os, inspection arguments, auth probes and image input."
 ---
 
 An **executor** is the recipe Orbit uses to spawn a provider CLI: its command,
-static arguments, output format and OS sandbox. This page covers overriding an
-executor Orbit already ships. It does not cover adding a provider Orbit has no
-executor for.
+static arguments, output format and OS sandbox. Edit an executor's YAML to:
 
-Use this page when you need to:
+- pin it to the hosts it can run on (`host_os`);
+- change its sandbox backend or fallback;
+- adjust `command` or `args` for a locally wrapped CLI;
+- declare inspection arguments (`inspection_args`), image delivery
+  (`image_input`) or an authentication probe (`auth_probe`).
 
-- pin an executor to the hosts it can actually run on (`host_os`);
-- change its sandbox backend or its fallback behaviour;
-- adjust the static `command` or `args` for a locally wrapped CLI;
-- declare the arguments a pinned-source inspection run needs
-  (`inspection_args`);
-- declare how image files reach the model (`image_input`); or
-- declare an authentication recovery probe (`auth_probe`).
-
-For choosing a provider and writing a crew, see
-[Agents and crews](../../concepts/agents/). A crew names a provider and model;
-the executor is the lower-level definition underneath it.
+To choose a provider and write a crew, see
+[Agents and crews](/concepts/agents/). A crew names a provider and model; the
+executor is the definition underneath it.
 
 ## Where the file lives
 
-Executors are **machine scope**, not workspace scope. `orbit init` seeds one
-file per shipped executor under the global Orbit root:
+Executors are machine scope. `orbit init` seeds one file per shipped executor:
 
 ```text
 ~/.orbit/resources/executors/<name>.yaml
 ```
 
-For example, `~/.orbit/resources/executors/codex.yaml`. Editing that file
-changes the executor for every workspace on this machine. There is no
-workspace-local executor override: a file under a checkout's
-`.orbit/resources/` does not replace the global executor definition.
+Editing `~/.orbit/resources/executors/codex.yaml` changes the Codex executor
+for every workspace on this machine. There is no workspace-local override: a
+file under a checkout's `.orbit/resources/` does not replace it.
 
-Re-running plain `orbit init` does not overwrite a file you customized. It
-only applies narrow migrations to a shipped default, such as copying a new
-shipped `host_os` onto an installed file that still omits the field, or
-re-aligning a platform-mismatched sandbox. `orbit init --force` deletes the
-global root first, so it resets these files to the shipped defaults.
+Plain `orbit init` keeps a file you customized. It only applies narrow
+migrations to a shipped default, such as adding a new shipped `host_os` to a
+file that omits the field or re-aligning a sandbox that does not match the
+platform. `orbit init --force` resets the global root, and these files with
+it.
 
-Inspect the effective definitions with:
+Inspect the definitions as Orbit resolves them on this host:
 
 ```bash
 orbit doctor providers
 orbit doctor providers --json
 ```
 
-That command reports each executor's type, command, sandbox, fallback setting
-and CLI availability as Orbit resolves them on this host. Verify flags against
-the provider CLI itself before you put them in `args`; Orbit passes `args`
-through and does not validate them against the CLI's help.
+It reports each executor's type, command, sandbox, fallback setting and CLI
+availability. Orbit passes `args` through without checking them against the
+CLI's help, so verify flags against the provider CLI first.
 
 ## Envelope
 
 Every executor file is a schema version 2 resource envelope. The file name,
-without `.yaml`, must match `metadata.name`:
-
-```yaml
-schemaVersion: 2
-kind: Executor
-metadata:
-  name: codex
-spec:
-  executor_type: direct_agent
-  command: codex
-  args:
-    - exec
-    - --json
-  stdout_format: envelope
-  sandbox: linux-bwrap
-  model_flag: "--model"
-  env: {}
-```
-
-An unsupported `schemaVersion`, a `kind` other than `Executor`, a
-`metadata.name` that does not match the file, or an invalid value for a
-checked field such as `host_os` fails to load, naming the file. Keep the
-envelope intact when you override a field: copy the installed file and edit
-only the `spec` entries you mean to change.
-
-## `spec` fields
-
-| Field | Type | Purpose |
-|---|---|---|
-| `executor_type` | string | Executor family: `direct_agent` for shipped agent CLIs, `local_shell` for deterministic local commands. See the retired values below. |
-| `command` | string | Program to spawn, resolved on `PATH` (for example `codex`). Omit it for `local_shell` steps that name their own program. |
-| `args` | list of strings | Static arguments on every run. Keep the execution envelope and prompt out of these; Orbit supplies them off `argv`. |
-| `inspection_args` | list of strings, or omitted | Arguments appended only for pinned-source inspection runs. An empty list and an omitted field mean different things; see below. |
-| `image_input` | object, or omitted | How image files reach the model (`native_read` or `attach_args`). Omitted means the executor cannot take images; see below. |
-| `stdout_format` | `envelope`, `json` or `text` | How Orbit reads the subprocess output. Leave the shipped value unless the CLI's output shape changes with your `args`. |
-| `model_pair_override` | `{ strong, weak }` | Legacy audit and attribution override for older definitions. It does not choose the model the subprocess runs; new definitions leave it out and use crew-selected models. |
-| `model_flag` | string | Flag Orbit appends with the step's model for a `direct_agent` (for example `"--model"`). Only the flag name; the model value comes from the crew or step. |
-| `timeout_seconds` | integer | Optional wall-clock limit where the executor family uses one, notably as the `local_shell` fallback budget. |
-| `auth_probe` | object | Optional bounded authentication recovery call. Only the shipped `claude` executor declares one; see below. |
-| `env` | map of strings | Extra environment entries for the subprocess. Credential values do not belong here; pass variable names through the configured environment instead. |
-| `sandbox` | `off`, `macos-sandbox-exec` or `linux-bwrap`, or omitted | OS sandbox backend. See the next section. |
-| `allow_fallback` | boolean, default `false` | Degrade to a bare process when the declared sandbox primitive is unavailable, instead of failing closed. |
-| `host_os` | list, or omitted | Host operating systems this executor can run on. See the `host_os` section. |
-| `created_at`, `updated_at` | timestamps | Maintained when Orbit writes the definition. You do not need to set them by hand. |
-
-A complete override that only restricts hosts and keeps everything else from
-the shipped Codex definition looks like this on a Linux host. Start from your
-installed file, because its `sandbox` value is already the one seeded for your
-platform:
+without `.yaml`, must match `metadata.name`. To override a field, copy the
+installed file and change only the `spec` entries you mean to. This is the
+shipped Codex definition on Linux with one override, `host_os`:
 
 ```yaml
 schemaVersion: 2
@@ -134,48 +77,65 @@ spec:
   env: {}
 ```
 
+Start from your installed file: its `sandbox` value is already the one seeded
+for your platform.
+
+A file fails to load, with an error that names it, when `schemaVersion` is
+unsupported, `kind` is not `Executor`, `metadata.name` does not match the file
+name, or a checked field such as `host_os` holds an invalid value.
+
+## `spec` fields
+
+| Field | Type | Purpose |
+|---|---|---|
+| `executor_type` | string | `direct_agent` for agent CLIs, `local_shell` for deterministic local commands. Retired values are under [What this is not](#what-this-is-not). |
+| `command` | string | Program to spawn, resolved on `PATH`. Omit it for `local_shell` steps that name their own program. |
+| `args` | list of strings | Static arguments on every run. Orbit supplies the execution envelope and prompt itself, off `argv`; keep them out. |
+| `inspection_args` | list of strings, or omitted | Arguments appended only for pinned-source inspection runs. Empty and omitted mean different things; see [Inspection runs](#inspection-runs-inspection_args). |
+| `image_input` | object, or omitted | How image files reach the model. Omitted means the executor cannot take images; see [Image input](#image-input). |
+| `stdout_format` | `envelope`, `json` or `text` | How Orbit reads the subprocess output. Keep the shipped value unless your `args` change the CLI's output shape. |
+| `model_pair_override` | `{ strong, weak }` | Legacy audit and attribution override. It does not choose the model that runs; leave it out of new definitions. |
+| `model_flag` | string | Flag name Orbit appends with the step's model for a `direct_agent`, for example `"--model"`. The value comes from the crew or step. |
+| `timeout_seconds` | integer | Optional wall-clock limit; the fallback budget for `local_shell`. |
+| `auth_probe` | object | Optional authentication recovery call; see [Authentication probes](#authentication-probes-auth_probe). |
+| `env` | map of strings | Extra environment entries for the subprocess. Do not put credential values here; pass variable names through the configured environment. |
+| `sandbox` | `off`, `macos-sandbox-exec` or `linux-bwrap`, or omitted | OS sandbox backend; see [Sandbox and fallback](#sandbox-and-fallback). |
+| `allow_fallback` | boolean, default `false` | Run without an OS wrapper when the declared sandbox primitive is unavailable, instead of failing. |
+| `host_os` | list, or omitted | Host operating systems this executor can run on; see [Host constraint](#host-constraint-host_os). |
+| `created_at`, `updated_at` | timestamps | Maintained by Orbit. Do not set them by hand. |
+
 ## Sandbox and fallback
 
-`sandbox` selects the OS wrapper Orbit applies around the provider CLI,
-scoped by the activity's filesystem profile:
+`sandbox` selects the OS wrapper around the provider CLI, scoped by the
+activity's filesystem profile.
 
-- `macos-sandbox-exec` applies on macOS only.
-- `linux-bwrap` applies on Linux only.
-- `off` explicitly disables the outer Orbit sandbox and the provider's inner
-  sandboxing. It applies on any host, and it is a persistent operator choice,
-  not a per-run flag.
-- Omitting `sandbox` leaves the choice unspecified. Installed Linux defaults
-  migrate to Bubblewrap during seeding; other executors keep provider
-  behaviour. The bundled `local-shell` executor declares no sandbox by design.
+| Value | Effect |
+|---|---|
+| `macos-sandbox-exec` | Applies on macOS only. |
+| `linux-bwrap` | Applies on Linux only. |
+| `off` | Disables Orbit's outer sandbox and the provider's inner sandboxing, on any host. It is a persistent choice, not a per-run flag. |
+| omitted | Unspecified. Installed Linux defaults migrate to Bubblewrap during seeding; other executors keep provider behaviour. The shipped `local-shell` executor omits it by design. |
 
-Shipped assets declare their sandbox intent once, and seeding translates it
-for the host: a shipped executor installs with `linux-bwrap` on Linux and
-keeps `macos-sandbox-exec` on macOS. A value you set yourself is not
-translated. Declaring a backend unsupported on the host OS (such as
-`macos-sandbox-exec` on Linux or `linux-bwrap` on macOS) is always refused
-before provider launch; `allow_fallback` does not override an OS/backend
-mismatch. The remedy is to configure the host's native backend (`linux-bwrap` on
-Linux, `macos-sandbox-exec` on macOS; WSL2 on Windows) or explicitly set
-`sandbox: off`.
+Seeding translates a shipped executor's sandbox for the host: `linux-bwrap` on
+Linux, `macos-sandbox-exec` on macOS. A value you set yourself is not
+translated. A backend that does not match the host OS is refused before the
+provider launches, and `allow_fallback` does not override that. Set the
+host's native backend, or `sandbox: off`.
 
-On a supported host OS, `allow_fallback: true` permits running without an OS
-wrapper if the host's native sandbox primitive is missing or unusable (for
-example, on Linux when Bubblewrap is absent or its user namespace probe fails,
-or on macOS if `/usr/bin/sandbox-exec` is missing):
+`allow_fallback: true` covers a different case: the backend matches the host,
+but its primitive is missing or unusable (Bubblewrap absent or failing its
+user-namespace probe on Linux, `/usr/bin/sandbox-exec` missing on macOS).
 
 ```yaml
-# Supported Linux host where Bubblewrap may be unavailable:
 spec:
   sandbox: linux-bwrap
   allow_fallback: true
 ```
 
-With `allow_fallback: true`, an unavailable sandbox primitive on a supported OS
-degrades to running the CLI with no OS wrapper rather than refusing dispatch.
-The activity's tool policy and in-process guards still apply, but the filesystem
-profile is no longer kernel-enforced. Leave it `false` unless that trade-off is
-acceptable on this machine. Check readiness before a run with
-`orbit doctor providers`.
+The CLI then runs with no OS wrapper instead of dispatch being refused. Tool
+policy and in-process guards still apply, but the kernel no longer enforces
+the filesystem profile. Leave it `false` unless you accept that on this
+machine. Check readiness with `orbit doctor providers`.
 
 ## Host constraint: `host_os`
 
@@ -187,39 +147,29 @@ spec:
     - macos
 ```
 
-Rules:
-
 - The value is a non-empty subset of `linux`, `macos` and `windows`. An empty
-  list or any other name is refused when the file loads, and the error names
-  the file.
-- Omit `host_os`, or set it to null, to allow every host.
-- A concrete sandbox backend is separate from `host_os`. A macOS-only
-  executor still needs a sandbox value that applies there; `host_os` never
-  translates one backend into another.
+  list or any other name fails to load.
+- Omit `host_os`, or set it to null, to allow every host. Most shipped
+  executors omit it.
+- `host_os` does not pick or translate a sandbox. A macOS-only executor still
+  needs a `sandbox` value that applies on macOS.
 
-Admission intersects the executor's `host_os` with the task's `os:` tags. The
-task's effective OS requirement is that intersection, and task creation,
-`orbit run ship` discovery and pull admission all read the same intersection:
+Admission intersects the executor's `host_os` with the task's `os:` tags:
 
-- An empty intersection — an `os: linux` task whose crew's executor declares
-  `host_os: [macos]` — is refused when the task is created or updated. Nothing
-  is written, so the task never becomes one no host can run.
-- A crew pinned to an executor this host cannot run stays assigned and waits,
-  for example `waits for a macos host`. Orbit does not redraw it onto another
-  crew. Pool and default-crew draws on this host skip crews whose executor
-  excludes it.
-- `orbit doctor providers` reports such an executor as unsupported on this OS
-  rather than telling you to install its CLI here.
-
-Most shipped executors omit `host_os`, so they run wherever their seeded
-sandbox applies. Declare it when a wrapped CLI genuinely exists on only some
-of your hosts.
+- **Empty intersection.** An `os: linux` task whose crew's executor declares
+  `host_os: [macos]` is refused when the task is created or updated. Nothing
+  is written.
+- **Crew pinned to an executor this host cannot run.** The task stays
+  assigned and waits for a host that can. Orbit does not redraw it onto
+  another crew. Pool and default-crew draws on this host skip such crews.
+- **`orbit doctor providers`** reports the executor as unsupported on this
+  OS, not as a missing CLI.
 
 ## Inspection runs: `inspection_args`
 
-Task pilot and escalation triage inspect pinned source
-with the provider CLI's own file-read and shell tools. `inspection_args` names
-the arguments appended to that executor's `args` for those runs only:
+Task pilot and escalation triage inspect pinned source with the provider
+CLI's own file-read and shell tools. `inspection_args` names the arguments
+appended to `args` for those runs only:
 
 ```yaml
 spec:
@@ -230,32 +180,24 @@ spec:
     - features.unified_exec=true
 ```
 
-The three states matter:
+| State | Meaning |
+|---|---|
+| A list | Appended to an inspection run. The shipped `codex` executor declares the list above so its native shell stays on. |
+| `[]` | The static `args` already enable the native tools. The shipped `claude` executor declares this, because its `args` pass `--tools default`. |
+| Omitted | No inspection surface. Inspection draws skip that executor's crews, and a run that still names one is refused before launch. No other shipped executor declares the field. |
 
-- **A list** appends those arguments to an inspection run. The shipped
-  `codex` executor declares the list above so its native shell stays on.
-- **An empty list** (`inspection_args: []`) declares that the static `args`
-  already enable the native tools. The shipped `claude` executor declares
-  `[]`, because its `args` already pass `--tools default`.
-- **Omitted** declares no known inspection surface. Inspection draws skip that
-  executor's crews, and a run that still names one is refused before launch.
-  No other shipped executor declares the field.
+An installed file that omits the field takes the shipped default for the same
+executor name; a value you set wins.
 
-An installed definition that omits the field takes the shipped default's
-declaration for the same executor name, so an existing install keeps
-inspecting after an upgrade. A value you set wins over that default.
-
-These arguments do not grant write access. Read-only inspection stays
-enforced by the `reviewer` filesystem profile and the OS sandbox, and the
-apply step still checks the revision the inspection reports against the
-pinned source.
+These arguments grant no write access. The `reviewer` filesystem profile and
+the OS sandbox keep inspection read-only.
 
 ## Authentication probes: `auth_probe`
 
-An executor may declare one bounded call that a pull drain uses to recover an
-authentication-excluded provider account. Only the shipped `claude` executor
-declares one. A probe never runs at drain start, for a healthy crew, or for a
-capacity or refusal exclusion.
+An executor may declare one bounded call that a pull drain uses to recover a
+provider account excluded for an authentication failure. Only the shipped
+`claude` executor declares one. A probe never runs at drain start, for a
+healthy crew, or for a capacity or refusal exclusion.
 
 ```yaml
 spec:
@@ -269,24 +211,23 @@ spec:
     relogin_hint: "Run `claude auth login`, or renew `claude setup-token` and pass CLAUDE_CODE_OAUTH_TOKEN in [execution.env].pass."
 ```
 
-- `args` replaces the activity arguments for the probe call, using the same
-  resolved command. `stdin` carries the minimal prompt, never `argv`.
-- `timeout_seconds` is between 1 and 120. Each attempt costs one real model
-  request.
-- `success.kind` is `exit_zero`, or `stdout_contains` with non-empty `text`.
-  Both also require a zero exit.
-- `relogin_hint` is the operator action Orbit surfaces when the probe keeps
-  failing.
+| Field | Meaning |
+|---|---|
+| `args` | Replaces the activity arguments for the probe call, on the same resolved command. |
+| `stdin` | The minimal prompt. It never goes on `argv`. |
+| `timeout_seconds` | 1 to 120. Each attempt costs one real model request. |
+| `success.kind` | `exit_zero`, or `stdout_contains` with non-empty `text`. Both also require a zero exit. |
+| `relogin_hint` | The operator action Orbit shows when the probe keeps failing. |
 
-Copy this shape only for an executor whose minimal model call and success
-signal you have verified. Declaring a probe with an unverified success check
-can re-admit a provider that still cannot authenticate.
+Declare a probe only for an executor whose minimal model call and success
+signal you have verified. An unverified success check can re-admit a provider
+that still cannot authenticate.
 
 ## Image input
 
-`spec.image_input` declares how image files reach the model. Images never
-travel in prompt text. Orbit stages them as files in the run's scratch
-directory, and the declaration says how the lane delivers them.
+`spec.image_input` declares how image files reach the model. Orbit stages
+images as files in the run's scratch directory; they never travel in prompt
+text.
 
 ```yaml
 spec:
@@ -297,100 +238,65 @@ spec:
     attach_args: ["--image", "{path}"] # attach_args only: argv per image
 ```
 
-- `native_read`: the CLI's own file-read tool presents image files to the
-  model. The prompt lists the staged paths and tells the agent to read each
-  one.
-- `attach_args`: the images are attached at launch, `attach_args` appended
-  once per image with `{path}` replaced by the staged file. Only scratch
-  paths reach `argv`, never content.
+| Key | Rule |
+|---|---|
+| `mode` | `native_read`: the prompt lists the staged paths and the CLI's own file-read tool presents them. `attach_args`: the images are attached at launch. |
+| `formats` | At least one of `png`, `jpeg`, `webp`, `gif`, with no repeats. Must include `png`. |
+| `max_images` | Most images one invocation may receive, canary included. At least 2. |
+| `attach_args` | Required in `attach_args` mode, refused in `native_read`. Appended once per image with `{path}` replaced by the staged file. No entry may be empty, and one must contain `{path}`. |
 
-Rules:
+An invalid declaration, including an unknown key, fails to load with
+`invalid spec.image_input: …`.
 
-- `formats` lists at least one of `png`, `jpeg`, `webp` and `gif`. It must
-  include `png`, the format of the canary every image-input run receives,
-  and must not repeat a format.
-- `max_images` is the most images one invocation may receive, canary
-  included. It is at least 2: the canary plus one image.
-- `attach_args` applies only to `attach_args` mode. That mode requires it,
-  `native_read` refuses it, no entry may be empty, and one entry must contain
-  `{path}`.
-- A definition with an invalid declaration fails to load with
-  `invalid spec.image_input: …`: an unknown key, no `png` in `formats`, a
-  repeated format, `max_images` below 2, `attach_args` with `native_read`,
-  `attach_args` mode without `attach_args`, an empty entry in `attach_args`,
-  or a template without `{path}`.
-- Omitting the field means the executor cannot take images. An activity whose
-  input asks for images on such a crew fails before launch with the
-  non-retryable `image_input_unavailable` error, which names the executor and
-  `spec.image_input`. No capability is claimed for executors that omit the
-  field.
-- An installed definition that omits the field takes the shipped default
-  executor's declaration of the same name, as `inspection_args` does. A value
-  you set wins over that default.
+Shipped declarations:
 
-Shipped declarations are declared only because their lane passed the canary
-probe below: `claude` uses `native_read` (`png`, `jpeg`, `webp`, `gif`),
-`codex` uses `attach_args` with `--image {path}`
-(`png`, `jpeg`, `webp`), and `muse` uses `attach_args` with
-`--image {path}` (`png`). The other shipped executors declare none, so their
-crews cannot take images.
+| Executor | Mode | Formats |
+|---|---|---|
+| `claude` | `native_read` | `png`, `jpeg`, `webp`, `gif` |
+| `codex` | `attach_args`, `--image {path}` | `png`, `jpeg`, `webp` |
+| `muse` | `attach_args`, `--image {path}` | `png` |
 
-Only regular files are staged. A requested image that is a FIFO, socket,
-directory, device or another non-regular file — including a symlink that
-resolves to one — is refused before launch with a `stage image …` error
-that names the path. When the source opens, the refusal reports
-`not a regular file (found <kind>)`; when opening the source itself fails
-— as it does for a Unix-domain socket on Linux, refused with its OS error
-such as `No such device or address (os error 6)` — the staging error retains
-that open error instead. The source is opened without blocking, so a named
-pipe with no writer cannot stall preparation before provider supervision
-starts.
+The other shipped executors declare none. An installed file that omits the
+field takes the shipped default for the same executor name; a value you set
+wins.
 
-A crew can also opt out on an image-capable lane. A crew that sets
-`vision = false` in `config.toml` is never given images, even when its
-executor declares `image_input`. The default is `true`. Set it to `false` for
-a text-only model on a lane that passes for other models. See
-[Configuration](../config/).
+Before you declare `image_input` for a lane, probe it with
+`orbit agents vision-probe`; see [CLI commands](/reference/cli/#analytics).
 
-Every image-input invocation is first given a canary: a generated PNG of a
-random six-character code, created per invocation in scratch and never written
-to a task. The agent must return the code as `result.canary`. A delivery
-result without it, or with another code, is refused as `[image_not_seen]`, a
-retryable step failure. The image-input probe records the same miss for that
-crew and the probe run still completes. Each check emits an `activity.image_canary_checked`
-audit event with the crew, mode and whether it was seen. The canary proves
-delivery, not judgement.
+### When a crew cannot take images
 
-A crew whose newest two or more canary checks all missed is held for visual
-purposes until 30 minutes after its last miss, doubling with each further
-consecutive miss up to 24 hours, like a provider failure hold. Its next
-passing check clears it. The hold is read from the audit events, so it covers
-probes and deliveries alike.
+- **The executor omits `image_input`.** An activity that asks for images on
+  that crew fails before launch with the non-retryable
+  `image_input_unavailable` error.
+- **The crew sets `vision = false`** in `config.toml`. It is never given
+  images, even on an image-capable executor. The default is `true`; use
+  `false` for a text-only model. See [Configuration](/reference/config/).
+- **A requested image is not a regular file** (a directory, FIFO, socket or
+  device, or a symlink to one). The run is refused before launch with a
+  `stage image …` error that names the path.
 
-Probe a lane with `orbit agents vision-probe` before you declare `image_input`
-for it. See `orbit agents vision-probe` in [CLI commands](../cli/#observe).
+### The canary
+
+Every image-input invocation also receives a canary: a generated PNG of a
+random six-character code, which the agent must return as `result.canary`. A
+result without the right code is refused as `[image_not_seen]`, a retryable
+step failure. Each check emits an `activity.image_canary_checked` audit
+event. The canary proves delivery, not judgement.
+
+A crew whose newest two or more checks all missed is held for visual work
+until 30 minutes after its last miss. The hold doubles with each further miss,
+up to 24 hours, and the next passing check clears it. Probes and deliveries
+both count.
 
 ## What this is not
 
-- **Adding an unsupported provider.** A new provider lane needs a supported
-  CLI contract and changes to Orbit itself, not just a YAML file. Writing an
-  executor file with a new name does not register a new provider family with
-  crews, effort handling or a stdout adapter. Use a shipped provider id in a
-  crew, or run that CLI outside Orbit.
-- **The retired External Executor Protocol.** `executor_type: external` still
-  parses so old definitions load, but no external transport is dispatched and
-  nothing spawns from it. Do not write new definitions with that value.
-- **The legacy `agent_cli` spelling.** Older definitions using it migrate to
-  `direct_agent` during seeding. Write `direct_agent` in new files. The old
-  `cli_command` spelling of `local_shell` is likewise still accepted on load
-  and re-serialized as `local_shell`.
-- **Per-workspace or per-task configuration.** Executor definitions are one
-  per machine. For per-work choices, configure the crew in `config.toml`
-  instead; see [Configuration](../config/).
-
-## Related pages
-
-- [Agents and crews](../../concepts/agents/) — providers, crews and platform
-  support.
-- [Configuration](../config/) — `config.toml` layering and crew settings.
-- [Scoping rules](../scoping/) — where Orbit stores each artifact type.
+- **A way to add a provider.** A new provider needs changes to Orbit itself.
+  An executor file with a new name registers no provider family. Use a
+  shipped provider id in a crew, or run that CLI outside Orbit.
+- **Per-workspace or per-task configuration.** Executors are one per machine.
+  For per-work choices, configure the crew in `config.toml`; see
+  [Configuration](/reference/config/).
+- **`executor_type: external`.** The value still parses so old definitions
+  load, but nothing is dispatched from it. Do not use it.
+- **`agent_cli` and `cli_command`.** These old spellings of `direct_agent`
+  and `local_shell` still load. Write the new names.

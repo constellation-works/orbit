@@ -1,49 +1,37 @@
 ---
 title: Plugin manifest
-description: "Author a v2 Orbit plugin: backend contracts, tools, permissions, conformance cases, dashboard panels, and migration from external-tool sidecars."
+description: "Author an Orbit plugin: the manifest, backend contracts, permissions, conformance cases, dashboard panels and migration from external tools."
 ---
 
-Use a plugin to bundle tools with their backend, permission requests, settings,
-skills and dashboard panels. The source directory holds a `.orbit-plugin/`
-directory containing `plugin.yaml` and everything the installed plugin needs.
-Only that directory is installed. Keep build inputs elsewhere in the source
-tree when they are not runtime assets.
-
-Installs, enable state, grants and secrets belong to this machine. Checkout
-pins and workspace toggles do not grant authority. See
-[Install and grant plugins](../../how-to/plugins/) for installation and consent.
+A plugin bundles tools with their backend, permission requests, settings, skills
+and dashboard panels. Its source keeps `plugin.yaml` and every runtime asset in a
+`.orbit-plugin/` directory, the only directory installed. To install one and
+grant what it requests, see [Install and grant plugins](/how-to/plugins/).
 
 ## Start with a working plugin
-
-Run these commands in a directory where you want to create a source tree:
 
 ```bash
 orbit plugin scaffold demo
 orbit plugin validate ./demo
 orbit plugin validate ./demo --render
 orbit plugin test ./demo
-orbit plugin test ./demo --case status_reports_ready
 ```
 
-The scaffold creates `demo/.orbit-plugin/` with an executable Python backend,
-a `status` tool, a dashboard panel, a skill, an auto-task template and conformance
-cases. It requests no additional permissions. You need Python 3 to run its backend.
-`validate` checks the source without installing or running the backend; `--render`
-also shows the effective sandbox profile and child environment without creating,
-repointing or removing an installed plugin's program links. Run it from the
-registered workspace, or pass `--workspace <selector>`, to inspect that workspace's
-configuration. Outside a workspace it uses host configuration.
+- `scaffold` creates `demo/.orbit-plugin/` with a Python 3 backend, a `status`
+  tool, a dashboard panel, a skill, an auto-task template and conformance cases.
+  It requests no permissions.
+- `validate` checks the source without installing it or running the backend.
+  `--render` also prints the effective sandbox profile and child environment,
+  using the configuration of the registered workspace you are in or name with
+  `--workspace <selector>`, or else the host's.
+- `test` runs the [conformance cases](#conformance-cases) against the backend in
+  a temporary workspace.
 
-`test` executes the backend through the real protocol in a temporary workspace
-and reports the Orbit version. A filtered `--case` run does not certify the full
-suite. Edit the generated backend and manifest together, then repeat validation
-and conformance before installing the source.
+Validate and test again after each change, before you install the source.
 
 ## Manifest shape
 
-This complete minimal manifest uses the scaffold's backend and its `status`
-handler. Save it as `demo/.orbit-plugin/plugin.yaml` if you want to try a smaller
-version of the scaffold:
+A complete minimal manifest, using the scaffold's backend and `status` handler:
 
 ```yaml
 schemaVersion: 2
@@ -84,43 +72,42 @@ spec:
   tests: [tests/conformance/*.yaml]
 ```
 
-`metadata.name` owns the namespace. Names and tool verbs start with a lowercase
-letter and contain lowercase letters, digits or hyphens. Built-in command names
-are reserved. `metadata.version` is a semantic version. Optional metadata includes
-`publisher` and `homepage`; `origin: orbit` is honored only for a verified
-first-party source. It does not let an arbitrary source claim the `orbit.*`
-namespace.
+`metadata.name` is the namespace. Names and tool verbs start with a lowercase
+letter and contain lowercase letters, digits or hyphens; built-in command names
+are reserved. `metadata.version` is a semantic version. `publisher` and
+`homepage` are optional. `origin: orbit` is honored only for a verified
+first-party source: no other source can claim the `orbit.*` namespace.
 
 | Field under spec | Purpose |
 |---|---|
-| requires | Optional Orbit version range (`orbit`), host API major (`host_api`), supported `platforms`, and host `programs` the backend spawns. |
-| backend | Required `type` (`exec` or `mcp`), `command`, optional `args`, `timeout_ms` and `sandbox` (`default` or `none`). Relative commands resolve from the plugin root. The host caps calls at 300000 ms. |
-| permissions | Requested filesystem roots, network mode, environment names and Orbit callbacks. See [Permission and callback boundaries](#permission-and-callback-boundaries). |
-| tools | At least one tool, with a verb, `execution_kind`, schemas and optional MCP/CLI exposure. |
-| definitions | Glob lists named `activities`, `jobs`, `routines` and `auto_tasks`. Activities/jobs enter the plugin catalog layer; routines and auto-tasks are seeded disabled on enable. |
+| requires | Optional: Orbit version range (`orbit`), host API major (`host_api`), supported `platforms`, host `programs` the backend spawns. |
+| backend | Required `type` (`exec` or `mcp`) and `command`, relative to the plugin root; optional `args`, `timeout_ms` (capped at 300000) and `sandbox` (`default` or `none`). |
+| permissions | What the backend requests. See [Permission and callback boundaries](#permission-and-callback-boundaries). |
+| tools | At least one tool. See [Tools](#tools). |
+| definitions | Glob lists: `activities`, `jobs`, `routines`, `auto_tasks`. Activities and jobs join the plugin's catalog layer; routines and auto-tasks are seeded disabled on enable. |
 | skills | Plugin-relative skill directories. |
-| config | `schema`: a plugin-relative JSON Schema file; `defaults`: a settings object. Operators configure declared keys under `[plugins.demo]`; effective settings are validated before loading. |
-| web | Declarative panels and links. See [Dashboard panels and links](#dashboard-panels-and-links). |
-| tests | Plugin-relative conformance file globs. |
-| secrets | Named credentials, with `name`, optional `description` and `rotatable` (default `false`). Declare names only; operators set values on the host. |
-| build | Optional install-time build: declared `programs`, optional networked `fetch` argv, offline `command` argv, and `outputs` mapping `from` to `to`. Only declared outputs are installed. |
+| config | `schema`, a plugin-relative JSON Schema file, and `defaults`, a settings object. Operators set declared keys under `[plugins.demo]`; the result is validated before loading. |
+| web | See [Dashboard panels and links](#dashboard-panels-and-links). |
+| tests | Plugin-relative globs of [conformance](#conformance-cases) files. |
+| secrets | Credential names: `name`, optional `description`, `rotatable` (default `false`). Operators set the values on the host. |
+| build | Install-time build: `programs`, optional networked `fetch` argv, offline `command` argv, `outputs` mapping `from` to `to`, optional per-phase `timeout_ms`. Only declared outputs are installed. |
 
-Asset paths stay inside the plugin root. Runtime path templates accept
-`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}` and `{{config.<key>}}`.
-A missing workspace or configuration key is an error. Store durable plugin data
-under `{{plugin_state}}`, rather than modifying the installed source.
+Asset paths stay inside the plugin root. Runtime paths accept `{{workspace}}`,
+`{{plugin_root}}`, `{{plugin_state}}` and `{{config.<key>}}`; a missing
+workspace or key is an error. Keep durable data under `{{plugin_state}}`, not in
+the installed source.
 
-Install-time builds are limited to `git+` sources pinned to a full commit ID and
-require the operator's per-install `--allow-build` consent. Other source forms
-must already contain their outputs. Build argv accepts only `{{build_dir}}` as a
-template; `outputs.from` is relative to that build directory and `outputs.to` to
-the plugin root. A manifest or checkout pin cannot consent to a build.
+A build runs only for a `git+` source pinned to a full commit ID, and only when
+the operator passes `--allow-build` on that install. Every other source must
+already contain its outputs. Build argv accepts only `{{build_dir}}`.
+`outputs.from` is relative to the build directory, `outputs.to` to the plugin
+root.
 
-### Tool names, schemas and exposure
+## Tools
 
-For the example above, the canonical tool is `demo.status`, its MCP name is
-`demo_status`, and the derived CLI spelling is `orbit demo status`. After
-installation and enablement, these calls supply the same tool input:
+The tool above is `demo.status`, `demo_status` over MCP and `orbit demo status`
+on the CLI. Once the plugin is installed and enabled, these calls are
+equivalent:
 
 ```bash
 orbit tool run demo.status --input '{"subject":"reader"}'
@@ -128,20 +115,20 @@ orbit demo status reader
 orbit demo status --subject reader
 ```
 
-`input_schema` and `output_schema` are JSON Schema objects, or file references
-such as `{ $ref: schemas/status-input.json }` within the plugin root. Output is
-checked against the declared output schema. `cli.verb` can rename the derived
-subcommand; `cli.positional` lists top-level input properties to promote to
-positionals (every property except JSON-shaped ones — objects, arrays of
-objects or booleans, and untyped shapes — which keep only their
-`--<name>-json` flag). Those properties remain available as flags.
+| Tool field | Purpose |
+|---|---|
+| name, description | The verb and its description. |
+| execution_kind | `read_only` admits agents, operators and runners. `mutating` needs operator or runner capability by default. |
+| agent_callable | Requests agent access to a `mutating` tool. Default `false`. See below. |
+| mcp_scope | `workspace` (default); `global`, callable without a workspace; or `none`, reachable through `orbit tool run` but not advertised over MCP. |
+| input_schema, output_schema | A JSON Schema object, or a file in the plugin root such as `{ $ref: schemas/status-input.json }`. Output is checked against its schema. |
+| cli.verb | Renames the derived subcommand. |
+| cli.positional | Top-level input properties that also become positionals. A JSON-shaped property (an object, an array of anything but strings or numbers, or an untyped one) keeps only its `--<name>-json` flag. |
 
-Set `execution_kind` to `read_only` or `mutating` to describe the operation.
-Read-only tools admit agents, operators and runners. Mutating tools require
-operator or runner capability by default.
+### Agent-callable mutations
 
-For an append-only or proposal-only tool that an interactive agent may safely
-call, request agent access on that individual tool:
+Request agent access for an append-only or proposal-only tool that an
+interactive agent may safely call:
 
 ```yaml
 - name: capture
@@ -151,37 +138,24 @@ call, request agent access on that individual tool:
   mcp_scope: workspace
 ```
 
-`agent_callable` defaults to false and is valid only with `mutating`. The
-operator must review the backend and explicitly grant `agent_tools` when
-enabling the plugin; Orbit does not prove that a backend is append-only.
-Include other requested grants in the same complete grant list, or use
-`--grant requested` after reviewing all requests. Missing consent makes the
-plugin inactive. Enable output names the requested tools and consent status;
-`plugin list` names them, and `plugin show` displays declarations and grants.
-An upgrade that adds another agent-callable tool widens permissions, disables
-the plugin and clears grants unless the operator explicitly re-consents.
-Removing or reordering declared tools does not widen permissions. Older hosts
-reject manifests using this field or grant; upgrade Orbit first.
+The operator must grant `agent_tools` when enabling the plugin; until then the
+plugin is inactive. Orbit does not prove that a backend is append-only, so the
+operator reviews it first. `orbit plugin show` displays declarations and grants.
 
-With consent, an agent session can call the tool through `orbit mcp serve`
-without `--operator`, `orbit tool run`, or its derived CLI command. Calls keep
-the agent caller in the audit trail. Unmarked mutations retain their existing
-requirement. Activity allowlists and denials still apply; a task requirement or
-allowlist entry alone grants no capability. `ORBIT_OPERATOR` and `--operator`
-keep their existing behavior. This declaration grants no filesystem access,
-callback permissions or operator capability.
+With the grant, an agent session can call the tool through `orbit mcp serve`
+without `--operator`, `orbit tool run`, or the derived command, and stays the
+caller in the audit trail. Activity allowlists and denials still apply. The
+grant gives no filesystem access, callback permission or operator capability.
 
-`mcp_scope` defaults to `workspace`; `global` allows calls without a workspace,
-while `none` keeps the tool available through `orbit tool run` but excludes it
-from MCP advertisement. A global tool cannot assume a workspace exists.
+An upgrade that adds another agent-callable tool disables the plugin and clears
+its grants until the operator consents again.
 
 ## Backend contracts
 
 ### Exec
 
-`backend.type: exec` starts one process per call. Orbit writes a versioned JSON
-request to stdin. This example shows an interactive call with no configured
-settings or declared secrets:
+`backend.type: exec` starts one process per call and writes a JSON request to
+stdin. An interactive call with no settings or secrets:
 
 ```json
 {
@@ -199,10 +173,13 @@ settings or declared secrets:
 }
 ```
 
-Read the requested verb from `tool` and the arguments from `input`. Context
-comes from the host: workspace, agent/model, effective plugin settings and,
-for managed activity calls, activity binding. Return exactly one JSON response
-object on stdout and exit zero, including for a structured backend error:
+Read the verb from `tool` and the arguments from `input`. `context` carries the
+workspace, agent and model, effective plugin settings and, for a managed
+activity call, the task and run. The request's `schema_version` is 1, unlike the
+manifest's `schemaVersion: 2`.
+
+Return exactly one JSON object on stdout and exit zero, even for a backend
+error:
 
 ```json
 {"ok":true,"output":{"plugin":"demo","status":"ready","subject":"reader"}}
@@ -212,37 +189,42 @@ object on stdout and exit zero, including for a structured backend error:
 {"ok":false,"error":{"code":"not_ready","message":"Index is unavailable","retryable":true,"detail":{"state":"missing"}}}
 ```
 
-Send diagnostics to stderr. A nonzero exit, malformed response or rejected
-output schema fails the call; there is no partial success. The manifest uses
-`schemaVersion: 2`, while the exec request uses `schema_version: 1`.
+Send diagnostics to stderr. A nonzero exit, a malformed response or output that
+fails its schema fails the whole call.
 
 ### MCP
 
 `backend.type: mcp` starts a stdio MCP server and reuses it within a runtime for
 the same workspace and caller tool allowance. Implement MCP initialization,
-`tools/list` and `tools/call`. The server must advertise exactly the manifest's
-verbs, with matching input schemas. For `demo.status`, advertise `status`,
-not `demo.status` or `demo_status`.
+`tools/list` and `tools/call`. Advertise exactly the manifest's verbs with
+matching input schemas: `status`, not `demo.status` or `demo_status`.
 
-Orbit sends the verb in `params.name`, input in `params.arguments`, and per-call
-context in `params._meta.orbit`, including the canonical tool name. Read this
-metadata for each call. Return `structuredContent` for JSON output. Otherwise
-Orbit uses a single text content item, parsing it as JSON when possible, or
-falls back to the content array. `isError: true` reports a tool failure; a
-structured error can carry the same `code`, `message`, `retryable` and `detail`
-fields used by the exec error above. Output schemas apply here too.
+Orbit sends the verb in `params.name`, the input in `params.arguments` and the
+per-call context, with the canonical tool name, in `params._meta.orbit`. Read
+it on every call.
 
-### Permission and callback boundaries
+Return `structuredContent` for JSON output. Without it, Orbit uses a single text
+content item, parsed as JSON when possible, or else the content array.
+`isError: true` reports a failure; a structured error carries the same `code`,
+`message`, `retryable` and `detail` as the exec error. Output schemas apply.
 
-The default sandbox uses the host's confinement. `permissions.fs.read` and
-`permissions.fs.write` request roots; `network` is `none`, `loopback` or `any`;
-`env_pass` names environment variables; `orbit_tools` lists canonical Orbit
-tools the backend needs to call. Orbit-reserved `ORBIT_*` variables cannot be
-requested through `env_pass`. A request is never a grant. `sandbox: none`
-requires explicit `unsandboxed` consent.
+## Permission and callback boundaries
 
-Use `permissions.fs.write_files` for an existing file that the backend must
-modify without opening its parent directory:
+A request is never a grant: the operator grants each kind when enabling the
+plugin.
+
+| Field under permissions | Requests |
+|---|---|
+| fs.read, fs.write | Directory roots to read or write. |
+| fs.write_files | Existing files to modify without access to their parent directory. |
+| network | `none`, `loopback` or `any`. |
+| env_pass | Environment variables to pass through. `ORBIT_*` names are reserved. |
+| orbit_tools | Canonical Orbit tools the backend calls back into. |
+
+The default sandbox uses the host's confinement. `backend.sandbox: none` needs
+an explicit `unsandboxed` grant.
+
+### Single-file writes
 
 ```yaml
 permissions:
@@ -250,38 +232,40 @@ permissions:
     write_files: ["{{config.runtime_file}}"]
 ```
 
-This list uses the same path templates and `fs` consent as directory writes.
-Each file must already exist at a physical path, be owned by the current user,
-have one hard link, and have no group/other write access. Symbolic links,
-missing files, directories and unsafe ancestors are refused; Orbit does not
-create or widen the file grant. Install trees, protected Orbit state and
-workspace metadata remain protected. A scoped `fs=<root>` grant must cover the
-file itself or an ancestor directory. Adding a file or changing its configured
-destination requires consent again. Linux binds the existing inode and macOS
-uses a rule rooted at that file, which matches only it; neither grants sibling
-files. A path with `*` or `?` in any component is refused, since macOS would read
-those characters as a pattern matching sibling entries. Existing platform
-scratch permissions still apply. Omit `write_files` when unused. File creation
-or replacement by rename needs an appropriate `fs.write` directory grant.
+`write_files` uses the same path templates and `fs` consent as directory writes,
+and grants no sibling file. Each entry must be:
 
-Callbacks use `orbit tool run <tool>` (including derived plugin spellings) or
-MCP `tools/call` through `orbit mcp serve`. Other Orbit CLI commands are refused
-for a plugin child. The effective callback allowance is bounded by the
-manifest's list, the host's recorded grant and the spawning caller's allowance.
-An inherited host-issued credential establishes identity; setting an environment
-variable cannot confer callback authority. A grant cannot turn an agent into an
-operator or widen a managed activity's policy.
+- an existing file, not a symbolic link or a directory;
+- owned by the current user, with one hard link and no group or other write access;
+- free of `*` and `?` in its path.
 
-Declared secret values travel only in the call's `context.secrets` (exec) or
-`_meta.orbit.secrets` (MCP), keyed by name with `value` and opaque `version`.
-Unset names are absent. They are not command arguments or environment variables.
-Use [plugin secret commands](../../how-to/plugins/#set-secrets) for host values,
-and fixture secrets for conformance. Keep ordinary settings separate from credentials.
+A scoped `fs=<root>` grant must cover the file or an ancestor directory. A new
+entry, or a templated entry that now points elsewhere, needs consent again.
+To create a file or replace one by rename, request an `fs.write` directory.
+
+### Callbacks
+
+A backend calls back with `orbit tool run <tool>`, a derived plugin command, or
+MCP `tools/call` through `orbit mcp serve`. Every other Orbit command is
+refused for a plugin child.
+
+A callback must pass three limits: the manifest's `orbit_tools` list, the grant
+the host recorded, and what the caller that started the plugin may itself call.
+The host issues the child's credential, so setting an environment variable
+confers nothing. A grant never turns an agent into an operator or widens a
+managed activity's policy.
+
+### Secrets
+
+Declared secrets arrive only inside the call, never as arguments or environment
+variables: in `context.secrets` for exec and `_meta.orbit.secrets` for MCP,
+keyed by name with a `value` and an opaque `version`. Unset names are absent.
+Operators set them with the [plugin secret commands](/how-to/plugins/#set-secrets).
 
 ## Conformance cases
 
-Put this file at `demo/.orbit-plugin/tests/conformance/status.yaml`; the manifest's
-`tests` glob includes it. `tool` is the manifest verb:
+Put cases in a file the manifest's `tests` glob matches, for example
+`demo/.orbit-plugin/tests/conformance/status.yaml`. `tool` is the manifest verb:
 
 ```yaml
 schemaVersion: 1
@@ -306,28 +290,27 @@ tests:
         subject: "{{workspace}}"
 ```
 
-`expect.output` compares exact JSON values, ignoring object key order. String
-values in `input` and `expect.output` can use `{{workspace}}` and
-`{{plugin_root}}`. For a tool that returns a backend error, use
-`expect: { error: { code: not_ready, retryable: true } }`; `retryable` and
-`detail` are optional assertions. A case can supply `secrets: { api_token:
-fixture-token }` for a manifest-declared secret. Tests never read the host's
-secret store; fixture secrets arrive with version `fixture`.
+- `expect.output` compares exact JSON values, ignoring object key order.
+- Strings in `input` and `expect.output` accept `{{workspace}}` and `{{plugin_root}}`.
+- For a backend error, use `expect: { error: { code: not_ready, retryable: true } }`;
+  `retryable` and `detail` are optional.
+- `secrets: { api_token: fixture-token }` supplies a declared secret, with version
+  `fixture`. Tests never read the host's secret store.
 
 ```bash
 orbit plugin test ./demo --case status_reports_ready
 orbit plugin test ./demo --update-goldens
 ```
 
-`--update-goldens` replaces mismatched expected outputs. Review those changes
-before accepting them. Testing applies the requested temporary-workspace profile;
-an unconfined backend, writes outside the temporary directory, `network: any`
-or `env_pass` need explicit run consent with `--grant` or `--accept-requested`.
-These options do not store a host grant. Review the manifest before consenting.
+| Flag | Effect |
+|---|---|
+| `--case <name>` | Runs one case. A filtered run does not certify the full suite. |
+| `--update-goldens` | Replaces mismatched `expect.output` values with the actual output. Review the diff. |
+| `--grant <grants>`, `--accept-requested` | Consent for this run only, never a host grant. One is required when the manifest asks for an unconfined backend, a write root outside the run's temporary directory, `network: any` or `env_pass`. |
 
 ## Dashboard panels and links
 
-Add this section under `spec` to expose the example's status:
+Add this under `spec` to show the example's status in the dashboard:
 
 ```yaml
 web:
@@ -343,8 +326,10 @@ web:
       url: "http://127.0.0.1:8080/"
 ```
 
-Each panel's `source: tool:<verb>` must name one of this plugin's `read_only`
-tools. Panels use generic renderers, with no plugin JavaScript:
+A panel's `source: tool:<verb>` names one of this plugin's `read_only` tools.
+`group` is `diagnostics` (default), `operations` or `config`. `refresh_ms` is
+how long the server reuses the last successful response: 1000 to 3600000,
+default 30000. Panels run no plugin JavaScript; `render` picks a renderer:
 
 | Renderer | Expected output |
 |---|---|
@@ -353,16 +338,14 @@ tools. Panels use generic renderers, with no plugin JavaScript:
 | markdown | String, or an object's `markdown` or `text` field, rendered as sanitized Markdown. |
 | json | Pretty-printed JSON; the default renderer. |
 
-`group` is `diagnostics` (default), `operations` or `config`. `refresh_ms` controls
-server-side reuse of the last successful response, defaults to 30000 and accepts
-1000–3600000 ms. Links are plain tiles to a separately hosted UI and accept only
-HTTP or HTTPS URLs; they may use manifest templates such as `{{config.port}}`.
-A panel or link does not grant backend access or start a service.
+A link is a plain tile to a separately hosted UI. Its `url` is HTTP or HTTPS
+and may use templates such as `{{config.port}}`. Panels and links grant no
+backend access and start no service.
 
 ## Legacy external tools
 
-Existing executable tools and v1 sidecars remain supported. Prefer a v2 plugin
-for new work that needs grants, schemas, bundled assets or conformance.
+Executables registered as tools, with or without a v1 sidecar, still work. Use
+a plugin for new work that needs grants, schemas, bundled assets or conformance.
 
 A v1 sidecar describes one executable's tool, for example
 `hello.orbit-tool.yaml` beside `hello.py`:
@@ -388,28 +371,32 @@ orbit tool doctor
 orbit tool remove demo.hello
 ```
 
-The executable receives raw JSON input on stdin and returns JSON on stdout.
-Registration is enabled immediately. `--name` and `--description` override the
-sidecar; without `--manifest`, discovery checks the executable's stem with
-`.orbit-tool.yaml`, `.orbit-tool.yml`, then `.orbit-tool.json`. Without a
-sidecar, the name comes from the filename and parameters are empty. Removing a
-registration does not delete the executable.
+The executable receives the raw JSON input on stdin and returns JSON on stdout.
+A registration is enabled at once and lives in this machine's tool store,
+pointing at the executable. Removing it does not delete the executable.
 
-Legacy registrations live in this machine's tool store and refer to the external
-executable path. They do not install a v2 bundle or establish v2 permission grants.
+`--name` and `--description` override the sidecar. Without `--manifest`,
+`orbit tool add` looks for the executable's stem plus `.orbit-tool.yaml`,
+`.orbit-tool.yml`, then `.orbit-tool.json`. With no sidecar, the name comes
+from the filename and the tool has no parameters.
 
-To generate a v2 source tree instead:
+### Migrate to a plugin
 
 ```bash
 orbit plugin migrate ./hello.py --sidecar ./hello.orbit-tool.yaml --name demo --out-dir ./demo-v2
 orbit plugin validate ./demo-v2
 ```
 
-Without `--out-dir`, migration prints the manifest. With it, migration writes
-`.orbit-plugin/plugin.yaml` and copies the backend into `.orbit-plugin/bin/`;
-it refuses to overwrite existing output files. Migration preserves the old
-sidecars and registrations. It translates their declarations, not backend code,
-and conservatively marks migrated tools `mutating`. Adapt the copied executable
-to the v2 exec request/response envelope, review permissions and execution kinds,
-add conformance cases, then run `orbit plugin test ./demo-v2` before installing
-and enabling it. Retire the old registration when you are ready to switch callers.
+With `--out-dir`, migration writes `.orbit-plugin/plugin.yaml` and copies the
+backend into `.orbit-plugin/bin/`, refusing to overwrite existing files. Without
+it, the manifest is printed. Migration translates declarations, not backend
+code, marks every tool `mutating`, and leaves the old sidecars and
+registrations in place.
+
+Before you install the result:
+
+1. Adapt the copied executable to the [exec](#exec) request and response.
+2. Review the permissions and each tool's `execution_kind`.
+3. Add conformance cases and run `orbit plugin test ./demo-v2`.
+
+Then remove the old registration when callers have switched.
