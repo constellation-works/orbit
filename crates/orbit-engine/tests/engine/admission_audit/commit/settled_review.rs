@@ -114,6 +114,52 @@ fn settled_review_head_refused_when_not_descendant_of_pin() {
     );
 }
 
+/// Legacy comment settlements may abbreviate a commit, but must not resolve refs.
+#[test]
+fn legacy_settlement_resolves_short_hash_but_refuses_symbolic_ref() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::legacy_settlement_resolves_short_hash_but_refuses_symbolic_ref"
+    )) {
+        return;
+    }
+
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    let base_sha = head(repo);
+    git(repo, &["commit", "--allow-empty", "-qm", "reviewer repair"]);
+    let reviewer_head = head(repo);
+    let short_hash = &reviewer_head[..8];
+    let host = CommitTestHost::new(
+        vec![task_with_file("T1", "Candidate", "README.md", "codex")],
+        repo.to_path_buf(),
+    )
+    .with_legacy_settled_review("T1", short_hash);
+    let output = git_commit(&host, &commit_input(repo, &base_sha))
+        .expect("a legacy settlement's short commit id must resolve");
+    assert_eq!(output["decision"], json!("already_committed"));
+
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    let base_sha = head(repo);
+    git(repo, &["commit", "--allow-empty", "-qm", "reviewer repair"]);
+    git(
+        repo,
+        &["commit", "--allow-empty", "-qm", "unrecorded extra"],
+    );
+    let host = CommitTestHost::new(
+        vec![task_with_file("T1", "Candidate", "README.md", "codex")],
+        repo.to_path_buf(),
+    )
+    .with_legacy_settled_review("T1", "HEAD");
+    let error = git_commit(&host, &commit_input(repo, &base_sha))
+        .expect_err("a ref expression must not authorize a later unrecorded HEAD");
+    assert!(
+        error.to_string().contains("worktree_head_changed"),
+        "unexpected error: {error}"
+    );
+}
+
 /// A moved HEAD no settled review recorded is refused.
 #[test]
 fn moved_head_refused_when_not_recorded_by_settled_review() {

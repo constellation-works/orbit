@@ -6,8 +6,8 @@ use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExecutionLocation,
-    REVIEW_SETTLED_EVENT, RecordedReviewSettlement, ReviewSettlementGate, Task, TaskDecision,
-    TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    REVIEW_SETTLED_EVENT, RecordedReviewSettlement, ReviewSettlementGate, Task, TaskComment,
+    TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::JobRun;
@@ -27,6 +27,7 @@ pub struct CommitTestHost {
     worker: Option<WorkerInvocation>,
     /// Task history, including the selector widenings this host recorded.
     history: Mutex<Vec<(String, TaskHistoryEntry)>>,
+    comments: Mutex<Vec<(String, TaskComment)>>,
 }
 
 impl CommitTestHost {
@@ -39,6 +40,7 @@ impl CommitTestHost {
             data_root,
             worker: None,
             history: Mutex::new(Vec::new()),
+            comments: Mutex::new(Vec::new()),
         }
     }
 
@@ -100,6 +102,23 @@ impl CommitTestHost {
                 to_status: None,
                 operation_id: None,
                 decision: Some(TaskDecision::ReviewSettlement(settlement)),
+            },
+        ));
+        self
+    }
+
+    /// Record a legacy comment-only settlement with the supplied final candidate.
+    pub fn with_legacy_settled_review(self, task_id: &str, final_commit: &str) -> Self {
+        self.comments.lock().unwrap().push((
+            task_id.to_string(),
+            TaskComment {
+                at: Utc::now(),
+                by: "reviewer".to_string(),
+                message: format!(
+                    "before-landing review settled attempt `review-1`: verdict **reject**\n\
+                     - Final candidate: `{final_commit}`"
+                ),
+                operation_id: None,
             },
         ));
         self
@@ -235,6 +254,17 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
             .iter()
             .filter(|(id, _)| id == task_id)
             .map(|(_, entry)| entry.clone())
+            .collect())
+    }
+
+    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| id == task_id)
+            .map(|(_, comment)| comment.clone())
             .collect())
     }
 

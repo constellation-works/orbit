@@ -321,7 +321,15 @@ pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
             return Ok(true);
         }
         // Legacy settlements may record a short id; resolve it in this
-        // worktree before comparing. Unresolvable records prove nothing.
+        // worktree before comparing. Only hexadecimal object-id prefixes are
+        // valid here: resolving arbitrary revision expressions such as `HEAD`
+        // would let a later, unrecorded commit authorize itself. Unresolvable
+        // records prove nothing.
+        if !(4..=64).contains(&final_commit.len())
+            || !final_commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            continue;
+        }
         if let Ok(resolved) = git_output(
             workspace_path,
             &[
@@ -330,6 +338,10 @@ pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
                 &format!("{final_commit}^{{commit}}"),
             ],
         ) && resolved.trim().eq_ignore_ascii_case(head_sha)
+            && resolved
+                .trim()
+                .get(..final_commit.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(final_commit))
         {
             return Ok(true);
         }
