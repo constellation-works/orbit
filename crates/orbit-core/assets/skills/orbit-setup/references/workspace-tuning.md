@@ -333,6 +333,48 @@ repository keeps tests or assets in unconventional places, and copy any
 default entries you still want, since an array replaces the default wholesale.
 Changes apply to deliveries recorded afterwards.
 
+### Regression layers
+
+`workflow.regression_layers` classifies each `regression_from` link by where
+the regression task's fix sits. Orbit uses the fix's landed paths, or its
+declared footprint when landed paths are unavailable. Each path matches the
+first layer whose `prefixes` entry it starts with, whose `dirs` entry equals
+one of its directory components, or whose `suffixes` entry it ends with. The
+fix is assigned the layer most of its paths match; a tie goes to the earlier
+layer. `ci_tests` and `docs_skills` count only when the fix touches nothing
+else. An unmatched path is `other`; a fix with no path is `unknown`.
+
+When unset, the list has two repository-neutral defaults:
+
+```toml
+[[workflow.regression_layers]]
+name = "ci_tests"
+prefixes = [".github/"]
+dirs = ["tests", "testdata", "fixtures"]
+
+[[workflow.regression_layers]]
+name = "docs_skills"
+prefixes = ["docs/"]
+suffixes = [".md"]
+```
+
+Setting the list replaces these rows. Repeat any defaults you want to keep
+before adding repository-specific layers. Every row needs a unique name other
+than `other` or `unknown`, at least one matching rule, and `dirs` entries must
+be single directory components. An invalid list prevents config loading and
+names the key. An explicit `workflow.regression_layers = []` classifies every
+path as `other`.
+
+Check the accepted key and its fields with `orbit config keys --json`, then
+verify the loaded value with `orbit config show --all`. After changing the
+list, run `orbit codebase analytics --layer <name> --min-support 1 --json` to
+inspect regressions assigned to a layer; use `other` or `unknown` to inspect
+those buckets. Follow a ranked path with
+`orbit codebase show <path> --layer <name> --min-support 1 --json` to inspect
+the regression details. Layer classification is computed when analytics runs,
+so the next analytics run reflects the updated list. A layer with no matching
+regression links has no rows to show.
+
 ## Keeping a task out of the drain (`no-drain`)
 
 Use the reserved `no-drain` task tag when an interactive session owns a
