@@ -26,6 +26,7 @@ pub(in crate::application) trait TaskReviewPort {
         &self,
         task: &Task,
         head: Option<&str>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
     ) -> Result<bool, OrbitError>;
 
     /// The review gate evidence for `task`, read from the certificate its

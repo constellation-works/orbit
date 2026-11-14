@@ -19,6 +19,7 @@ impl TaskReviewPort for OrbitRuntime {
         &self,
         task: &Task,
         head: Option<&str>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
     ) -> Result<bool, OrbitError> {
         use crate::application::job::ReviewAdmissionHook;
         use orbit_types::task::ArtifactWriter;
@@ -41,13 +42,34 @@ impl TaskReviewPort for OrbitRuntime {
         {
             return Ok(true);
         }
-        let manifest = self.get_task_artifact_manifest(&task.id)?;
+        let use_snapshot = manifest.is_some() && self.worker_invocation().is_none();
+        let loaded_manifest;
+        let manifest = match manifest {
+            Some(manifest) => manifest,
+            None => {
+                loaded_manifest = self.get_task_artifact_manifest(&task.id)?;
+                &loaded_manifest
+            }
+        };
         if !manifest.iter().any(|file| {
             file.path == REVIEW_GATE_ARTIFACT && file.writer == Some(ArtifactWriter::System)
         }) {
             return Ok(false);
         }
-        let Some(artifact) = self.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)? else {
+        let Some(file) = manifest
+            .iter()
+            .find(|file| file.path == REVIEW_GATE_ARTIFACT)
+        else {
+            return Ok(false);
+        };
+        let artifact = if use_snapshot {
+            self.stores()
+                .task_artifacts()
+                .task_artifact_from_manifest(&task.id, file)?
+        } else {
+            self.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?
+        };
+        let Some(artifact) = artifact else {
             return Ok(false);
         };
         let Ok(certificate) = serde_json::from_slice::<ReviewCertificate>(&artifact.content) else {
@@ -64,8 +86,14 @@ impl TaskReviewPort for OrbitRuntime {
             .task_ids
             .iter()
             .map(|id| {
-                let task = self.get_task(id)?;
-                let digest = orbit_automation::review::task_meaning_digest(&task)
+                let loaded_task;
+                let covered_task = if id == &task.id {
+                    task
+                } else {
+                    loaded_task = self.get_task(id)?;
+                    &loaded_task
+                };
+                let digest = orbit_automation::review::task_meaning_digest(covered_task)
                     .map_err(super::automation_error)?;
                 Ok((id.clone(), digest))
             })

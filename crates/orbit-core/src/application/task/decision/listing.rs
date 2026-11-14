@@ -1,89 +1,11 @@
 //! Decision request reads and surface projections.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, OnceLock, PoisonError};
-
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_store::contracts::TaskDecisionSnapshot;
 use orbit_types::task::{DecisionGate, DecisionRequest, DecisionRequestState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-
-/// Tasks a workspace decision scan found raising no request, by workspace
-/// and task id, each with the whole-bundle stamp taken before the read that
-/// showed it.
-///
-/// Requests derive only from `decision_requested` history events, so a task
-/// whose history holds none lists no request in any state, whatever its
-/// status, binding inputs or the clock. While its bundle stamp is unchanged
-/// the store has not written the bundle since, so a read would still find
-/// no event and no damage the store wrote, and the scan may skip it. Any
-/// store write to the bundle changes the stamp, and the next scan reads that
-/// task in full; a task the store cannot stamp is read every time. Only a
-/// clean read is recorded, so a corrupt bundle keeps warning. The stamp's
-/// limits are the store's (`task_bundle_stamps`): out-of-band edits its
-/// stamp does not cover stay unseen until the bundle's next write.
-///
-/// The set lives for the process, which for the dashboard is the server:
-/// the first scan after start reads every bundle, later ones only what
-/// changed. Bounded at [`NoRequestTasks::CAPACITY`] entries; overflowing it
-/// starts over, costing one full scan.
-struct NoRequestTasks;
-
-type NoRequestEntries = HashMap<String, HashMap<String, String>>;
-
-impl NoRequestTasks {
-    const CAPACITY: usize = 1 << 18;
-
-    fn entries() -> std::sync::MutexGuard<'static, NoRequestEntries> {
-        static ENTRIES: OnceLock<Mutex<NoRequestEntries>> = OnceLock::new();
-        ENTRIES
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The `ids` a scan must read, each with its current stamp when it has
-    /// one: every id but those proven under the stamp they still carry.
-    fn unproven(
-        workspace: &str,
-        ids: Vec<String>,
-        mut stamps: BTreeMap<String, String>,
-    ) -> Vec<(String, Option<String>)> {
-        let entries = Self::entries();
-        let proven = entries.get(workspace);
-        ids.into_iter()
-            .filter_map(|id| {
-                let stamp = stamps.remove(&id);
-                let holds = stamp.as_ref().is_some_and(|stamp| {
-                    proven
-                        .and_then(|proven| proven.get(&id))
-                        .is_some_and(|recorded| recorded == stamp)
-                });
-                (!holds).then_some((id, stamp))
-            })
-            .collect()
-    }
-
-    fn record(workspace: &str, mut proven: Vec<(String, String)>) {
-        if proven.is_empty() {
-            return;
-        }
-        let mut entries = Self::entries();
-        let held: usize = entries.values().map(HashMap::len).sum();
-        if held + proven.len() > Self::CAPACITY {
-            entries.clear();
-        }
-        // A single batch larger than the bound still fits after the clear,
-        // so keep only the first CAPACITY entries. Anything not retained is
-        // simply read in full on the next scan.
-        proven.truncate(Self::CAPACITY);
-        entries
-            .entry(workspace.to_string())
-            .or_default()
-            .extend(proven);
-    }
-}
 
 /// Decision requests readable in a workspace scan, with corrupt bundles
 /// identified separately so a partial result never looks complete.
@@ -248,6 +170,36 @@ impl OrbitRuntime {
         Ok(value)
     }
 
+    /// Projection inputs outside the bundle. A different tool registry,
+    /// typed-decision boundary or native platform must not reuse a pilot
+    /// request's closed state from another runtime. Bump the version when
+    /// changing decision folding semantics across binary versions.
+    pub(crate) fn decision_projection_key(&self) -> String {
+        let mut tools = self.allowlist_known_tool_names();
+        tools.sort();
+        orbit_common::security::release::sha256_hex(
+            json!([
+                "decision-projection-v1",
+                std::env::consts::OS,
+                self.typed_decisions_since(),
+                tools
+            ])
+            .to_string()
+            .as_bytes(),
+        )
+    }
+
+    pub(crate) fn record_decision_snapshots(&self, records: &[TaskDecisionSnapshot]) {
+        if !records.is_empty()
+            && let Err(error) = self
+                .stores()
+                .tasks()
+                .record_task_decision_snapshots(records)
+        {
+            tracing::debug!(%error, "decision snapshots not recorded");
+        }
+    }
+
     fn scan_decision_requests(
         &self,
         gate: Option<DecisionGate>,
@@ -259,37 +211,72 @@ impl OrbitRuntime {
             Some(task_id) => vec![task_id.to_string()],
             None => self.decision_scan_task_ids()?,
         };
-        // A workspace scan skips a task proven to raise no request: its whole
-        // bundle still carries the stamp taken before an earlier clean read
-        // found no `decision_requested` event. See [`NoRequestTasks`].
-        let workspace = task_id
-            .is_none()
-            .then(|| self.workspace_id().ok())
-            .flatten();
-        let reads = match &workspace {
-            Some(workspace) => {
-                let stamps = self.task_bundle_stamps(&ids);
-                NoRequestTasks::unproven(workspace, ids, stamps)
-            }
-            None => ids.into_iter().map(|id| (id, None)).collect(),
+        // Proofs are per partition and cover the whole bundle, including
+        // terminal tasks. Only clean, closed projections can skip a read.
+        let use_cache = task_id.is_none() && self.worker_invocation().is_none();
+        let stamps = if use_cache {
+            self.task_bundle_stamps(&ids)
+        } else {
+            Default::default()
         };
+        let mut snapshots = if use_cache {
+            self.stores()
+                .tasks()
+                .task_decision_snapshots()
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, "decision snapshots unavailable");
+                    Default::default()
+                })
+        } else {
+            Default::default()
+        };
+        let projection_key = if use_cache {
+            self.decision_projection_key()
+        } else {
+            String::new()
+        };
+        let now = chrono::Utc::now();
         let mut listing = DecisionRequestListing::default();
-        let mut proven = Vec::new();
-        for (id, stamp) in reads {
-            let read = self.get_task_decision_requests_with_events(&id);
-            let (requests, raised_any) = if tolerate_corrupt {
-                let Some(requests) =
-                    super::super::listing::task_bundle_scan_result(read, &mut listing.warnings)?
-                else {
-                    continue;
-                };
-                requests
-            } else {
-                read?
+        let mut observed = Vec::new();
+        for id in ids {
+            let stamp = stamps.get(&id);
+            let cached = snapshots.remove(&id).filter(|snapshot| {
+                stamp == Some(&snapshot.stamp)
+                    && snapshot.projection_key == projection_key
+                    && now >= snapshot.observed_at
+                    && snapshot
+                        .requests
+                        .iter()
+                        .all(|request| request.state != DecisionRequestState::Open)
+            });
+            let requests = match cached {
+                Some(snapshot) => snapshot.requests,
+                None => {
+                    let read = self.get_task_decision_requests_for_scan(&id);
+                    let (requests, observed_at) = if tolerate_corrupt {
+                        let Some(requests) = super::super::listing::task_bundle_scan_result(
+                            read,
+                            &mut listing.warnings,
+                        )?
+                        else {
+                            continue;
+                        };
+                        requests
+                    } else {
+                        read?
+                    };
+                    if let Some(stamp) = stamp {
+                        observed.push(TaskDecisionSnapshot {
+                            task_id: id,
+                            stamp: stamp.clone(),
+                            projection_key: projection_key.clone(),
+                            observed_at,
+                            requests: requests.clone(),
+                        });
+                    }
+                    requests
+                }
             };
-            if !raised_any && let Some(stamp) = stamp {
-                proven.push((id, stamp));
-            }
             for request in requests {
                 if gate.is_some_and(|gate| gate != request.gate) {
                     continue;
@@ -300,9 +287,7 @@ impl OrbitRuntime {
                 listing.requests.push(request);
             }
         }
-        if let Some(workspace) = &workspace {
-            NoRequestTasks::record(workspace, proven);
-        }
+        self.record_decision_snapshots(&observed);
         listing
             .requests
             .sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
@@ -337,6 +322,35 @@ impl OrbitRuntime {
         &self,
         request_id: &str,
     ) -> Result<Option<DecisionRequest>, OrbitError> {
+        if self.worker_invocation().is_none() && self.coordination_task_reads_visible() {
+            let owner = self
+                .stores()
+                .tasks()
+                .decision_request_task_id(request_id)
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, "decision request owner unavailable");
+                    None
+                });
+            if let Some(owner) = owner {
+                match self.get_task_decision_requests(&owner) {
+                    Ok(requests) => {
+                        if let Some(request) = requests
+                            .into_iter()
+                            .find(|request| request.id == request_id)
+                        {
+                            return Ok(Some(request));
+                        }
+                    }
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        // IDs are opaque hashes. Older bundles or a lost opportunistic
+        // cache write need discovery once; subsequent lookups read the owner.
         Ok(self
             .list_decision_requests(None, None, true)?
             .into_iter()

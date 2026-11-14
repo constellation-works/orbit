@@ -712,6 +712,10 @@ fn validate_envelope_for(task_id: &str, envelope: &TaskEnvelopeV2) -> Result<(),
 /// place atomically, so one file is always self-consistent, and the index
 /// validation that reads it on every listing pays nothing here.
 fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query", "task_bundle_canonical_read",
+    )
+    .entered();
     // A missing bundle cannot be in a lifecycle transition. Avoid asking the
     // shared-lock helper to create a stable lock target for a filtered miss.
     if !bundle_dir.try_exists()? {
@@ -730,6 +734,10 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
 /// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
 fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query", "task_bundle_lightweight_read",
+    )
+    .entered();
     #[cfg(test)]
     LIGHTWEIGHT_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     if !bundle_dir.try_exists()? {

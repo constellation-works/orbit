@@ -182,12 +182,27 @@ produces (the pilot verdict, the triage application, the approval). Supersession
 and expiry need no write — they are derived on read (§2.2). This gives three
 properties for free: the request travels with the task record everywhere the task
 goes, publication and sync need no new table, and the audit trail a reviewer reads
-is the same history they read today. The cost is a scan of task history to list
-open requests across a workspace; that is the same shape as the block readout and
-is bounded by the listing tools' existing task scans. If volume ever makes that
-scan hot, a derived index can be added without changing the record
-([state-compatibility](../state-compatibility/): additive history events are the
-compatible direction; old binaries ignore unknown events).
+is the same history they read today.
+
+Workspace listings read each unproven task once through the lightweight
+bundle snapshot (task, comments and history together). Artifact payloads are
+verified against that manifest without reopening the bundle, preserving corruption
+warnings. The registry keeps derived, whole-bundle-stamp-bound projections,
+including summaries for tasks whose requests
+are all closed. Fresh processes reuse those projections; tasks with an open
+request are read live, regardless of task status. Changed stamps, a different
+projection context (tool registry, typed-decision boundary or native OS), or a
+clock earlier than the observation invalidate the proof. Corrupt bundles never
+produce a proof, so warning-tolerant listings keep reporting them.
+
+A derived request-owner index resolves an observed opaque request id to its task;
+showing or answering it reads that task and rechecks its effective state. A
+missing or stale owner entry falls back to discovery, including legacy requests
+that predate the index. Cache writes are opportunistic and never authority: a
+read-only registry, a busy writer or lost cache rows merely costs another scan.
+The registry cache schema is an additive migration;
+the request record remains compatible with older readers
+([state-compatibility](../state-compatibility/)).
 
 The token's single-use marker is the `decision_answered` entry itself plus a
 `decision_token_consumed` entry written on any *refused-after-authentication*
@@ -215,13 +230,12 @@ CLI warnings go to stderr, preserving its JSON record array. Explicit single-tas
 reads, request lookup and answering stay strict. I/O and authorization failures
 still fail the operation.
 
-A workspace scan reads a task's whole bundle only when the task may hold a
-request. Requests come only from `decision_requested` history events, so once a
-clean read finds none, the process remembers the task with a stamp of its
-bundle: the stamps of the bundle directory, its `task.yaml` envelope, its
-`artifacts` and `artifacts/files` directories, and its `events.jsonl` and
-`comments.jsonl` logs, taken without reading them. Later scans skip the task
-while that stamp holds. Any store write to the bundle (a raised, answered or
+The persisted freshness proof uses the stamps of the bundle directory, its
+`task.yaml` envelope, its `artifacts` and `artifacts/files` directories, and its
+`events.jsonl` and
+`comments.jsonl` logs, taken without reading them before a clean bundle read.
+Later scans reuse a closed projection while that stamp and its projection
+context hold. Any store write to the bundle (a raised, answered or
 reopened request, a status move, a comment, an artifact) moves the stamp, so the
 next scan reads it again. A bundle the store cannot stamp is read every time.
 Corruption the store writes, such as a removed artifact blob, also moves the
@@ -229,9 +243,9 @@ stamp and still warns. An out-of-band in-place edit to the `task.yaml` envelope
 changes its size, modification time, device or inode, so the next scan reads
 the bundle. An out-of-band in-place edit to a document, the manifest or a blob,
 or a change inside a legacy nested artifact directory, stays unseen until the
-bundle's next store write. The first scan after a process starts reads every
-bundle. [ORB-21835] bounds this decision-list scanning for the Tasks waiting
-count.
+bundle's next store write. Starting a fresh process retains unchanged proofs;
+only a missing or invalid proof, or an open request, requires a bundle read.
+[ORB-21835] introduced the stamp proof for the Tasks waiting count.
 
 ## 3. Delegated-human authority
 

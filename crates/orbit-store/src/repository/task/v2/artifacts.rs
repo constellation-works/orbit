@@ -124,6 +124,53 @@ fn immutable_artifact_blob(path: &str, sha256: &str) -> String {
 }
 
 impl TaskV2Store {
+    /// A payload from an already validated task-row manifest. Blob paths
+    /// remain contained and bytes are authenticated against that snapshot.
+    pub(crate) fn task_artifact_from_manifest(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        file.validate()?;
+        self.ensure_recovered()?;
+        let bundle_dir = self.bundle_store.bundle_path(id)?;
+        let blob_path = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&file.blob);
+        let corrupt = |reason: String| OrbitError::TaskBundleCorrupt {
+            task_id: id.to_string(),
+            path: bundle_dir.to_string_lossy().into_owned(),
+            reason: OrbitError::Store(reason).to_string(),
+        };
+        let Some(content) = crate::fs::path_safety::read_contained_artifact_blob(
+            &bundle_dir.join(TASK_ARTIFACTS_DIR_NAME),
+            &file.blob,
+        )?
+        else {
+            return Err(corrupt(format!(
+                "artifact manifest references missing file {}",
+                blob_path.display()
+            )));
+        };
+        if content.len() as u64 != file.size_bytes {
+            return Err(corrupt(format!(
+                "artifact manifest size mismatch for {}",
+                blob_path.display()
+            )));
+        }
+        if sha256_hex(&content) != file.sha256 {
+            return Err(corrupt(format!(
+                "artifact manifest sha256 mismatch for {}",
+                blob_path.display()
+            )));
+        }
+        Ok(Some(TaskArtifact {
+            path: file.path.clone(),
+            media_type: file.media_type.clone(),
+            content,
+            created_by: Some(file.created_by.clone()),
+        }))
+    }
+
     pub(crate) fn get_task_artifacts(
         &self,
         id: &str,

@@ -180,6 +180,19 @@ pub struct EnvelopeStampRecord {
     pub fingerprint: String,
 }
 
+/// A derived decision projection, never authority. Reuse only when the
+/// whole-bundle stamp and the caller's projection key still match, time has
+/// not moved backwards, and every request is closed. Open requests are read
+/// live; their snapshots only supply the request-to-task lookup index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDecisionSnapshot {
+    pub task_id: String,
+    pub stamp: String,
+    pub projection_key: String,
+    pub observed_at: DateTime<Utc>,
+    pub requests: Vec<orbit_types::task::DecisionRequest>,
+}
+
 /// A relation edge whose target uses a locally known task prefix but does not
 /// resolve to any registered task bundle in the coordination registry — the
 /// exact condition

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    ArtifactManifestFileV2, DecisionRequest, ExternalRef, Task, TaskArtifact, TaskComment,
-    TaskHistoryEntry, TaskStatus,
+    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
+    TaskStatus,
 };
 
 use orbit_store::RegisteredTaskResolution;
@@ -24,58 +24,6 @@ impl OrbitRuntime {
             .tasks()
             .get_task(id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
-    }
-
-    /// Read effective human-decision requests, rechecking the current task,
-    /// block episode and pilot admission hold without writing any records.
-    pub fn get_task_decision_requests(&self, id: &str) -> Result<Vec<DecisionRequest>, OrbitError> {
-        let task = self.get_task(id)?;
-        let history = self.get_task_history(id)?;
-        let comments = self.get_task_comments(id)?;
-        self.task_decision_requests_in(&task, &history, &comments, chrono::Utc::now())
-    }
-
-    /// [`Self::get_task_decision_requests`], plus whether the history holds
-    /// any `decision_requested` event, so a scan knows the task can raise
-    /// none until its history changes.
-    pub(crate) fn get_task_decision_requests_with_events(
-        &self,
-        id: &str,
-    ) -> Result<(Vec<DecisionRequest>, bool), OrbitError> {
-        let task = self.get_task(id)?;
-        let history = self.get_task_history(id)?;
-        let comments = self.get_task_comments(id)?;
-        let raised_any = history
-            .iter()
-            .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT);
-        let requests =
-            self.task_decision_requests_in(&task, &history, &comments, chrono::Utc::now())?;
-        Ok((requests, raised_any))
-    }
-
-    /// Effective decision requests over records a read-only aggregate already loaded.
-    /// `task` must include its requirements: revision-bound requests cannot be
-    /// checked against bodyless task-index metadata.
-    pub(crate) fn task_decision_requests_in(
-        &self,
-        task: &Task,
-        history: &[TaskHistoryEntry],
-        comments: &[TaskComment],
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<DecisionRequest>, OrbitError> {
-        let pilot_operation = if task.status == TaskStatus::Backlog
-            && self
-                .pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))?
-                .is_some()
-        {
-            super::pilot::latest_pilot_operation_id(comments)
-        } else {
-            None
-        };
-        let mut requests =
-            orbit_types::task::decision_requests_from_history(task, history, pilot_operation, now);
-        self.add_handoff_landing_answers(task, &mut requests)?;
-        Ok(requests)
     }
 
     /// Resolve a dependency target through this machine's registered owner.
