@@ -11,7 +11,7 @@ use std::str::FromStr;
 
 use orbit_common::OrbitError;
 use orbit_registry::hosts::{HostRoute, load_host_routes};
-use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
+use orbit_types::identity::{validate_machine_id, validate_workspace_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineQualifiedSelector {
@@ -49,19 +49,6 @@ impl fmt::Display for MachineQualifiedSelector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}/{}", self.machine_id, self.workspace_id)
     }
-}
-
-fn validate_workspace_id(workspace_id: &str) -> Result<(), ()> {
-    validate_registry_identifier("workspace_id", workspace_id).map_err(|_| ())?;
-    let suffix = workspace_id.strip_prefix("ws_").ok_or(())?;
-    if suffix.is_empty()
-        || !suffix
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
-        return Err(());
-    }
-    Ok(())
 }
 
 fn unknown_selector(token: &str) -> OrbitError {

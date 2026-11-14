@@ -5,6 +5,7 @@ use orbit_common::fs::io::atomic_write_bytes;
 use orbit_core::{
     OrbitError, RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
+use orbit_types::identity::canonicalize_workspace_id;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 use serde::Deserialize;
 
@@ -57,27 +58,7 @@ fn describe_routine_collisions(collisions: &[RoutineNameCollision]) -> String {
 }
 
 pub(super) fn canonical_workspace_id(name: &str) -> String {
-    let mut canonical = String::new();
-    let mut separator = false;
-    for character in name.chars().flat_map(char::to_lowercase) {
-        if character.is_ascii_alphanumeric() || character == '_' {
-            canonical.push(character);
-            separator = false;
-        } else if !canonical.is_empty() {
-            separator = true;
-        }
-        if separator && !canonical.ends_with('-') {
-            canonical.push('-');
-            separator = false;
-        }
-    }
-    while canonical.ends_with('-') {
-        canonical.pop();
-    }
-    if canonical.is_empty() {
-        canonical.push_str("workspace");
-    }
-    format!("ws_{canonical}")
+    canonicalize_workspace_id(name)
 }
 
 #[derive(Deserialize)]

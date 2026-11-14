@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_types::identity::validate_workspace_partition_id;
 
 const ARTIFACT_BLOB_OUTSIDE_ROOT: &str = "resolves outside the task artifact directory";
 
@@ -91,12 +92,7 @@ pub(crate) fn validate_path_stem(stem: &str, kind: &str) -> Result<(), OrbitErro
 /// the task registry mints for an unregistered checkout.
 pub(crate) fn validate_partition_id(raw: &str) -> Result<String, OrbitError> {
     let trimmed = raw.trim();
-    let logical = trimmed.strip_prefix("ws_").is_some_and(|name| {
-        !name.is_empty()
-            && name
-                .bytes()
-                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
-    });
+    let logical = validate_workspace_partition_id(trimmed).is_ok();
     let legacy = trimmed.rsplit_once('-').is_some_and(|(slug, suffix)| {
         !slug.is_empty()
             && !slug.starts_with('-')
