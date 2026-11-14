@@ -111,9 +111,10 @@ impl OrbitRuntime {
             run_id: run_id.clone(),
         };
         let tasks = self.stores().tasks();
-        let claim = tasks.resolve_execution_claims()?.into_iter().find(|claim| {
-            claim.claim.task_id == task.id && claim.bound_run.as_ref() == Some(&bound)
-        });
+        let claim = tasks
+            .resolve_task_execution_claims(&task.id)?
+            .into_iter()
+            .find(|claim| claim.bound_run.as_ref() == Some(&bound));
         let handoff = match &claim {
             Some(claim) => tasks.find_accepted_handoff(&claim.claim.claim_id)?,
             None => None,

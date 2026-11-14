@@ -300,7 +300,18 @@ impl OrbitRuntime {
                 "claims": Vec::<serde_json::Value>::new(),
             }));
         }
-        let inspected_claims = self.stores().tasks().inspect_execution_claims()?;
+        let inspected_claims = match (task_id, state) {
+            (Some(task_id), _) => self
+                .stores()
+                .tasks()
+                .inspect_task_execution_claims(task_id)?,
+            (None, DistributedClaimState::Active) => {
+                self.stores().tasks().inspect_live_execution_claims()?
+            }
+            (None, DistributedClaimState::Settled | DistributedClaimState::All) => {
+                self.stores().tasks().inspect_execution_claims()?
+            }
+        };
         let claims = inspected_claims
             .iter()
             .filter(|claim| {

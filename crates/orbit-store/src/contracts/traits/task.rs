@@ -182,6 +182,21 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
+    /// Read-only inspection of claims whose phase protects a footprint,
+    /// refusing when an interrupted commit is pending recovery.
+    fn inspect_live_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+    /// Read-only inspection of one task's claims, refusing when an interrupted
+    /// commit is pending recovery.
+    fn inspect_task_execution_claims(
+        &self,
+        _task_id: &str,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
     /// Read-only logical storage diagnostic for admission and mutation receipts.
     fn inspect_admission_receipt_storage(
         &self,
@@ -192,6 +207,21 @@ pub trait TaskStoreBackend: Send + Sync {
     /// Unavailable backends fail closed.
     fn resolve_execution_claims(
         &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+    /// Repairing read of claims whose phase protects a footprint: settles an
+    /// interrupted commit before reading. Unavailable backends fail closed.
+    fn resolve_live_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+    /// Repairing read of one task's claims: settles an interrupted commit
+    /// before reading. Unavailable backends fail closed.
+    fn resolve_task_execution_claims(
+        &self,
+        _task_id: &str,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }

@@ -31,14 +31,13 @@ fn live_execution_claims(
     action: &str,
 ) -> Result<Vec<ExecutionClaim>, DispatchError> {
     Ok(runtime
-        .inspect_execution_claims()
+        .inspect_live_execution_claims()
         .map_err(|error| DispatchError::DeterministicActionFailed {
             action: action.to_string(),
             message: format!("read execution claims: {error}"),
         })?
         .into_iter()
         .map(|inspection| inspection.claim)
-        .filter(|claim| claim.phase.protects_footprint())
         .collect())
 }
 

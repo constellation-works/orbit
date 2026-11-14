@@ -94,11 +94,9 @@ pub(in super::super) fn superseded_with_current(
     }
     if matches!(current.status, TaskStatus::InProgress | TaskStatus::Review)
         && runtime
-            .inspect_execution_claims()?
+            .inspect_task_execution_claims(task_id)?
             .iter()
-            .any(|inspection| {
-                inspection.claim.task_id == task_id && inspection.claim.phase.protects_footprint()
-            })
+            .any(|inspection| inspection.claim.phase.protects_footprint())
     {
         return Ok(Some(superseded(
             "execution_claim",

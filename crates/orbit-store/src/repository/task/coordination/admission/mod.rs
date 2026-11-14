@@ -21,6 +21,7 @@ mod lookup;
 mod refusal;
 mod retention;
 
+pub(super) use lookup::decode_claim;
 #[cfg(test)]
 pub(super) use lookup::{claim_decodes, reset_claim_decodes};
 pub use refusal::admission_refusal;
