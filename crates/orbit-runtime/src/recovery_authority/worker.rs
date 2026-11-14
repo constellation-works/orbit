@@ -115,10 +115,8 @@ pub(super) fn current_worker_binding_in(
                 // read ends the walk with no binding.
                 return Ok(None);
             };
-            stat.rsplit_once(')')
-                .and_then(|(_, fields)| fields.split_whitespace().nth(1))
-                .and_then(|value| value.parse::<u32>().ok())
-                .map(Some)
+            orbit_common::process::identity::parse_linux_process_stat(&stat)
+                .map(|parsed| Some(parsed.parent_pid))
                 .ok_or_else(|| OrbitError::Execution("worker process ancestry unavailable".into()))
         },
     )
@@ -217,9 +215,8 @@ pub(crate) fn namespace_key(proc_root: &Path, pid: u32) -> Result<String, OrbitE
     let process = proc_root.join(pid.to_string());
     let namespace = std::fs::read_link(process.join("ns/pid"))?;
     let stat = std::fs::read_to_string(process.join("stat"))?;
-    let start = stat
-        .rsplit_once(')')
-        .and_then(|(_, fields)| fields.split_whitespace().nth(19))
+    let start = orbit_common::process::identity::parse_linux_process_stat(&stat)
+        .map(|parsed| parsed.start_ticks)
         .ok_or_else(|| {
             OrbitError::Execution("namespace leader start identity unavailable".into())
         })?;
