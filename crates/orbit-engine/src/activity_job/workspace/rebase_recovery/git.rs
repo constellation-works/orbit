@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::context::{RuntimeHost, StepRecoveryAdmission};
 use crate::executor::automation::vcs::git::{BaseSyncMode, GitBytesOutcome, git_run_bytes};
+use orbit_types::workflow::{COMPLETE_PR_STEP_ID, COMPLETE_REVIEWED_PR_STEP_ID, SYNC_BASE_STEP_ID};
 
 use super::super::DispatchError;
 use super::super::fingerprint::{
@@ -58,9 +59,9 @@ pub(super) fn validate_failed_step_identity<'a>(
         .ok_or("missing failed_step_id")?;
     if !matches!(
         (failed_step_id, activity_name),
-        ("sync_base", "git_rebase")
-            | ("complete_pr", "pr_complete")
-            | ("complete_reviewed_pr", "pr_complete")
+        (SYNC_BASE_STEP_ID, "git_rebase")
+            | (COMPLETE_PR_STEP_ID, "pr_complete")
+            | (COMPLETE_REVIEWED_PR_STEP_ID, "pr_complete")
     ) {
         return Err("failed_step_id and activity_name do not name a supported rebase step");
     }

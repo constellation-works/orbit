@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_tools::ToolContext;
+use orbit_types::workflow::PR_CONFLICT_RECOVERY_ACTIVITY;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
@@ -44,7 +45,7 @@ pub(super) fn require_conflict_recovery_target(
     input: &Value,
     run_id: &str,
 ) -> Result<(), DispatchError> {
-    if activity_name == "pr_conflict_recovery"
+    if activity_name == PR_CONFLICT_RECOVERY_ACTIVITY
         && (task_ids.is_empty() || input.get("run_id").and_then(Value::as_str) != Some(run_id))
     {
         return Err(DispatchError::CliInvocationPermanent(

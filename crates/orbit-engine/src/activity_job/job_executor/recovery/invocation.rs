@@ -6,6 +6,7 @@ use crate::activity_job::workspace::generated_paths::conflicted_generated_paths;
 use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
 };
+use orbit_types::workflow::{PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY};
 
 /// A completed recovery dispatch, the decision slot its input named, and
 /// what the engine observed before it ran.

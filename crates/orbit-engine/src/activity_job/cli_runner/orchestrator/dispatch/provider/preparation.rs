@@ -10,6 +10,7 @@ use crate::activity_job::dispatcher::DispatchError;
 use orbit_agent::{Agent, AgentConfig};
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
+use orbit_types::workflow::{AGENT_IMPLEMENT_ACTIVITY, PR_CONFLICT_RECOVERY_ACTIVITY};
 use orbit_types::workflow::{
     CREW_MEMORY_PRECEDENCE_SENTENCE, V2AuditEventKind, render_tag_instructions,
 };
@@ -98,7 +99,7 @@ pub(super) fn prepare_provider_envelope<'a>(
     }
     // `pr.agent_sections` / `pr.required_sections`: the implementer writes
     // their content to a task artifact `pr_open` reads.
-    if activity_name == "agent_implement"
+    if activity_name == AGENT_IMPLEMENT_ACTIVITY
         && let Some(instruction) = host.pr_config().conventions.implement_instruction()
     {
         envelope_spec.instruction.push_str("\n\n");
@@ -152,7 +153,7 @@ pub(super) fn prepare_provider_envelope<'a>(
     // envelope the provider reads. Admission below still recomputes the chain
     // from the original input and does not see this copy.
     let mut pinned_recovery_input = None;
-    if activity_name == "pr_conflict_recovery" && inspection_input.is_none() {
+    if activity_name == PR_CONFLICT_RECOVERY_ACTIVITY && inspection_input.is_none() {
         let mut owned = input.clone();
         crate::executor::automation::vcs::apply_authenticated_published_head(
             host, run_id, &mut owned,

@@ -12,8 +12,9 @@ use orbit_types::workflow::activity_job::{
     ActivityToolPolicyMode, AgentLoopSpec, MUTATING_TOOLS, is_response_correction_mutating_tool,
 };
 use orbit_types::workflow::{
-    ExperimentActivityOverlay, ExperimentOverlayRecord, tool_allowed,
-    tools_allowed_by_disallow_list,
+    AGENT_IMPLEMENT_ACTIVITY, AGENT_REVIEW_REPAIR_ACTIVITY, ExperimentActivityOverlay,
+    ExperimentOverlayRecord, PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY,
+    TASK_PILOT_ACTIVITY, tool_allowed, tools_allowed_by_disallow_list,
 };
 use serde_json::Value;
 
@@ -71,16 +72,16 @@ fn legacy_program_allowlist_for_mcp(activity: &str, disallowed: &[String]) -> Op
         return None;
     }
     match activity {
-        "agent_implement" | "agent_review_repair" => Some(concat!(
+        AGENT_IMPLEMENT_ACTIVITY | AGENT_REVIEW_REPAIR_ACTIVITY => Some(concat!(
             "git,make,rg,orbit,bash,sh,cat,ls,find,sed,awk,grep,jq,",
             "cargo,rustc,rustfmt,node,npm,npx,pnpm,yarn,bun,deno,",
             "python,python3,uv,poetry,pytest,ruff,mypy,go,gofmt,",
             "java,javac,mvn,gradle,dotnet,cc,c++,clang,clang++,gcc,g++,",
             "cmake,ctest,ninja,swift,ruby,bundle,rake"
         )),
-        "pr_conflict_recovery" => Some("cargo,git,make,orbit,rg"),
-        "step_failure_recovery" => Some("git,gh,orbit,rg"),
-        "task_pilot" => Some("git,rg"),
+        PR_CONFLICT_RECOVERY_ACTIVITY => Some("cargo,git,make,orbit,rg"),
+        STEP_FAILURE_RECOVERY_ACTIVITY => Some("git,gh,orbit,rg"),
+        TASK_PILOT_ACTIVITY => Some("git,rg"),
         _ => None,
     }
 }

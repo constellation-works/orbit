@@ -20,11 +20,9 @@ pub(super) use input::{
     redacted_recovery_diagnostic,
 };
 pub(super) use invocation::crew_overridden_recovery_spec;
+use orbit_types::workflow::STEP_FAILURE_RECOVERY_ACTIVITY;
 pub(super) use retry::{StepFailure, recover_or_return_original};
 pub(super) use unrepairable::{UnrepairableFailure, unrepairable_failure};
-
-const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
-const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
 /// The pool step-failure and PR conflict recovery draw their crew from: the
 /// failure-recovery purpose pool. While it is unset the host draws from the
 /// medium complexity pool [ORB-15663]: recovery diagnoses a failure in work of

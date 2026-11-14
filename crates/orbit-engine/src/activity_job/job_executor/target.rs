@@ -1,5 +1,6 @@
 use super::reviewer::ReviewerInvocation;
 use super::*;
+use orbit_types::workflow::{AGENT_IMPLEMENT_ACTIVITY, IMPLEMENT_ONE_STEP_ID};
 
 /// Run-input keys the executor owns and hands every nested target of the
 /// step they belong to unchanged: a final-recovery `resume`'s context and a
@@ -665,7 +666,8 @@ fn apply_implementer_blocker(
 }
 
 fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {
-    step.id == "implement_one" || target.activity_name.as_deref() == Some("agent_implement")
+    step.id == IMPLEMENT_ONE_STEP_ID
+        || target.activity_name.as_deref() == Some(AGENT_IMPLEMENT_ACTIVITY)
 }
 
 /// Persist the invocation trace for a dispatched step.

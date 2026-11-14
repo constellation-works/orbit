@@ -35,6 +35,36 @@ pub const TASK_GATE_PIPELINE_JOB: &str = "task_gate_pipeline";
 /// Shipped task pilot pipeline job. Run records persist this string.
 pub const TASK_PILOT_PIPELINE_JOB: &str = "task_pilot_pipeline";
 
+/// Shipped `implement_one` step id. Run records persist this string.
+pub const IMPLEMENT_ONE_STEP_ID: &str = "implement_one";
+
+/// Shipped `sync_base` step id. Run records persist this string.
+pub const SYNC_BASE_STEP_ID: &str = "sync_base";
+
+/// Shipped `complete_pr` step id. Run records persist this string.
+pub const COMPLETE_PR_STEP_ID: &str = "complete_pr";
+
+/// Shipped `complete_reviewed_pr` step id. Run records persist this string.
+pub const COMPLETE_REVIEWED_PR_STEP_ID: &str = "complete_reviewed_pr";
+
+/// Shipped `worktree_setup` step id. Run records persist this string.
+pub const WORKTREE_SETUP_STEP_ID: &str = "worktree_setup";
+
+/// Shipped `agent_implement` activity. Run records persist this string.
+pub const AGENT_IMPLEMENT_ACTIVITY: &str = "agent_implement";
+
+/// Shipped `agent_review_repair` activity. Run records persist this string.
+pub const AGENT_REVIEW_REPAIR_ACTIVITY: &str = "agent_review_repair";
+
+/// Shipped `pr_conflict_recovery` activity. Run records persist this string.
+pub const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
+
+/// Shipped `step_failure_recovery` activity. Run records persist this string.
+pub const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
+
+/// Shipped `task_pilot` activity. Run records persist this string.
+pub const TASK_PILOT_ACTIVITY: &str = "task_pilot";
+
 /// The drain jobs: the owner's workspace auto drain and a replica's pull drain.
 pub const DRAIN_JOBS: &[&str] = &[WORKSPACE_AUTO_PIPELINE_JOB, WORKSPACE_PULL_PIPELINE_JOB];
 

@@ -6,6 +6,7 @@ use orbit_agent::AgentRequest;
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::ActivityToolDenyPolicy;
+use orbit_types::workflow::PR_CONFLICT_RECOVERY_ACTIVITY;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 
 use crate::activity_job::dispatcher::DispatchOutcome;
@@ -306,7 +307,7 @@ pub(in super::super) fn dispatch_prepared_provider(
             .with_activity(step_id)
     });
 
-    if activity_name == "pr_conflict_recovery" {
+    if activity_name == PR_CONFLICT_RECOVERY_ACTIVITY {
         let boundary = worktree_boundary.as_mut().ok_or_else(|| {
             DispatchError::CliInvocationPermanent(
                 "conflict recovery requires a validated assigned worktree; refusing primary-checkout execution".to_string(),
