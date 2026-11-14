@@ -506,8 +506,10 @@ merges. A lost lease (`push_lease_lost`) is recorded without failing the
 handoff, and the commit stays local. A `reject`, a reviewer timeout or a failed
 revalidation pushes nothing; uncommitted edits of a timed-out reviewer are not
 preserved. In an owner run, because the PR is already published and the task
-promoted, an evidence-only `incomplete` is not held in progress (§4): it ends like any other
-`incomplete`. Final
+promoted, an evidence-only `incomplete` first replays its admitted
+`host_sandbox_test` requirements on that owner host outside the agent sandbox
+(§4). A complete passing replay can establish the review. If evidence is still
+missing, it is not held in progress: it ends like any other `incomplete`. Final
 recovery still gets one look, as for a failed re-review.
 
 **Claimed leaves: the review runs on the leaf.** A claim from an owner with
@@ -1247,7 +1249,7 @@ the requirement's kind:
 | `hosted_ci` | `operator` |
 | `native_os` | `operator` |
 | `codeql` | `operator`, or `system` (owner fulfilment, below) |
-| `host_sandbox_test` | `operator`, `system` (Linux owner fulfilment, below), or the claimed host's own settlement (below) |
+| `host_sandbox_test` | `operator`, `system` (Linux owner fulfilment or owner landing settlement, below), or the claimed host's own settlement (below) |
 
 An `operator` write is a human actor on the bare CLI or the dashboard with no
 agent identity, whose process declares no agent envelope or managed run. A
@@ -1345,10 +1347,13 @@ candidate's own script or tests. Details are in the
 [review gate runbook](../../runbooks/review-gate.md).
 
 A claimed leaf fulfils its own `host_sandbox_test` requirements before it
-holds. Every agent lane runs inside Orbit's sandbox, where a nested one cannot
+holds. An owner before-landing settlement also attempts this replay for an
+otherwise evidence-only `incomplete`; its task is already in `review`, outside
+the in-progress fulfilment tick's selection. An explicit owner `reject` never
+enters replay. Every agent lane runs inside Orbit's sandbox, where a nested one cannot
 apply: macOS `sandbox_apply` fails with `EPERM`, and Bubblewrap cannot create
 its namespaces. So the reviewer cannot run Orbit's sandbox tests, nor an
-owner-required command that runs them. Settlement on the leaf's host is
+owner-required command that runs them. Settlement on the executing host is
 Orbit's deterministic worker, outside the agent sandbox. When the report would
 otherwise be an evidence-only hold, including a broader run whose every
 deferred test a requirement covers (above), it runs each requirement whose
@@ -1371,14 +1376,17 @@ no sandbox-unavailable diagnostic, prints no skip notice (`SKIP:`, `DEFERRED:`,
 `skipping`), and, for the `cargo test` form, passes at least one test. Failing
 those checks leaves the evidence missing with `sandbox_unavailable`,
 `self_skipped`, `no_tests_ran`, `tool_missing`, `timed_out` or `run_failed`, so
-the review holds as above. A failing test (`test_failed`) fails the reviewer's
+the claimed review holds as above. An owner landing review with missing
+evidence keeps its published PR pending a recorded decision (§3.2). A failing
+test (`test_failed`) fails the reviewer's
 required record, and any broader record that deferred the test, and the
 review blocks. A passing run attaches a result like
 the operator's, with `os`, and settlement counts it on this tree, so the review
 passes with no hold. The certificate's `host_evidence` lists every attempt.
 
-These results carry no writer class the owner accepts, so they count only in
-the settlement that ran them. A passed verdict's handoff pins each passing
+An owner landing settlement writes its result and log as `system`. Claimed
+results carry no writer class the owner accepts, so they count only in
+the settlement that ran them. A passed claimed verdict's handoff pins each passing
 result and its log under `host_evidence`. The owner reads both by digest and
 accepts the handoff only if all of the following hold: each passing record is
 pinned and no other ref is; the log is nonempty; the result is a passed

@@ -1,14 +1,15 @@
-//! A claimed leaf's host runs the `host_sandbox_test` checks its reviewer
-//! could not run inside the agent sandbox [ORB-14478].
+//! A claimed leaf's host or an owner landing review's host runs the
+//! `host_sandbox_test` checks its reviewer could not run inside the agent
+//! sandbox [ORB-14478].
 //!
 //! Every agent lane runs inside Orbit's own sandbox, and the kernel refuses a
 //! nested one: a macOS `sandbox_apply` fails with `EPERM`, and a Linux
 //! Bubblewrap cannot create its namespaces. Tests of Orbit's sandbox paths
 //! therefore skip or fail inside the reviewer, which then reports
 //! `incomplete` and names each such check as a `host_sandbox_test`
-//! requirement with the host OS it needs. Settlement on the claimed leaf's
-//! own host, Orbit's deterministic worker, runs each one whose OS is this
-//! host's, before the verdict is reconciled:
+//! requirement with the host OS it needs. Settlement in Orbit's deterministic
+//! worker, outside the agent sandbox, runs each one whose OS is this host's,
+//! before the verdict is reconciled:
 //!
 //! - only when the report is otherwise evidence-only, so a review that would
 //!   block anyway runs nothing. A broader required run that passed only by
@@ -24,7 +25,8 @@
 //! Each run attaches its log; a passing one also attaches its result, which
 //! settlement counts like any external evidence on this tree, so the review
 //! can pass without a hold. A run that skipped, deferred, ran no test or met
-//! an unavailable sandbox leaves the evidence missing, and the review holds.
+//! an unavailable sandbox leaves the evidence missing. A claimed review holds;
+//! an owner landing review keeps its published PR pending a decision.
 //! A failed run fails the reviewer's record, and any broader record that
 //! deferred the same test, and the review blocks. The certificate keeps every
 //! record, and a passed verdict's handoff pins each result and log for the
@@ -37,7 +39,7 @@ use orbit_engine::review_gate::run_host_sandbox_test;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     EvidenceHostOs, HostEvidenceReason, HostEvidenceRecord, HostSandboxCommand, ReviewEvidenceKind,
-    ReviewExternalEvidence, ValidationOutcome, ValidationRole,
+    ReviewExternalEvidence, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::json;
 
@@ -51,7 +53,7 @@ use super::context::GateContext;
 use super::judgement::{Judgement, write_artifact};
 
 impl Judgement {
-    /// Run each `host_sandbox_test` requirement this claimed leaf's host can
+    /// Run each `host_sandbox_test` requirement this settlement's host can
     /// run, and return the passing results by artifact path for settlement
     /// to count on `candidate`.
     pub(super) fn fulfil_host_evidence(
@@ -66,7 +68,16 @@ impl Judgement {
         let [task_id] = context.task_ids.as_slice() else {
             return Ok(satisfied);
         };
-        if !context.claimed
+        // Owner landing tasks are already in review, so they cannot rely on
+        // the in-progress hold fulfilment tick. Replay an evidence-only
+        // incomplete here, on the same deterministic host path as a claim.
+        // An explicit owner rejection remains a recorded decision to block.
+        let owner_landing = self.verdict == ReviewVerdict::Incomplete
+            && context
+                .admission
+                .as_ref()
+                .is_some_and(|admission| admission.gates_landing());
+        if (!context.claimed && !owner_landing)
             || self.verdict.passed()
             || self.has_open_findings()
             || !self

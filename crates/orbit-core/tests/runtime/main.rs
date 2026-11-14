@@ -118,6 +118,8 @@ mod review_evidence_paths;
 mod review_evidence_writers;
 mod review_gate_audit;
 mod review_held_resume;
+#[cfg(target_os = "linux")]
+mod review_owner_host_evidence;
 mod review_record_ids;
 mod review_report_revisions;
 mod review_run_option;
