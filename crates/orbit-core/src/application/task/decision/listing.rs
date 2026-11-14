@@ -2,7 +2,9 @@
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::TaskDecisionSnapshot;
-use orbit_types::task::{DecisionGate, DecisionRequest, DecisionRequestState};
+use orbit_types::task::{
+    DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -362,6 +364,22 @@ impl OrbitRuntime {
     pub fn open_decisions_json(&self, task_id: &str) -> Result<Value, OrbitError> {
         Ok(Value::Array(
             self.get_task_decision_requests(task_id)?
+                .iter()
+                .filter(|request| request.state == DecisionRequestState::Open)
+                .map(open_decision_json)
+                .collect(),
+        ))
+    }
+
+    /// [`Self::open_decisions_json`] over records the caller already loaded.
+    pub fn open_decisions_json_in(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+    ) -> Result<Value, OrbitError> {
+        Ok(Value::Array(
+            self.task_decision_requests_in(task, history, comments, chrono::Utc::now())?
                 .iter()
                 .filter(|request| request.state == DecisionRequestState::Open)
                 .map(open_decision_json)

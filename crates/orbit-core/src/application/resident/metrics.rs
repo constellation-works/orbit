@@ -41,6 +41,7 @@ use serde_json::{Value, json};
 
 use super::due::{checkpoints, started_cycles};
 use crate::OrbitRuntime;
+use crate::application::statistics;
 
 /// The reversal window of design §9: a human undo within 7 days of the
 /// resident decision or action it undoes.
@@ -97,18 +98,10 @@ pub(super) fn parse_window_start(
         .ok_or_else(|| OrbitError::InvalidInput(format!("out of range `--since` window: {raw}")))
 }
 
+/// The median of `values` without reordering them: callers also report the
+/// samples in the order they were recorded.
 fn median_seconds(values: &[f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = sorted.len() / 2;
-    Some(if sorted.len() % 2 == 1 {
-        sorted[mid]
-    } else {
-        (sorted[mid - 1] + sorted[mid]) / 2.0
-    })
+    statistics::median(&mut values.to_vec())
 }
 
 fn active_days(task_created: DateTime<Utc>, start: DateTime<Utc>, end: DateTime<Utc>) -> f64 {

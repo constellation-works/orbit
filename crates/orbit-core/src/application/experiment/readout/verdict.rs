@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::ExperimentRecord;
 
-use crate::application::experiment::readout::outcomes::{Kind, MetricSpec, metric_spec};
+use crate::application::experiment::definition::{Kind, MetricSpec, metric_spec};
 
 use super::model::{GuardrailArm, GuardrailReadout, ReadoutArm, ReadoutMetric, Verdict};
 
@@ -190,7 +190,7 @@ pub(super) fn verdict(
             vec!["not every arm has reached min_sample and max_days has not passed".into()],
         );
     }
-    let Some(primary) = primary.filter(|primary| primary.measured) else {
+    let Some(primary) = primary else {
         return make(
             "inconclusive",
             None,
