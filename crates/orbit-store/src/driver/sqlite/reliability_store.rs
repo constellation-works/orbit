@@ -9,7 +9,7 @@
 //! would be confidently wrong. Durations and counts do not share that defect.
 //!
 //! Both queries are workspace-scoped. `job_runs` and `invocations` both carry
-//! `workspace_id`; run ids are only unique within a workspace, so an
+//! `workspace_id`; historical run ids can collide across workspaces, so an
 //! invocation counts only when its own workspace matches and its run, joined
 //! on `(workspace_id, run_id)`, is present in `job_runs`. A legacy invocation
 //! recorded without a workspace, or one whose run is absent, is excluded

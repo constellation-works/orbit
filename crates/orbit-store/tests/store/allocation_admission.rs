@@ -463,7 +463,13 @@ allocation_test!(removed_job_run_ids_are_never_reallocated, {
                 }
                 assert!(jobs.get_job_run(&removed.run_id).unwrap().is_none());
                 drop(jobs);
-                let reopened = open();
+                // Deleted identities also stay reserved for another workspace
+                // opening its own connection to the host's database.
+                let reopened = if delete {
+                    workspace_job_run_store(Store::open(&db).unwrap(), "ws_b")
+                } else {
+                    open()
+                };
                 let next = reopened
                     .insert_job_run("job-a", 1, Utc::now(), None, None)
                     .unwrap();

@@ -313,3 +313,20 @@ pub(super) fn apply_job_run_build(conn: &Connection) -> Result<(), OrbitError> {
     }
     add_column_if_missing(conn, "job_runs", "build_json", "TEXT")
 }
+
+/// Host-wide allocation probes retain the old workspace keys so historical
+/// duplicate ids remain readable. These non-unique indexes bound each probe
+/// without scanning every workspace's retained allocation ledger.
+pub(super) fn apply_job_run_host_id_indexes(conn: &Connection) -> Result<(), OrbitError> {
+    if table_exists(conn, "job_runs")? {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_job_runs_host_run_id ON job_runs(run_id);",
+        )
+        .map_err(sqlite_store_error)?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_job_run_allocations_host_run_id
+         ON job_run_id_allocations(run_id);",
+    )
+    .map_err(sqlite_store_error)
+}

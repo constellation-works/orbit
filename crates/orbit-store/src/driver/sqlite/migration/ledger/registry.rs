@@ -833,12 +833,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_agent_task_facts,
     },
+    // Non-unique indexes preserve legacy workspace-scoped collisions while
+    // new allocations reserve a host-wide identity in the shared transaction.
+    Migration {
+        version: 92,
+        name: "job_run_host_id_indexes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_job_run_host_id_indexes,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 91;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 92;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

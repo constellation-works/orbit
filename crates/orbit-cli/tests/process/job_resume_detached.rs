@@ -236,6 +236,78 @@ mod unix {
         }
     }
 
+    #[test]
+    fn same_minute_workspaces_settle_on_their_own_workers() {
+        if crate::workflow_gate::wait_if_requested() {
+            std::process::exit(0);
+        }
+        if crate::isolated_test::run_in_child(
+            "job_resume_detached::unix::same_minute_workspaces_settle_on_their_own_workers",
+        ) {
+            return;
+        }
+        let first = Fixture::new();
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("second-repo");
+        fs::create_dir_all(&repo).unwrap();
+        crate::git_repo::init(&repo);
+        let second = Fixture {
+            _temp: temp,
+            gate: WorkflowGate::new(),
+            home: first.home.clone(),
+            repo,
+        };
+        second
+            .command()
+            .args(["workspace", "init", "--name", "second-workspace"])
+            .assert()
+            .success();
+        let job = json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "second_workspace_fixture"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [second.gate.step("nap")]}});
+        fs::write(
+            first
+                .home
+                .join(".orbit/resources/jobs/second_workspace_fixture.yaml"),
+            job.to_string(),
+        )
+        .unwrap();
+
+        // Keep the first worker alive until the other's lifecycle has settled.
+        // A bounded retry only handles crossing a real wall-clock minute.
+        for _ in 0..3 {
+            let a = first.json(&["run", "job", "resume_cli_fixture", "--json"]);
+            let a = a["run_id"].as_str().unwrap();
+            first.gate.wait_ready();
+            let a_running = first.json(&["run", "show", a, "--json"]);
+            let b = second.json(&["run", "job", "second_workspace_fixture", "--json"]);
+            let b = b["run_id"].as_str().unwrap();
+            second.gate.wait_ready();
+            let b_running = second.json(&["run", "show", b, "--json"]);
+            second.gate.fail();
+            second.poll_run(b, "failed", Duration::from_secs(30));
+            let a_after = first.json(&["run", "show", a, "--json"]);
+            first.gate.release();
+            let a_done = first.poll_run(a, "success", Duration::from_secs(30));
+            let b_done = second.json(&["run", "show", b, "--json"]);
+            assert_eq!(a_after["run"]["state"], "running");
+            assert_eq!(a_running["run"]["pid"], a_after["run"]["pid"]);
+            assert_ne!(
+                a_running["run"]["pid"].as_u64().unwrap(),
+                b_running["run"]["pid"].as_u64().unwrap()
+            );
+            assert_eq!(a_done["run"]["state"], "success");
+            assert_eq!(b_done["run"]["state"], "failed");
+            if a.rsplit_once('-').unwrap().0 == b.rsplit_once('-').unwrap().0 {
+                assert_ne!(
+                    a, b,
+                    "same-minute runs in different workspaces must have distinct host identities"
+                );
+                return;
+            }
+        }
+        panic!("could not dispatch both workspaces in one minute");
+    }
+
     /// `orbit web serve` is launched by this same CLI main. Both CLI workflow
     /// entry points must mark the binary before the shared worker spawn path.
     fn ship_and_auto_cli_commands_launch_workers() {

@@ -76,6 +76,17 @@ A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T2026
 
 ## 3. Job Surface
 
+New run ids use `jrun-<YYYYmmdd-HHMM>-<role><sequence>`, with separate `t`
+(top-level) and `c` (child) sequences shared by every workspace in the host's
+SQLite store. Allocation probes live runs and retained id reservations in the
+same immediate transaction as insertion, including routine, automation, resume
+and local-pull submissions. Archiving or deleting a run never frees its id in
+another workspace. Historical colliding ids remain workspace-scoped; the
+non-unique host lookup indexes preserve those rows without rewriting references.
+This prevents new same-slot routines from sharing a host run identity. Older
+binaries still allocate per workspace, so all host dispatchers must be upgraded
+for that guarantee to hold.
+
 `JobV2` carries:
 
 - `state`
@@ -1694,7 +1705,7 @@ A pipeline wait (`--wait`, `orbit.pipeline.wait`, agent-invocation waits) reread
 
 ### 8.7 Invocation metrics
 
-The dashboard metrics endpoints read knowledge usage from job-run state (`/api/metrics/knowledge`) and agent, tool, task, and invocation usage from the SQLite invocation store (`/api/metrics/activity`, `/api/metrics/tools`, `/api/metrics/task/:id`, `/api/metrics/invocations`). They do not scrape `.orbit/state/audit/v2_loop/` or diagnostics JSONL. Each invocation row records the workspace whose run produced it, taken from the recording runtime's job-run partition rather than from the ingested payload. Run ids are only unique within a workspace, so listings filtered by `job_run_id`, the reliability counts, and the activity/tool aggregates match on that workspace; legacy rows the store could not attribute to exactly one workspace match neither. The provider ledger stays host-wide by contract.
+The dashboard metrics endpoints read knowledge usage from job-run state (`/api/metrics/knowledge`) and agent, tool, task, and invocation usage from the SQLite invocation store (`/api/metrics/activity`, `/api/metrics/tools`, `/api/metrics/task/:id`, `/api/metrics/invocations`). They do not scrape `.orbit/state/audit/v2_loop/` or diagnostics JSONL. Each invocation row records the workspace whose run produced it, taken from the recording runtime's job-run partition rather than from the ingested payload. Historical run ids can collide across workspaces, so listings filtered by `job_run_id`, the reliability counts, and the activity/tool aggregates match on that workspace; legacy rows the store could not attribute to exactly one workspace match neither. The provider ledger stays host-wide by contract.
 
 Reliability's count-only reads use a covering SQLite index on workspace, timestamp, run and activity, installed by the additive `invocation_reliability_window_index` migration. Because the store collects no planner statistics, SQLite also favours that covering index for lookups that bind only the workspace; the implement_one succeeded-candidate selection therefore pins its later-invocation probe to the workspace/run index, so each candidate reads its own run rather than the whole workspace [ORB-21827]. Catalog role projection reuses parsed roles only while all definition bytes and their precedence order remain unchanged; catalogs with diagnostics are parsed again so their diagnostics remain visible. Each request takes a fresh snapshot of definition bytes. The fleet endpoint shares one request-scoped read set across workspaces, so its initial snapshot walks and reads shared global and plugin definitions once per request. On a warm role-memo hit, that snapshot confirms the cached roles still match and avoids parsing each workspace's catalog again. On a cold or invalidated memo miss, each workspace's catalog is loaded and parsed independently. When the initial snapshot is readable and parsing returns no diagnostics, a fresh definition snapshot is read after parsing to check for edits before memoizing. Catalogs with diagnostics are not memoized, so their per-workspace parsing repeats on later requests. No read set is kept between requests [ORB-22422]. Each workspace's read and phase timings are logged at debug level. Latest-run reads and decoding still run on every request, including cache hits, so their errors remain visible. The memo holds at most 128 workspace entries; eviction only causes another parse.
 
