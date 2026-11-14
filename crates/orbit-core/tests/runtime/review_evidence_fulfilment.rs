@@ -1116,6 +1116,103 @@ fn a_custom_codeql_command_is_refused_with_the_published_script() {
     );
 }
 
+/// An admitted `codeql` command whose checked-out script lacks the executable
+/// bit (a `curl -o` download committed at 100644) is refused before spawning,
+/// naming the missing executable bit and its `chmod +x` remedy, instead of
+/// failing opaquely at spawn with `Permission denied`.
+#[test]
+fn an_admitted_codeql_script_without_the_executable_bit_is_refused_before_spawn() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::an_admitted_codeql_script_without_the_executable_bit_is_refused_before_spawn",
+    ) {
+        return;
+    }
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "an_admitted_codeql_script_without_the_executable_bit_is_refused_before_spawn",
+            &probe.detail,
+        );
+        return;
+    }
+    let (fixture, _hold) = held_non_executable(Stub::Clean, CODEQL);
+    configure_job(&fixture, 1, None);
+    let (_, output) = fulfil_once(&fixture);
+    assert_eq!(output["fulfilled"], false, "{output}");
+    assert_eq!(output["reason"], "command_failed", "{output}");
+    assert_eq!(output["retryable"], false, "{output}");
+    let detail = output["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("not executable"),
+        "the refusal names the missing executable bit: {detail}"
+    );
+    assert!(
+        detail.contains("chmod +x"),
+        "the refusal states the executable-bit remedy: {detail}"
+    );
+    assert!(
+        detail.contains("100755"),
+        "the refusal names the git mode the executable copy is committed as: {detail}"
+    );
+    let log = artifact(&fixture, EVIDENCE_LOG).expect("the refusal's log is attached");
+    assert_eq!(log["reason"], "command_failed");
+    assert_eq!(log["detail"].as_str(), Some(detail));
+    assert!(
+        stub_runs(&fixture).is_empty(),
+        "a non-executable script never spawns: {log}"
+    );
+    assert_still_held(&fixture, "non-executable codeql script");
+}
+
+/// Like [`held`], but the candidate commits the stub without the executable
+/// bit, as a `curl -o` download saved at 100644 would.
+fn held_non_executable(stub: Stub, command: &str) -> (Fixture, ReviewEvidenceHold) {
+    let mut fixture = Fixture::new_with_required_commands(&[command]);
+    install_substitute_worker(&fixture);
+    let script = fixture.repo.join("scripts/codeql-rust-local.sh");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, stub_script(stub)).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+    git(&fixture, &["add", "scripts"]);
+    git(
+        &fixture,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "stub codeql without the executable bit",
+        ],
+    );
+    fixture.admit();
+    fixture.put_report(&json!({
+        "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "incomplete", "summary": "Reviewed on macOS; the Linux CodeQL run is owed.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": command, "outcome": "not_run", "role": "required"},
+        ],
+        "external_evidence": [{
+            "kind": "codeql", "name": "Rust CodeQL (Linux)", "command": command, "artifact": EVIDENCE,
+        }],
+        "escalation": "A Linux CodeQL run is owed",
+    }));
+    run_review_pipeline(&fixture);
+    let hold: ReviewEvidenceHold = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .expect("the review settled into an evidence hold")
+            .content,
+    )
+    .unwrap();
+    std::fs::write(fixture.repo.join("candidate.txt"), "later\n").unwrap();
+    git(&fixture, &["commit", "-q", "-am", "moved on"]);
+    assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), hold.candidate.commit);
+    (fixture, hold)
+}
+
 fn assert_codeql_refusal_contract(detail: &str) {
     assert!(
         detail.contains(PUBLISHED_CODEQL_SCRIPT),
@@ -1132,6 +1229,18 @@ fn assert_codeql_refusal_contract(detail: &str) {
     assert!(
         detail.contains("exactly one query selector"),
         "the refusal names the selector contract: {detail}"
+    );
+    assert!(
+        detail.contains("chmod +x"),
+        "the refusal states the executable-bit step a download needs: {detail}"
+    );
+    assert!(
+        detail.contains("executable"),
+        "the refusal names the executable bit the direct exec requires: {detail}"
+    );
+    assert!(
+        detail.contains("100755"),
+        "the refusal names the git mode the executable copy is committed as: {detail}"
     );
     assert!(
         detail.contains("A custom command is not fulfilled"),

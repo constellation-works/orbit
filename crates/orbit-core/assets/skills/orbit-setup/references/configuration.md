@@ -829,7 +829,10 @@ A `codeql` rule the built-in fulfilment runs must name
 `--toolchain <version>`, then exactly one query selector, as in the example.
 Download that script from
 <https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
-and save it at `scripts/codeql-rust-local.sh` in the workspace.
+and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it
+executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755):
+the fulfilment executes that path directly, so a copy saved without the
+executable bit cannot run.
 Configuration accepts any non-empty `codeql` command, and a custom command
 is not fulfilled by the built-in path: the hold stays, and the refusal names
 this contract and that download.

@@ -265,6 +265,26 @@ impl OrbitRuntime {
             "ORBIT_SCRATCH_DIR".to_string(),
             scratch.to_string_lossy().into_owned(),
         ));
+        // A download saved without the executable bit (for example `curl -o`
+        // of the published script, mode 0664) would fail at spawn with an
+        // opaque `Permission denied`. Refuse before spawning with the remedy,
+        // naming the missing executable bit explicitly.
+        #[cfg(unix)]
+        {
+            let script = checkout.join(CODEQL_SCRIPT);
+            if let Ok(metadata) = std::fs::metadata(&script) {
+                use std::os::unix::fs::PermissionsExt;
+                if metadata.permissions().mode() & 0o111 == 0 {
+                    run.refusal = Some(FulfilmentRefusal::CommandFailed);
+                    run.detail = format!(
+                        "`{CODEQL_SCRIPT}` in the evidence checkout is not executable: \
+                         make the workspace copy executable (`chmod +x {CODEQL_SCRIPT}`, \
+                         committed as mode 100755) so the fulfilment can execute it directly"
+                    );
+                    return run;
+                }
+            }
+        }
         #[cfg(target_os = "linux")]
         let outcome = {
             let request = ExecRequest {
@@ -432,14 +452,19 @@ pub(super) fn admitted_codeql_args(command: &str) -> Result<Vec<String>, String>
 
 /// Why `command` is not run, including the admitted shape and where a
 /// consumer obtains [`CODEQL_SCRIPT`]. The workspace-relative program is the
-/// command contract; the URL is the copy to install there.
+/// command contract; the URL is the copy to install there. A download saved
+/// without the executable bit cannot run: the fulfilment executes the script
+/// path directly, so the remedy names `chmod +x` explicitly.
 fn codeql_command_refusal(command: &str, why: &str) -> String {
     format!(
         "`{command}` is not an admitted CodeQL command: {why}. \
          The built-in fulfilment admits only `{CODEQL_SCRIPT}` with optional \
          `--ram <mib>` and `--toolchain <version>` and exactly one query selector. \
          Obtain the script from {CODEQL_SCRIPT_SOURCE} and place it at `{CODEQL_SCRIPT}` \
-         in the workspace. A custom command is not fulfilled"
+         in the workspace, then make it executable (`chmod +x {CODEQL_SCRIPT}`, \
+         committed as mode 100755): the fulfilment executes that path directly, \
+         so a copy saved without the executable bit cannot run. \
+         A custom command is not fulfilled"
     )
 }
 
