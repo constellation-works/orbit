@@ -105,9 +105,8 @@ not.
 the invocation store and writes nothing. Each dashboard server shares one
 computation per live workspace runtime and canonical window for 90 seconds,
 including concurrent requests. Omitted `window` and `window=all` share an
-entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired
-`GET /api/scoreboard` returns the same body with `Deprecation` and `Sunset`
-headers until 2026-11-12. Files left under `state/scoreboard/` are never read.
+entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired `GET /api/scoreboard` alias was removed after its 2026-11-12
+sunset and now returns 404. Files left under `state/scoreboard/` are never read.
 
 Cross-run incident grouping tokenizes messages once and incrementally refreshes
 only citations affected by a fold. It preserves the existing fold order,

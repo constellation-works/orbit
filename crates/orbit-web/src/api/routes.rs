@@ -218,8 +218,6 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .route("/auto-tasks/mint", post(auto_tasks::mint_auto_task))
         .route("/cost", get(cost::cost))
-        // [ORB-15922] Deprecated alias for /cost; delete after 2026-11-12.
-        .route("/scoreboard", get(cost::scoreboard))
         .route("/metrics/knowledge", get(metrics::knowledge_metrics))
         .route("/metrics/activity", get(metrics::activity_metrics))
         .route("/metrics/tools", get(metrics::tool_metrics))
