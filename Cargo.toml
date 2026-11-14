@@ -41,7 +41,7 @@ license = "MIT"
 # MSRV [ORB-10010]: edition 2024 requires >= 1.85; the highest `rust-version`
 # among locked dependencies is 1.88 (time, cookie_store, ort), and workspace
 # code uses the file-locking API (`File::unlock`) stabilized in 1.89. Enforced
-# by the `msrv` job in .github/workflows/ci.yml (keep its MSRV env var in sync).
+# by the `msrv` job in .github/workflows/msrv.yml (keep its MSRV env var in sync).
 rust-version = "1.89"
 
 # Workspace-wide lint config. Each crate opts in via `[lints] workspace = true`.
