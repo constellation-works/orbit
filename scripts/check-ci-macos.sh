@@ -308,9 +308,10 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
     The build is what `cargo nextest run --workspace --bins --tests`
     runs, plus examples so the folded all-targets lint covers them. Listing
     still selects only the binaries the workflow filters name. Doctests are
-    not listed (the per-package path includes them); the guard only needs
-    >= 1 match. No `--lib`: it overrides `[lib] test = false`; `--tests`
-    selects library unit tests whose test flag is true.
+    not listed, because `[lib] doctest = false` disables them workspace-wide;
+    the guard only needs >= 1 match. No `--lib`: it overrides
+    `[lib] test = false`; `--tests` selects library unit tests whose test flag
+    is true.
     """
     metadata = run_listing(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
@@ -322,8 +323,8 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
     selection = ["--workspace"]
     if selected_packages:
         selection = [argument for name in selected_packages for argument in ("-p", name)]
-    # The all-targets lint flags come from the shared wrapper. The nextest run,
-    # doctests and the sandbox gate use it too, so they reuse these artifacts.
+    # The all-targets lint flags come from the shared wrapper. The nextest run
+    # and the sandbox gate use it too, so they reuse these artifacts.
     build = run_listing(
         [str(repo_root / "scripts/with-test-build-lint.sh"),
          "cargo", "test", *selection, "--bins", "--tests", "--examples",

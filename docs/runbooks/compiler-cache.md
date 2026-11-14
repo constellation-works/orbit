@@ -155,10 +155,13 @@ compiles `--lib --bins --tests --examples` with
 `CLIPPY_ARGS` on `__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those
 arguments, so a space-separated value is one rustc argument and does not apply
 the flags. `scripts/with-test-build-lint.sh` holds that environment. The
-nextest listing and archive, the doctests and the Linux sandbox gate run
+nextest listing and archive and the Linux sandbox gate run
 through it too: Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and the
 `CLIPPY_ARGS` value `clippy-driver` tracks, so under any other environment
-each would recompile every workspace member. `make ci-lint` still runs
+each would recompile every workspace member. Workspace doctests are disabled
+(`[lib] doctest = false`), so no doctest command runs;
+`scripts/check-doctest-fences.sh` statically fails any doc fence that rustdoc
+would run unless it is tagged `ignore`. `make ci-lint` still runs
 production Clippy and `cargo clippy --all-targets`. Keep the four native
 delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
 `make ci-test-affected`) and the ordinary hosted required checks.
