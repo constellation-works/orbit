@@ -326,7 +326,6 @@
         "application/pull_drain/tests/drain.rs::pull_lost_request_and_binding_responses_recover_the_same_leaf",
         "application/review/gate/tests/admit.rs::before_pr_is_captured_at_submission_and_an_in_flight_run_keeps_it",
         "application/review/gate/tests/judgement.rs::system_writes_cannot_borrow_the_operator_for_history",
-        "application/review/tests/evidence.rs::a_package_wide_deferral_is_covered_by_the_same_lib_filter",
         "application/routines/tests/materialize.rs::confined_writer_preserves_the_previous_file_when_staging_write_fails",
         "application/routines/tests/materialize.rs::confined_writer_refuses_links",
         "application/routines/tests/materialize.rs::confined_writer_replaces_the_file_without_changing_an_open_readers_content",

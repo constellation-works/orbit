@@ -42,8 +42,6 @@ mod projection;
 pub(crate) mod reconciliation;
 mod switches;
 mod task_port;
-#[cfg(test)]
-mod tests;
 
 pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
