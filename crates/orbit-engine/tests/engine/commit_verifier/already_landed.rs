@@ -88,6 +88,135 @@ fn claimed_action(
     (host, result)
 }
 
+/// The ORB-24605 sequence: a claimed leaf verifies already-landed evidence
+/// against a task with no `regression_from` relation, returns the culprit in
+/// its output, and the owner records that relation on acceptance. Re-verifying
+/// on the owner must accept exactly that recording, and refuse any relation
+/// change the handoff did not supply [ORB-24696].
+fn claimed_commit_lands_after_owner_records_supplied_regression_from() {
+    use orbit_types::task::{TaskRelation, TaskRelationType};
+    let relation = |relation_type: TaskRelationType, target: &str| TaskRelation {
+        relation_type,
+        target: target.to_string(),
+        regression: None,
+    };
+    let regression = |target: &str| relation(TaskRelationType::RegressionFrom, target);
+    type Case = (
+        &'static str,
+        Vec<TaskRelation>,
+        &'static [&'static str],
+        bool,
+    );
+    let cases: &[Case] = &[
+        (
+            "owner records the supplied culprit",
+            vec![regression("ORB-24427")],
+            &["ORB-24427"],
+            true,
+        ),
+        (
+            "owner records a culprit the handoff did not supply",
+            vec![regression("ORB-24428")],
+            &["ORB-24427"],
+            false,
+        ),
+        (
+            "a different relation type to the supplied target",
+            vec![relation(TaskRelationType::SpawnedFrom, "ORB-24427")],
+            &["ORB-24427"],
+            false,
+        ),
+        (
+            "supplied culprit plus an unsupplied one",
+            vec![regression("ORB-24427"), regression("ORB-24428")],
+            &["ORB-24427"],
+            false,
+        ),
+        (
+            "no supplied culprit at all",
+            vec![regression("ORB-24427")],
+            &[],
+            false,
+        ),
+    ];
+    let temp = tempdir().unwrap();
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    for (case, recorded, supplied, lands) in cases {
+        let (report, logs) = mixed_evidence(&head);
+        let (host, result) = claimed_action_after_owner_records(
+            temp.path(),
+            &head,
+            report,
+            logs,
+            recorded.clone(),
+            supplied,
+        );
+        if *lands {
+            let result = result.unwrap_or_else(|error| {
+                panic!("{case} must land without already_landed_unverified, got: {error}")
+            });
+            assert_eq!(result["decision"], "verified_already_landed", "{case}");
+            assert_eq!(host.artifacts.lock().unwrap()[TASK_ID].len(), 4, "{case}");
+        } else {
+            let message = result.expect_err(case).to_string();
+            assert!(
+                message.contains("already_landed_unverified")
+                    && message.contains("scope.relations"),
+                "{case} must still be refused at scope.relations, got: {message}"
+            );
+        }
+        assert_eq!(git_head(temp.path()), head, "{case}");
+    }
+}
+
+/// [`claimed_action`] with the owner's task already carrying `recorded`
+/// relations and the implementer's output carrying `supplied` culprits.
+fn claimed_action_after_owner_records(
+    repo: &Path,
+    head: &str,
+    report: Value,
+    logs: Vec<(&'static str, Value)>,
+    recorded: Vec<orbit_types::task::TaskRelation>,
+    supplied: &[&str],
+) -> (VerifierHost, Result<Value, OrbitError>) {
+    let mut host = VerifierHost::new(repo, fixture_task());
+    host.tasks
+        .lock()
+        .unwrap()
+        .get_mut(TASK_ID)
+        .unwrap()
+        .relations = recorded;
+    host.worker = Some(WorkerInvocation {
+        owner_machine_id: "owner".into(),
+        owner_workspace_id: "ws_owner".into(),
+        owner_destination: "owner/ws_owner".into(),
+        task_id: TASK_ID.into(),
+        claim_id: "claim-verifier".into(),
+        execution: ExecutionLocation {
+            machine_id: "follower".into(),
+            machine_name: None,
+        },
+        bound_run_id: RUN_ID.into(),
+    });
+    let scratch = repo.join(".orbit/tmp");
+    fs::write(repo.join(".git/info/exclude"), ".orbit/tmp/\n").unwrap();
+    fs::create_dir_all(&scratch).unwrap();
+    let mut references = Vec::new();
+    for (path, content) in std::iter::once(("already-landed.json", report)).chain(logs) {
+        fs::write(scratch.join(path), serde_json::to_vec(&content).unwrap()).unwrap();
+        references.push(json!({"path": path, "source_path": format!(".orbit/tmp/{path}")}));
+    }
+    let mut input = commit_input(repo, head);
+    input["implementation"] = json!({
+        "execution_summary": "Outcome: success\nVerified existing delivery.",
+        "no_diff_artifacts": references,
+        "regression_from": supplied,
+    });
+    let result = action(&host, &input);
+    (host, result)
+}
+
 fn claimed_commit_accepts_required_checks_with_controls_and_diagnostics() {
     let temp = tempdir().unwrap();
     init_git_repo(temp.path());
@@ -212,6 +341,10 @@ fn claimed_evidence_contracts_1() {
             (
                 "claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence",
                 claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence,
+            ),
+            (
+                "claimed_commit_lands_after_owner_records_supplied_regression_from",
+                claimed_commit_lands_after_owner_records_supplied_regression_from,
             ),
         ]);
     });

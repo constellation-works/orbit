@@ -270,7 +270,17 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
         ));
     }
     let task = host.get_task(&handoff.task_id)?;
-    verify_clean_tree_handoff_at_revision(host, &task, workspace, &handoff.run_id, &report)?;
+    // The owner recorded the handoff's own `regression_from` culprits when it
+    // accepted the handoff; that recording must not invalidate the leaf's
+    // already-landed verification [ORB-24696].
+    verify_clean_tree_handoff_at_revision(
+        host,
+        &task,
+        workspace,
+        &handoff.run_id,
+        &report,
+        &handoff.regression_from,
+    )?;
     Ok(HandoffCandidate {
         candidate: base.clone(),
         base,

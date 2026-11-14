@@ -63,6 +63,52 @@ pub(super) trait Verifier {
         tested_head: &str,
     ) -> Result<Value, OrbitError>;
 
+    /// [`Self::verify_at_revision`] allowing the owner's recording of the
+    /// `regression_from` relations the handoff itself supplied [ORB-24696].
+    /// Only the already-landed verifier's scope comparison uses them.
+    fn verify_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        tested_head: &str,
+        _supplied_regression_from: &[String],
+    ) -> Result<Value, OrbitError> {
+        Self::verify_at_revision(host, task, workspace, run_id, tested_head)
+    }
+
+    /// [`Self::verify`] through
+    /// [`Self::verify_at_revision_with_supplied_regression_from`].
+    fn verify_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        tested_head: &str,
+        supplied_regression_from: &[String],
+    ) -> Result<Value, OrbitError> {
+        if git_output(workspace, &["rev-parse", "HEAD"])? != tested_head {
+            return Err(Self::refused(Self::SPEC.head_changed));
+        }
+        if !git_output(
+            workspace,
+            &["status", "--porcelain", "--untracked-files=all"],
+        )?
+        .is_empty()
+        {
+            return Err(Self::refused(Self::SPEC.dirty_tree));
+        }
+        Self::check_artifacts(host, task)?;
+        Self::verify_at_revision_with_supplied_regression_from(
+            host,
+            task,
+            workspace,
+            run_id,
+            tested_head,
+            supplied_regression_from,
+        )
+    }
+
     /// Promotion and completion require the exact evidence accepted at commit.
     fn verify_handoff<H: RuntimeHost + ?Sized>(
         host: &H,
@@ -87,8 +133,35 @@ pub(super) trait Verifier {
         run_id: &str,
         checkpoint: &Value,
     ) -> Result<(), OrbitError> {
+        Self::verify_handoff_at_revision_with_supplied_regression_from(
+            host,
+            task,
+            workspace,
+            run_id,
+            checkpoint,
+            &[],
+        )
+    }
+
+    /// [`Self::verify_handoff_at_revision`] allowing the owner's recording of
+    /// the `regression_from` relations the handoff itself supplied.
+    fn verify_handoff_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        checkpoint: &Value,
+        supplied_regression_from: &[String],
+    ) -> Result<(), OrbitError> {
         let head = checkpoint["base_sha"].as_str().unwrap_or_default();
-        let checked = Self::verify_at_revision(host, task, workspace, run_id, head)?;
+        let checked = Self::verify_at_revision_with_supplied_regression_from(
+            host,
+            task,
+            workspace,
+            run_id,
+            head,
+            supplied_regression_from,
+        )?;
         Self::compare_checkpoint(checkpoint, &checked)
     }
 

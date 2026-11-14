@@ -704,6 +704,31 @@ fn a_claimed_implementers_regression_culprit_is_recorded_at_handoff() {
     );
 }
 
+/// The ORB-24605 sequence end to end: a claimed already-landed leaf returns
+/// its culprit, the owner records that relation on acceptance, and landing
+/// then completes without `already_landed_unverified` [ORB-24696].
+fn a_claimed_already_landed_handoff_lands_after_owner_records_its_regression_culprit() {
+    let mut fixture = CleanLeaf::new(true, "done");
+    let culprit = add_regression_culprit(
+        &fixture,
+        "The delivery that broke CI",
+        "Landed the failing change.",
+    );
+    fixture.input["implementation"]["regression_from"] = json!([culprit.clone()]);
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    assert_eq!(handoff.regression_from, vec![culprit.clone()]);
+    fixture.settle_review(&handoff);
+    assert_eq!(
+        fixture.pair.owner_task(&fixture.task)["relations"],
+        json!([{"type": "regression_from", "target": culprit}]),
+        "the owner records the culprit when it accepts the handoff"
+    );
+    let landed = fixture.land(&handoff);
+    assert_eq!(landed["evidence"]["external_merge"], false, "{landed}");
+    fixture.assert_status("done");
+    fixture.assert_no_blocked();
+}
+
 fn no_diff_retains_owner_completion_authority() {
     let fixture = CleanLeaf::new(false, "review");
     let handoff = fixture.prepare_handoff();
@@ -2098,6 +2123,7 @@ crate::scenario_table!(
     no_diff_retains_owner_completion_authority_scenarios,
     no_diff_retains_owner_completion_authority,
     a_claimed_implementers_regression_culprit_is_recorded_at_handoff,
+    a_claimed_already_landed_handoff_lands_after_owner_records_its_regression_culprit,
     owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_without_blocking,
     claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs
 );
