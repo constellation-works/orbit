@@ -283,7 +283,14 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
         "--json",
     ]);
     let add_description = add_detail["description"].as_str().unwrap_or_default();
-    for expected in ["guarded creation", "fewer fields"] {
+    for expected in [
+        "guarded creation",
+        "'title'",
+        "'description'",
+        "'acceptance_criteria'",
+        "'priority'",
+        "'crew'",
+    ] {
         assert!(
             add_description.contains(expected),
             "ORB-24434: add request_id description must mention {expected}: {add_description}"
@@ -298,7 +305,14 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
         "--json",
     ]);
     let update_description = update_detail["description"].as_str().unwrap_or_default();
-    for expected in ["guarded update", "fewer fields"] {
+    for expected in [
+        "guarded update",
+        "'verdict'",
+        "'complete'",
+        "'comment'",
+        "'status'",
+        "ordinary update",
+    ] {
         assert!(
             update_description.contains(expected),
             "ORB-24434: update request_id description must mention {expected}: {update_description}"
