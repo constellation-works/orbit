@@ -11,12 +11,19 @@ use crate::provider_limit::{
     CrewSelection, ProviderLimitBudget, ProviderLimitExplicitCrews, ProviderLimitPolicy,
     ProviderLimitTarget, UsagePressurePolicy, stored_provider_limit_override,
 };
+use crate::regression_layers::RegressionLayerDefinition;
 
 impl ConfigSnapshot {
     /// The admitted `workflow.task_types`, in configured order.
     #[must_use]
     pub fn task_types(&self) -> &[TaskTypeDefinition] {
         &self.workflow_task_types
+    }
+
+    /// The admitted `workflow.regression_layers`, in configured order.
+    #[must_use]
+    pub fn regression_layers(&self) -> &[RegressionLayerDefinition] {
+        &self.workflow_regression_layers
     }
 }
 
