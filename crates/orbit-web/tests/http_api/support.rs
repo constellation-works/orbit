@@ -6,8 +6,13 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, TimeZone, Utc};
+use orbit_core::{
+    JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime, V2AuditEventInsertParams,
+};
+use orbit_types::workflow::{ChildDispatch, PipelineState};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
@@ -981,4 +986,407 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
 /// Run pending store migrations through the production open boundary.
 pub(super) fn upgrade_retention_analytics(fixture: &Fixture) {
     orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+}
+
+// --- Shared run-scenario fixture helpers ---
+
+pub(super) fn get(server: &Server, path: &str) -> Value {
+    json_ok(server.get(path))
+}
+
+pub(super) fn run_detail(server: &Server, run_id: &str) -> Value {
+    get(server, &format!("/api/runs/{run_id}"))
+}
+
+pub(super) fn list_rows(page: &Value) -> &[Value] {
+    page["items"].as_array().unwrap()
+}
+
+pub(super) fn run_ids(page: &Value) -> BTreeSet<String> {
+    list_rows(page)
+        .iter()
+        .map(|run| run["run_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+pub(super) fn id_set(ids: &[&str]) -> BTreeSet<String> {
+    ids.iter().map(|id| id.to_string()).collect()
+}
+
+pub(super) fn ws_id(fixture: &Fixture) -> String {
+    fixture.runtime.workspace_id().unwrap()
+}
+
+pub(super) fn store(fixture: &Fixture) -> orbit_store::Store {
+    fixture.runtime.sqlite_store().unwrap()
+}
+
+/// The one `v2_audit_events` insert shape every scenario seeds through.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn insert_audit(
+    fixture: &Fixture,
+    workspace: &str,
+    source: &str,
+    event_id: &str,
+    run_id: &str,
+    ts: DateTime<Utc>,
+    event_type: &str,
+    agent: &str,
+    parent: Option<&str>,
+    payload: Value,
+) {
+    fixture
+        .runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: workspace.into(),
+            event_id: event_id.into(),
+            source: source.into(),
+            schema_version: 1,
+            event_type: event_type.into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: agent.into(),
+            parent_event_id: parent.map(str::to_string),
+            workspace_path: None,
+            payload_json: payload.to_string(),
+        })
+        .unwrap();
+}
+
+/// [`insert_audit`] with the default source and the fixture agent.
+pub(super) fn insert_audit_default(
+    fixture: &Fixture,
+    workspace: &str,
+    event_id: &str,
+    run_id: &str,
+    ts: DateTime<Utc>,
+    event_type: &str,
+    payload: Value,
+) {
+    insert_audit(
+        fixture,
+        workspace,
+        "v2_envelope",
+        event_id,
+        run_id,
+        ts,
+        event_type,
+        "fixture",
+        None,
+        payload,
+    );
+}
+
+/// [`insert_audit_default`] in the fixture's own workspace.
+pub(super) fn insert_audit_here(
+    fixture: &Fixture,
+    event_id: &str,
+    run_id: &str,
+    ts: DateTime<Utc>,
+    event_type: &str,
+    payload: Value,
+) {
+    insert_audit_default(
+        fixture,
+        &ws_id(fixture),
+        event_id,
+        run_id,
+        ts,
+        event_type,
+        payload,
+    );
+}
+
+pub(super) fn make_job_run(
+    run_id: &str,
+    job_id: &str,
+    state: JobRunState,
+    at: DateTime<Utc>,
+    input: Option<Value>,
+) -> JobRun {
+    JobRun {
+        build: None,
+        run_id: run_id.into(),
+        job_id: job_id.into(),
+        attempt: 1,
+        state,
+        scheduled_at: at,
+        created_at: at,
+        started_at: Some(at),
+        finished_at: state.is_terminal().then_some(at),
+        duration_ms: None,
+        pid: None,
+        pid_start_time: None,
+        input,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    }
+}
+
+pub(super) fn write_state(fixture: &Fixture, run: &JobRun, state: &PipelineState) {
+    fixture.runtime.write_run_state(&run.run_id, state).unwrap();
+}
+
+pub(super) fn pipeline_for(run: &JobRun) -> PipelineState {
+    PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}))
+}
+
+/// Build a fresh `PipelineState` for `run`, mutate it, and persist it.
+pub(super) fn state_with(fixture: &Fixture, run: &JobRun, edit: impl FnOnce(&mut PipelineState)) {
+    let mut state = pipeline_for(run);
+    edit(&mut state);
+    write_state(fixture, run, &state);
+}
+
+pub(super) fn at(hour: u32, minute: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 10, 10, hour, minute, 0).unwrap()
+}
+
+pub(super) fn dispatch(child: &JobRun) -> ChildDispatch {
+    dispatch_ids(&child.run_id, &child.job_id)
+}
+
+pub(super) fn dispatch_ids(run_id: &str, job_id: &str) -> ChildDispatch {
+    child_dispatch(run_id, job_id, "leaf_invoke", false, false, Utc::now())
+}
+
+/// A submitted child dispatch with an explicit step and flags.
+pub(super) fn child_dispatch(
+    run_id: &str,
+    job_id: &str,
+    step: &str,
+    wait: bool,
+    coordinator: bool,
+    at: DateTime<Utc>,
+) -> ChildDispatch {
+    ChildDispatch::submitted(
+        run_id.into(),
+        job_id.into(),
+        step.into(),
+        wait,
+        coordinator,
+        at,
+    )
+}
+
+pub(super) fn operations(trace: &[Value], name: &str) -> usize {
+    trace
+        .iter()
+        .filter(|event| event["span"]["name"] == name)
+        .count()
+}
+
+/// Record `child` as a dispatched child of `parent`.
+pub(super) fn link_child(fixture: &Fixture, parent: &JobRun, child: &JobRun) {
+    state_with(fixture, parent, |state| {
+        state.record_child_dispatch(dispatch(child))
+    });
+}
+
+/// A `test.event` audit row as the provider and log scenarios seed them.
+pub(super) fn insert_test_event(
+    fixture: &Fixture,
+    workspace: &str,
+    run_id: &str,
+    event_id: &str,
+    ts: &str,
+    parent: Option<&str>,
+    payload: Value,
+) {
+    let ts = ts.parse::<DateTime<Utc>>().unwrap();
+    insert_audit(
+        fixture,
+        workspace,
+        "v2_envelope",
+        event_id,
+        run_id,
+        ts,
+        "test.event",
+        "codex",
+        parent,
+        payload,
+    );
+}
+
+pub(super) fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> OrbitRuntime {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = id.into();
+    workspace.name = name.into();
+    let repo = fixture.path(name);
+    let work = repo.join(".orbit");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .unwrap();
+    let checkout = WorkspaceCheckout::owner(id.into(), repo, work);
+    registry.workspaces.push(workspace.clone());
+    registry.checkouts.push(checkout.clone());
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap()
+}
+
+/// A successful `task_pr_pipeline` run for `ORB-2` in another workspace,
+/// `offset_ms` after `created` (the cross-workspace list cases).
+pub(super) fn seed_other_run(
+    runtime: &OrbitRuntime,
+    id: &str,
+    offset_ms: i64,
+    created: DateTime<Utc>,
+) {
+    let at = created + chrono::Duration::milliseconds(offset_ms);
+    let run = make_job_run(
+        id,
+        "task_pr_pipeline",
+        JobRunState::Success,
+        at,
+        Some(json!({"task_id": "ORB-2"})),
+    );
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+}
+
+/// A step record with no timing yet; callers set the fields they seed.
+pub(super) fn run_step(
+    target_type: JobTargetType,
+    target_id: &str,
+    state: JobRunState,
+) -> JobRunStep {
+    JobRunStep {
+        lock_wait_ms: None,
+        step_index: 0,
+        target_type,
+        target_id: target_id.into(),
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        exit_code: None,
+        agent_response_json: None,
+        state,
+        error_code: None,
+        failure_code: None,
+        error_message: None,
+    }
+}
+
+pub(super) fn save_record_step(fixture: &Fixture, run: &JobRun, step: &JobRunStep) {
+    store(fixture)
+        .upsert_job_run_step_for_workspace(&ws_id(fixture), &run.run_id, step)
+        .unwrap();
+}
+
+/// One `step_started` or `step_finished` event in a run's audit trail.
+pub(super) fn insert_step_audit(
+    fixture: &Fixture,
+    run_id: &str,
+    step_id: &str,
+    body_kind: &str,
+    minute: u32,
+) {
+    let ts = at(6, minute);
+    let event_id = format!("evt-{run_id}-{step_id}-{body_kind}");
+    insert_audit_here(
+        fixture,
+        &event_id,
+        run_id,
+        ts,
+        "activity.progress",
+        json!({"event_id": event_id, "body_kind": body_kind, "step_id": step_id, "outcome": "success", "lock_wait_ms": 42, "ts": ts}),
+    );
+}
+
+pub(super) fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<Utc>) {
+    let payload = json!({
+        "schemaVersion": 1, "event_type": "run.cancelled", "event_id": format!("evt-{run_id}"), "ts": ts, "run_id": run_id,
+        "agent_identity": "not-the-actor", "body_kind": "run_cancelled", "actor": "on-call", "source": "cli",
+        "reason": "stopped after the gate hung", "previous_state": "running", "final_state": "cancelled",
+    });
+    insert_audit(
+        fixture,
+        &ws_id(fixture),
+        "v2_envelope",
+        &format!("evt-{run_id}"),
+        run_id,
+        ts,
+        "run.cancelled",
+        "not-the-actor",
+        None,
+        payload,
+    );
+}
+
+pub(super) fn pull_destination() -> orbit_store::contracts::PullDestination {
+    orbit_store::contracts::PullDestination {
+        owner_machine_id: "hm_owner".into(),
+        owner_workspace_id: "ws_owner".into(),
+        selector: "owner/workspace".into(),
+        execution_machine_id: "hm_follower".into(),
+    }
+}
+
+pub(super) fn pull_request(
+    run: &JobRun,
+    request_id: &str,
+) -> orbit_store::contracts::AdmissionRequest {
+    serde_json::from_value(json!({
+        "request_id": request_id, "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
+        "run_context": { "run_id": run.run_id, "job_name": run.job_id, "machine_name": "follower" },
+        "ship": { "mode": "pr", "base_branch": "agent-main", "landing_branch": "agent-main", "completion": "review" },
+    })).unwrap()
+}
+
+/// Bind `task_id`'s run to another host in the task document store.
+pub(super) fn bind_task_run_to_host(fixture: &Fixture, task_id: &str, run_id: &str) {
+    use orbit_store::contracts::TaskDocumentUpdateParams;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    let documents = orbit_store::compose::workspace_coordinated_backends(
+        TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap(),
+        ws_id(fixture),
+        store(fixture),
+    )
+    .unwrap()
+    .task
+    .document;
+    documents
+        .update_task_document(
+            task_id,
+            TaskDocumentUpdateParams {
+                actor: "fixture".into(),
+                job_run_id: Some(Some(run_id.into())),
+                job_run_machine: Some(Some(orbit_types::task::ExecutionLocation {
+                    machine_id: "hm_follower_mini".into(),
+                    machine_name: Some("follower-mini".into()),
+                })),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+pub(super) fn persist_admission(
+    store: &orbit_store::Store,
+    workspace: &str,
+    request_id: &str,
+    admission: &orbit_store::contracts::LocalPullAdmission,
+) {
+    store.connection().lock().unwrap().execute(
+        "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",
+        (admission.leaf_run_id.as_deref(), serde_json::to_string(admission).unwrap(), workspace, request_id),
+    ).unwrap();
 }
