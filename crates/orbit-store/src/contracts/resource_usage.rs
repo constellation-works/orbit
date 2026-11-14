@@ -345,7 +345,11 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
     ) -> Result<u64, OrbitError>;
 
     /// Delete at most `limit` of the rows [`Self::resource_minutes_older_than`]
-    /// counts, in one statement. Returns how many went.
+    /// counts. Selection takes no write lock; deletion uses row keys in one
+    /// short transaction. For a full sweep, select once with
+    /// [`super::StoreRetentionBackend::resource_retention_candidates`] and
+    /// delete those candidates in batches instead of ranking on every batch.
+    /// Returns how many went.
     fn prune_resource_minutes_batch(
         &self,
         table: ResourceMinutesTable,

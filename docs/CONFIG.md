@@ -2816,6 +2816,14 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 | `seeding.auto_tasks` | `all` | Which shipped default auto-tasks this workspace seeds: `"all"`, `"none"` or a list of names. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
 | `decision_channel.enabled` | `false` | Raise decision requests for work held on a human decision. |
 
+Store retention selects resource-history candidates once on a read connection,
+including the deliveries kept for each profile key and crew model. It deletes
+those candidates by key in batches of at most 1,000 rows, yielding 20 ms between
+batches; history ranking holds no writer lock. The blob-reference scan stops
+at each table's initial maximum rowid, while pending markers and the 24-hour
+blob grace protect concurrent publications. Freed database pages remain
+available for reuse; retention does not run `VACUUM`.
+
 Several housekeeping bounds are fixed [ORB-22808]; their former keys are [deprecated](#validation-and-errors):
 
 - **CI failure suppression.** A CI sweep finding archived or rejected without `covered_by` suppresses recurrences of its evidenced cause for 6 hours from that status event. A recurrence whose retained diagnostic differs files again. One whose cause cannot be established stays held: within the window for a plain archive, and with no expiry under a cover. An explicit task or GitHub PR cover holds that cause while open, or until its landed commit is observed in the failing checkout; if it fails to hold, later completed repairs still own duplicates or defer older failures until their landing is tested. (`ci_failure.operator_suppression_hours`)

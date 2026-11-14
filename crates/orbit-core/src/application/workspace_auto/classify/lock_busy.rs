@@ -41,7 +41,10 @@ const LOCK_BUSY_PASS_CODE: &str = orbit_common::LOCK_BUSY_ERROR_CODE;
 /// pass that completes resets it. At [`TRANSIENT_PASS_FAILURE_LIMIT`] the
 /// pass fails as before, naming the lock and the count, so a store that
 /// stays locked still ends the drain. A pass outside a drain, or one whose
-/// deferral cannot be recorded, has no count to bound it and fails at once.
+/// deferral cannot be recorded for any reason other than lock contention,
+/// fails at once. If SQLite also holds out the diagnostic write, the drain
+/// still waits and retries within its existing window; it cannot count that
+/// pass durably until the store accepts writes again.
 pub(super) fn defer_lock_busy_pass(
     runtime: &OrbitRuntime,
     action: &str,
@@ -76,8 +79,13 @@ pub(super) fn defer_lock_busy_pass(
             Ok(())
         });
     let failures = match (recorded, failures) {
-        (Ok(RunStateUpdate::Updated), Some(failures)) => failures,
+        (Ok(RunStateUpdate::Updated), Some(failures)) => Some(failures),
         (Ok(_), _) => return Err(error.into()),
+        (Err(record_error), _) if record_error.is_lock_busy() => {
+            tracing::warn!(target: "orbit.core.job_run", run_id, error = %record_error,
+                "busy store also held out the deferred-pass diagnostic; the next pass retries");
+            None
+        }
         (Err(record_error), _) => {
             tracing::warn!(
                 target: "orbit.core.job_run",
@@ -88,7 +96,7 @@ pub(super) fn defer_lock_busy_pass(
             return Err(error.into());
         }
     };
-    if failures >= TRANSIENT_PASS_FAILURE_LIMIT {
+    if let Some(failures) = failures.filter(|failures| *failures >= TRANSIENT_PASS_FAILURE_LIMIT) {
         tracing::error!(
             target: "orbit.core.job_run",
             run_id,
@@ -104,7 +112,7 @@ pub(super) fn defer_lock_busy_pass(
     tracing::warn!(
         target: "orbit.core.job_run",
         run_id,
-        consecutive_pass_failures = failures,
+        consecutive_pass_failures = ?failures,
         limit = TRANSIENT_PASS_FAILURE_LIMIT,
         backoff_seconds,
         error = %reason,
@@ -120,6 +128,7 @@ pub(super) fn defer_lock_busy_pass(
             "code": LOCK_BUSY_PASS_CODE,
             "reason": reason,
             "consecutive_pass_failures": failures,
+            "recorded": failures.is_some(),
             "limit": TRANSIENT_PASS_FAILURE_LIMIT,
         },
     }))
