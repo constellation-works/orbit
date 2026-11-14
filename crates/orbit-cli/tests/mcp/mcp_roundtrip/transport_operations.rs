@@ -1397,6 +1397,80 @@ fn stdio_task_add_accepts_source_task_id_at_creation() {
         shown["source_task_id"], source,
         "one add call must persist the regression source: {shown}"
     );
+    // Both fields naming the same target merge into the single classified
+    // link from `relations`, not a duplicate or an unclassified edge.
+    let merged = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title":"Classified regression",
+            "description":"Disposable defect filed with both source fields.",
+            "complexity":"low",
+            "model":"codex",
+            "source_task_id":source,
+            "relations":[{
+                "type":"regression_from",
+                "target":source,
+                "regression":{"nature":"defect_in_new","escape":"no_test","severity":"low","sites":["file:crates/orbit-store/src/repository/task/v2/relations.rs"]}
+            }],
+        }),
+    );
+    let merged_id = merged["id"].as_str().expect("merged bug id");
+    let merged_shown = client.call_tool_ok("orbit_task_show", json!({"id":merged_id}));
+    assert_eq!(
+        merged_shown["source_task_id"], source,
+        "the merged task must read back the shared regression source: {merged_shown}"
+    );
+    let merged_relations = merged_shown["relations"]
+        .as_array()
+        .expect("merged relations list");
+    assert_eq!(
+        merged_relations.len(),
+        1,
+        "both fields for one target must store one regression link: {merged_shown}"
+    );
+    assert_eq!(merged_relations[0]["type"], "regression_from");
+    assert_eq!(merged_relations[0]["target"], source);
+    assert_eq!(
+        merged_relations[0]["regression"]["nature"], "defect_in_new",
+        "the relations classification must survive the merge: {merged_shown}"
+    );
+    assert_eq!(merged_relations[0]["regression"]["escape"], "no_test");
+    assert_eq!(merged_relations[0]["regression"]["severity"], "low");
+    assert_eq!(
+        merged_relations[0]["regression"]["sites"],
+        json!(["file:crates/orbit-store/src/repository/task/v2/relations.rs"])
+    );
+    // Both fields naming different targets are refused, naming both fields,
+    // rather than storing divergent edges.
+    let other = client.add_task("Other culprit", "Disposable second origin.");
+    let conflict = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title":"Conflicting regression",
+            "description":"Disposable conflicting filing.",
+            "complexity":"low",
+            "model":"codex",
+            "source_task_id":source,
+            "relations":[{
+                "type":"regression_from",
+                "target":other,
+                "regression":{"nature":"defect_in_new","escape":"no_test","severity":"low"}
+            }],
+        }),
+    );
+    let conflict_message = conflict["message"].as_str().expect("MCP error message");
+    assert!(
+        conflict_message.contains("source_task_id"),
+        "the conflict error must name `source_task_id`: {conflict_message}"
+    );
+    assert!(
+        conflict_message.contains("relations"),
+        "the conflict error must name `relations`: {conflict_message}"
+    );
+    assert!(
+        conflict_message.contains("regression_from"),
+        "the conflict error must name the `regression_from` relation: {conflict_message}"
+    );
     let refused = client.call_tool_err(
         "orbit_task_add",
         json!({
