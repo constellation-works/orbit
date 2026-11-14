@@ -47,6 +47,8 @@ class AwaitJobsTests(unittest.TestCase):
         self.raw_job_body = None
         # Optional (page, elapsed) -> (status, headers, JSON payload or None).
         self.artifact_reply = None
+        # Optional elapsed -> (status, headers, jobs list | raw str | None).
+        self.job_reply = None
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -66,6 +68,22 @@ class AwaitJobsTests(unittest.TestCase):
                         payload = None if produced is None else {"total_count": len(produced),
                                                                  "artifacts": produced}
                     body = b"" if payload is None else json.dumps(payload).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if fixture.job_reply is not None:
+                    status, headers, payload = fixture.job_reply(
+                        float(self.headers.get("X-Fixture-Time", "0")))
+                    if isinstance(payload, (str, bytes)):
+                        body = payload.encode() if isinstance(payload, str) else payload
+                    elif payload is None:
+                        body = b""
+                    else:
+                        body = json.dumps({"total_count": len(payload), "jobs": payload}).encode()
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json")
                     for name, value in headers.items():
@@ -587,6 +605,39 @@ finally:
             self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
             self.assertEqual(float((self.root / "elapsed").read_text()), 7)
             self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
+    def test_listing_unavailable_after_success_is_not_reported_as_in_progress(self):
+        calls = {"n": 0}
+
+        def reply(_elapsed):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return 200, {}, [job("Test build", "in_progress")]
+            return 403, {"X-RateLimit-Remaining": "0"}, '{"message": "API rate limit exceeded for installation"}'
+
+        self.job_reply = reply
+        result = self.wait([job("unused")], timeout="10", jobs=["Test build"],
+                           poll="1", virtual=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("listing has been unavailable since", result.stderr)
+        self.assertIn("consecutive failures", result.stderr)
+        self.assertIn("rate limit exceeded (HTTP 403)", result.stderr)
+        self.assertNotIn("Test build (in_progress)", result.stderr)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 10)
+
+    def test_rate_limit_reset_beyond_deadline_fails_promptly(self):
+        for headers in ({"X-RateLimit-Remaining": "0",
+                         "X-RateLimit-Reset": str(int(time.time()) + 3600)},
+                        {"Retry-After": "3600"}):
+            with self.subTest(headers=headers):
+                self.job_reply = lambda _elapsed, headers=headers: (403, headers, '{"message": "API rate limit exceeded for installation"}')
+                result = self.wait([job("unused")], timeout="30", jobs=["Test build"],
+                                   poll="1", virtual=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ci-await: rate limit:", result.stderr)
+                self.assertIn("rate limit exceeded (HTTP 403)", result.stderr)
+                self.assertNotIn("timed out after 30 s", result.stderr)
+                self.assertLess(float((self.root / "elapsed").read_text()), 30)
 
     def test_malformed_single_page_job_listing_retries_until_the_deadline(self):
         bodies = (

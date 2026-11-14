@@ -35,6 +35,22 @@ CLEANUP_SECONDS more), and the wait fails naming the unavailable listing. A
 listing that returns after expiry is not accepted as success: the wait fails
 with a timeout even when every awaited job succeeded.
 
+Failed listings never update the cached listing and are never success. The
+wait counts consecutive listing failures and, at the deadline, reports that
+the listing has been unavailable since the first of them, with the count and
+the last error, instead of reporting the last known job statuses as current.
+When a failed listing is rate limited (HTTP 403 or 429) and its
+Retry-After or, once the primary quota is exhausted, its X-RateLimit-Reset
+lies beyond the remaining budget, the wait fails at once with a distinct
+`ci-await: rate limit` message instead of sleeping out the budget.
+
+A 304 response is not a failed listing and cannot return a stale listing:
+it is the server's confirmation that the cached representation is still
+current, so a job completing changes the representation (and its ETag) and
+the next conditional request returns 200 with the new listing. Only that
+server-confirmed cached listing is reused; a listing obtained before later
+failures is never presented as the jobs' current status.
+
 With --step, a job also counts as done once its step of that name succeeds,
 while its later steps still run. The shard jobs wait this way for the test
 build's archive upload, not for the partition guard after it. A step that
@@ -132,6 +148,54 @@ class JobListingPoller:
         self.not_modified = 0
         self.server_minimum = 0
         self.primary_remaining = 1000
+        self.consecutive_listing_failures = 0
+        self.listing_unavailable_since = None
+        self.last_listing_error = None
+        self.rate_limit_wait_seconds = None
+
+    def _note_listing_failure(self, signature, rate_limit_wait_seconds=None):
+        self.consecutive_listing_failures += 1
+        if self.listing_unavailable_since is None:
+            self.listing_unavailable_since = time.monotonic()
+        self.last_listing_error = signature
+        self.rate_limit_wait_seconds = rate_limit_wait_seconds
+        return None
+
+    def _note_listing_success(self):
+        self.consecutive_listing_failures = 0
+        self.listing_unavailable_since = None
+        self.last_listing_error = None
+        self.rate_limit_wait_seconds = None
+
+    def _rate_limit_wait(self, headers, http_status):
+        """Explicit server wait from a failed rate-limited response, if any."""
+        if http_status not in ("403", "429"):
+            return None
+        waits = []
+        try:
+            if "retry-after" in headers:
+                waits.append(float(headers["retry-after"]))
+            if self.primary_remaining == 0 and "x-ratelimit-reset" in headers:
+                waits.append(float(headers["x-ratelimit-reset"]) - time.time())
+        except ValueError:
+            return None
+        return max(waits) if waits else None
+
+    def _failure_signature(self, headers, http_status):
+        if http_status in ("403", "429"):
+            return f"rate limit exceeded (HTTP {http_status})"
+        if http_status:
+            return f"HTTP {http_status}"
+        return "job listing failed"
+
+    def listing_unavailable_description(self, now=None):
+        if now is None:
+            now = time.monotonic()
+        since = self.listing_unavailable_since
+        offset = max(now - since, 0) if since is not None else 0
+        return (f"listing has been unavailable since {offset:g} s ago "
+                f"({self.consecutive_listing_failures} consecutive failures, "
+                f"last error {self.last_listing_error or 'unknown'})")
 
     def _backoff_minimum(self, headers, http_status):
         """Fold one response's backoff headers into the poll interval floor."""
@@ -184,29 +248,41 @@ class JobListingPoller:
             pages = self._parse_paginated_listing(stdout)
             if not pages:
                 if status:
-                    return None
+                    return self._note_listing_failure("job listing failed")
                 try:
-                    return {job["name"]: job for line in stdout.splitlines() if line.strip()
+                    jobs = {job["name"]: job for line in stdout.splitlines() if line.strip()
                             for job in [json.loads(line)]}
                 except (ValueError, KeyError):
-                    return None
+                    return self._note_listing_failure("malformed job listing")
+                self._note_listing_success()
+                return jobs
             minimum = self.server_minimum
             for http_status, headers, _ in pages:
                 minimum = max(minimum, self._backoff_minimum(headers, http_status))
             self.poll_seconds = max(minimum, self.fallback_seconds)
             if status:
-                return None
+                for http_status, headers, _ in pages:
+                    wait = self._rate_limit_wait(headers, http_status)
+                    if wait is not None or http_status in ("403", "429"):
+                        return self._note_listing_failure(
+                            self._failure_signature(headers, http_status), wait)
+                first_status = pages[0][0] if pages else ""
+                return self._note_listing_failure(
+                    self._failure_signature({}, first_status))
             jobs = {}
             try:
-                for http_status, _, body in pages:
+                for http_status, headers, body in pages:
                     if http_status != "200":
-                        return None
+                        return self._note_listing_failure(
+                            self._failure_signature(headers, http_status),
+                            self._rate_limit_wait(headers, http_status))
                     for line in body:
                         if line.strip():
                             job = json.loads(line)
                             jobs[job["name"]] = job
             except (ValueError, KeyError):
-                return None
+                return self._note_listing_failure("malformed job listing")
+            self._note_listing_success()
             return jobs
         arguments = ["--include", self.endpoint]
         if self.etag:
@@ -220,9 +296,12 @@ class JobListingPoller:
         minimum = self._backoff_minimum(headers, http_status)
         self.poll_seconds = max(minimum, self.fallback_seconds)
         if status:
-            return None
+            return self._note_listing_failure(
+                self._failure_signature(headers, http_status),
+                self._rate_limit_wait(headers, http_status))
         if http_status == "304" and self.jobs is not None:
             self.not_modified += 1
+            self._note_listing_success()
         elif http_status == "200":
             # A first-page ETag says nothing about later pages. Retain the
             # original fully paginated listing and cadence for larger runs.
@@ -240,19 +319,24 @@ class JobListingPoller:
             try:
                 payload = json.loads(body)
                 if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
-                    return None
+                    return self._note_listing_failure("malformed job listing (HTTP 200)")
                 jobs = payload["jobs"]
                 if payload.get("total_count") != len(jobs):
-                    return None
-                self.jobs = {job["name"]: job for job in jobs}
-                if len(self.jobs) != len(jobs):
-                    return None
+                    return self._note_listing_failure(
+                        "incomplete job listing (total_count mismatch)")
+                parsed = {job["name"]: job for job in jobs}
+                if len(parsed) != len(jobs):
+                    return self._note_listing_failure("malformed job listing (HTTP 200)")
+                self.jobs = parsed
                 self.etag = headers.get("etag")
             except (ValueError, KeyError, TypeError):
-                return None
+                return self._note_listing_failure("malformed job listing (HTTP 200)")
+            self._note_listing_success()
         else:
             print(f"ci-await: job listing returned unexpected HTTP status {http_status}", file=sys.stderr)
-            return None
+            return self._note_listing_failure(
+                self._failure_signature(headers, http_status),
+                self._rate_limit_wait(headers, http_status))
         if self.etag and self.primary_remaining >= 100:
             self.poll_seconds = max(minimum, min(3, self.fallback_seconds))
         return self.jobs
@@ -481,9 +565,22 @@ def await_workflow_jobs(args, poller):
                     parts = " with archive parts " + ", ".join(args.artifacts)
                 print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded{reached}{parts}")
                 return 0
+        # Prompt rate-limit failure: a failed listing whose explicit
+        # server wait already exceeds the remaining budget will not
+        # succeed by sleeping out that budget.
+        if (jobs is None and not blocked and poller.rate_limit_wait_seconds is not None
+                and poller.rate_limit_wait_seconds > remaining and remaining > 0):
+            print(f"ci-await: rate limit: {poller.listing_unavailable_description()} "
+                  f"and the rate-limit wait {poller.rate_limit_wait_seconds:g} s exceeds "
+                  f"the remaining {remaining:g} s of the {args.timeout_seconds:g} s budget",
+                  file=sys.stderr)
+            return 1
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            if jobs is None and pending:
+            if jobs is None and poller.consecutive_listing_failures:
+                # Stale pending from an earlier listing is not current.
+                waiting = f"every job ({poller.listing_unavailable_description()})"
+            elif pending:
                 waiting = ", ".join(pending)
                 if blocked:
                     waiting += f" (latest {listing})"
