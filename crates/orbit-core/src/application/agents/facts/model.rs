@@ -5,6 +5,7 @@ use orbit_types::task::{
     DefectSeverity, RegressionClassification, TaskComplexity, TaskStatus, is_no_diff_expected,
 };
 use orbit_types::workflow::ReviewVerdict;
+use serde::{Deserialize, Serialize};
 
 use super::super::attribution::{Charge, Credit};
 use super::super::records::Cause;
@@ -17,7 +18,7 @@ use crate::application::task::FindingVerdict;
 /// How far back the scan reads. Every window, `all` included, fits inside it.
 pub(in crate::application::agents) const SCAN_DAYS: i64 = 90;
 /// A recorded occurrence that counts against some role, or against none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Problem {
     /// The description or acceptance criteria edited after the first
     /// implementation run started; counted once per task.
@@ -86,7 +87,7 @@ impl Problem {
     }
 
     /// Rework: a repeat run, a `[BLOCKED]` or unmerged PR, or a requeue.
-    pub fn is_rework(self) -> bool {
+    pub(crate) fn is_rework(self) -> bool {
         matches!(
             self,
             Problem::RepeatRun
@@ -99,7 +100,7 @@ impl Problem {
 
 /// Who did a piece of work: the crew and model a job run recorded, and the
 /// run. Each is `None` when nothing records it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Runner {
     pub(in crate::application::agents) crew: Option<String>,
     pub(in crate::application::agents) model: Option<String>,
@@ -113,7 +114,7 @@ pub(in crate::application::agents) struct Runner {
 
 /// One implementation attempt: a run span from task history, and the job
 /// run that worked it when one is found.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Attempt {
     pub(in crate::application::agents) start: DateTime<Utc>,
     pub(in crate::application::agents) end: Option<DateTime<Utc>>,
@@ -151,7 +152,7 @@ impl Attempt {
 
 /// How a task was executed, derived from its implementation attempts; no
 /// agent sets it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ExecutionMode {
     /// Its final implementation attempt (the landed one, else the latest)
     /// was worked by a job.
@@ -176,7 +177,7 @@ impl ExecutionMode {
 }
 
 /// A problem as the task's records show it, before it has an owner.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Record {
     pub(in crate::application::agents) problem: Problem,
     pub(in crate::application::agents) at: DateTime<Utc>,
@@ -188,7 +189,7 @@ pub(in crate::application::agents) struct Record {
 }
 
 /// What a review finding's settlement records about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::application::agents) enum FindingState {
     /// Left open: it blocks a `reject`.
     Open,
@@ -199,7 +200,7 @@ pub(in crate::application::agents) enum FindingState {
 }
 
 /// One finding of a settled review.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Finding {
     pub(in crate::application::agents) severity: String,
     pub(in crate::application::agents) state: FindingState,
@@ -210,7 +211,7 @@ pub(in crate::application::agents) struct Finding {
 }
 
 /// How the run after a `reject` turned out for the findings it left open.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::application::agents) enum RejectOutcome {
     /// No review settled after it yet.
     Pending,
@@ -227,7 +228,7 @@ pub(in crate::application::agents) enum RejectOutcome {
 }
 
 /// One settled review gate attempt, read at the task history boundary.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Review {
     pub(in crate::application::agents) attempt_id: String,
     /// The review step that produced the settlement, as invocations
@@ -279,7 +280,7 @@ impl Review {
 
 /// A finding a review job filed as a `bug` task, and what finding
 /// verification decided about it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct FiledFinding {
     /// The review task it was spawned from.
     pub(in crate::application::agents) filer: Option<String>,
@@ -302,7 +303,7 @@ pub(in crate::application::agents) struct RegressionLink {
     pub(in crate::application::agents) classification: RegressionClassification,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct TaskFacts {
     pub(in crate::application::agents) id: String,
     pub(in crate::application::agents) title: String,
@@ -397,6 +398,7 @@ impl AgentFacts {
 }
 
 /// A job run that implemented a task.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::application::agents) struct RunRecord {
     pub(super) started_at: DateTime<Utc>,
     pub(super) finished_at: Option<DateTime<Utc>>,

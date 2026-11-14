@@ -66,6 +66,13 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_attempts()
     }
 
+    fn landing_attempt(
+        &self,
+        handoff_id: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        self.claim_boundary()?.landing_attempt(handoff_id)
+    }
+
     fn landing_retry_receipt(
         &self,
         handoff_id: &str,
@@ -527,7 +534,7 @@ impl TaskDocumentStoreBackend for TaskV2Store {
         &self,
         id: &str,
         params: TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         self.update_task_document(id, &params)
     }
 
@@ -567,7 +574,7 @@ impl TaskHistoryStoreBackend for TaskV2Store {
         &self,
         id: &str,
         params: TaskHistoryUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         self.update_task_history(id, &params)
     }
 

@@ -38,7 +38,7 @@ use crate::application::job::{
 
 /// The hold an unsuccessful run of `job_id` ends on instead of failing, if
 /// its typed `error_code` or failure `message` names one. Owner-local runs hold on provider
-/// capacity and usage limits; claimed leaves hold on usage limits.
+/// capacity, usage limits and unavailability; claimed leaves hold on usage limits.
 fn held_failure(
     job_id: &str,
     error_code: Option<&str>,
@@ -711,7 +711,7 @@ impl OrbitRuntime {
             Err(error) => {
                 // [ORB-15202] A red base or a refusal awaiting a recorded
                 // decision kept its candidate: the run holds, it did not fail.
-                // So do local provider capacity/limit holds and a claimed
+                // So do local provider capacity/limit/unavailability holds and a claimed
                 // leaf its provider's usage limit stopped [ORB-15517].
                 let typed_code = error.step_failure_code();
                 let held = held_failure(

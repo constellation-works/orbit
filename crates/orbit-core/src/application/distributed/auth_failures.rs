@@ -79,11 +79,18 @@ impl OrbitRuntime {
     ) -> Result<Vec<ProviderAuthFailure>, OrbitError> {
         let since = now - WINDOW;
         let observations = self.provider_invocation_observations(since)?;
-        let failures = self.stores().jobs().list_job_runs_filtered(&bounded_query(
+        // Authentication runs now end `held` on owner-local pipelines; keep
+        // reading `failed` too, for claimed leaves and older executors.
+        let mut failures = self.stores().jobs().list_job_runs_filtered(&bounded_query(
             JobRunState::Failed,
             since,
             true,
         ))?;
+        failures.extend(self.stores().jobs().list_job_runs_filtered(&bounded_query(
+            JobRunState::Held,
+            since,
+            true,
+        ))?);
         if !observations
             .iter()
             .any(|item| item.class == Some(ProviderFailureClass::Unavailable))

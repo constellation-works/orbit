@@ -1,6 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, TaskComment, TaskDecision, TaskStatus};
+use orbit_types::workflow::FailureHandoffDecision;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -90,7 +91,7 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
     }
     Ok(Some(json!({
         "phase": "failure_handoff",
-        "decision": "review_repair_after_merge",
+        "decision": FailureHandoffDecision::ReviewRepairAfterMerge.as_str(),
         "failed_step_id": failed_step_id,
         "task_status": "blocked",
         "candidate_preserved": true,
@@ -123,7 +124,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     if failed_step_id == "worktree" && pipeline_step(input, "worktree").is_err() {
         return Ok(json!({
             "phase": "failure_handoff",
-            "decision": "no_candidate",
+            "decision": FailureHandoffDecision::NoCandidate.as_str(),
             "failed_step_id": failed_step_id,
         }));
     }
@@ -395,7 +396,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     if committed_files.is_empty() && head_sha == original_base_sha {
         return Ok(json!({
             "phase": "failure_handoff",
-            "decision": "no_candidate",
+            "decision": FailureHandoffDecision::NoCandidate.as_str(),
             "failed_step_id": failed_step_id,
             "workspace_path": workspace_path,
         }));
@@ -480,7 +481,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": if conflict_blocked { "blocked_conflict_pr" } else { "blocked_failure_pr" },
+        "decision": if conflict_blocked { FailureHandoffDecision::BlockedConflictPr.as_str() } else { FailureHandoffDecision::BlockedFailurePr.as_str() },
         "task_id": task.id,
         "handoff_run_id": run_id,
         "checkpoint_owner": checkpoint_owner,

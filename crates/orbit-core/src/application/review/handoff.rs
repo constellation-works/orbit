@@ -111,7 +111,7 @@ impl OrbitRuntime {
     }
 
     /// Explicit review-state approval. Does not reuse the backlog grant validator.
-    pub fn approve_task_handoff(
+    pub(crate) fn approve_task_handoff(
         &self,
         context: &ClaimInvocation,
         request_id: &str,
@@ -132,7 +132,7 @@ impl OrbitRuntime {
         Ok(result)
     }
 
-    pub fn revoke_task_handoff(
+    pub(crate) fn revoke_task_handoff(
         &self,
         context: &ClaimInvocation,
         request_id: &str,
@@ -172,7 +172,7 @@ impl OrbitRuntime {
 // transaction the landing consumer uses, and every refusal is the store's.
 
 /// Response shape version of [`OrbitRuntime::distributed_claim_console`].
-pub const HANDOFF_CONSOLE_SCHEMA: u32 = 1;
+pub(crate) const HANDOFF_CONSOLE_SCHEMA: u32 = 1;
 
 /// Claim lifecycle states selected by the owner's read-only console.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

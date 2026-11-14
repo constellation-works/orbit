@@ -1350,7 +1350,9 @@ fn mcp_repeated_field_metadata_stays_within_context_budget() {
 /// wire fails here.
 #[test]
 fn operator_tools_list_stays_within_byte_budget() {
-    const TASK_UPDATE_BUDGET: usize = 4_500;
+    // ORB-24434 requires the guarded request_id description to name its
+    // modes' fields; that minimal wording measured 4532 (ORB-24608).
+    const TASK_UPDATE_BUDGET: usize = 4_600;
     const TASK_ADD_BUDGET: usize = 3_500;
     const TASK_LIST_BUDGET: usize = 2_500;
     const OPERATOR_LIST_BUDGET: usize = 50_000;

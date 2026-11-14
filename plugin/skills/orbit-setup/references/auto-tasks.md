@@ -335,9 +335,7 @@ scheduler's cursor untouched — so it creates real work even for a disabled def
 enabled delivery definition another machine owns, so this host never admits
 work for it. Its reason is printed on stderr and carried as `skipped_reason`
 by the MCP listing and the dashboard API, where its next evaluation reads
-`unavailable`. `enabled` and `disabled` follow the effective value, so a
-`delivery-code-review` that the deprecated `after-landing` policy enables
-lists as enabled.
+`unavailable`. `enabled` and `disabled` follow the definition's own `enabled` flag.
 
 Over MCP: `orbit_auto_task` action `add`, `orbit_auto_task` action `list`, `orbit_auto_task` action `update`, and
 `orbit_auto_task` action `mint`; `orbit_auto_task` action `update` with `enabled` is the

@@ -15,6 +15,7 @@ use super::season::{DEFINITION_VERSION, RankSeasons, Season, SeasonScale};
 use super::{board, sample};
 use crate::OrbitRuntime;
 use crate::application::agents::score::REVIEW_MIN_SUPPORT;
+use crate::application::statistics;
 
 /// The scales a board divides by, and where they came from.
 pub(super) struct Scales {
@@ -41,7 +42,7 @@ fn reference_size(rows: &[ModelRow]) -> usize {
     } else {
         eligible
     };
-    let median = sample::percentile(&mut units, 50.0);
+    let median = statistics::percentile(&mut units, 50.0);
     median.map_or(1, |median| (median.round() as usize).max(1))
 }
 
@@ -173,7 +174,7 @@ pub fn agent_rank(
 /// `seasons` with a new season appended: noise scales calibrated on the
 /// settled window of `query`, numbered after the seasons on file. A live
 /// query is refused, and so is a window without implemented work.
-pub fn agent_rank_calibration(
+pub(crate) fn agent_rank_calibration(
     facts: &AgentFacts,
     query: &RankQuery,
     seasons: &RankSeasons,

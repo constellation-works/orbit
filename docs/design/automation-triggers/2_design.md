@@ -1,7 +1,7 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-11-09
+last_updated: 2026-11-14
 last_validated: 2026-10-29
 status: Draft
 feature: automation-triggers
@@ -214,7 +214,7 @@ and consumed as `excluded` state and batch `exclusions`; see
 ## 4. Observation, dispatch, and successful coverage
 
 Keyed task mint retries return the existing task without appending creation
-crew provenance or emitting another `TaskAdded` session event. They preserve
+crew provenance. They preserve
 the task's current crew and revision, including operator changes after minting.
 A durable key reservation whose bundle has not yet been published still counts
 as a new creation when recovery publishes it; replay is determined under the

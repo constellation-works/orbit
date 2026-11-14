@@ -1,7 +1,6 @@
 //! An operator accepts a published failure handoff without another execution.
 
 use orbit_common::{DecisionRefusalCode, OrbitError};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ArtifactManifestFileV2, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
     DecisionRequest, DecisionRequestState, DecisionResolution, DecisionRiskTier, ExternalRef, Task,
@@ -257,38 +256,30 @@ impl OrbitRuntime {
         );
         let mut refs = task.external_refs.clone();
         push_external_ref_if_missing(&mut refs, ExternalRef::github_pr(number.to_string())?);
-        let updated = self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                &task.id,
-                TaskRecordUpdateParams {
-                    actor: actor.clone(),
-                    status: Some(TaskStatus::Done),
-                    status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.into()),
-                    status_note: Some(note.clone()),
-                    execution_summary: task
-                        .execution_summary
-                        .trim()
-                        .is_empty()
-                        .then(|| format!("Delivered by {actor}: {note}.")),
-                    external_refs: Some(refs.clone()),
-                    append_history: history.clone(),
-                    append_comments: vec![TaskComment {
-                        at: resolution.answered_at,
-                        by: actor.clone(),
-                        message: comment.clone(),
-                        operation_id: Some(request.id.clone()),
-                    }],
-                    expected_status: Some(vec![TaskStatus::Blocked]),
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task.id.clone(),
-                },
-            ))
-        })?;
+        let updated = self.stores().task_records().update(
+            &task.id,
+            TaskRecordUpdateParams {
+                actor: actor.clone(),
+                status: Some(TaskStatus::Done),
+                status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.into()),
+                status_note: Some(note.clone()),
+                execution_summary: task
+                    .execution_summary
+                    .trim()
+                    .is_empty()
+                    .then(|| format!("Delivered by {actor}: {note}.")),
+                external_refs: Some(refs.clone()),
+                append_history: history.clone(),
+                append_comments: vec![TaskComment {
+                    at: resolution.answered_at,
+                    by: actor.clone(),
+                    message: comment.clone(),
+                    operation_id: Some(request.id.clone()),
+                }],
+                expected_status: Some(vec![TaskStatus::Blocked]),
+                ..Default::default()
+            },
+        )?;
         self.record_resolves_side_effects(task.status, &updated);
         self.close_task_prs_after_transition(task.status, &updated, Some(&note));
         Ok(())

@@ -10,7 +10,7 @@ use orbit_types::desktop::{DesktopTaskOperation, DesktopTaskRequest};
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
-use serde_json::{Value, json};
+use serde_json::json;
 use tempfile::TempDir;
 
 fn test_runtime() -> (TempDir, OrbitRuntime, std::path::PathBuf) {
@@ -169,7 +169,7 @@ fn automation_update_to_done_resolves_related_friction_scenario() {
     assert_friction_resolved_by(&runtime, &friction_id, &task_id);
 }
 
-fn approving_task_with_dangling_friction_relation_records_event_but_succeeds_scenario() {
+fn approving_task_with_dangling_friction_relation_succeeds_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let task_id = add_task_with_resolves(&runtime, &repo_root, "F9999-12-999", "backlog");
     move_backlog_task_to_review(&runtime, &task_id);
@@ -182,18 +182,6 @@ fn approving_task_with_dangling_friction_relation_records_event_but_succeeds_sce
         .expect("approve task");
     assert_eq!(approved["status"], json!("done"));
 
-    let events = runtime.list_session_events(20).expect("session events");
-    assert!(events.iter().any(|event| {
-        event.payload.get("type") == Some(&Value::String("TaskRelationDangling".to_string()))
-            && event
-                .payload
-                .get("data")
-                .and_then(Value::as_object)
-                .is_some_and(|data| {
-                    data.get("task_id") == Some(&Value::String(task_id.clone()))
-                        && data.get("target") == Some(&Value::String("F9999-12-999".to_string()))
-                })
-    }));
     assert!(
         frictions(&runtime)
             .show("F9999-12-999")
@@ -415,23 +403,10 @@ fn comment_on_task(runtime: &OrbitRuntime, task_id: &str, comment: &str) {
         .expect("comment on done task");
 }
 
-fn auto_resolved_events(runtime: &OrbitRuntime, friction_id: &str) -> usize {
-    runtime
-        .list_session_events(200)
-        .expect("session events")
-        .iter()
-        .filter(|event| {
-            event.payload.get("type") == Some(&json!("FrictionAutoResolved"))
-                && event.payload["data"]["friction_id"] == json!(friction_id)
-        })
-        .count()
-}
-
 fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let (friction_id, task_id) = complete_task_with_resolves(&runtime, &repo_root);
     assert_friction_resolved_by(&runtime, &friction_id, &task_id);
-    assert_eq!(auto_resolved_events(&runtime, &friction_id), 1);
     reopen_friction(&runtime, &friction_id);
 
     comment_on_task(&runtime, &task_id, "The fix shipped in the last release.");
@@ -477,7 +452,6 @@ fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened_scenario(
         )
         .expect("desktop comment on done task");
     assert_friction_still_open(&runtime, &friction_id);
-    assert_eq!(auto_resolved_events(&runtime, &friction_id), 1);
 }
 
 fn a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write_scenario() {
@@ -569,8 +543,8 @@ crate::scenario_table!(
     automation_update_to_done_resolves_related_friction_scenario
 );
 crate::scenario_table!(
-    approving_task_with_dangling_friction_relation_records_event_but_succeeds,
-    approving_task_with_dangling_friction_relation_records_event_but_succeeds_scenario
+    approving_task_with_dangling_friction_relation_succeeds,
+    approving_task_with_dangling_friction_relation_succeeds_scenario
 );
 crate::scenario_table!(
     approving_task_does_not_overwrite_existing_friction_resolution,

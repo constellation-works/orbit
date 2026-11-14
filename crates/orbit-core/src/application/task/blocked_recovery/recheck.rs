@@ -22,7 +22,6 @@
 //! it cannot settle is left for final recovery.
 
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{TaskComment, TaskHistoryEntry, TaskStatus};
 use serde::Serialize;
 
@@ -204,35 +203,27 @@ impl OrbitRuntime {
                     return Ok(());
                 }
                 let now = chrono::Utc::now();
-                self.with_mutation(|| {
-                    let updated = self.stores().task_records().update(
-                        task_id,
-                        StoreTaskUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            status: Some(TaskStatus::Backlog),
-                            status_event: Some(FINAL_RECOVERY_REQUEUED_EVENT.to_string()),
-                            status_note: Some(format!("blocked-task recheck: {why}")),
-                            append_comments: vec![TaskComment {
-                                at: now,
-                                by: SYSTEM_ACTOR_LABEL.to_string(),
-                                message: format!(
-                                    "blocked_task_recheck kind=checks_green\nwhy: {why}\nThe task \
-                                 returns to backlog; its next run continues the publication."
-                                ),
-                                operation_id: None,
-                            }],
-                            append_history: vec![recheck_entry(RecheckKind::ChecksGreen, &why)],
-                            expected_status: Some(vec![TaskStatus::Blocked]),
-                            ..Default::default()
-                        },
-                    )?;
-                    Ok((
-                        updated,
-                        OrbitEvent::TaskUpdated {
-                            id: task_id.to_string(),
-                        },
-                    ))
-                })?;
+                self.stores().task_records().update(
+                    task_id,
+                    StoreTaskUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        status: Some(TaskStatus::Backlog),
+                        status_event: Some(FINAL_RECOVERY_REQUEUED_EVENT.to_string()),
+                        status_note: Some(format!("blocked-task recheck: {why}")),
+                        append_comments: vec![TaskComment {
+                            at: now,
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            message: format!(
+                                "blocked_task_recheck kind=checks_green\nwhy: {why}\nThe task \
+                             returns to backlog; its next run continues the publication."
+                            ),
+                            operation_id: None,
+                        }],
+                        append_history: vec![recheck_entry(RecheckKind::ChecksGreen, &why)],
+                        expected_status: Some(vec![TaskStatus::Blocked]),
+                        ..Default::default()
+                    },
+                )?;
                 settled = true;
                 Ok(())
             })?;
@@ -252,23 +243,15 @@ impl OrbitRuntime {
         why: &str,
         comment: Option<TaskComment>,
     ) -> Result<(), OrbitError> {
-        self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                task_id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    append_comments: comment.into_iter().collect(),
-                    append_history: vec![recheck_entry(kind, why)],
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task_id.to_string(),
-                },
-            ))
-        })?;
+        self.stores().task_records().update(
+            task_id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_comments: comment.into_iter().collect(),
+                append_history: vec![recheck_entry(kind, why)],
+                ..Default::default()
+            },
+        )?;
         Ok(())
     }
 }

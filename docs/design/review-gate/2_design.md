@@ -94,11 +94,10 @@ before-PR or before-landing review switched on without a resolvable
 **Migration.** `operation.review_policy` and `operation.review_minutes` are
 deprecated: they are translated on load with a warning naming each key, and a
 later release makes them errors. `before-pr` sets `review.timing = "before_pr"`;
-`none` sets it `off`; `after-landing` enables the consumer only while
-no operator has configured it (its `updated_by` is unset or `system`) — once
-`orbit auto-task toggle` or any other edit stamps an actor, its own flag
-decides. `orbit auto-task list`/`show` report that as `effective_enabled`. A
-`[review]` table in the same file wins over the deprecated spelling.
+`none` sets it `off`; `after-landing` turns neither on, because the consumer's
+own `enabled` flag (`orbit auto-task toggle`) is the only switch. `orbit
+auto-task list`/`show` report that flag as `effective_enabled`, which now equals
+`enabled`. A `[review]` table in the same file wins over the deprecated spelling.
 `operation.review_minutes` becomes `review.minutes`. The budget keys
 `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
 retired [ORB-13989]: one review per candidate counts neither, so both are

@@ -83,8 +83,12 @@ pub(super) struct CodebaseRelatedQuery {
     top: Option<usize>,
 }
 
-/// The validated selection of an analytics or show query.
-fn codebase_selection(query: &CodebaseAnalyticsQuery) -> Result<CodebaseQuery, Box<Response>> {
+/// The validated selection of an analytics or show query; a layer is checked
+/// against the workspace's `workflow.regression_layers`.
+fn codebase_selection(
+    runtime: &orbit_core::OrbitRuntime,
+    query: &CodebaseAnalyticsQuery,
+) -> Result<CodebaseQuery, Box<Response>> {
     let selection = CodebaseQuery::parse(
         query.window.as_deref(),
         query.min_support,
@@ -96,6 +100,7 @@ fn codebase_selection(query: &CodebaseAnalyticsQuery) -> Result<CodebaseQuery, B
             query.escape.as_deref(),
             query.layer.as_deref(),
             query.detected_by.as_deref(),
+            runtime.regression_layers(),
         )?))
     });
     selection.map_err(|error| {
@@ -131,7 +136,7 @@ pub(super) async fn codebase_analytics(
     Ws(runtime): Ws,
     Query(query): Query<CodebaseAnalyticsQuery>,
 ) -> Response {
-    let query = match codebase_selection(&query) {
+    let query = match codebase_selection(&runtime, &query) {
         Ok(query) => query,
         Err(response) => return *response,
     };
@@ -157,7 +162,7 @@ pub(super) async fn codebase_show(
     Ws(runtime): Ws,
     Query(query): Query<CodebaseAnalyticsQuery>,
 ) -> Response {
-    let selection = match codebase_selection(&query) {
+    let selection = match codebase_selection(&runtime, &query) {
         Ok(selection) => selection,
         Err(response) => return *response,
     };
@@ -193,16 +198,14 @@ pub(super) async fn codebase_related(
         return bad_request("path is required".into());
     };
     let scan_runtime = Arc::clone(&runtime);
+    let scan_query = selection.codebase_query();
     let facts = match state
         .codebase_memo()
         .get_or_compute(
             &runtime,
             Some(selection.window().to_owned()),
             CODEBASE_ANALYTICS_TTL,
-            move || {
-                let query = selection.codebase_query();
-                scan_runtime.codebase_related_scan(&query)
-            },
+            move || scan_runtime.codebase_related_scan(&scan_query),
         )
         .await
     {

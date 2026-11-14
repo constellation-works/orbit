@@ -1835,7 +1835,7 @@ one. From then on:
     Therefore this retry is not a fresh current-base merge check. A pass on
     the rerun clears the failure. If it fails with the same signature while
     the base has that successful same-check result, the landing classifies it
-    as **candidate** and uses the usual automatic repair; it needs no further
+    as **candidate** and returns the task to the backlog for repair; it needs no further
     base run. A same-signature base failure stays
     **inherited**. The lookup examines up to 100 recent base-branch push runs,
     retaining the latest run per workflow and commit; evidence outside that
@@ -1860,8 +1860,8 @@ one. From then on:
     citation, and no transient, inherited, unknown or inconclusive job), an eligible
     set on a head with no prior rerun first gets one classification rerun on the
     unchanged head. `ci_check_rerun_reserved` spends the shared once-per-head budget
-    before sending; a repeat failure takes the one automatic repair route, or
-    requeue if repair is spent. Other candidate failures keep their repair/requeue route,
+    before sending; a repeat candidate failure returns the task to the backlog.
+    Other candidate failures keep their requeue route,
     and inherited failures keep their base update/wait route. Other failure
     classes stop in review naming the read failure, not `waiting_for_base`.
     Without decisive evidence, `handoff_land` holds the candidate in review
@@ -1873,12 +1873,11 @@ one. From then on:
     Its hold evidence names the check, signature and missing rerun or base
     result for operator review. A log that cites no repository file, or cites
     a file the candidate changed, is classified as before.
-  - **candidate**: anything else. The landing stops for the claim's one
-    automatic repair, the same repair a conflicting base gets, and the stop
-    evidence carries the failed step's signature and log excerpt for the
-    repair leaf.
+  - **candidate**: anything else. The landing returns the task to the backlog
+    with the candidate and the failed step's signature and log excerpt for
+    its next repair run.
 
-  The one automatic repair is a new claim on the same task, admitted to a
+  For a repairable conflict or other repairable stop, the one automatic repair is a new claim on the same task, admitted to a
   pull. While the stopped claim is `repair_pending`, the task is
   `in-progress`. The repair is reserved for the executor that delivered
   the candidate, because it already holds the candidate's objects. Its next
@@ -1916,9 +1915,8 @@ one. From then on:
   - To hand a repair back to its original executor before the owner takes
     it, restart that executor's pull drain.
 
-  A **candidate** failure once that repair is spent (the claim is the
-  repair, or the task already returned to the backlog for a landing repair)
-  does not leave the task in `review`. The owner ends the claim, keeps its
+  A **candidate** failure does not leave the task in `review`, regardless of
+  whether an automatic repair has been spent. The owner ends the claim, keeps its
   candidate with the stop's reason, and returns the task to the backlog
   with history event `landing_repair_requeued`. That landing run is held as
   `delivery_landing_repair_requeue`, so it is not a failed run and it is not

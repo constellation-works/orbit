@@ -124,6 +124,39 @@ impl Fixture {
             .id
     }
 
+    /// Appends `toml` to the workspace `config.toml` and reopens the runtime,
+    /// so the in-process runtime reads it as well as any server started next.
+    pub(super) fn with_workspace_config(self, toml: &str) -> Self {
+        let Self {
+            temp,
+            global,
+            work,
+            runtime,
+        } = self;
+        drop(runtime);
+        let config = work.join("config.toml");
+        let mut text = fs::read_to_string(&config).unwrap_or_default();
+        text.push_str(toml);
+        fs::write(&config, text).unwrap();
+        let registry = orbit_registry::workspace_registry::load_registry_from(
+            &orbit_registry::workspace_registry::registry_path_for(&global),
+        )
+        .unwrap();
+        let runtime =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                &global,
+                &registry.workspaces[0],
+                &registry.checkouts[0],
+            )
+            .expect("reopened disposable runtime");
+        Self {
+            temp,
+            global,
+            work,
+            runtime,
+        }
+    }
+
     /// Reopens an owner-prepared checkout with replica authority for HTTP tests.
     pub(super) fn into_replica(self, owner_machine_id: &str) -> Self {
         let Self {

@@ -206,7 +206,7 @@ impl ReviewSwitches {
     }
 
     /// Whether an enabled after-landing consumer cannot review landed work.
-    pub fn after_landing_unhealthy(&self) -> bool {
+    pub(crate) fn after_landing_unhealthy(&self) -> bool {
         self.after_landing
             .health
             .as_ref()
@@ -214,7 +214,7 @@ impl ReviewSwitches {
     }
 
     /// Whether before-PR review is on but cannot run here.
-    pub fn before_pr_unhealthy(&self) -> bool {
+    pub(crate) fn before_pr_unhealthy(&self) -> bool {
         !self.before_pr.problems.is_empty()
     }
 

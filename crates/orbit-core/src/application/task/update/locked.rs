@@ -2,7 +2,6 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CREW_ASSIGNED_EVENT, CrewAssignmentState,
     CrewSource, FINAL_RECOVERY_DECIDED_EVENT, GRANTED_TOOLS_CHANGED_EVENT, RecordedCrewAssignment,
@@ -29,7 +28,9 @@ use super::entry::{
     LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
 };
 use crate::OrbitRuntime;
-use crate::application::task::{TaskEvolutionPort, TaskJobPort, TaskResidentPort, TaskReviewPort};
+use crate::application::task::{
+    TaskEvolutionPort, TaskJobPort, TaskResidentPort, TaskReviewPort, TaskRow,
+};
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole
@@ -48,6 +49,17 @@ impl OrbitRuntime {
         params: TaskUpdateParams,
         context: TaskUpdateContext,
     ) -> Result<Task, OrbitError> {
+        Ok(self.update_task_applied(id, params, context)?.0)
+    }
+
+    /// [`Self::update_task_with_context`], also returning the post-write row
+    /// when the write did not change status or attach evidence.
+    pub(super) fn update_task_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        context: TaskUpdateContext,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         // The lock hook takes `FnMut` because it is a trait object, but the
         // body must run exactly once and consumes its inputs; `take()` makes
         // both facts explicit rather than forcing the params to be cloneable.
@@ -84,6 +96,7 @@ impl OrbitRuntime {
         }
         let LockedTaskUpdate {
             task: updated,
+            row,
             previous_status,
             status_note,
         } = updated.ok_or_else(|| {
@@ -103,7 +116,15 @@ impl OrbitRuntime {
                 discarded,
             );
         }
-        Ok(updated)
+        // A status change can append history after this lock (resolves, pull
+        // request closure). Keep the in-memory row only while that cannot
+        // have happened, so a full response does not serve a stale sidecar.
+        let row = if previous_status == updated.status {
+            row
+        } else {
+            None
+        };
+        Ok((updated, row))
     }
 
     pub(super) fn update_task_locked(
@@ -582,47 +603,39 @@ impl OrbitRuntime {
             (Some(crew), None) => Some(format!("{HUMAN_CREW_BYPASS_NOTE} '{crew}'")),
             (None, note) => note,
         };
-        let mut updated = self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                id,
-                TaskRecordUpdateParams {
-                    artifact_owner_run_id: artifact_owner.clone(),
-                    artifact_writer,
-                    actor: effective_label.clone(),
-                    crew_source: crew_source.clone(),
-                    planned_by: attribution.planned_by.clone(),
-                    implemented_by: attribution.implemented_by.clone(),
-                    status_event: status_event.clone(),
-                    status_note,
-                    append_comments: append_comments.clone(),
-                    append_history: append_history.clone(),
-                    expected_status: expected_status.map(|status| vec![status]),
-                    operator_comment: comment_only && operator_write && !agent_context_declared(),
-                    ..TaskRecordUpdateParams::from(params)
-                },
-            )?;
-            let event = if previous_status == TaskStatus::Archived
-                && updated.status != TaskStatus::Archived
-            {
-                OrbitEvent::TaskUnarchived { id: id.to_string() }
-            } else if previous_status != TaskStatus::Archived
-                && updated.status == TaskStatus::Archived
-            {
-                OrbitEvent::TaskArchived { id: id.to_string() }
-            } else {
-                OrbitEvent::TaskUpdated { id: id.to_string() }
-            };
-            Ok((updated.clone(), event))
-        })?;
+        let row = self.stores().task_records().update_returning_row(
+            id,
+            TaskRecordUpdateParams {
+                artifact_owner_run_id: artifact_owner.clone(),
+                artifact_writer,
+                actor: effective_label.clone(),
+                crew_source: crew_source.clone(),
+                planned_by: attribution.planned_by.clone(),
+                implemented_by: attribution.implemented_by.clone(),
+                status_event: status_event.clone(),
+                status_note,
+                append_comments: append_comments.clone(),
+                append_history: append_history.clone(),
+                expected_status: expected_status.map(|status| vec![status]),
+                operator_comment: comment_only && operator_write && !agent_context_declared(),
+                ..TaskRecordUpdateParams::from(params)
+            },
+        )?;
+        let mut updated = row.task.clone();
+        let mut row = Some(row);
 
         self.project_task_checkpoint_costs(&append_comments)?;
 
         if evidence_attached {
+            // Evidence resume can change the task after the write. The
+            // in-memory row would hide that, so the response reads again.
             self.resume_review_evidence(id)?;
             updated = self.get_task(id)?;
+            row = None;
         }
         Ok(LockedTaskUpdate {
             task: updated,
+            row,
             previous_status,
             status_note: written_note,
         })

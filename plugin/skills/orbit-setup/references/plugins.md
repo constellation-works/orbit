@@ -296,9 +296,6 @@ workspace. From an unregistered directory it uses host-level config and does not
 initialize a workspace there. Pass the global `--workspace <selector>` option when
 rendering needs workspace config or to inspect another registered checkout.
 
-`orbit tool scaffold` still writes the older executable-plus-sidecar form for one more
-release and prints a deprecation pointing here.
-
 ## When a plugin is not serving its tools
 
 ```bash

@@ -9,8 +9,8 @@ mod distributed_port;
 mod job_port;
 pub(crate) use capture::validate_claimed_experiment_capture;
 pub use definition::{
-    EXPERIMENT_COMPLEXITIES, EXPERIMENT_METRICS, REVIEW_DERIVED_METRICS, STEP_LOCAL_METRICS,
-    experiment_metric_is_review_derived, experiment_metric_is_step_local,
+    EXPERIMENT_COMPLEXITIES, experiment_metric_is_review_derived, experiment_metric_is_step_local,
+    experiment_metric_names, step_local_metric_names,
 };
 mod lifecycle;
 mod memory_arms;
@@ -36,6 +36,6 @@ pub const EXPERIMENTS_MAX_RUNNING: u32 = 3;
 /// treatment; below it, a readout gives no verdict.
 ///
 /// The former `experiments.min_delivered_rate` default, fixed when the key was removed [ORB-22808].
-pub const EXPERIMENTS_MIN_DELIVERED_RATE: f64 = 0.9;
+pub(crate) const EXPERIMENTS_MIN_DELIVERED_RATE: f64 = 0.9;
 pub use readout::ExperimentReadout;
 pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};

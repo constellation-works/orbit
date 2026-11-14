@@ -112,7 +112,7 @@ impl OrbitRuntime {
             actor.to_string(),
         )
         .with_handoff_observation(observation);
-        if let Err(error) = tasks.mutate_execution_claim(
+        if let Err(error) = self.mutate_execution_claim(
             Some(&context),
             &format!("landing-retry:{}", request.request_key),
             &ClaimMutation::RetryLanding(request.clone()),
@@ -173,7 +173,7 @@ impl OrbitRuntime {
         {
             return Ok(());
         }
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&self.landing_invocation(&claim)),
             &format!("landing-retry-attach:{}:{run_id}", request.request_key),
             &ClaimMutation::AttachLandingRetry {

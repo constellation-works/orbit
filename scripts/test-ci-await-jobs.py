@@ -47,6 +47,8 @@ class AwaitJobsTests(unittest.TestCase):
         self.raw_job_body = None
         # Optional (page, elapsed) -> (status, headers, JSON payload or None).
         self.artifact_reply = None
+        # Optional (elapsed) -> (status, headers, jobs list or None).
+        self.job_reply = None
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -72,6 +74,19 @@ class AwaitJobsTests(unittest.TestCase):
                         self.send_header(name, value)
                     self.end_headers()
                     self.wfile.write(body)
+                    return
+                if fixture.job_reply is not None:
+                    elapsed = float(self.headers.get("X-Fixture-Time", "0"))
+                    status, headers, payload = fixture.job_reply(elapsed)
+                    body = b"" if payload is None else json.dumps(
+                        {"total_count": len(payload), "jobs": payload}).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    self.end_headers()
+                    if status != 304:
+                        self.wfile.write(body)
                     return
                 if fixture.raw_job_body is not None:
                     raw = fixture.raw_job_body
@@ -126,11 +141,24 @@ class AwaitJobsTests(unittest.TestCase):
 import os, signal, sys
 blocked_pid_file = os.environ.get("CI_AWAIT_BLOCK_PID_FILE")
 if blocked_pid_file:
-    # A listing that never answers: record the pid, then wait to be killed.
-    with open(blocked_pid_file, "w") as pid_file:
-        pid_file.write(str(os.getpid()))
-    while True:
-        signal.pause()
+    answered = os.environ.get("CI_AWAIT_ANSWERED_LISTINGS")
+    should_block = True
+    if answered is not None:
+        count_file = blocked_pid_file + ".count"
+        try:
+            count = int(open(count_file).read())
+        except Exception:
+            count = 0
+        count += 1
+        with open(count_file, "w") as handle:
+            handle.write(str(count))
+        should_block = count > int(answered)
+    if should_block:
+        # A listing that never answers: record the pid, then wait to be killed.
+        with open(blocked_pid_file, "w") as pid_file:
+            pid_file.write(str(os.getpid()))
+        while True:
+            signal.pause()
 args = ["http://127.0.0.1:{server.server_port}/" + arg if arg.startswith("repos/") else arg
         for arg in sys.argv[1:]]
 if "CI_AWAIT_FIXTURE_TIME" in os.environ:
@@ -495,9 +523,17 @@ finally:
                 result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
                                    artifact_names=["nextest-archive-1"])
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
-                self.assertEqual(float((self.root / "elapsed").read_text()), 7,
-                                 "the backoff minimum cannot extend the absolute deadline")
+                explicit = status in (403, 429) and ("Retry-After" in headers or
+                                                     "X-RateLimit-Reset" in headers)
+                if explicit:
+                    self.assertIn("ci-await: rate limit:", result.stderr)
+                    self.assertIn("artifact listing has been unavailable", result.stderr)
+                    self.assertNotIn("timed out", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+                else:
+                    self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 7,
+                                     "the backoff minimum cannot extend the absolute deadline")
                 self.assertEqual(self.artifact_request_times(), [0], self.requests)
 
     def test_paginated_artifact_listing_folds_backoff_from_every_page(self):
@@ -524,10 +560,17 @@ finally:
                 result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
                                    artifact_names=["nextest-archive-1"])
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("timed out after 7 s", result.stderr)
+                explicit = second_status in (403, 429) and ("Retry-After" in second_headers or
+                                                            "X-RateLimit-Reset" in second_headers)
+                if explicit:
+                    self.assertIn("ci-await: rate limit:", result.stderr)
+                    self.assertNotIn("timed out", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+                else:
+                    self.assertIn("timed out after 7 s", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 7)
                 self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
                 self.assertEqual(self.artifact_request_times(), [0, 0], self.requests)
-                self.assertEqual(float((self.root / "elapsed").read_text()), 7)
 
     def test_artifact_polling_uses_fallback_interval(self):
         # Completed jobs carry an ETag, so the job listing drops to a 3 s
@@ -587,6 +630,67 @@ finally:
             self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
             self.assertEqual(float((self.root / "elapsed").read_text()), 7)
             self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
+    def test_listing_unavailable_after_success_is_not_reported_as_in_progress(self):
+        def reply(elapsed):
+            if elapsed == 0:
+                return 200, {}, [job("Test build", "in_progress")]
+            return 403, {}, None
+        self.job_reply = reply
+        try:
+            result = self.wait(timeout="5", jobs=["Test build"], poll="1", virtual=True)
+        finally:
+            self.job_reply = None
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("listing has been unavailable", result.stderr)
+        self.assertIn("consecutive failure", result.stderr)
+        self.assertIn("rate limit exceeded (HTTP 403)", result.stderr)
+        self.assertNotIn("waiting for Test build (in_progress)", result.stderr)
+
+    def test_rate_limit_beyond_remaining_budget_fails_promptly_for_jobs(self):
+        for headers in ({"Retry-After": "120"},
+                        {"X-RateLimit-Remaining": "0",
+                         "X-RateLimit-Reset": str(int(time.time()) + 120)}):
+            with self.subTest(headers=headers):
+                self.job_reply = lambda elapsed, headers=headers: (403, headers, None)
+                try:
+                    result = self.wait(timeout="30", jobs=["Test build"], poll="15", virtual=True)
+                finally:
+                    self.job_reply = None
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ci-await: rate limit:", result.stderr)
+                self.assertIn("rate limit exceeded (HTTP 403)", result.stderr)
+                self.assertNotIn("timed out", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+
+    def test_rate_limit_beyond_remaining_budget_fails_promptly_for_artifacts(self):
+        self.timed_response = lambda elapsed: [job("Test build")]
+        for status, headers in ((403, {"X-RateLimit-Remaining": "0",
+                                       "X-RateLimit-Reset": str(int(time.time()) + 120)}),
+                                (429, {"Retry-After": "60"})):
+            with self.subTest(status=status, headers=headers):
+                self.requests.clear()
+                self.request_headers.clear()
+                self.artifact_reply = lambda page, elapsed, status=status, headers=headers: (
+                    status, headers, None)
+                result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ci-await: rate limit:", result.stderr)
+                self.assertIn("artifact listing has been unavailable", result.stderr)
+                self.assertNotIn("timed out", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+        self.artifact_reply = None
+
+    def test_a_listing_killed_after_an_earlier_success_is_not_reported_as_current(self):
+        pid_file = self.root / "gh.pid"
+        self.env["CI_AWAIT_BLOCK_PID_FILE"] = str(pid_file)
+        self.env["CI_AWAIT_ANSWERED_LISTINGS"] = "1"
+        result = self.wait([job("Test build", "in_progress")], timeout="2", jobs=["Test build"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("timed out after 2 s waiting for every job (job listing still running at the "
+                      "deadline, killed)", result.stderr)
+        self.assertNotIn("waiting for Test build (in_progress)", result.stderr)
 
     def test_malformed_single_page_job_listing_retries_until_the_deadline(self):
         bodies = (

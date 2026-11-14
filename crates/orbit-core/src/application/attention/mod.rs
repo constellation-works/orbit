@@ -75,7 +75,7 @@ fn attention_local_workspace(runtime: &OrbitRuntime) -> Result<AttentionWorkspac
 ///
 /// Each checkout reports what its host is authoritative for: an owner its
 /// task-level kinds, every checkout its own host health.
-pub fn attention_query(
+pub(crate) fn attention_query(
     runtime: &OrbitRuntime,
     input: Value,
     session_context: &ToolSessionContext,

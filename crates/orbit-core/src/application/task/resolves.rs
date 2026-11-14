@@ -17,7 +17,6 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::FrictionLandingOutcome;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, Task, TaskHistoryEntry,
     TaskStatus, named_friction_targets, pending_resolves_entries, resolves_relation_targets,
@@ -29,7 +28,6 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::application::task::final_recovery::FINAL_RECOVERY_COMPLETED_EVENT;
 
-const RELATION_RESOLVES: &str = "resolves";
 /// Task history event recording that resolving one `resolves` target failed
 /// after the task reached done. Its note's first line is `target=<id>`.
 pub(crate) const RESOLVES_SIDE_EFFECT_FAILED_EVENT: &str = "resolves_side_effect_failed";
@@ -48,6 +46,13 @@ thread_local! {
 struct LandingResolution {
     commit: String,
     pr_number: Option<u64>,
+}
+
+/// Only the distinctions needed for durable side-effect bookkeeping.
+enum ResolvesSideEffectOutcome {
+    Resolved,
+    Unchanged,
+    Failed(String),
 }
 
 impl OrbitRuntime {
@@ -106,21 +111,12 @@ impl OrbitRuntime {
                 )
             })
             .collect();
-        for (target, event) in self.apply_resolves_side_effects(task, &targets, landing.as_ref()) {
-            let Some(event) = event else {
-                if pending.contains_key(target) {
-                    history.push(resolves_history_entry(
-                        RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
-                        target,
-                        None,
-                    ));
-                }
-                continue;
-            };
-            match &event {
+        for (target, outcome) in self.apply_resolves_side_effects(task, &targets, landing.as_ref())
+        {
+            match &outcome {
                 // A target already recorded as failed keeps its earlier entry;
                 // repeating it on every write would only grow the history.
-                OrbitEvent::TaskRelationSideEffectFailed { reason, .. }
+                ResolvesSideEffectOutcome::Failed(reason)
                     if pending.get(target) != Some(&UnfinishedResolve::Failed) =>
                 {
                     history.push(resolves_history_entry(
@@ -129,15 +125,19 @@ impl OrbitRuntime {
                         Some(reason),
                     ));
                 }
-                OrbitEvent::TaskRelationSideEffectFailed { .. } => {}
-                _ if pending.contains_key(target) => history.push(resolves_history_entry(
-                    RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
-                    target,
-                    None,
-                )),
-                _ => {}
+                ResolvesSideEffectOutcome::Failed(_) => {}
+                ResolvesSideEffectOutcome::Resolved | ResolvesSideEffectOutcome::Unchanged
+                    if pending.contains_key(target) =>
+                {
+                    history.push(resolves_history_entry(
+                        RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
+                        target,
+                        None,
+                    ))
+                }
+                ResolvesSideEffectOutcome::Resolved | ResolvesSideEffectOutcome::Unchanged => {}
             }
-            if matches!(event, OrbitEvent::FrictionAutoResolved { .. })
+            if matches!(outcome, ResolvesSideEffectOutcome::Resolved)
                 && let Some(landing) = &landing
             {
                 let mut entry = resolves_history_entry(RESOLVES_LANDING_EVENT, target, None);
@@ -149,9 +149,6 @@ impl OrbitRuntime {
                         .map_or_else(|| "none".to_string(), |number| format!("#{number}")),
                 ));
                 history.push(entry);
-            }
-            if let Err(error) = self.record_event(event) {
-                tracing::warn!(task_id = %task.id, %error, "recording a resolves side-effect event failed");
             }
         }
         if !history.is_empty()
@@ -180,13 +177,7 @@ impl OrbitRuntime {
         task: &Task,
         targets: &[&'a str],
         landing: Option<&LandingResolution>,
-    ) -> Vec<(&'a str, Option<OrbitEvent>)> {
-        let failed = |target: &str, reason: String| OrbitEvent::TaskRelationSideEffectFailed {
-            task_id: task.id.clone(),
-            target: target.to_string(),
-            relation: RELATION_RESOLVES.to_string(),
-            reason,
-        };
+    ) -> Vec<(&'a str, ResolvesSideEffectOutcome)> {
         let frictions = match crate::runtime::friction::store_for(self) {
             Ok(store) => store,
             // Without a store there is no per-relation verdict to give, so
@@ -194,7 +185,12 @@ impl OrbitRuntime {
             Err(error) => {
                 return targets
                     .iter()
-                    .map(|target| (*target, Some(failed(target, error.to_string()))))
+                    .map(|target| {
+                        (
+                            *target,
+                            ResolvesSideEffectOutcome::Failed(error.to_string()),
+                        )
+                    })
                     .collect();
             }
         };
@@ -219,20 +215,14 @@ impl OrbitRuntime {
                             }
                         }),
                 };
-                let event = match result {
-                    Ok(FrictionLandingOutcome::AlreadyResolved) => return (*target, None),
-                    Ok(FrictionLandingOutcome::Resolved) => OrbitEvent::FrictionAutoResolved {
-                        task_id: task.id.clone(),
-                        friction_id: target.to_string(),
-                    },
-                    Ok(FrictionLandingOutcome::Missing) => OrbitEvent::TaskRelationDangling {
-                        task_id: task.id.clone(),
-                        target: target.to_string(),
-                        relation: RELATION_RESOLVES.to_string(),
-                    },
-                    Err(error) => failed(target, error.to_string()),
+                let outcome = match result {
+                    Ok(
+                        FrictionLandingOutcome::AlreadyResolved | FrictionLandingOutcome::Missing,
+                    ) => ResolvesSideEffectOutcome::Unchanged,
+                    Ok(FrictionLandingOutcome::Resolved) => ResolvesSideEffectOutcome::Resolved,
+                    Err(error) => ResolvesSideEffectOutcome::Failed(error.to_string()),
                 };
-                (*target, Some(event))
+                (*target, outcome)
             })
             .collect()
     }
@@ -246,22 +236,14 @@ impl OrbitRuntime {
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
-                self.with_mutation(|| {
-                    let updated = self.stores().task_records().update(
-                        task_id,
-                        TaskRecordUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            append_history: history.clone(),
-                            ..Default::default()
-                        },
-                    )?;
-                    Ok((
-                        updated,
-                        OrbitEvent::TaskUpdated {
-                            id: task_id.to_string(),
-                        },
-                    ))
-                })?;
+                self.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        append_history: history.clone(),
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })
     }

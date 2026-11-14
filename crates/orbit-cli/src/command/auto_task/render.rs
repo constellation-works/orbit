@@ -222,8 +222,6 @@ fn show(value: Value) -> CommandOut {
         "inactive"
     } else if doc["enabled"].as_bool() == Some(true) {
         "enabled"
-    } else if doc["effective_enabled"].as_bool() == Some(true) {
-        "enabled by the deprecated operation.review_policy = after-landing"
     } else {
         "disabled"
     };

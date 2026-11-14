@@ -61,10 +61,10 @@ pub const TASK_RISKINESS_ESTIMATOR_VERSION: u32 = 3;
 /// Trailing days of done tasks the riskiness model observes: the former
 /// `workflow.regression_risk.window_days` default, fixed when the key was
 /// removed [ORB-22806].
-pub const RISKINESS_WINDOW_DAYS: u32 = 30;
+pub(crate) const RISKINESS_WINDOW_DAYS: u32 = 30;
 /// Observations a size basis needs before it is fitted: the former
 /// `workflow.regression_risk.min_support` default [ORB-22806].
-pub const RISKINESS_MIN_SUPPORT: usize = 5;
+pub(crate) const RISKINESS_MIN_SUPPORT: usize = 5;
 /// Fisher-scoring iterations one fit may take before it is abandoned.
 const FIT_MAX_ITERATIONS: usize = 100;
 /// A fit has converged once a full step moves no parameter further.
