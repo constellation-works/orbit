@@ -347,10 +347,12 @@ class PrepReadinessRegression(unittest.TestCase):
         }
 
     def verdict(self, request):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
             input=json.dumps(request), text=True, capture_output=True, timeout=30,
-            cwd=ROOT / ".orbit/tmp")
+            cwd=scratch)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 

@@ -11,6 +11,7 @@ a stray file, or a missing executable.
 
 import os
 from pathlib import Path
+import shutil
 import self_test_hang
 import tempfile
 import unittest
@@ -50,10 +51,25 @@ class MakeInstallRecipeTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="orbit-make-install-")
         self.addCleanup(temporary.cleanup)
         scratch = Path(temporary.name)
-        # The recipe word-splits BUILD_BUDGET and CARGO, so their paths cannot hold whitespace.
-        for path in (scratch, BUILD_BUDGET):
-            if any(char.isspace() for char in str(path)):
-                raise AssertionError(f"{path} contains whitespace; the recipe word-splits BUILD_BUDGET and CARGO")
+        if any(char.isspace() for char in str(scratch)):
+            temporary.cleanup()
+            try:
+                temporary = tempfile.TemporaryDirectory(prefix="orbit-make-install-", dir="/tmp")
+            except OSError:
+                raise unittest.SkipTest("no whitespace-free scratch directory available")
+            self.addCleanup(temporary.cleanup)
+            scratch = Path(temporary.name)
+            if any(char.isspace() for char in str(scratch)):
+                raise unittest.SkipTest("scratch directory contains whitespace")
+        # The recipe word-splits BUILD_BUDGET and CARGO, so a spaced checkout
+        # stages the wrapper under the (whitespace-free) scratch instead of
+        # erroring every test before the spaced destination is exercised.
+        self.build_budget = BUILD_BUDGET
+        if any(char.isspace() for char in str(BUILD_BUDGET)):
+            staged = scratch / "tools" / "build-budget.py"
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(BUILD_BUDGET, staged)
+            self.build_budget = staged
         # The make working directory doubles as the parent of every destination, so any
         # path a word-split operand resolves relative to it lands where the tree check sees it.
         self.work = scratch / "work"
@@ -64,7 +80,7 @@ class MakeInstallRecipeTests(unittest.TestCase):
         self.target = scratch / "target"
         self.cargo_log = scratch / "cargo.log"
         self.stub = scratch / "tools" / "cargo"
-        self.stub.parent.mkdir()
+        self.stub.parent.mkdir(exist_ok=True)
         self.stub.write_text(STUB_CARGO)
         self.stub.chmod(0o755)
         self.spaced = self.work / "install dir" / "bin"
@@ -83,7 +99,7 @@ class MakeInstallRecipeTests(unittest.TestCase):
             [
                 "make", "-f", str(MAKEFILE), "-C", str(self.work), goal,
                 f"INSTALL_BIN_DIR={destination}",
-                f"BUILD_BUDGET={BUILD_BUDGET}",
+                f"BUILD_BUDGET={self.build_budget}",
                 f"CARGO={self.stub}",
             ],
             step=f"make {goal}",

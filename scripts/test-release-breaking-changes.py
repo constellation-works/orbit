@@ -10,13 +10,11 @@ come from a stub `orbit` binary that serves a JSON fixture.
 import json
 import os
 from pathlib import Path
-import runpy
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
-from unittest import mock
 
 import self_test_hang
 from release_schema_oracle import INSTANCES, bounded_schema_pairs, schema_accepts_instance
@@ -1420,7 +1418,8 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                     self.assertEqual(report["next_version"], "0.36.0")
 
     def test_zero_shared_edited_mcp_alternative_changes_are_reported(self):
-        detect_mcp_changes = runpy.run_path(str(SCRIPT))["detect_mcp_changes"]
+        # Drive the public CLI over a fixture repo (like sibling cases), so
+        # CLI wiring and rev handling for zero-shared-name edits are exercised.
         cases = (
             (
                 {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
@@ -1434,26 +1433,33 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
             ),
         )
         unchanged = {"properties": {"a": {"type": "string"}}}
+        counter = 0
         for keyword in ("anyOf", "oneOf"):
             for old_branch, new_branch, changes in cases:
                 for reordered in (False, True):
                     with self.subTest(keyword=keyword, changes=changes, reordered=reordered):
-                        before = [unchanged, old_branch]
-                        after = [new_branch, unchanged] if reordered else [unchanged, new_branch]
-                        git = mock.Mock()
-                        git.show.side_effect = [
-                            json.dumps([{"name": "orbit_task_show",
-                                         "inputSchema": {keyword: branches}}])
-                            for branches in (before, after)
-                        ]
-
-                        signals = detect_mcp_changes(git, "before", "after", [MCP])
-                        self.assertEqual(signals, [
-                            {"signal": "mcp-schema", "file": MCP,
-                             "detail": f"`orbit_task_show` property "
-                                       f"`inputSchema{{{keyword}1}}.{prop}` {change}"}
+                        counter += 1
+                        self.repo = FixtureRepo(Path(self.tmp.name) / f"zero-shared-{counter}")
+                        tools = self.repo.mcp()
+                        schema = tools[0]["inputSchema"]
+                        schema.pop("anyOf", None)
+                        schema.pop("oneOf", None)
+                        schema[keyword] = [unchanged, old_branch]
+                        self.repo.write_mcp(tools)
+                        self.repo.commit(f"feat: Add {keyword} alternatives [ORB-60] (#1)")
+                        self.repo.git("tag", "-f", "v0.35.0")
+                        schema[keyword] = ([new_branch, unchanged] if reordered
+                                           else [unchanged, new_branch])
+                        self.repo.write_mcp(tools)
+                        self.repo.commit(f"feat: Edit {keyword} alternative [ORB-61] (#2)")
+                        report = self.report()
+                        self.assertEqual(self.signals(report), {
+                            ("ORB-61", "mcp-schema",
+                             f"`orbit_task_show` property `inputSchema{{{keyword}1}}.{prop}` {change}")
                             for prop, change in changes
-                        ])
+                        })
+                        self.assertEqual(report["bump"], "minor")
+                        self.assertEqual(report["next_version"], "0.36.0")
 
     def test_reordered_edited_mcp_alternative_removal_is_reported(self):
         tools = self.repo.mcp()

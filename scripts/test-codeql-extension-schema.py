@@ -260,11 +260,11 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         pack_file = pack_dir / "codeql-pack.yml"
         pack_file.write_text(MALFORMED_NESTED_SEQUENCE_PACK, encoding="utf-8")
         (pack_dir / "path-validation.yaml").write_text(TWO_VALID_ROWS, encoding="utf-8")
-        errors = self.errors()
-        self.assertEqual(len(errors), 1, errors)
-        self.assertIn("malformed YAML", errors[0])
-        self.assertIn(pack_file.relative_to(self.root).as_posix(), errors[0])
-        self.assertIn("line 10", errors[0])
+        result = self._public_guard()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("malformed YAML", result.stderr)
+        self.assertIn(pack_file.relative_to(self.root).as_posix(), result.stderr)
+        self.assertIn("line 10", result.stderr)
 
     def test_unsupported_predicate_fails_clearly(self):
         self.write_pack(UNSUPPORTED_PREDICATE)
