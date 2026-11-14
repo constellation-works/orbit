@@ -67,10 +67,6 @@ use crate::state::{DashboardState, Ws};
 /// process itself runs inside a managed run whose ambient identity is a model.
 const OPERATOR_ACTOR: &str = "human";
 
-/// Longest accepted approve replay identity. Approve has no tool surface, so
-/// its key stays checked here; recover, revoke and retry check theirs in core.
-const MAX_REQUEST_ID: usize = 128;
-
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ClaimsStateQuery {
@@ -174,9 +170,10 @@ pub(super) async fn approve_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_id = match validate_request_id(&body.request_id) {
+    let request_id = match operator_input::replay_key(&body.request_id) {
         Ok(request_id) => request_id,
-        Err(message) => return bad_request(message),
+        Err(OrbitError::InvalidInput(message)) => return bad_request(message),
+        Err(error) => return server_error(error),
     };
     let expected = ExpectedCandidate {
         candidate_commit: body.expected_candidate_commit,
@@ -532,21 +529,4 @@ fn capabilities(operator_session: bool) -> Value {
         "handoff_revoke": action_capability(&DASHBOARD_HANDOFF_REVOKE, operator_session),
         "claim_recover": action_capability(&DASHBOARD_CLAIM_RECOVER, operator_session),
     })
-}
-
-fn validate_request_id(raw: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(
-            "request_id identifies this decision so a retry replays it instead of recording a \
-             second one; send one"
-                .to_string(),
-        );
-    }
-    if trimmed.len() > MAX_REQUEST_ID {
-        return Err(format!(
-            "request_id must be at most {MAX_REQUEST_ID} characters"
-        ));
-    }
-    validate_id(trimmed).map(ToString::to_string)
 }
