@@ -154,3 +154,40 @@ fn dashboard_task_create_keeps_uncertain_submission_on_retry_authorization_refus
         "task-create must still clear the saved submission for a first-attempt or body-definitive refusal (e.g. 413/415), as intended by the plain-text framework-refusal handling"
     );
 }
+
+#[test]
+fn dashboard_common_el_applies_all_attributes_without_allow_list() {
+    let sources = first_party_dashboard_sources();
+    let common_js = sources
+        .iter()
+        .find(|(name, _)| name == "js/common.js")
+        .unwrap_or_else(|| panic!("dashboard test cannot find js/common.js"))
+        .1
+        .as_str();
+
+    // Structural safety guard: el() previously filtered attributes with an
+    // allow-list (role, type, aria-*), silently dropping other valid attributes
+    // like optgroup label in task-status-controls.js and forcing wrappers (ORB-24591).
+    assert!(
+        !common_js.contains("name.startsWith(\"aria-\") || name === \"role\" || name === \"type\""),
+        "common.js el must not filter attributes by an allow-list of role/type/aria- (ORB-24591)"
+    );
+    assert!(
+        common_js.contains("node.setAttribute(name, String(value))"),
+        "common.js el must set non-direct attributes via setAttribute (ORB-24591)"
+    );
+    let el_defs: Vec<&str> = sources
+        .iter()
+        .filter(|(_, src)| {
+            src.lines().any(|line| {
+                line.starts_with("function el(") || line.starts_with("export function el(")
+            })
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        el_defs,
+        vec!["js/common.js"],
+        "common.js must be the only dashboard module defining function el() (ORB-24591)"
+    );
+}

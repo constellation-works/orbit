@@ -937,7 +937,14 @@ export function el(tag, opts = {}, children = []) {
   if (opts.title != null) node.title = opts.title;
   if (opts.style) Object.assign(node.style, opts.style);
   for (const [name, value] of Object.entries(opts)) {
-    if (value != null && (name.startsWith("aria-") || name === "role" || name === "type")) {
+    if (
+      value != null &&
+      name !== "id" &&
+      name !== "class" &&
+      name !== "text" &&
+      name !== "title" &&
+      name !== "style"
+    ) {
       node.setAttribute(name, String(value));
     }
   }
