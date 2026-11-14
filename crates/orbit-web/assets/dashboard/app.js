@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
-import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
@@ -393,6 +393,7 @@ function routerContext() {
     // hash and survive reload/back-navigation the same way audit's do.
     applyTasksHashQuery: (query, page) => applyTasksHashQuery(query, taskContext(), page),
     buildTasksHash: () => buildTasksHash(taskContext()),
+    buildTasksFilterHash: () => buildTasksFilterHash(taskContext()),
     syncTaskControls: () => syncTaskControls(taskContext()),
   };
 }
