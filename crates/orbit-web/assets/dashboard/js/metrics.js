@@ -16,7 +16,7 @@
 // the tooltip in place.
 
 import {
-  el as makeEl, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
+  el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
   notifyScopeChange, wireWindowSelector, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock, getClockZone,
   bindTaskLink, DASHBOARD_WINDOWS, pinnedInfoHint,
@@ -29,15 +29,6 @@ import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayl
 import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
 
 const $ = (id) => document.getElementById(id);
-
-// `el` from common.js, also applying the table and focus attributes it leaves out.
-function el(tag, opts = {}, children = []) {
-  const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex"]) {
-    if (opts[name] != null) node.setAttribute(name, String(opts[name]));
-  }
-  return node;
-}
 
 // A bucket or actor with fewer runs than this is drawn hollow or dimmed: its
 // average is one or two runs, not a trend.

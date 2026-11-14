@@ -2,18 +2,9 @@
 // the labels several tabs read, and the card, table, collapsed-section and
 // info-icon builders.
 
-import { el as makeEl, pinnedInfoHint, detailsPanel } from './common.js';
+import { el, pinnedInfoHint, detailsPanel } from './common.js';
 
-export { pinnedInfoHint };
-
-// `el` from common.js, also applying the table and focus attributes it leaves out.
-export function el(tag, opts = {}, children = []) {
-  const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex", "colspan"]) {
-    if (opts[name] != null) node.setAttribute(name, String(opts[name]));
-  }
-  return node;
-}
+export { el, pinnedInfoHint };
 
 // `render` is set by forecast.js, which owns fetching and the page.
 export const forecastView = {
