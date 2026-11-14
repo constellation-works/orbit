@@ -19,3 +19,7 @@ removed or changed in meaning.
 - **v4 (2026-11-14):** adds R38 (a row of controls uses the full width available before it
   wraps, and a bar that belongs to the whole view spans the view). From the owner's Tasks
   status-chip correction in session f09993e5 (ORB-24686, F2026-11-288).
+- **v5 (2026-11-14):** R38 no longer says a view-wide bar spans the view. A row of controls
+  extends into the empty space beside it only where it would otherwise wrap inside its
+  column; where it fits its column it stays there. From the owner's correction of the
+  ORB-24686 fix (ORB-24777, F2026-11-294).
