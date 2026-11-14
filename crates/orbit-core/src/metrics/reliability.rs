@@ -44,8 +44,13 @@
 //! A run the host manager stopped — a terminating signal whose recorded
 //! sender command is `systemd`, with no recorded memory or task-limit breach —
 //! is `held` under `operator_stopped`. That state is [`RunOutcome::Held`],
-//! outside the failure rate. An unknown or unreadable sender, a signal from
-//! another command, and a crash exit stay `interrupted` and count as failures.
+//! outside the failure rate. A supervisor that finalizes a running worker's
+//! non-signal crash marks it `failed` without `worker_terminated`; stale-owner
+//! reconciliation that finalizes the dead worker first marks it `interrupted`
+//! with that code. Both count as failures. An unknown or unreadable sender or
+//! a signal from another command also remains a failure. Reconciliation only
+//! applies the host-manager hold when the exit row is recorded before it
+//! finalizes; later sender evidence does not rewrite an interruption.
 //!
 //! Because six of the eight outcomes sit outside the denominator, and a
 //! wrapper that failed only because its child failed is rolled out of

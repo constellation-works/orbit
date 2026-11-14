@@ -636,14 +636,18 @@ older binary), stops scheduled routines and worktree GC on that host until those
 processes exit. Every such tick says so on stderr (`clock tick refused by upgrade
 admission (N tick(s) in a row since …)`), followed by the refusal, and `orbit doctor`'s
 `clock-unit` row reports an error naming the run of refused ticks and the latest
-refusal until a tick runs again. A claimed worker that exits without a recorded cancellation stays
-`interrupted` with `worker_terminated` when the sender is unknown or the
-process crashed, whether its supervisor observes the exit or stale-owner
-reconciliation sees the dead process first. A terminating signal the recorded
-exit attributes to `systemd` — a service restart or host shutdown — is `held`
-with `operator_stopped` and is outside the failure query. The supervisor and
-reconciliation apply that same rule. An unknown sender, another command, a
-crash, and a memory or task-limit breach stay failures.
+refusal until a tick runs again. A claimed worker that exits without a
+recorded cancellation has a failure state that depends on which path finalizes
+it. When the supervisor finalizes a running worker's
+non-signal crash exit, the run is `failed` without `worker_terminated`. When
+stale-owner reconciliation finalizes the dead worker first, it records
+`interrupted` with `worker_terminated`. Both states count as failures. A
+recorded terminating signal from `systemd` — a service restart or host
+shutdown — is `held` with `operator_stopped` and is outside the failure query
+when that exit evidence is available before finalization. If reconciliation
+finalizes first, it keeps the interruption even if the supervisor later
+records the `systemd` sender. Unknown senders, signals from other commands,
+and memory or task-limit breaches remain failures.
 
 #### Rollout beside executable-generation-v1 processes
 
