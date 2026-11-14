@@ -289,8 +289,9 @@ orbit task locks list                      # files held by active tasks and rese
 orbit task locks release <reservation_id> --confirm  # operator escape hatch
 ```
 
-The dashboard's **Locks held** card uses the same listing, including active
-reservations and distinct task counts. No-diff tasks hold no context locks;
+The listing also includes active reservations and distinct task counts. The
+Drain readiness groups name the holders blocking a waiting task. No-diff tasks
+hold no context locks;
 other holders use admission's canonical selectors and unlocked-path rules.
 Listing locks also expires old reservations and records their audit events.
 
