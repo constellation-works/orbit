@@ -142,23 +142,42 @@ fn cli_command_with_width(
     crate::help::hang_wrap_footers(install_output_args(root, true), usize::from(term_width))
 }
 
+/// Report a clap parse failure in the invocation's output mode and exit.
+fn exit_parse_error(err: clap::error::Error, args: &[std::ffi::OsString]) -> ! {
+    let (requested, legacy) = usage_error::pre_parse_format(args);
+    let err = usage_error::suggest_help_flag(repair_crew_flag_suggestion(err));
+    let err = if usage_error::is_unknown_host_flag(&err) {
+        usage_error::suggest_host_command(err, host_ssh_command(args))
+    } else {
+        err
+    };
+    usage_error::exit(err, requested, legacy)
+}
+
 /// Parse argv into the derived CLI, the two inputs to mode resolution, and
 /// whether `--header` asked for a plain-form header row.
 pub(super) fn parse_cli() -> (command::Cli, Option<FormatArg>, bool, bool) {
-    let groups = plugin_cli_groups();
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    let matches = cli_command(&groups)
-        .try_get_matches_from(&args)
-        .unwrap_or_else(|err| {
-            let (requested, legacy) = usage_error::pre_parse_format(&args);
-            let err = usage_error::suggest_help_flag(repair_crew_flag_suggestion(err));
-            let err = if usage_error::is_unknown_host_flag(&err) {
-                usage_error::suggest_host_command(err, host_ssh_command(&args))
-            } else {
-                err
-            };
-            usage_error::exit(err, requested, legacy)
-        });
+    // Try the built-in tree first: a successful parse cannot be a plugin
+    // group, so it pays no plugin discovery. A plugin namespace equal to a
+    // built-in command is refused during discovery and never becomes a
+    // group, so the built-in winning here is the outcome today too. Any
+    // failure (help/version display, unknown subcommand, usage error)
+    // falls through to discovery and a reparse against the augmented
+    // tree, so help, suggestions and errors keep their current wording.
+    let (groups, matches) = match cli_command(&[]).try_get_matches_from(&args) {
+        Ok(matches) => (Vec::new(), matches),
+        Err(built_in_error) => {
+            let groups = plugin_cli_groups();
+            if groups.is_empty() {
+                exit_parse_error(built_in_error, &args);
+            }
+            match cli_command(&groups).try_get_matches_from(&args) {
+                Ok(matches) => (groups, matches),
+                Err(err) => exit_parse_error(err, &args),
+            }
+        }
+    };
     let (requested, legacy) = requested_output(&matches)
         .unwrap_or_else(|err| usage_error::exit(err, Some(FormatArg::Json), true));
     let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
