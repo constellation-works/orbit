@@ -15,7 +15,7 @@
 // click uses setActiveTab (preserving the ?step= query for run-detail
 // pre-expansion) rather than navigateToRun, so it matches the pre-split behavior.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatAge, formatDateTime, listItems, runHref, truncate } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatAge, formatDateTime, listItems, bindRunLink, truncate } from './common.js';
 import { renderIncidents } from './incidents.js';
 
 const $ = (id) => document.getElementById(id);
@@ -80,7 +80,7 @@ function errorRunLabel(row) {
 
 function runDashboardLink(runId, workspaceId) {
   const link = el("a", { class: "mono", text: runId, title: `Open ${runId}` });
-  link.href = runHref(runId, { workspace: workspaceId });
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 
@@ -94,12 +94,6 @@ function truncatedMessageNote(row, ctx) {
   const workspaceId = row.workspace_id || getWorkspace();
   const link = runDashboardLink(row.job_run, workspaceId);
   link.textContent = "Open the run";
-  link.addEventListener("click", event => {
-    event.stopPropagation();
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    event.preventDefault();
-    if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(row.job_run, workspaceId);
-  });
   return el("p", { class: "error-message-note" }, ["The feed shows the start of this long message. ", link, " for the full text."]);
 }
 
@@ -168,12 +162,6 @@ function getDiagErrorsColumns(ctx) {
         if (!runId) return errorRunLabel(row);
         const workspaceId = row.workspace_id || getWorkspace();
         const link = runDashboardLink(runId, workspaceId);
-        link.addEventListener("click", event => {
-          event.stopPropagation();
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-          event.preventDefault();
-          if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(runId, workspaceId);
-        });
         return link;
       },
     },

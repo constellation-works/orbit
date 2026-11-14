@@ -893,6 +893,28 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   window.addEventListener("popstate", restoreScopeFromUrl);
 }
 
+/// Bind a run address while keeping ordinary navigation in this dashboard.
+export function bindRunLink(link, runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
+  link.href = runHref(runId, { host, workspace });
+  link.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (host !== selectedRunHost() || (workspace && workspace !== currentWorkspace)) {
+      persistScopeToUrl();
+      if (host !== selectedRunHost()) requestHostSwitch(host, { fromHistory: true });
+      if (workspace) setWorkspace(workspace);
+      syncWorkspaceSelector();
+      history.pushState(null, "", runHref(runId, { host, workspace }));
+      addressScope = addressScopeKey();
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      return;
+    }
+    window.location.hash = `#runs?run_id=${encodeURIComponent(runId)}`;
+  });
+  return link;
+}
+
 /// Make `link` open task `taskId` on the Tasks tab. The href is `taskHref`, so
 /// a new tab, a copy or a modified click lands on the same task. A plain click
 /// stays in the page, in `workspace`, and adds one history entry: the scope

@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, copyWithFeedback, el, elapsedDurationInfo, fetchJson, fmtDuration, formatDateTime, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
 import { humanCrewFor } from './task-crew.js';
-import { absTimeNode, canMutateTask, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM, taskDispatchIdentity } from './task-shared.js';
+import { absTimeNode, canMutateTask, pullRequestLink, refreshTasks, rerender, bindTaskRunLink, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM, taskDispatchIdentity } from './task-shared.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, claimAttention, deliverySteps, lastKnownClaims } from './distributed.js';
 import { buildTaskMeta, buildStageStrip } from './task-lifecycle.js';
 import { buildActionsRow } from './task-actions.js';
@@ -569,7 +569,7 @@ function renderTaskRuns(node, task, context) {
 function buildTaskRun(run, task) {
   const runId = String(run.run_id || "");
   const link = el("a", { class: "mono task-run-id", text: runId });
-  link.href = taskRunHref(task, runId);
+  bindTaskRunLink(link, task, runId);
   const when = run.started_at || run.scheduled_at || run.finished_at;
   const { durationMs } = elapsedDurationInfo(run);
   return el("li", { class: "task-run" }, [

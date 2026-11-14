@@ -12,7 +12,7 @@
 // (re-exported by app's routerContext), run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, fmtDuration, formatDate, formatDateTime, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText, infoHint } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, fmtDuration, formatDate, formatDateTime, formatClock, elapsedDurationInfo, bindRunLink, bindTaskLink, reviewLayerText, infoHint } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -69,11 +69,6 @@ function setRunDetailSubtab(name) {
   }
 }
 
-function navigateToRun(runId) {
-  if (hasCtx("navigateToRun")) {
-    try { _runDetailCtx.navigateToRun(runId); } catch (_) {}
-  }
-}
 
 function setActiveTab(tab) {
   if (hasCtx("setActiveTab")) {
@@ -367,12 +362,12 @@ export function renderRunDetailMeta() {
   const actions = el("div", { class: "run-detail-actions" }, [back]);
   if (run.retry_source_run_id) {
     const sourceId = run.retry_source_run_id;
-    const lineage = el("button", {
+    const lineage = el("a", {
       class: "back-action replay-source",
       text: `Replayed from ${sourceId}`,
       title: `Open ${sourceId}`,
     });
-    lineage.addEventListener("click", () => navigateToRun(sourceId));
+    bindRunLink(lineage, sourceId, { workspace: run.workspace_id || getWorkspace() });
     actions.appendChild(lineage);
   }
   // A run recorded under a workspace this host no longer registers is
@@ -543,12 +538,12 @@ function buildClaimedLeaves(run, leaves) {
       if (leaf.leaf_state) parts.push(`state ${leaf.leaf_state}`);
       if (leaf.stage) parts.push(leaf.stage);
       if (leaf.settlement_phase) parts.push(`claim ${leaf.settlement_phase}`);
-      const link = el("button", {
+      const link = el("a", {
         class: "back-action",
         text: leaf.leaf_run_id,
         title: `Open ${leaf.leaf_run_id}`,
       });
-      link.addEventListener("click", () => navigateToRun(leaf.leaf_run_id));
+      bindRunLink(link, leaf.leaf_run_id, { workspace: run.workspace_id || getWorkspace() });
       panel.appendChild(el("div", { class: "child-dispatch-row" }, [
         link,
         el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
@@ -756,14 +751,13 @@ function navigableTaskId(token) {
   return Boolean(match) && !NON_TASK_PREFIX.has(match[1]);
 }
 
-function failureRunLink(runId) {
-  const link = el("button", {
+function failureRunLink(runId, workspaceId) {
+  const link = el("a", {
     class: "failure-id-link",
-    type: "button",
     text: runId,
     title: `Open ${runId}`,
   });
-  link.addEventListener("click", () => navigateToRun(runId));
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 
@@ -785,7 +779,7 @@ function linkifyFailureText(text, workspaceId) {
     const token = match[0];
     const start = match.index;
     if (start > cursor) nodes.push(source.slice(cursor, start));
-    if (token.startsWith("jrun-")) nodes.push(failureRunLink(token));
+    if (token.startsWith("jrun-")) nodes.push(failureRunLink(token, workspaceId));
     else if (navigableTaskId(token)) nodes.push(failureTaskLink(token, workspaceId));
     else nodes.push(token);
     cursor = start + token.length;
@@ -803,7 +797,7 @@ function buildFailureRoot(root, workspaceId) {
   if (!root || typeof root.run_id !== "string" || root.run_id === "") return null;
   const line = el("p", { class: "run-failure-root" });
   line.append(el("strong", { text: "Root cause: " }));
-  line.append(failureRunLink(root.run_id));
+  line.append(failureRunLink(root.run_id, workspaceId));
   if (root.state) line.append(` ${root.state}`);
   if (root.step) line.append(` at ${root.step}`);
   if (root.message) {
@@ -922,12 +916,12 @@ function buildChildDispatches(run) {
     if (d.child_status) parts.push(`checkpoint status ${d.child_status}`);
     if (d.cancellation) parts.push(`cancel ${d.cancellation.policy}/${d.cancellation.outcome}`);
 
-    const link = el("button", {
+    const link = el("a", {
       class: "back-action",
       text: d.child_run_id,
       title: `Open ${d.child_run_id}`,
     });
-    link.addEventListener("click", () => navigateToRun(d.child_run_id));
+    bindRunLink(link, d.child_run_id, { workspace: run.workspace_id || getWorkspace() });
 
     const row = el("div", { class: "child-dispatch-row" }, [
       stateCell(state),

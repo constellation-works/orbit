@@ -1,5 +1,4 @@
-import { bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, runHref, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
-import { navigateToRun } from './router.js';
+import { bindRunLink, bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
 
 export const operationsState = {
   context: null,
@@ -524,12 +523,7 @@ export function outcomeDot(state) {
 
 export function runLink(runId, workspaceId, text = runId) {
   const link = el("a", { class: "mono operation-run-link", text, title: `Open run ${runId}` });
-  link.href = runHref(runId, { workspace: workspaceId || null });
-  link.addEventListener("click", (event) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    event.preventDefault();
-    navigateToRun(runId, workspaceId || null);
-  });
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 

@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, runHref, bindTaskLink, makeCopyButton, pinnedInfoHint, truncate } from './common.js';
+import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, pinnedInfoHint, truncate } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -105,10 +105,6 @@ function eventCountLabel(value) {
 
 function number(value) {
   return asCount(value).toLocaleString("en-US");
-}
-
-function plainClick(event) {
-  return !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0);
 }
 
 function windowPhrase(window) {
@@ -914,13 +910,7 @@ function auditButton(group, text, className) {
 
 function runLink(runId, workspaceId, ctx) {
   const link = el("a", { class: "mono", text: runId, title: `Open ${runId}` });
-  link.href = runHref(runId, { workspace: workspaceId });
-  link.addEventListener("click", event => {
-    event.stopPropagation();
-    if (!plainClick(event)) return;
-    event.preventDefault();
-    if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(runId, workspaceId);
-  });
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 

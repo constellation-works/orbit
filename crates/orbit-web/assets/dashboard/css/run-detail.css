@@ -607,6 +607,7 @@ a.failure-id-link:focus-visible {
   color: var(--fg-dim);
   transition: all 0.2s ease;
 }
+a.back-action { display: inline-flex; align-items: center; box-sizing: border-box; text-decoration: none; }
 .back-action:hover {
   color: var(--fg);
   border-color: var(--fg-dim);

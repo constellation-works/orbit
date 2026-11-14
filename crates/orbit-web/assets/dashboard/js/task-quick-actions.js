@@ -1,6 +1,6 @@
 // Orbit dashboard task row quick actions: the Approve, Ship and remote-run controls a row shows, with their pending and failed state.
 
-import { captureWorkspaceVisit, getWorkspace, el, postJson, isAggregateView, runHref, submissionNoticeLines } from './common.js';
+import { bindRunLink, captureWorkspaceVisit, getWorkspace, el, postJson, isAggregateView, submissionNoticeLines } from './common.js';
 import { drainReadinessFor } from './drain-waits.js';
 import { claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole, registeredMachineHost } from './distributed.js';
 import { taskState, rerender, refreshTasks, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, pullRequestLink } from './task-shared.js';
@@ -81,8 +81,7 @@ function buildRemoteRunAction(task, location) {
   const host = registeredMachineHost(location);
   if (host) {
     const link = el("a", { class: "task-quick-link remote-run-link", text: "View run", title: `Open run ${runId} on ${host.name}` });
-    link.href = runHref(runId, { host: host.name, workspace: task.workspace_id || getWorkspace() });
-    link.addEventListener("click", (event) => event.stopPropagation());
+    bindRunLink(link, runId, { host: host.name, workspace: task.workspace_id || getWorkspace() });
     return link;
   }
   const machine = location.machine_name || location.machine_id;
@@ -103,8 +102,7 @@ export function buildQuickAction(task, context) {
     // it on that host rather than this host's job store.
     if (task.job_run_navigable !== false) {
       const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
-      link.href = taskShared.taskRunHref(task, task.job_run_id);
-      link.addEventListener("click", (event) => event.stopPropagation());
+      taskShared.bindTaskRunLink(link, task, task.job_run_id);
       cell.appendChild(link);
       return cell;
     }
@@ -175,8 +173,7 @@ export function buildQuickActionError(task, context) {
     const before = text.slice(0, idx);
     const after = text.slice(idx + runId.length);
     const link = el("a", { class: "task-quick-error-link", text: runId, title: `Open run ${runId}` });
-    link.href = taskShared.taskRunHref(task, runId);
-    link.addEventListener("click", (e) => e.stopPropagation());
+    taskShared.bindTaskRunLink(link, task, runId);
     message = el("span", { class: "task-quick-error-message" }, [
       before,
       link,
