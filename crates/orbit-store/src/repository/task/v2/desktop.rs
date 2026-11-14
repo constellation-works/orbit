@@ -66,7 +66,7 @@ impl TaskV2Store {
             .as_ref()
             .map(|manifest| manifest.files.clone())
             .unwrap_or_default();
-        let task = self.task_from_bundle(bundle)?;
+        let task = super::task_from_bundle(bundle);
         let readonly = self.registry.is_read_only()?
             || fs::metadata(self.bundle_store.bundle_path(id)?)?
                 .permissions()

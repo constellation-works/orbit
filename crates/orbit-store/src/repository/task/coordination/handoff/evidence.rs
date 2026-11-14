@@ -182,11 +182,7 @@ impl TaskCommitBoundary {
                 .cloned()
                 .map(crate::repository::task::v2::task_comment_from_row)
                 .collect::<Vec<_>>();
-            let task = crate::repository::task::TaskV2Store::new(
-                self.registry.clone(),
-                self.workspace_id.clone(),
-            )
-            .task_from_bundle(bundle)?;
+            let task = crate::repository::task::v2::task_from_bundle(bundle);
             if proof.schema_version != 1
                 || proof.task_id != handoff.task_id
                 || proof.covering_task_id != handoff.task_id

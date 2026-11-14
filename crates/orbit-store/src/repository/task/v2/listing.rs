@@ -542,7 +542,7 @@ impl TaskV2Store {
             .unwrap_or_default();
         artifacts.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(TaskRow {
-            task: self.task_from_bundle(bundle)?,
+            task: super::task_from_bundle(bundle),
             comments,
             history,
             artifacts,

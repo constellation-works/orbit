@@ -297,11 +297,9 @@ impl TaskCommitBoundary {
         &self,
         task_id: &str,
     ) -> Result<orbit_types::task::Task, OrbitError> {
-        crate::repository::task::v2::TaskV2Store::new(
-            self.registry.clone(),
-            self.workspace_id.clone(),
-        )
-        .task_from_bundle(self.bundle_store.read_bundle(task_id)?)
+        Ok(crate::repository::task::v2::task_from_bundle(
+            self.bundle_store.read_bundle(task_id)?,
+        ))
     }
 
     /// The typed failure releases of `task_id` that count against its

@@ -240,11 +240,11 @@ impl TaskV2Store {
                 &bundle.envelope,
                 "idempotent task creation",
             )?;
-            return self.task_from_bundle(bundle).map(|task| (task, replayed));
+            return Ok((super::task_from_bundle(bundle), replayed));
         }
         self.bundle_store.create_bundle(&bundle)?;
         self.publish_task_index_and_lease_notices(&bundle.envelope, "task creation")?;
-        self.task_from_bundle(bundle).map(|task| (task, false))
+        Ok((super::task_from_bundle(bundle), false))
     }
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
@@ -312,7 +312,7 @@ impl TaskV2Store {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
         match self.bundle_store.read_bundle(id) {
-            Ok(bundle) => self.task_from_bundle(bundle).map(Some),
+            Ok(bundle) => Ok(Some(super::task_from_bundle(bundle))),
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,
                 ..
@@ -358,7 +358,7 @@ impl TaskV2Store {
         }
         Ok(match self.read_registered_owner_bundle(&binding)? {
             Some(bundle) => {
-                RegisteredTaskResolution::Resolved(Box::new(self.task_from_bundle(bundle)?))
+                RegisteredTaskResolution::Resolved(Box::new(super::task_from_bundle(bundle)))
             }
             None => RegisteredTaskResolution::Missing,
         })

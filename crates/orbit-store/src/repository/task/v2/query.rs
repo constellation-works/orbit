@@ -14,7 +14,7 @@ impl TaskV2Store {
     ) -> Result<Option<Task>, OrbitError> {
         let sidecars_match =
             sidecar_fields_match(&bundle.comments, bundle.artifact_manifest.as_ref(), lowered);
-        let task = self.task_from_bundle(bundle)?;
+        let task = super::task_from_bundle(bundle);
         Ok((task_in_memory_fields_match_query(&task, lowered) || sidecars_match).then_some(task))
     }
 

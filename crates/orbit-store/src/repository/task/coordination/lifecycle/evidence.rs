@@ -19,7 +19,9 @@ use super::super::{TaskCommitBoundary, TaskCommitIntent};
 use super::invalid;
 use crate::contracts::{ClaimCommitEffects, ClaimEvidence, ClaimRun};
 use crate::driver::file::task_bundle::truncate_jsonl_file;
-use crate::repository::task::v2::{normalize_v2_artifact_path, review_report_history};
+use crate::repository::task::v2::{
+    normalize_v2_artifact_path, review_report_history, task_from_bundle,
+};
 use crate::repository::task::v2_bundle::{TaskBundleV2, TaskDocumentV2};
 
 impl TaskCommitBoundary {
@@ -47,11 +49,7 @@ impl TaskCommitBoundary {
             .map(crate::repository::task::v2::task_comment_from_row)
             .collect::<Vec<_>>();
         let history = crate::repository::task::v2::task_history_from_events(failed.events.clone());
-        let task = crate::repository::task::v2::TaskV2Store::new(
-            self.registry.clone(),
-            self.workspace_id.clone(),
-        )
-        .task_from_bundle(failed)?;
+        let task = task_from_bundle(failed);
         let revision = crate::contracts::FinalRecoveryTaskRevision::of(&task, &comments, &history);
         for row in rows
             .iter_mut()

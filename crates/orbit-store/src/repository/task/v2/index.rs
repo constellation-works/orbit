@@ -202,8 +202,8 @@ impl TaskV2Store {
         let mut tasks = self
             .scan_and_repair_index("missing or stale index")?
             .into_iter()
-            .map(|bundle| self.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(super::task_from_bundle)
+            .collect::<Vec<_>>();
         sort_by_created_desc_id_asc(&mut tasks, |task| &task.created_at, |task| &task.id);
         Ok(tasks)
     }
@@ -220,11 +220,12 @@ impl TaskV2Store {
         let ids = self
             .registry
             .indexed_task_ids_filtered(&self.workspace_id, filter)?;
-        self.bundles_from_ids(ids)?
-            .into_iter()
-            .map(|bundle| self.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some)
+        Ok(Some(
+            self.bundles_from_ids(ids)?
+                .into_iter()
+                .map(super::task_from_bundle)
+                .collect(),
+        ))
     }
 
     /// The freshness scan: compare every registered task's index row with its
@@ -743,22 +744,6 @@ impl TaskV2Store {
             );
         }
         Ok(())
-    }
-
-    pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
-        let _span = orbit_common::tracing::trace_span!(
-            target: "orbit.store.task_query",
-            "task_bundle_materialization",
-            task_id = %bundle.envelope.id,
-        )
-        .entered();
-        Ok(Task::from_envelope_parts(
-            bundle.envelope,
-            bundle.description,
-            parse_acceptance(&bundle.acceptance),
-            bundle.plan,
-            bundle.execution_summary,
-        ))
     }
 
     /// The task an envelope describes, without its body documents: `description`,
