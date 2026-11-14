@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
@@ -6,7 +7,7 @@ use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionTaskGuidance,
     ExecutorCapability, JobRunQuery,
 };
-use orbit_types::task::{NO_DRAIN_TAG, Task, TaskStatus};
+use orbit_types::task::{NO_DRAIN_TAG, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{
     CLAIMED_MODE_DENIED_TOOLS, is_claimed_leaf_reachable_tool, is_claimed_owner_tool,
 };
@@ -17,7 +18,7 @@ use crate::application::distributed::{
     DistributedAdmissionPort, DistributedExperimentPort, owner_binary_version,
 };
 use crate::application::host_labels;
-use crate::application::task::PilotAdmissionHold;
+use crate::application::task::{PilotAdmissionHold, standing_baseline_hold_from_history};
 use crate::runtime::run_input::recorded_task_ids;
 
 /// The pull hold for a task assigned to a human crew: operator work no
@@ -123,6 +124,10 @@ impl OrbitRuntime {
         // executor.
         let machine_id = Some(identity.location().machine_id.as_str());
         let now = chrono::Utc::now();
+        // Each backlog task's bundle is read at most once in this pre-pass:
+        // the lazy history loader below memoizes per task and the map it
+        // fills feeds the provider and baseline holds after the loop.
+        let mut history_by_task: BTreeMap<String, Vec<TaskHistoryEntry>> = BTreeMap::new();
         for task in &backlog {
             if let Some(hold) = no_drain_pull_hold(task) {
                 admission_holds.insert(task.id.clone(), hold);
@@ -133,12 +138,24 @@ impl OrbitRuntime {
                 admission_holds.insert(task.id.clone(), hold);
                 continue;
             }
+            let history_cache: RefCell<Option<Vec<TaskHistoryEntry>>> = RefCell::new(None);
+            let load_history = || -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+                if let Some(cached) = history_cache.borrow().as_ref() {
+                    return Ok(cached.clone());
+                }
+                let history = self.get_task_history(&task.id)?;
+                *history_cache.borrow_mut() = Some(history.clone());
+                Ok(history)
+            };
             // A task scheduled ahead is claimed by no follower until its
             // time; the first request after it may take it.
-            if let Some(hold) = crate::application::task::schedule_hold_in(task, now, &|| {
-                self.get_task_history(&task.id)
-            })? {
+            if let Some(hold) =
+                crate::application::task::schedule_hold_in(task, now, &load_history)?
+            {
                 admission_holds.insert(task.id.clone(), hold.detail());
+                if let Some(cached) = history_cache.borrow().as_ref() {
+                    history_by_task.insert(task.id.clone(), cached.clone());
+                }
                 continue;
             }
             // A task an auto-task job step minted is claimed only while its
@@ -146,15 +163,16 @@ impl OrbitRuntime {
             if let Some(hold) = crate::application::auto_tasks::job_step::step_bound_admission_hold(
                 self,
                 task,
-                &|| self.get_task_history(&task.id),
+                &load_history,
             ) {
                 admission_holds.insert(task.id.clone(), hold);
+                if let Some(cached) = history_cache.borrow().as_ref() {
+                    history_by_task.insert(task.id.clone(), cached.clone());
+                }
                 continue;
             }
             let comments = self.get_task_comments(&task.id)?;
-            match self
-                .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
-            {
+            match self.pilot_admission_hold_in(task, &comments, &load_history)? {
                 Some(PilotAdmissionHold::StaleAssessment(detail)) => {
                     admission_holds.insert(task.id.clone(), detail);
                 }
@@ -185,8 +203,19 @@ impl OrbitRuntime {
             // executor that would run it as an excluded crew: its own, or the
             // executor's default for a task naming none. Another executor, or
             // this owner's own draw, takes it on a crew the hold leaves.
-            if let Some(why) = self.pull_provider_hold(task, request, machine_id) {
-                admission_holds.entry(task.id.clone()).or_insert(why);
+            match load_history() {
+                Ok(history) => {
+                    if let Some(why) = self.pull_provider_hold(task, request, machine_id, &history)
+                    {
+                        admission_holds.entry(task.id.clone()).or_insert(why);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, "could not read provider failure hold: {error}");
+                }
+            }
+            if let Some(cached) = history_cache.borrow().as_ref() {
+                history_by_task.insert(task.id.clone(), cached.clone());
             }
         }
         // Match local dispatch's expiry boost and its best-effort fallback:
@@ -236,7 +265,7 @@ impl OrbitRuntime {
             &self.paths().repo_root,
             &self.data_root(),
             &admission_holds,
-            &self.baseline_held_tasks(&backlog),
+            &self.baseline_held_tasks(&backlog, &history_by_task),
             &|task, comments, history| {
                 if let Some(hold) = no_drain_pull_hold(task) {
                     return Ok(Some(hold));
@@ -296,13 +325,24 @@ impl OrbitRuntime {
     /// [ORB-16379] The hold is read as the executor's `machine` sees it: an
     /// unavailable hold placed on another host excludes there only the crews
     /// it carries from an earlier standing hold.
+    /// From history the caller already read, so the pre-pass does not
+    /// read the task's bundle again for this hold.
     fn pull_provider_hold(
         &self,
         task: &Task,
         request: &AdmissionRequest,
         machine: Option<&str>,
+        history: &[TaskHistoryEntry],
     ) -> Option<String> {
-        let hold = self.provider_hold_on(task, machine)?;
+        let hold = self.provider_hold_on_from_history(task, history, machine)?;
+        Self::pull_provider_hold_detail(task, request, hold)
+    }
+
+    fn pull_provider_hold_detail(
+        task: &Task,
+        request: &AdmissionRequest,
+        hold: orbit_types::workflow::ProviderFailureHold,
+    ) -> Option<String> {
         let crew = task
             .crew
             .as_deref()
@@ -326,10 +366,19 @@ impl OrbitRuntime {
     /// [ORB-14258]. Only the clock tick's recorded verdicts are read, so no
     /// Git or validation command runs on pull admission [ORB-14739]; a hold
     /// that lifts a moment late only defers the task to the next request.
-    fn baseline_held_tasks(&self, backlog: &[Task]) -> BTreeMap<String, String> {
+    /// Reuses histories the pre-pass already read; a task absent from
+    /// `histories` is read here, once.
+    fn baseline_held_tasks(
+        &self,
+        backlog: &[Task],
+        histories: &BTreeMap<String, Vec<TaskHistoryEntry>>,
+    ) -> BTreeMap<String, String> {
         let mut held = BTreeMap::new();
         for task in backlog {
-            match self.standing_baseline_hold(task) {
+            match histories.get(&task.id).map_or_else(
+                || self.standing_baseline_hold(task),
+                |history| Ok(standing_baseline_hold_from_history(task, history)),
+            ) {
                 Ok(Some(why)) => {
                     held.insert(task.id.clone(), why);
                 }
