@@ -53,6 +53,12 @@ def load_json(path: Path, label: str) -> dict[str, Any] | None:
     except json.JSONDecodeError as exc:
         errors.append(f"{label} is not valid JSON: {exc}")
         return None
+    except UnicodeDecodeError as exc:
+        errors.append(f"{label} is not valid JSON: {exc}")
+        return None
+    except OSError as exc:
+        errors.append(f"{label} cannot be read: {exc}")
+        return None
     if not isinstance(payload, dict):
         errors.append(f"{label} must contain a JSON object")
         return None
@@ -134,7 +140,11 @@ def validate_skill_frontmatter(skill_dir: Path) -> None:
     if not skill_path.is_file():
         errors.append(f"skill {skill_dir.name} is missing SKILL.md")
         return
-    text = skill_path.read_text(encoding="utf-8")
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        errors.append(f"skill {skill_dir.name} SKILL.md cannot be read: {exc}")
+        return
     if not text.startswith("---\n"):
         errors.append(f"skill {skill_dir.name} must start with YAML frontmatter")
         return

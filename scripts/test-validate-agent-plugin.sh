@@ -11,23 +11,38 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! grep -Fqx 'from __future__ import annotations' "$validator"; then
-  echo "test-validate-agent-plugin: validator must defer annotations for Python 3.9" >&2
-  exit 1
-fi
+python3 - "$validator" <<'PY'
+import ast
+import sys
+from pathlib import Path
 
-python3 - <<'PY'
-from __future__ import annotations
-
-from typing import Any
-
-
-def accepts_optional_mapping(value: dict[str, Any] | None) -> list[str]:
-    return [] if value is None else list(value)
-
-
-assert accepts_optional_mapping(None) == []
-assert accepts_optional_mapping({"supported": True}) == ["supported"]
+validator = Path(sys.argv[1])
+text = validator.read_text(encoding="utf-8")
+marker = "<<'PY'\n"
+start = text.find(marker)
+if start < 0:
+    print("test-validate-agent-plugin: validator embedded Python not found", file=sys.stderr)
+    raise SystemExit(1)
+start += len(marker)
+end = text.find("\nPY", start)
+if end < 0:
+    print("test-validate-agent-plugin: validator embedded Python not terminated", file=sys.stderr)
+    raise SystemExit(1)
+source = text[start:end]
+try:
+    tree = ast.parse(source, filename=str(validator), feature_version=(3, 9))
+except SyntaxError as exc:
+    print(f"test-validate-agent-plugin: validator is not Python 3.9 compatible: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+first = tree.body[0] if tree.body else None
+has_future = (
+    isinstance(first, ast.ImportFrom)
+    and first.module == "__future__"
+    and any(alias.name == "annotations" for alias in first.names)
+)
+if not has_future:
+    print("test-validate-agent-plugin: validator must defer annotations for Python 3.9", file=sys.stderr)
+    raise SystemExit(1)
 PY
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/orbit-agent-plugin.XXXXXX")"
@@ -82,6 +97,9 @@ def expect_failure(root: Path, needle: str, label: str) -> None:
         errors.append(f"{label}: expected validator failure")
         return
     combined = result.stdout + result.stderr
+    if "Traceback" in combined:
+        errors.append(f"{label}: validator leaked a traceback\n{combined}")
+        return
     if needle not in combined:
         errors.append(f"{label}: stderr/stdout missing {needle!r}\n{combined}")
 
@@ -233,6 +251,16 @@ expect_failure(broken, "plugin/plugin.json is missing", "missing plugin.json")
 broken = clone_fixture("malformed-plugin-manifest")
 (broken / "plugin" / "plugin.json").write_text("{not-json", encoding="utf-8")
 expect_failure(broken, "not valid JSON", "malformed plugin.json")
+
+# Negative: non-UTF8 plugin.json must fail cleanly, not with a traceback.
+broken = clone_fixture("nonutf8-plugin-manifest")
+(broken / "plugin" / "plugin.json").write_bytes(b"\xff\xfe\x00bad")
+expect_failure(broken, "not valid JSON", "non-UTF8 plugin.json")
+
+# Negative: non-UTF8 SKILL.md must fail cleanly, not with a traceback.
+broken = clone_fixture("nonutf8-skill")
+(broken / "plugin" / "skills" / "orbit" / "SKILL.md").write_bytes(b"\xff\xfe\x00bad")
+expect_failure(broken, "cannot be read", "non-UTF8 SKILL.md")
 
 # Negative: ownership drift away from constellation-works.
 broken = clone_fixture("owner-drift")

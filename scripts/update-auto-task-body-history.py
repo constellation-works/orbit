@@ -73,8 +73,22 @@ def source(path, revision):
 
 def record(raw, revision):
     # Match the v1 definition's serde defaults/omissions before fingerprinting.
-    definition = yaml.safe_load(raw)
-    template = definition["template"]
+    where = f"auto-task body at {revision}" if revision else "current auto-task body"
+    try:
+        definition = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{where}: invalid YAML: {exc}") from exc
+    if not isinstance(definition, dict):
+        raise ValueError(f"{where}: definition must be a mapping, got {type(definition).__name__}")
+    template = definition.get("template")
+    if not isinstance(template, dict):
+        raise ValueError(f"{where}: template must be a mapping, got {type(template).__name__}")
+    if "schedule" not in definition:
+        raise ValueError(f"{where}: missing schedule")
+    if not isinstance(definition["schedule"], dict):
+        raise ValueError(
+            f"{where}: schedule must be a mapping, got {type(definition['schedule']).__name__}"
+        )
     settings = {
         "enabled": definition.get("enabled", True),
         "schedule": definition["schedule"],
@@ -106,11 +120,16 @@ def record(raw, revision):
             template.pop(field, None)
     probe = definition.get("skip_if_unchanged")
     if probe:
+        if not isinstance(probe, dict):
+            raise ValueError(f"{where}: skip_if_unchanged must be a mapping, got {type(probe).__name__}")
+        cursor = probe.get("cursor")
+        if not isinstance(cursor, dict):
+            raise ValueError(f"{where}: skip_if_unchanged.cursor must be a mapping, got {type(cursor).__name__}")
         # Shipped probes used agent-main before branch rendering was introduced.
-        if probe["ref"] == "agent-main":
+        if probe.get("ref") == "agent-main":
             probe["ref"] = PLACEHOLDER
-        if not probe["cursor"].get("legacy_tags"):
-            probe["cursor"].pop("legacy_tags", None)
+        if not cursor.get("legacy_tags"):
+            cursor.pop("legacy_tags", None)
     else:
         definition.pop("skip_if_unchanged", None)
     canonical = json.dumps(definition, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -218,4 +237,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    try:
+        main()
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"update-auto-task-body-history: {exc}", file=sys.stderr)
+        sys.exit(1)
