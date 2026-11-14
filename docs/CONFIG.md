@@ -1144,7 +1144,7 @@ within a backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 | `delivery_pr_closed` | The PR closed without merging. |
 | `delivery_task_not_promotable` | The task's current status refuses promotion. |
 | `delivery_landing_conflict` | Owner landing requires a conflict repair with fresh validation and a new handoff. |
-| `delivery_landing_repair_requeue` | A required check failed because of the candidate after its one automatic repair was spent. The same hold covers a spent section-gap draft and a spent unreadable retry classified as the candidate's. The landing run is held. The claim ends and the task returns to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The next run repairs that candidate. This hold is not handed back and the held run is not resumed. While that one automatic repair is still available, the same candidate failure still fails the run so the repair can start. |
+| `delivery_landing_repair_requeue` | A required check was classified as caused by the candidate. The same hold covers a spent section-gap draft and a spent unreadable retry classified as the candidate's. The landing run is held. The claim ends and the task returns to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The next run repairs that candidate. This hold is not handed back and the held run is not resumed. |
 | `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
 | `delivery_completion_budget_expired` | The completion budget (deadline) expired before completion could be confirmed; the last observed pull request state was unmerged and the task stays in review. The pull request may have merged since, through auto-merge (a hold does not cancel it) or another actor, so check the forge. |
@@ -1199,12 +1199,11 @@ evidence produce typed `delivery_evidence_stale` holds. A permanent failure to
 read required-check evidence in auto-fix, including a credential or permission
 refusal, holds as `delivery_check_evidence_inconclusive` before or after a
 completion mutation; no repair agent runs and no merge is admitted on that
-evidence. Permanent forge-read failures at other boundaries, a candidate-caused
-required-check failure whose one automatic repair is still available, and
-unlisted refusals remain failures. Once that repair is spent, the same
-failure holds as `delivery_landing_repair_requeue`: the claim ends, the
-task returns to the backlog with the candidate kept (or blocks once the
-landing repair budget is spent), and the held run is not resumed. Transport failures after a merge,
+evidence. Permanent forge-read failures at other boundaries and unlisted
+refusals remain failures. A candidate-caused required-check failure holds as
+`delivery_landing_repair_requeue`: the claim ends, the task returns to the
+backlog with the candidate kept (or blocks once the landing repair budget is
+spent), and the held run is not resumed. Transport failures after a merge,
 auto-merge or rebase request (in that run or recorded in the task's history)
 also remain failures, except that a narrowly classified synchronous HTTP
 500/502/503/504 merge server error permits one read-only reconciliation within
@@ -2596,15 +2595,15 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   Orbit runs `gh run rerun <id> --failed`; GitHub retains the
   original event's `GITHUB_SHA` and `GITHUB_REF`, while Orbit CI's candidate-build jobs explicitly
   check out the PR head rather than a merge with the current base. A passing rerun clears the failure;
-  the same signature failing again with the passing base result enters the one automatic repair for
-  the candidate's own failure. If that retry's evidence cannot be read or authenticated for
+  the same signature failing again with the passing base result returns the candidate to the backlog
+  for repair. If that retry's evidence cannot be read or authenticated for
   `max_base_ci_cycles` consecutive polls, a same-check base pass sends a flaky failure to repair
   (or requeue once spent). For a candidate set with no cause evidence (no aggregate, no changed-file
   citation, and no transient, inherited, unknown or inconclusive job), an eligible
   set on a head with no prior rerun first gets one classification rerun on the
   unchanged head. `ci_check_rerun_reserved` spends the shared once-per-head budget
-  before sending; a repeat failure takes the one automatic repair route, or
-  requeue if repair is spent. Other candidate failures keep their repair/requeue route, and
+  before sending; a repeated candidate failure returns the task to the backlog.
+  Other candidate failures keep their requeue route, and
   inherited failures keep their base update/wait route. Other failure classes with unreadable
   retry evidence stop in review naming the read failure. If untouched-path evidence remains
   incomplete, landing holds the candidate in review as `delivery_base_checks_pending` after
