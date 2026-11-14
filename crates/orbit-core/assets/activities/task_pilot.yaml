@@ -229,7 +229,11 @@ spec:
             evidence:
               type: string
             recommended_crew:
-              type: string
+              description: >
+                Optional advisory crew name; omit or return null when unknown.
+                The host selects the implementation crew from the assessed
+                complexity pool and preserves explicit crew assignments.
+              type: [string, "null"]
             recommended_complexity:
               type: string
               enum: [low, medium, hard, xhard, unassessed]
@@ -1085,7 +1089,14 @@ spec:
     ## Return
 
     Return exactly one Orbit response envelope. Copy `partition_index` and
-    `task_ids` from the input, and return one entry in `tasks` per input ID:
+    `task_ids` from the input, and return one entry in `tasks` per input ID.
+
+    `recommended_crew` is optional and advisory. Omit it or return null when
+    the configured crews are unknown. Do not read workspace configuration or
+    fail an otherwise complete assessment to obtain a crew name. Orbit selects
+    the implementation crew from the assessed complexity pool, retaining an
+    explicit crew assignment. `crew_config_key` selects the crew running this
+    pilot; it does not ask you to resolve or recommend that crew.
 
     {"schemaVersion":1,"status":"success","result":{
       "partition_index":0,
@@ -1097,7 +1108,6 @@ spec:
         "context_files_after":["file:path/to/target"],
         "disposition":"selectors|verified_no_diff|host_operational",
         "evidence":"required when context_files_after is empty",
-        "recommended_crew":"<crew configured in this workspace>",
         "recommended_complexity":"low|medium|hard|xhard|unassessed",
         "assessment_rationale":"why the evidence supports the rating or investigation",
         "confidence":"high|medium|low",

@@ -40,7 +40,9 @@ fn filed_low_task(workspace: &Workspace) -> Task {
 
 /// Scripted codex CLI answering every task it is shown with `complexity` and
 /// `confidence`. Each invocation appends the reasoning effort it was run at
-/// to the returned file.
+/// to the returned file. It omits `recommended_crew` initially and returns
+/// null at high effort: both rendered pilot and repair contracts must accept
+/// a complete assessment without workspace config access (ORB-24687).
 fn install_provider(workspace: &Workspace, complexity: &str, confidence: &str) -> PathBuf {
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
     let calls = workspace.root.path().join("provider-efforts");
@@ -75,7 +77,6 @@ tasks = [{{
     "task_id": task_id,
     "context_files_after": ["file:README.md"],
     "disposition": "selectors",
-    "recommended_crew": "fixture",
     "recommended_complexity": {complexity:?},
     "confidence": {confidence:?},
     "assessment_rationale": "README.md contains the affected material.",
@@ -89,6 +90,9 @@ tasks = [{{
     "duplicate_of": None,
     "already_landed": None,
 }} for task_id in found]
+if effort == "high":
+    for task in tasks:
+        task["recommended_crew"] = None
 head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 tree = subprocess.check_output(["git", "rev-parse", "HEAD^{{tree}}"], text=True).strip()
 sys.stdout.write(json.dumps({{

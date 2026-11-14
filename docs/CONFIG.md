@@ -1660,6 +1660,12 @@ Orbit reads only string `payload.text` of the last `run.terminal.completed` reco
 
 ### Automatic crew pools by complexity
 
+The pilot's `recommended_crew` is optional and advisory; it may be omitted or
+null when workspace configuration is unavailable in the inspection checkout.
+Orbit selects the implementation crew from the assessed complexity pool and
+preserves explicit crew assignments. The task-pilot purpose pool selects the
+agent doing the assessment, separately from the task's implementation crew.
+
 ```toml
 [workflow]
 low_complexity_crews = ["luna"]
