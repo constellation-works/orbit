@@ -109,16 +109,12 @@ pub struct ResidentAuthorityChange {
 impl ResidentAuthorityChange {
     /// The history entry recording this change, written by `entry.by`.
     pub fn history_entry(&self) -> TaskHistoryEntry {
-        TaskHistoryEntry {
-            at: self.entry.at,
-            by: self.entry.by.clone(),
-            event: RESIDENT_AUTHORITY_CHANGED_EVENT.to_string(),
-            note: serde_json::to_string(self).ok(),
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: None,
-        }
+        TaskHistoryEntry::new(
+            self.entry.at,
+            self.entry.by.clone(),
+            RESIDENT_AUTHORITY_CHANGED_EVENT,
+        )
+        .with_note(serde_json::to_string(self).ok())
     }
 }
 

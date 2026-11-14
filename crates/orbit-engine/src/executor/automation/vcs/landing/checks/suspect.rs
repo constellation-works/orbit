@@ -557,16 +557,14 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
             host.apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
-                    append_history: vec![orbit_types::task::TaskHistoryEntry {
-                        at: chrono::Utc::now(),
-                        by: "system".into(),
-                        event: CI_BASE_SUSPECT_EVENT.into(),
-                        note: Some(note.clone()),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                    }],
+                    append_history: vec![
+                        orbit_types::task::TaskHistoryEntry::new(
+                            chrono::Utc::now(),
+                            "system",
+                            CI_BASE_SUSPECT_EVENT,
+                        )
+                        .with_note(Some(note.clone())),
+                    ],
                     ..TaskAutomationUpdate::default()
                 },
             )?;

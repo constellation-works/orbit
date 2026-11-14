@@ -219,16 +219,10 @@ fn record_retrigger<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             task,
             TaskAutomationUpdate {
-                append_history: vec![TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: CHECKS_RETRIGGER_EVENT.into(),
-                    note: Some(note.clone()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
+                append_history: vec![
+                    TaskHistoryEntry::new(chrono::Utc::now(), "system", CHECKS_RETRIGGER_EVENT)
+                        .with_note(Some(note.clone())),
+                ],
                 ..TaskAutomationUpdate::default()
             },
         )?;

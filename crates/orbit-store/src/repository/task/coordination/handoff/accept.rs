@@ -148,18 +148,15 @@ impl TaskCommitBoundary {
                 activity: "claim_handoff".into(),
                 selectors: additions,
             };
-            params
-                .append_history
-                .push(orbit_types::task::TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: params.actor.clone(),
-                    event: CONTEXT_FILES_WIDENED_EVENT.into(),
-                    note: Some(encode(&widening)?),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(TaskDecision::ContextFilesWidened(widening)),
-                });
+            params.append_history.push(
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    params.actor.clone(),
+                    CONTEXT_FILES_WIDENED_EVENT,
+                )
+                .with_note(Some(encode(&widening)?))
+                .with_decision(Some(TaskDecision::ContextFilesWidened(widening))),
+            );
         }
         if candidate.base_branch != ship.base_branch
             || candidate.landing_branch != ship.landing_branch
@@ -204,18 +201,14 @@ impl TaskCommitBoundary {
         // [ORB-16855] A claimed leaf writes no owner history: the owner's own
         // light-delivery judgement of the candidate is recorded here.
         for decision in &observation.light_delivery {
-            params
-                .append_history
-                .push(orbit_types::task::TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: params.actor.clone(),
-                    event: decision.event().into(),
-                    note: Some(decision.note()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                });
+            params.append_history.push(
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    params.actor.clone(),
+                    decision.event(),
+                )
+                .with_note(Some(decision.note())),
+            );
         }
         // [ORB-15427] The owner established each known-red command against
         // its own base run, or accepted the follower's base evidence because
@@ -227,18 +220,17 @@ impl TaskCommitBoundary {
                 .iter()
                 .find(|item| item.command == known.command && item.base_sha == known.base_sha)
                 .and_then(|item| item.accepted_across_os);
-            params
-                .append_history
-                .push(orbit_types::task::TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: params.actor.clone(),
-                    event: KNOWN_RED_VALIDATION_EVENT.into(),
-                    note: Some(known.text(&known_red_acceptance_detail(known, across_os))),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(TaskDecision::KnownRedValidation(known.clone())),
-                });
+            params.append_history.push(
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    params.actor.clone(),
+                    KNOWN_RED_VALIDATION_EVENT,
+                )
+                .with_note(Some(
+                    known.text(&known_red_acceptance_detail(known, across_os)),
+                ))
+                .with_decision(Some(TaskDecision::KnownRedValidation(known.clone()))),
+            );
         }
         // Reviewer-baseline checks are carried by the validated certificate,
         // rather than the claim's required-command logs. Record them inside
@@ -249,16 +241,15 @@ impl TaskCommitBoundary {
             if recorded.contains(&known) {
                 continue;
             }
-            params.append_history.push(orbit_types::task::TaskHistoryEntry {
-                at: Utc::now(),
-                by: params.actor.clone(),
-                event: KNOWN_RED_VALIDATION_EVENT.into(),
-                note: Some(known.text("The accepted review certificate records this check as known red on the claimed candidate.")),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: Some(TaskDecision::KnownRedValidation(known.clone())),
-            });
+            params.append_history.push(
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    params.actor.clone(),
+                    KNOWN_RED_VALIDATION_EVENT,
+                )
+                .with_note(Some(known.text("The accepted review certificate records this check as known red on the claimed candidate.")))
+                .with_decision(Some(TaskDecision::KnownRedValidation(known.clone()))),
+            );
             recorded.push(known);
         }
         for reference in &handoff.validation {
@@ -266,18 +257,15 @@ impl TaskCommitBoundary {
                 serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, reference)?)
                     .map_err(|error| invalid(&format!("invalid validation log: {error}")))?;
             if let Some(flaky) = log.flaky {
-                params
-                    .append_history
-                    .push(orbit_types::task::TaskHistoryEntry {
-                        at: Utc::now(),
-                        by: params.actor.clone(),
-                        event: orbit_types::workflow::FLAKY_VALIDATION_EVENT.into(),
-                        note: Some(flaky.text()),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: Some(TaskDecision::FlakyValidation(flaky)),
-                    });
+                params.append_history.push(
+                    orbit_types::task::TaskHistoryEntry::new(
+                        Utc::now(),
+                        params.actor.clone(),
+                        orbit_types::workflow::FLAKY_VALIDATION_EVENT,
+                    )
+                    .with_note(Some(flaky.text()))
+                    .with_decision(Some(TaskDecision::FlakyValidation(flaky))),
+                );
             }
         }
         // A claimed worker cannot write its task's relations or read other
@@ -319,18 +307,14 @@ impl TaskCommitBoundary {
                 run_id: handoff.run_id.clone(),
                 criteria: handoff.owed_criteria.clone(),
             };
-            params
-                .append_history
-                .push(orbit_types::task::TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: params.actor.clone(),
-                    event: orbit_types::workflow::POST_DEPLOY_OWED_EVENT.into(),
-                    note: Some(encode(&owed)?),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                });
+            params.append_history.push(
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    params.actor.clone(),
+                    orbit_types::workflow::POST_DEPLOY_OWED_EVENT,
+                )
+                .with_note(Some(encode(&owed)?)),
+            );
         }
         let accepted = AcceptedHandoff {
             handoff_id: format!("handoff-{}", sha256_hex(encode(handoff)?.as_bytes())),

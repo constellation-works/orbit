@@ -104,16 +104,8 @@ impl RecordedReviewSettlement {
 
     /// A history row whose timestamp is the display comment's timestamp.
     pub fn history_entry(&self, at: DateTime<Utc>, by: &str) -> TaskHistoryEntry {
-        TaskHistoryEntry {
-            at,
-            by: by.to_string(),
-            event: REVIEW_SETTLED_EVENT.to_string(),
-            note: None,
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: Some(TaskDecision::ReviewSettlement(self.clone())),
-        }
+        TaskHistoryEntry::new(at, by, REVIEW_SETTLED_EVENT)
+            .with_decision(Some(TaskDecision::ReviewSettlement(self.clone())))
     }
 }
 

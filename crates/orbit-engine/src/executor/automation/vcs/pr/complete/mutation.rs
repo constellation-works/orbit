@@ -158,20 +158,18 @@ pub(super) fn record_completion_mutation<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             &task.id,
             crate::context::TaskAutomationUpdate {
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: PR_COMPLETION_MUTATION_STARTED_EVENT.into(),
-                    note: Some(
+                append_history: vec![
+                    orbit_types::task::TaskHistoryEntry::new(
+                        chrono::Utc::now(),
+                        "system",
+                        PR_COMPLETION_MUTATION_STARTED_EVENT,
+                    )
+                    .with_note(Some(
                         json!({"run_id":context.batch_id,"operation":operation,
                         "pr_number":input["pr_number"],"head_sha":input["published_head_sha"]})
                         .to_string(),
-                    ),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
+                    )),
+                ],
                 ..Default::default()
             },
         )?;

@@ -343,21 +343,19 @@ fn record_observation<H: RuntimeHost + ?Sized>(
     host.apply_task_automation_update(
         &binding.task_id,
         TaskAutomationUpdate {
-            append_history: vec![TaskHistoryEntry {
-                at,
-                by: "system".into(),
-                event: if observation.decision == PublicationSettlingDecision::Refused {
-                    REFUSED
-                } else {
-                    OBSERVED
-                }
-                .into(),
-                note: Some(evidence.to_string()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: Some(TaskDecision::SourceRepairPublication(observation)),
-            }],
+            append_history: vec![
+                TaskHistoryEntry::new(
+                    at,
+                    "system",
+                    if observation.decision == PublicationSettlingDecision::Refused {
+                        REFUSED
+                    } else {
+                        OBSERVED
+                    },
+                )
+                .with_note(Some(evidence.to_string()))
+                .with_decision(Some(TaskDecision::SourceRepairPublication(observation))),
+            ],
             ..Default::default()
         },
     )

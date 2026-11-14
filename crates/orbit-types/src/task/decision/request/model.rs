@@ -447,16 +447,9 @@ impl DecisionRequest {
 
     /// The history entry that raises this request, written by `by`.
     pub fn history_entry(&self, by: &str) -> TaskHistoryEntry {
-        TaskHistoryEntry {
-            at: self.raised_at,
-            by: by.to_string(),
-            event: DECISION_REQUESTED_EVENT.to_string(),
-            note: serde_json::to_string(self).ok(),
-            from_status: None,
-            to_status: None,
-            operation_id: Some(self.id.clone()),
-            decision: None,
-        }
+        TaskHistoryEntry::new(self.raised_at, by, DECISION_REQUESTED_EVENT)
+            .with_note(serde_json::to_string(self).ok())
+            .with_operation_id(Some(self.id.clone()))
     }
 
     /// Read the request one history entry carries, or `None` when the

@@ -47,16 +47,10 @@ impl RecordedReviewFixValidationFailure {
         at: DateTime<Utc>,
         by: &str,
     ) -> Result<TaskHistoryEntry, serde_json::Error> {
-        Ok(TaskHistoryEntry {
-            at,
-            by: by.to_string(),
-            event: REVIEW_FIX_VALIDATION_FAILED_EVENT.to_string(),
-            note: Some(serde_json::to_string(self)?),
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: None,
-        })
+        Ok(
+            TaskHistoryEntry::new(at, by, REVIEW_FIX_VALIDATION_FAILED_EVENT)
+                .with_note(Some(serde_json::to_string(self)?)),
+        )
     }
 
     /// Decode this event's versioned note once; other events are not failures.

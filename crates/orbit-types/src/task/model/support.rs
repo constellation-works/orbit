@@ -32,6 +32,50 @@ pub struct TaskHistoryEntry {
     pub decision: Option<TaskDecision>,
 }
 
+impl TaskHistoryEntry {
+    pub fn new(at: DateTime<Utc>, by: impl Into<String>, event: impl Into<String>) -> Self {
+        Self {
+            at,
+            by: by.into(),
+            event: event.into(),
+            note: None,
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_note(mut self, note: Option<String>) -> Self {
+        self.note = note;
+        self
+    }
+
+    #[must_use]
+    pub fn with_status_change(
+        mut self,
+        from_status: Option<TaskStatus>,
+        to_status: Option<TaskStatus>,
+    ) -> Self {
+        self.from_status = from_status;
+        self.to_status = to_status;
+        self
+    }
+
+    #[must_use]
+    pub fn with_operation_id(mut self, operation_id: Option<String>) -> Self {
+        self.operation_id = operation_id;
+        self
+    }
+
+    #[must_use]
+    pub fn with_decision(mut self, decision: Option<TaskDecision>) -> Self {
+        self.decision = decision;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskArtifact {
     pub path: String,

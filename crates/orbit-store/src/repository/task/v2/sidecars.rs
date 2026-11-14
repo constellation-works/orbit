@@ -303,15 +303,12 @@ fn comments_read_span(id: &str) -> orbit_common::tracing::span::EnteredSpan {
 pub(crate) fn task_history_from_events(events: Vec<TaskEventRowV2>) -> Vec<TaskHistoryEntry> {
     events
         .into_iter()
-        .map(|event| TaskHistoryEntry {
-            at: event.at,
-            by: event.by,
-            event: event.event_type,
-            note: event.note,
-            from_status: event.from_status,
-            to_status: event.to_status,
-            operation_id: event.operation_id,
-            decision: event.decision,
+        .map(|event| {
+            TaskHistoryEntry::new(event.at, event.by, event.event_type)
+                .with_note(event.note)
+                .with_status_change(event.from_status, event.to_status)
+                .with_operation_id(event.operation_id)
+                .with_decision(event.decision)
         })
         .collect()
 }

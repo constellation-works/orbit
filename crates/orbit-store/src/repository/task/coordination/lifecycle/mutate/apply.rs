@@ -567,18 +567,14 @@ impl TaskCommitBoundary {
                     ) {
                         return Err(invalid("the cumulative base update is already reserved"));
                     }
-                    params
-                        .append_history
-                        .push(orbit_types::task::TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: auth.machine_id.clone(),
-                            event: PR_BASE_UPDATE_RESERVED_EVENT.into(),
-                            note: Some(encode(request)?),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        });
+                    params.append_history.push(
+                        orbit_types::task::TaskHistoryEntry::new(
+                            Utc::now(),
+                            auth.machine_id.clone(),
+                            PR_BASE_UPDATE_RESERVED_EVENT,
+                        )
+                        .with_note(Some(encode(request)?)),
+                    );
                     state.last_event = "handoff_base_update_admitted".into();
                 }
                 ClaimMutation::RetryLanding(request) => {
@@ -647,18 +643,14 @@ impl TaskCommitBoundary {
                         return Err(invalid("handoff landing history requires a note"));
                     }
                     self.check_live_landing_attempt(auth, handoff_id)?;
-                    params
-                        .append_history
-                        .push(orbit_types::task::TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: "system".into(),
-                            event: event.clone(),
-                            note: Some(note.clone()),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        });
+                    params.append_history.push(
+                        orbit_types::task::TaskHistoryEntry::new(
+                            Utc::now(),
+                            "system",
+                            event.clone(),
+                        )
+                        .with_note(Some(note.clone())),
+                    );
                     history_event = false;
                 }
                 ClaimMutation::RecordLandingCompletionHold {

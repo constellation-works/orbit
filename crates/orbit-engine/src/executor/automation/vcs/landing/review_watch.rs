@@ -317,16 +317,14 @@ fn record<H: RuntimeHost + ?Sized>(
     host.apply_task_automation_update(
         task_id,
         TaskAutomationUpdate {
-            append_history: vec![TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: WATCH_ACTOR.into(),
-                event: LANDING_CHECKS_OBSERVED_EVENT.into(),
-                note: Some(note),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
+            append_history: vec![
+                TaskHistoryEntry::new(
+                    chrono::Utc::now(),
+                    WATCH_ACTOR,
+                    LANDING_CHECKS_OBSERVED_EVENT,
+                )
+                .with_note(Some(note)),
+            ],
             ..TaskAutomationUpdate::default()
         },
     )
