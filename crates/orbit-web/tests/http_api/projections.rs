@@ -593,14 +593,6 @@ projections_test!(
         check_eq!(status_of(&server, "/api/diagnostics/metrics?since=24h&month=2026-04&workspace=ws_http_fixture") => 400; "since+month rejected");
         assert_fields!(get("/api/cost?workspace=ws_http_fixture"), "window": json!("all"));
         check_eq!(status_of(&server, "/api/cost?window=bogus&workspace=ws_http_fixture") => 400; "bogus cost window rejected");
-        // The retired scoreboard route answers with the cost body until
-        // its sunset, and says so in the response headers.
-        let alias = server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture");
-        check_eq!(alias.headers()["deprecation"] => "true"; "scoreboard alias deprecation header");
-        check!(alias.headers().contains_key("sunset"); "scoreboard alias sunset header");
-        let alias = json_ok(alias);
-        assert_fields!(alias, "window": json!("24h"));
-        check!(alias["orchestration"].is_object(); "scoreboard alias orchestration: {alias}");
     }
 );
 

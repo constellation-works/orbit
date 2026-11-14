@@ -597,7 +597,7 @@ Targeted axe scans cover contrast and scroll-region focus on the affected routes
 
 - [ORB-15746] replaced Health › Metrics' Step metrics table and summary card with implement_one duration and task completion trends by complexity.
 - [ORB-15921] retired the Health Scoreboard family leaderboard and renamed the page Cost (`#diagnostics/cost`). `#diagnostics/scoreboard` rewrites there. The managed-execution cost panel remains, and it still reads `/api/scoreboard`.
-- [ORB-15922] retired the scoreboard backend. The Cost page reads `/api/cost` (`{ window, window_since, generated_at, orchestration }`); `/api/scoreboard` serves the same body with `Deprecation` and `Sunset` headers until 2026-11-12.
+- [ORB-15922] retired the scoreboard backend. The Cost page reads `/api/cost` (`{ window, window_since, generated_at, orchestration }`); the `/api/scoreboard` alias was removed after its 2026-11-12 sunset and now returns 404.
 
 - [ORB-15355] replaced Audit › Policy with Audit › Codebase analytics and moved the canonical denial count to a rail badge that opens Events filtered to denials.
 - [ORB-16796] broke the Regressions ranking down by nature, escape, fix layer and detector, with filters, two cross-tabs and crew and complexity rates.
