@@ -34,6 +34,7 @@ pub use gc::{
 pub(in crate::executor::automation) use merge::merge_batch_worktree_into_base;
 pub use reclaim::WorktreeReclaimReport;
 pub use rescue::WorktreeGcRecovery;
+pub(in crate::executor::automation::vcs) use rescue::{index_changed_paths, snapshot_drops_staged};
 pub(in crate::executor::automation) use setup::setup_worktree;
 
 #[cfg(test)]

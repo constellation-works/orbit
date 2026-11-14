@@ -16,7 +16,7 @@
 //! of the head, after [`locate_review_repair`] proves it is that run's
 //! repair on that head.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::ReviewGateAdmissionOutput;
@@ -26,7 +26,7 @@ use crate::context::RuntimeHost;
 
 use super::claim::push_candidate_ref;
 use super::commit::commit_worktree_detached;
-use super::git::{git_command_success, git_output, git_output_raw, git_run};
+use super::git::{git_command_success, git_output, git_output_raw, git_output_with_env, git_run};
 use super::operations::{CANDIDATE_REF_PREFIX, valid_candidate_ref};
 use super::review_gate::{
     PARTIAL_REPAIR_RUN_TRAILER, PARTIAL_REPAIR_SUBJECT, REVIEW_ATTEMPT_TRAILER,
@@ -112,18 +112,29 @@ pub fn rescue_candidate_ref(run_id: &str) -> Result<String, OrbitError> {
     Ok(format!("refs/orbit/rescue/{run_id}"))
 }
 
+/// Scratch index for the working-tree snapshot. Distinct from the detached
+/// commit's index so a refused snapshot cannot collide with it.
+const RESCUE_SNAPSHOT_INDEX: &str = "orbit-rescue-snapshot.index";
+
 /// Keep `workspace_path`'s candidate — its `HEAD` plus every uncommitted
 /// change, as one detached commit when dirty — under
 /// [`rescue_candidate_ref`] in the local repository, before the worktree
 /// is torn down. The candidate's branch, index and files are left as they
 /// were. The ref keeps the commit reachable after the run branch and
 /// worktree are removed.
+///
+/// A path whose real index differs from both `HEAD` and that working-tree
+/// commit cannot be kept in one snapshot. Preservation fails before any ref
+/// is written, leaving both versions in the worktree. A clean tree, a change
+/// that is only unstaged, and a staged change that matches the working tree
+/// still keep the single documented commit (or `HEAD` when nothing differs).
 pub fn preserve_rescue_candidate(
     workspace_path: &Path,
     run_id: &str,
 ) -> Result<PreservedRescueCandidate, OrbitError> {
     let rescue_ref = rescue_candidate_ref(run_id)?;
     let head = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    refuse_distinct_staged_candidate(workspace_path, &head)?;
     let message = format!(
         "rescue: candidate preserved when its worker stopped\n\nOrbit-Rescue-Run: {run_id}"
     );
@@ -134,6 +145,62 @@ pub fn preserve_rescue_candidate(
         rescue_ref,
         commit,
         partial_commit,
+    })
+}
+
+/// Refuse when the real index holds a version of a path the working-tree
+/// snapshot does not. Worktree GC refuses this same ambiguity: one tree
+/// cannot be the recovery of both versions, and a ref that named only the
+/// working tree would drop the staged one.
+fn refuse_distinct_staged_candidate(workspace_path: &Path, head: &str) -> Result<(), OrbitError> {
+    // The same comparison worktree GC uses. Skip the snapshot when the index
+    // matches HEAD: an ordinary unstaged edit has no unique staged state.
+    let staged = super::worktree::index_changed_paths(workspace_path, head)?;
+    if staged.is_empty() {
+        return Ok(());
+    }
+    let tree = working_candidate_tree(workspace_path)?;
+    if !super::worktree::snapshot_drops_staged(workspace_path, &staged, &tree)? {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(
+        "staged paths differ from the working candidate; a single commit cannot preserve both \
+         versions, so no rescue ref was written and the branch, index and files are unchanged"
+            .to_string(),
+    ))
+}
+
+/// The tree `commit_worktree_detached` would commit: `HEAD` with the
+/// working tree overlaid in a scratch index. The real index is not read or
+/// written.
+fn working_candidate_tree(workspace_path: &Path) -> Result<String, OrbitError> {
+    let index = rescue_snapshot_index(workspace_path)?;
+    let index_env = index.to_string_lossy().into_owned();
+    let staged = (|| {
+        let scratch = [("GIT_INDEX_FILE", index_env.as_str())];
+        git_output_with_env(workspace_path, &["read-tree", "HEAD"], &scratch)?;
+        git_output_with_env(workspace_path, &["add", "--all", "--", "."], &scratch)?;
+        git_output_with_env(workspace_path, &["write-tree"], &scratch)
+    })();
+    if let Err(error) = std::fs::remove_file(&index)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(index = %index.display(), %error, "rescue snapshot index left behind");
+    }
+    staged
+}
+
+/// Absolute: `--git-path` answers relative to the worktree when its Git
+/// directory is inside it.
+fn rescue_snapshot_index(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
+    let path = PathBuf::from(git_output(
+        workspace_path,
+        &["rev-parse", "--git-path", RESCUE_SNAPSHOT_INDEX],
+    )?);
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        workspace_path.join(path)
     })
 }
 

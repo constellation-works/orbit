@@ -81,7 +81,7 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
         // A single-tree recovery cannot preserve two versions of a staged
         // path, even when another working edit makes the snapshot nonempty.
         let staged = index_changed_paths(worktree, &head)?;
-        if !staged.is_empty() && !staged.is_disjoint(&index_changed_paths(worktree, &tree)?) {
+        if snapshot_drops_staged(worktree, &staged, &tree)? {
             return Err(OrbitError::Execution(
                 "staged paths differ from the working candidate; a single-tree recovery cannot preserve both versions"
                     .to_string(),
@@ -111,9 +111,27 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
     snapshot.map_err(|error| format!("candidate snapshot refused: {error}"))
 }
 
+/// Whether `staged_against_head` includes a path whose real index entry also
+/// differs from `tree`. One tree cannot recover both versions. An empty
+/// staged set is not a conflict, and the tree is not compared: that is the
+/// short-circuit worktree GC used before this helper existed.
+pub(in crate::executor::automation::vcs) fn snapshot_drops_staged(
+    worktree: &Path,
+    staged_against_head: &BTreeSet<Vec<u8>>,
+    tree: &str,
+) -> Result<bool, OrbitError> {
+    if staged_against_head.is_empty() {
+        return Ok(false);
+    }
+    Ok(!staged_against_head.is_disjoint(&index_changed_paths(worktree, tree)?))
+}
+
 /// Paths whose real index entries differ from a tree. NUL-delimited bytes
 /// preserve arbitrary Git path names, and disabling renames checks both ends.
-fn index_changed_paths(worktree: &Path, tree: &str) -> Result<BTreeSet<Vec<u8>>, OrbitError> {
+pub(in crate::executor::automation::vcs) fn index_changed_paths(
+    worktree: &Path,
+    tree: &str,
+) -> Result<BTreeSet<Vec<u8>>, OrbitError> {
     let diff = git_run_bytes(
         worktree,
         &[
