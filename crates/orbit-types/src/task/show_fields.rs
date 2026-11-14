@@ -21,17 +21,20 @@ use crate::task::{
     resolve_task_relations_lazily, task_readiness_json,
 };
 
-/// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
-/// clap help and other const contexts.
-#[macro_export]
-macro_rules! task_show_projection_fields_csv {
-    () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, started_at, scheduled_hold, plan, execution_summary, context_files, created_by, created_by_model, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, final_recovery, orchestrator, orchestrator_model, orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments, history, artifacts"
+/// Defines the authoritative `orbit.task.show` `--fields` / `fields` / `field`
+/// vocabulary and its comma-separated form from one name list, so the two can
+/// no longer drift.
+macro_rules! define_task_show_projection_fields {
+    ($first:literal $(, $rest:literal)* $(,)?) => {
+        /// Authoritative `orbit.task.show` `--fields` / `fields` / `field` vocabulary.
+        pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[$first $(, $rest)*];
+        /// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
+        pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str =
+            concat!($first $(, ", ", $rest)*);
     };
 }
 
-/// Authoritative `orbit.task.show` `--fields` / `fields` / `field` vocabulary.
-pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
+define_task_show_projection_fields!(
     "id",
     "parent_id",
     "title",
@@ -86,7 +89,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "comments",
     "history",
     "artifacts",
-];
+);
 
 /// Stable top-level keys of the base task JSON, in output order.
 ///
@@ -130,9 +133,6 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "created_at",
     "updated_at",
 ];
-
-/// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
-pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str = crate::task_show_projection_fields_csv!();
 
 /// The `orbit.task.show` selector that answers with the task's delivery
 /// observation instead of a record projection. It is not a task field: it
