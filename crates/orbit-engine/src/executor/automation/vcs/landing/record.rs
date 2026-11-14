@@ -98,8 +98,15 @@ pub(super) fn hold_pr<H: RuntimeHost + ?Sized>(
         observation,
         HandoffLandingStep::Stop { repairable },
         reason,
-        (refusal == DeliveryRefusal::BaseChecksPending)
-            .then_some(LandingWaitGate::BaseChecksPending),
+        match refusal {
+            DeliveryRefusal::BaseChecksPending => Some(LandingWaitGate::BaseChecksPending),
+            DeliveryRefusal::ForgeObservationUnavailable
+                if observation.get("log_read_gap").is_some() =>
+            {
+                Some(LandingWaitGate::JobLogsUnavailable)
+            }
+            _ => None,
+        },
     )?;
     Ok(match stopped {
         OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },

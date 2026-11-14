@@ -36,6 +36,8 @@ use tempfile::tempdir;
 const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-landing-test";
 
+mod log_read;
+
 struct LandingHost {
     repo: PathBuf,
     context: HandoffLandingContext,
@@ -722,6 +724,8 @@ struct ForgeState {
     base_push_provider: bool,
     /// Commits whose job query fails.
     unreadable: Vec<String>,
+    /// Deterministic log collector timeouts before the real log becomes readable.
+    log_timeouts: HashMap<u64, u64>,
     /// What a rerun of a failed job leaves on the head.
     after_rerun: Option<FakeJob>,
     /// A read failure every retry-plan authentication returns.
@@ -1117,6 +1121,13 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             }
             "ci.job_log" => {
                 let job_id: u64 = input["job_id"].as_str().unwrap().parse().unwrap();
+                if let Some(remaining) = state.log_timeouts.get_mut(&job_id)
+                    && *remaining > 0
+                {
+                    *remaining -= 1;
+                    return Ok(json!({"log":"", "fallback_error":
+                        "process timed out after 15000ms: gh run view --log"}));
+                }
                 let log = state
                     .jobs
                     .values()
@@ -3206,13 +3217,21 @@ fn assert_held_in_review(error: OrbitError, case: &str, phrases: &[&str]) {
 fn an_unreadable_log_and_a_spent_transient_rerun_hold_the_landing() {
     let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
     forge.job(&candidate, failed_reading(1, 11, FakeLog::Unreadable));
-    assert_held_in_review(
-        land_now(&forge).expect_err("an unreadable log stays in review"),
-        "unreadable log",
+    let error = land_now(&forge).expect_err("an unreadable log stays resumable in review");
+    assert!(matches!(
+        error,
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::ForgeObservationUnavailable,
+            ..
+        }
+    ));
+    assert_contains(
+        &error.to_string(),
         &[
             "the failure was not classified",
             "the log of 'CI / clippy' could not be read",
         ],
+        "unreadable log",
     );
     assert_steps(
         &forge.steps(),

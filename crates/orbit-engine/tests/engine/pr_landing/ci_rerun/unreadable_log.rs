@@ -102,7 +102,7 @@ fn every_unreadable_failed_job_log_stays_unclassified() {
                 matches!(
                     error,
                     OrbitError::DeliveryRefused {
-                        refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+                        refusal: DeliveryRefusal::ForgeObservationUnavailable,
                         ..
                     }
                 ),

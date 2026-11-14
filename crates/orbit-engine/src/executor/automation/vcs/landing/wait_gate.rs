@@ -91,6 +91,24 @@ pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
                 && matches[0].conclusion.value() == Some(&CiJobConclusion::Success)
         }));
     }
+    if gate == LandingWaitGate::JobLogsUnavailable {
+        let failed = super::checks::failed_checks(&status);
+        if !failed.is_empty() {
+            let Some(head) = status.head_sha.as_deref() else {
+                return Ok(false);
+            };
+            // Keep each sweep observation bounded too. No repair or CI
+            // mutation is admitted here, even if the newly readable log fails.
+            let deadline_ms = super::super::completion_deadline::now_ms()?.saturating_add(60_000);
+            return super::checks::failed_job_logs_readable(
+                host,
+                workspace,
+                head,
+                &failed,
+                deadline_ms,
+            );
+        }
+    }
     let mut unreported = UnreportedChecks::new();
     let state = checked_pr_state(
         host,

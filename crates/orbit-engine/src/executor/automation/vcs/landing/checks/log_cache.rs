@@ -29,7 +29,8 @@ const MAX_ENTRIES: usize = 128;
 const MAX_ENTRY_BYTES: usize = 256 * 1024;
 /// How long one answer is reused before it ages out.
 const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-const SCHEMA_VERSION: u64 = 1;
+// Ignore older entries that could retain a truncated, unattributable answer.
+const SCHEMA_VERSION: u64 = 2;
 
 /// The identity of one completed job's log for one run attempt.
 pub(super) struct JobLogKey {

@@ -21,8 +21,8 @@ use super::super::pr::{
 use super::super::pr::{ReviewedMergeOutcome, diagnostics, draft_recovery};
 use super::super::remote_probe::fixed_wait as sleep;
 use super::checks::{
-    CheckRecovery, CheckRecoveryStep, ReadWait, failed_checks, landing_read_wait,
-    recover_failed_checks,
+    CheckRecovery, CheckRecoveryStep, ReadWait, failed_checks, landing_log_read_wait,
+    landing_read_wait, recover_failed_checks,
 };
 use super::intent::{LandingView, reconcile_intent};
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
@@ -603,6 +603,9 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         } else if let Some(diagnostic) = self.diagnostic.as_object_mut() {
             diagnostic.remove("ci_rerun_diagnostic");
         }
+        if let Some(diagnostic) = self.diagnostic.as_object_mut() {
+            diagnostic.remove("log_read_gap");
+        }
         match recovered {
             CheckRecoveryStep::Acted => {
                 self.recovery.waiting_for_base = None;
@@ -644,6 +647,38 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
                 )?);
             }
             CheckRecoveryStep::Stop(evidence) => return Err(self.stop(false, &evidence)?),
+            CheckRecoveryStep::LogsUnavailable(reason) => {
+                self.diagnostic["log_read_gap"] = json!({"reason": reason});
+                let now = super::super::completion_deadline::now_ms()?;
+                let deadline_ms = if self.max_wait_seconds == 0 {
+                    now
+                } else {
+                    self.deadline_ms
+                };
+                match landing_log_read_wait(
+                    &reason,
+                    &mut self.recovery.unavailable_log_waits,
+                    status.head_sha.as_deref(),
+                    now,
+                    deadline_ms,
+                ) {
+                    ReadWait::Wait { delay_ms, note } => {
+                        self.diagnostic["log_read_gap"] = note.clone();
+                        host.record_handoff_landing_wait(&context.handoff_id, &note.to_string())?;
+                        sleep(Duration::from_millis(delay_ms));
+                        self.waited_seconds =
+                            self.waited_seconds.saturating_add(delay_ms.div_ceil(1000));
+                        return Ok(Step::Continue);
+                    }
+                    ReadWait::Hold(evidence) => {
+                        return Err(self.hold(
+                            false,
+                            DeliveryRefusal::ForgeObservationUnavailable,
+                            &evidence,
+                        )?);
+                    }
+                }
+            }
             CheckRecoveryStep::ReadDeferred(read) => {
                 let now = super::super::completion_deadline::now_ms()?;
                 match landing_read_wait(
@@ -903,6 +938,17 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
             format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
         };
         waiting.push_str(&self.unreported.timeout_note());
+        if let Some(gap) = self.diagnostic["log_read_gap"]["reason"].as_str() {
+            return self.hold(
+                false,
+                DeliveryRefusal::ForgeObservationUnavailable,
+                &format!(
+                    "pull request #{number} is waiting for failed-job logs after \
+                     {max_wait_seconds}s: {gap}; the owner will re-read the logs and \
+                     resume when evidence is available; the candidate stays in review"
+                ),
+            );
+        }
         if let Some(suspicion) = self.diagnostic["base_suspicion"].as_str() {
             return self.hold(
                 false,

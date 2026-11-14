@@ -350,6 +350,8 @@ pub enum LandingWaitGate {
     BaseChecksPending,
     /// Required or owner-owed checks are still running on the candidate.
     RequiredChecksPending,
+    /// Failed-job logs must become readable before the failure can be classified.
+    JobLogsUnavailable,
 }
 
 impl LandingWaitGate {
@@ -358,6 +360,7 @@ impl LandingWaitGate {
         match self {
             Self::BaseChecksPending => "delivery_base_checks_pending",
             Self::RequiredChecksPending => "delivery_requirements_unsatisfied",
+            Self::JobLogsUnavailable => "delivery_forge_observation_unavailable",
         }
     }
 }

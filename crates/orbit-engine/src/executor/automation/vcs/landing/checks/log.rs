@@ -73,6 +73,7 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
             "the job log source is unknown".to_string(),
         ));
     }
+    let log = bound_job_log(&response, job)?;
     // A completed job's readable answer never changes for its run attempt,
     // so later passes reuse it instead of reading the provider again.
     if let (false, Some(key)) = (reused, cache_key.as_ref())
@@ -80,9 +81,18 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     {
         log_cache::store(host.data_root(), key, &answer);
     }
+    Ok(log)
+}
+
+/// Validate the selected evidence before caching it: incomplete attribution
+/// must remain eligible for another provider read.
+fn bound_job_log(
+    response: &CiJobLogAnswer,
+    job: &CiCommitJobEvidence,
+) -> Result<String, OrbitError> {
     let selected = response.diagnostic.as_deref();
     if selected.is_none() && response.failure_regions.is_some() {
-        return bound_failure_regions(&response, job)
+        return bound_failure_regions(response, job)
             .map(ToOwned::to_owned)
             .ok_or_else(|| {
                 OrbitError::Execution(
@@ -160,4 +170,33 @@ fn bound_failure_regions<'a>(
         CiLogSource::Unknown(_) => return None,
     }
     Some(text)
+}
+
+/// Whether a currently failed workflow job has a readable, attributable log.
+/// This only wakes the landing: classification and recovery still run there.
+pub(in crate::executor::automation::vcs::landing) fn failed_job_logs_readable<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    workspace: &Path,
+    head: &str,
+    failed: &[(Option<String>, String)],
+    deadline_ms: u64,
+) -> Result<bool, OrbitError> {
+    let jobs = super::jobs::commit_jobs(host, workspace, head)?;
+    for job in jobs.iter().filter(|job| {
+        super::jobs::unsuccessful(job)
+            && failed.iter().any(|check| super::jobs::answers(job, check))
+    }) {
+        if super::jobs::concluded_stopped(job).is_some() {
+            return Ok(true);
+        }
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
+            return Ok(false);
+        };
+        if job_log(host, workspace, run_id, job_id, job, Some(deadline_ms)).is_ok() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

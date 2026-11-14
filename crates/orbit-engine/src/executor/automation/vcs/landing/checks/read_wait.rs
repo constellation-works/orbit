@@ -1,4 +1,4 @@
-//! Waiting out a provider rate limit on the landing's failed-check reads.
+//! Bounded waits for unavailable failed-job logs and rate-limited check reads.
 //!
 //! The account's REST quota is shared by every landing, watcher and sweep on
 //! the host, so a throttled job or log read says nothing about the failure:
@@ -20,6 +20,42 @@ use crate::executor::automation::read_throttle::{read_not_before, rfc3339_ms};
 /// Waits one landing pass may take for throttled check reads.
 const MAX_THROTTLED_READ_WAITS: u64 = 3;
 
+/// Retry missing log evidence on this pass before handing it to the owner sweep.
+/// These waits never authorize a CI rerun or consume a candidate repair.
+pub(in crate::executor::automation::vcs) fn landing_log_read_wait(
+    reason: &str,
+    waits: &mut u64,
+    head: Option<&str>,
+    now_ms: u64,
+    deadline_ms: u64,
+) -> ReadWait {
+    const BACKOFF_MS: [u64; 3] = [5_000, 10_000, 20_000];
+    let delay_ms = usize::try_from(*waits)
+        .ok()
+        .and_then(|index| BACKOFF_MS.get(index).copied());
+    let Some(delay_ms) = delay_ms.filter(|delay| now_ms.saturating_add(*delay) < deadline_ms)
+    else {
+        return ReadWait::Hold(format!(
+            "the failure was not classified ({reason}); failed-job logs remain unavailable \
+             after {waits} bounded waits or the landing deadline; the owner will re-read \
+             the logs and resume the landing when evidence is available; the candidate \
+             stays in review"
+        ));
+    };
+    *waits = waits.saturating_add(1);
+    ReadWait::Wait {
+        delay_ms,
+        note: json!({
+            "state": "job_logs_unavailable",
+            "reason": reason,
+            "head": head,
+            "attempt": *waits,
+            "not_before_ms": now_ms.saturating_add(delay_ms),
+            "deadline_ms": deadline_ms,
+        }),
+    }
+}
+
 /// A failed-check read the provider rate-limited.
 pub(in crate::executor::automation::vcs) struct ThrottledRead {
     /// What could not be read, with the provider's own diagnostic.
@@ -38,11 +74,11 @@ impl ThrottledRead {
     }
 }
 
-/// What the landing does about a throttled read.
+/// What the landing does about an unavailable read.
 pub(in crate::executor::automation::vcs) enum ReadWait {
     /// Sleep `delay_ms`, then poll again; `note` is the recorded wait.
     Wait { delay_ms: u64, note: Value },
-    /// Hold for the forge with this evidence, which names the not-before.
+    /// Hold for the forge with this evidence, retaining the read's reason.
     Hold(String),
 }
 
