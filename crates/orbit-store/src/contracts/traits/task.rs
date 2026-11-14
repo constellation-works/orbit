@@ -7,6 +7,7 @@ use orbit_types::task::{
     normalize_task_tags, task_matches_tags,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 pub trait TaskStoreBackend: Send + Sync {
     /// Persisted decision projections for this partition. Unsupported
@@ -391,16 +392,23 @@ pub trait TaskStoreBackend: Send + Sync {
     /// with no coordination, recovery or index repair. Backends with a
     /// generated index override this; the default answers from
     /// [`Self::list_tasks`].
-    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
-        Ok(self
-            .list_tasks()?
-            .into_iter()
-            .map(|task| crate::contracts::TaskChangeStamp {
-                id: task.id,
-                status: task.status,
-                updated_at: task.updated_at,
-            })
-            .collect())
+    ///
+    /// An index-backed backend returns the same `Arc` until the registry
+    /// commits, so a watcher can skip rebuilding its comparison. A failed
+    /// read is an error and does not replace the snapshot the caller holds.
+    fn task_change_stamps(
+        &self,
+    ) -> Result<Arc<Vec<crate::contracts::TaskChangeStamp>>, OrbitError> {
+        Ok(Arc::new(
+            self.list_tasks()?
+                .into_iter()
+                .map(|task| crate::contracts::TaskChangeStamp {
+                    id: task.id,
+                    status: task.status,
+                    updated_at: task.updated_at,
+                })
+                .collect(),
+        ))
     }
     /// Bodyless scan identity inputs. Unlike the change watcher's compatibility
     /// fallback, this must never hydrate task bodies. The caller first validates

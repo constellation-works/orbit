@@ -21,6 +21,7 @@
 //! `listing` contains the index reads behind bounded task listing: freshness rows,
 //! filtered selection, and the workspace-scoped status projection.
 //! `index_snapshot` reuses freshness rows until a registry commit invalidates them.
+//! `change_stamps` reuses task change stamps until a registry commit invalidates them.
 //! `tests` contains the registry unit tests, split to mirror the source modules.
 
 use std::path::{Path, PathBuf};
@@ -28,6 +29,7 @@ use std::path::{Path, PathBuf};
 mod allocator;
 mod baseline;
 mod bindings;
+mod change_stamps;
 mod decision_snapshots;
 mod decision_snapshots_schema;
 mod envelope_stamps;

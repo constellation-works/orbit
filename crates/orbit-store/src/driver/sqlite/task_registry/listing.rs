@@ -8,6 +8,7 @@
 //! workspace.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::hold_step;
@@ -16,6 +17,7 @@ use orbit_types::task::{TaskStatus, task_id_prefix};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
 
+use super::change_stamps::read_task_change_stamps;
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
 use super::util::TERMINAL_STATUSES;
@@ -312,44 +314,23 @@ impl TaskRegistryStore {
     /// read from the generated index alone. A change watcher compares two
     /// reads; the index row is rewritten with its envelope on every commit,
     /// whichever process made it.
+    ///
+    /// Writable registries return the same snapshot until another connection
+    /// commits. A failed read leaves that snapshot in place and returns the
+    /// error. Read-only registries read the index directly.
     pub fn task_change_stamps(
         &self,
         partition_id: &str,
-    ) -> Result<Vec<TaskChangeStamp>, OrbitError> {
+    ) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self.read()?;
-        let mut stmt = conn
-            .prepare_cached(
-                "SELECT task_id, status, updated_at FROM task_bundle_index WHERE workspace_id = ?1",
-            )
-            .map_err(sqlite_store_error)?;
-        let rows = stmt
-            .query_map([&partition_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(sqlite_store_error)?;
-        let mut stamps = Vec::new();
-        for row in rows {
-            let (id, raw_status, raw_updated_at) = row.map_err(sqlite_store_error)?;
-            let status = parse_indexed_status(&id, &raw_status)?;
-            let updated_at = chrono::DateTime::parse_from_rfc3339(&raw_updated_at)
-                .map_err(|e| {
-                    OrbitError::Store(format!(
-                        "invalid indexed updated_at '{raw_updated_at}' for task '{id}': {e}"
-                    ))
-                })?
-                .with_timezone(&chrono::Utc);
-            stamps.push(TaskChangeStamp {
-                id,
-                status,
-                updated_at,
-            });
+        // Read-only admission may have fallen back to an immutable main-file
+        // connection on a mount without writable WAL sidecars. Preserve that
+        // connection's read semantics instead of requiring another live one.
+        if self.is_read_only()? {
+            let conn = self.read()?;
+            return Ok(Arc::new(read_task_change_stamps(&conn, &partition_id)?));
         }
-        Ok(stamps)
+        self.change_stamps.change_stamps_for(&partition_id)
     }
 }
 
@@ -371,7 +352,10 @@ fn collect_statuses(
     Ok(())
 }
 
-fn parse_indexed_status(task_id: &str, raw_status: &str) -> Result<TaskStatus, OrbitError> {
+pub(super) fn parse_indexed_status(
+    task_id: &str,
+    raw_status: &str,
+) -> Result<TaskStatus, OrbitError> {
     raw_status.parse::<TaskStatus>().map_err(|e| {
         OrbitError::Store(format!(
             "invalid indexed status '{raw_status}' for task '{task_id}': {e}"

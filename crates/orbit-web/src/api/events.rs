@@ -41,7 +41,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures_core::Stream;
-use orbit_core::application::change_watch::RunStateStamp;
+use orbit_core::application::change_watch::{RunStateStamp, TaskChangeStamp};
 use orbit_core::application::task;
 use orbit_core::{OrbitRuntime, TaskStatus};
 use serde_json::{Value, json};
@@ -258,10 +258,24 @@ fn holds_locks(status: TaskStatus) -> bool {
 
 type TaskStamp = (TaskStatus, DateTime<Utc>);
 
+/// The previous task scan. `snapshot` is the registry's shared stamp list:
+/// the same pointer means the registry has not committed since this baseline.
+struct TaskBaseline {
+    snapshot: Arc<Vec<TaskChangeStamp>>,
+    by_id: BTreeMap<String, TaskStamp>,
+}
+
+fn index_task_stamps(stamps: &[TaskChangeStamp]) -> BTreeMap<String, TaskStamp> {
+    stamps
+        .iter()
+        .map(|stamp| (stamp.id.clone(), (stamp.status, stamp.updated_at)))
+        .collect()
+}
+
 /// What the previous scan read. A source whose first read has not succeeded
 /// yet (`None`) produces no notices; its next successful read is its baseline.
 struct WorkspaceWatch {
-    tasks: Option<BTreeMap<String, TaskStamp>>,
+    tasks: Option<TaskBaseline>,
     active_triage: Option<BTreeMap<String, Value>>,
     runs: Option<BTreeMap<String, RunStateStamp>>,
     run_read_at: DateTime<Utc>,
@@ -299,28 +313,37 @@ impl WorkspaceWatch {
         let mut locks = false;
 
         match runtime.task_change_stamps() {
-            Ok(stamps) => {
-                let next = stamps
-                    .into_iter()
-                    .map(|stamp| (stamp.id, (stamp.status, stamp.updated_at)))
-                    .collect::<BTreeMap<_, _>>();
-                if let Some(previous) = &self.tasks {
-                    for (id, stamp) in &next {
-                        let before = previous.get(id);
-                        if before == Some(stamp) {
-                            continue;
+            Ok(snapshot) => {
+                // Same registry snapshot as the baseline: nothing committed,
+                // so the map and the diff would both be empty work.
+                let unchanged = self
+                    .tasks
+                    .as_ref()
+                    .is_some_and(|previous| Arc::ptr_eq(&previous.snapshot, &snapshot));
+                if !unchanged {
+                    let next = index_task_stamps(&snapshot);
+                    if let Some(previous) = &self.tasks {
+                        for (id, stamp) in &next {
+                            let before = previous.by_id.get(id);
+                            if before == Some(stamp) {
+                                continue;
+                            }
+                            locks |=
+                                holds_locks(stamp.0) || before.is_some_and(|b| holds_locks(b.0));
+                            notices.push(task_notice(id, Some(stamp.0), Some(stamp.1)));
                         }
-                        locks |= holds_locks(stamp.0) || before.is_some_and(|b| holds_locks(b.0));
-                        notices.push(task_notice(id, Some(stamp.0), Some(stamp.1)));
-                    }
-                    for (id, before) in previous {
-                        if !next.contains_key(id) {
-                            locks |= holds_locks(before.0);
-                            notices.push(task_notice(id, None, None));
+                        for (id, before) in &previous.by_id {
+                            if !next.contains_key(id) {
+                                locks |= holds_locks(before.0);
+                                notices.push(task_notice(id, None, None));
+                            }
                         }
                     }
+                    self.tasks = Some(TaskBaseline {
+                        snapshot,
+                        by_id: next,
+                    });
                 }
-                self.tasks = Some(next);
             }
             Err(error) => tracing::debug!(%error, "change stream could not read task stamps"),
         }
@@ -334,7 +357,7 @@ impl WorkspaceWatch {
                     let ids: BTreeSet<_> = previous.keys().chain(next.keys()).collect();
                     for id in ids {
                         if previous.get(id) != next.get(id) {
-                            let stamp = self.tasks.as_ref().and_then(|tasks| tasks.get(id));
+                            let stamp = self.tasks.as_ref().and_then(|tasks| tasks.by_id.get(id));
                             notices.push(task_notice(
                                 id,
                                 stamp.map(|(status, _)| *status),
@@ -442,7 +465,7 @@ impl WorkspaceWatch {
             return vec![resync_notice("unknown_event_id")];
         };
         let since = resume - Duration::seconds(RESUME_SLACK_SECONDS);
-        let Some(tasks) = &self.tasks else {
+        let Some(tasks) = self.tasks.as_ref().map(|baseline| &baseline.by_id) else {
             return vec![resync_notice("unavailable")];
         };
         let Ok(runs) = runtime.run_state_stamps(since) else {
