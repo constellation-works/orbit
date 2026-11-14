@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-10
+last_validated: 2026-11-14
 ---
 # Boundary-First Testing
 
@@ -915,6 +915,19 @@ and its child exits in 0.41s. With the match restored, a debug run spends
 0.942s on the receipt row and 1.096s on the refusal row (one child, 2.049s).
 
 Admitted unit tests:
+
+- `orbit-store`'s
+  `repository/task/coordination/tests/claim_index.rs::a_task_write_and_a_footprint_guard_decode_only_live_claims`
+  is the ORB-24411 acceptance check (criterion 1). It seeds one thousand
+  settled claims and two live ones, then counts `ExecutionClaim` decodes
+  through the `#[cfg(test)]` counter on the indexed claim reads. One
+  `with_task_lock` decodes that task's live claim only, and one
+  `guard_ordinary_footprint` decodes the two claims whose phase protects a
+  footprint. The same fixture's `EXPLAIN QUERY PLAN` of the by-task
+  statement must name `idx_task_coordination_claims_by_task`. The counter
+  and the statement are crate-private, so a crate-root test cannot observe
+  the decode bound. The pre-change read decoded every claim payload, so
+  the count does not hold there.
 
 - `orbit-engine`'s `executor/automation/vcs/operations/tests/push_retry.rs` cases
   `timed_out_evidence_push_lands_when_the_ref_names_the_commit`,

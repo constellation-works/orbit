@@ -148,6 +148,10 @@ impl Owner {
         .with_lock_options(options)
     }
 
+    pub(super) fn state_database(&self) -> PathBuf {
+        self.root.path().join("state.sqlite")
+    }
+
     pub(super) fn admit(&self, request_id: &str) -> Admitted {
         let request = request(request_id);
         let lookup = self

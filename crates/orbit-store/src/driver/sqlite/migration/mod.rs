@@ -103,7 +103,7 @@ use resource_minutes::{
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;
 use scripts::apply_script_grants;
-use task_commit_journal::apply_task_commit_journal;
+use task_commit_journal::{apply_task_commit_journal, apply_task_coordination_claim_indexes};
 use task_reservations::{
     apply_lease_notices, apply_task_reservation_lease_queue, apply_task_reservation_lease_token,
     apply_task_reservation_leases, apply_task_reservation_unreleased_expires_indexes,

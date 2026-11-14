@@ -33,7 +33,7 @@ impl TaskCommitBoundary {
             .partition(|entry| entry.fresh(now));
         if !stale.is_empty() {
             let claiming = self
-                .execution_claims()?
+                .footprint_protecting_claims()?
                 .into_iter()
                 .filter(|claim| {
                     matches!(

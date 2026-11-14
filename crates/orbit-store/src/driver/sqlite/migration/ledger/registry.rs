@@ -816,12 +816,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_task_reservation_unreleased_expires_indexes,
     },
+    // Partial expression indexes over claim and lifecycle payloads. Index-only:
+    // older binaries keep reading and writing the table, and SQLite maintains
+    // the indexes on their writes.
+    Migration {
+        version: 90,
+        name: "task_coordination_claim_indexes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_coordination_claim_indexes,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 89;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 90;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

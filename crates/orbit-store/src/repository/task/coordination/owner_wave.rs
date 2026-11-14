@@ -51,7 +51,7 @@ impl TaskCommitBoundary {
             return Ok(Vec::new());
         }
         self.with_admission(|| {
-            let claims = self.execution_claims()?;
+            let claims = self.footprint_protecting_claims()?;
             // Read tags under the same admission boundary as the claim check.
             // No-diff claims fence their task, but hold no context locks.
             // Missing or unsettled task metadata grants no exemption.

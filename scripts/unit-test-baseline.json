@@ -648,6 +648,7 @@
         "repository/task/coordination/tests/boundary.rs::a_status_observation_passes_a_queued_writer_that_ordinary_reads_wait_for",
         "repository/task/coordination/tests/boundary.rs::an_admission_is_not_starved_by_overlapping_reentrant_ordinary_sections",
         "repository/task/coordination/tests/boundary.rs::nested_reads_never_queue_behind_writers_they_hold_back",
+        "repository/task/coordination/tests/claim_index.rs::a_task_write_and_a_footprint_guard_decode_only_live_claims",
         "repository/task/coordination/tests/claim_section.rs::a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit",
         "repository/task/coordination/tests/claim_section.rs::a_listing_during_a_commit_apply_waits_for_the_writer_and_does_not_rebuild_the_index",
         "repository/task/coordination/tests/claim_section.rs::a_slow_claim_apply_holds_its_bundle_and_not_its_partition",
