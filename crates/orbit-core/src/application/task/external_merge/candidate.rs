@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
+use orbit_store::contracts::{
+    AdmissionIdentity, AdmissionLookup, ClaimInspection, ExecutionClaimPhase,
+};
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, names_task_delivery_pull_request,
 };
@@ -135,12 +137,39 @@ pub(super) fn names_delivery(
     )
 }
 
+/// Lazily-read claim ledger shared by one settlement pass: the outer
+/// `None` means not read yet, the inner `None` means the read failed.
+pub(super) type SettlementClaimsCache = Option<Option<Vec<ClaimInspection>>>;
+
 impl OrbitRuntime {
+    /// The pass-shared ledger, reading it on first use. `None` when the
+    /// ledger cannot be read; callers keep their own failure semantics.
+    fn settlement_claims<'a>(
+        &self,
+        cache: &'a mut SettlementClaimsCache,
+    ) -> Option<&'a [ClaimInspection]> {
+        if cache.is_none() {
+            *cache = Some(self.stores().tasks().inspect_execution_claims().ok());
+        }
+        cache.as_ref().and_then(|claims| claims.as_deref())
+    }
+
     /// `task` as a settlement candidate, or why it is not one.
     pub(super) fn settlement_candidate(
         &self,
         task: Task,
         carried: &BTreeSet<String>,
+    ) -> Result<Candidate, String> {
+        let mut cache = None;
+        self.settlement_candidate_with_claims(task, carried, &mut cache)
+    }
+
+    /// [`Self::settlement_candidate`] reusing `cache`'s one ledger read.
+    pub(super) fn settlement_candidate_with_claims(
+        &self,
+        task: Task,
+        carried: &BTreeSet<String>,
+        claims_cache: &mut SettlementClaimsCache,
     ) -> Result<Candidate, String> {
         if !SETTLEABLE_STATUSES.contains(&task.status) {
             return Err(format!(
@@ -149,19 +178,22 @@ impl OrbitRuntime {
             ));
         }
         let requeued_handoff = if task.status == TaskStatus::Backlog {
-            let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
             let receipt = self.handoff_receipt(&task).map_err(|e| e.to_string())?;
             match receipt {
-                Some(receipt)
+                Some(receipt) => {
+                    let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
                     if super::super::requeue::current_run_requeue_stands(&task, &history)
-                        && task.spec_digest_matches(&receipt.task_spec_digest) =>
-                {
-                    Some(
-                        receipt
-                            .pull_request
-                            .parse::<u64>()
-                            .map_err(|e| e.to_string())?,
-                    )
+                        && task.spec_digest_matches(&receipt.task_spec_digest)
+                    {
+                        Some(
+                            receipt
+                                .pull_request
+                                .parse::<u64>()
+                                .map_err(|e| e.to_string())?,
+                        )
+                    } else {
+                        return Err("backlog task has no preserved failure-handoff requeue".into());
+                    }
                 }
                 _ => return Err("backlog task has no preserved failure-handoff requeue".into()),
             }
@@ -171,13 +203,14 @@ impl OrbitRuntime {
         if let Some(live) = self.live_task_run(&task) {
             return Err(format!("{live}; that run lands or fails the task itself"));
         }
-        let revoked = self.revoked_handoff(&task)?;
         if carried.contains(&task.id) {
             return Err(
                 "a live `run auto` leaf carries it; that run lands or fails the task itself"
                     .to_string(),
             );
         }
+        let claims = self.settlement_claims(claims_cache);
+        let revoked = self.revoked_handoff_with_claims(&task, claims)?;
         if let Some(owed) = self.owed_settlement_hold(&task.id) {
             return Err(owed);
         }
@@ -186,8 +219,8 @@ impl OrbitRuntime {
                 BTreeMap::from([(revoked.pull_request, revoked.landing_branch.clone())])
             }
             None => {
-                let mut prs = self.released_claim_pull_requests(&task.id);
-                prs.extend(self.accepted_handoff_pull_requests(&task.id));
+                let mut prs = self.released_claim_pull_requests_with_claims(&task.id, claims);
+                prs.extend(self.accepted_handoff_pull_requests_with_claims(&task.id, claims));
                 prs
             }
         };
@@ -205,8 +238,12 @@ impl OrbitRuntime {
 
     /// The task's unsettled claim as a stopped or revoked handoff that may
     /// settle, `None` when it has no unsettled claim, or why its claim refuses.
-    fn revoked_handoff(&self, task: &Task) -> Result<Option<RevokedHandoff>, String> {
-        let Some(claim) = self.unsettled_task_claim(task)? else {
+    fn revoked_handoff_with_claims(
+        &self,
+        task: &Task,
+        claims: Option<&[ClaimInspection]>,
+    ) -> Result<Option<RevokedHandoff>, String> {
+        let Some(claim) = Self::unsettled_task_claim_with_claims(task, claims)? else {
             return Ok(None);
         };
         let unsettled = unsettled_claim_reason(&claim);
@@ -309,13 +346,17 @@ impl OrbitRuntime {
     /// PRs kept with this task's released or failed claim candidates. The
     /// original admission must still prove which branch each claim targeted;
     /// missing, expired or unreadable receipts contribute no authority.
-    fn released_claim_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
-        let tasks = self.stores().tasks();
-        let Ok(claims) = tasks.inspect_execution_claims() else {
+    fn released_claim_pull_requests_with_claims(
+        &self,
+        task_id: &str,
+        claims: Option<&[ClaimInspection]>,
+    ) -> BTreeMap<u64, String> {
+        let Some(claims) = claims else {
             return BTreeMap::new();
         };
+        let tasks = self.stores().tasks();
         claims
-            .into_iter()
+            .iter()
             .filter(|state| {
                 state.claim.task_id == task_id
                     && matches!(
@@ -325,12 +366,14 @@ impl OrbitRuntime {
             })
             .filter_map(|state| {
                 let number = state
-                    .preserved_candidate?
+                    .preserved_candidate
+                    .as_ref()?
                     .candidate
-                    .pull_request?
+                    .pull_request
+                    .as_ref()?
                     .parse::<u64>()
                     .ok()?;
-                let claim = state.claim;
+                let claim = state.claim.clone();
                 let AdmissionLookup::Found { receipt, .. } = tasks
                     .lookup_admission(
                         &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
@@ -375,12 +418,20 @@ impl OrbitRuntime {
     /// Every PR Orbit recorded for `task`, whether or not it may settle: those
     /// on the task and those its accepted handoffs and kept claims delivered.
     pub(super) fn recorded_pull_requests(&self, task: &Task) -> BTreeSet<u64> {
+        let claims = self.stores().tasks().inspect_execution_claims().ok();
+        let claims = claims.as_deref();
         task.external_refs
             .iter()
             .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
             .filter_map(|reference| reference.id.parse::<u64>().ok())
-            .chain(self.released_claim_pull_requests(&task.id).into_keys())
-            .chain(self.accepted_handoff_pull_requests(&task.id).into_keys())
+            .chain(
+                self.released_claim_pull_requests_with_claims(&task.id, claims)
+                    .into_keys(),
+            )
+            .chain(
+                self.accepted_handoff_pull_requests_with_claims(&task.id, claims)
+                    .into_keys(),
+            )
             .collect()
     }
 
