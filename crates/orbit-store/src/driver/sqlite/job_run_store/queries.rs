@@ -11,6 +11,8 @@ use orbit_types::workflow::{
     run_id_minute_stem,
 };
 
+use rusqlite::OptionalExtension;
+
 use super::input_keys::parse_input_keys;
 use super::state::write_state_json_conn;
 use crate::contracts::{JobRunOrder, JobRunQuery};
@@ -38,18 +40,22 @@ impl Store {
             // run columns. Retain exactly the listing surface's predicates.
             let (filter, params) = job_run_filter_sql(workspace_id, query);
             (
-                format!("SELECT input_json FROM job_runs WHERE {filter}"),
+                format!("SELECT run_id FROM job_runs WHERE {filter}"),
                 params,
             )
         };
+        // `job_run_tasks` (v59) materializes exactly the text `task_ids` /
+        // `task_id` bindings this projection returns, trigger-maintained on
+        // every write and backfilled, so read it joined to the selected
+        // runs instead of walking every selected run's `input_json`. The
+        // selected runs still decide membership (same predicates, same
+        // limit/order surface); a malformed binding in one run simply has
+        // no row there and cannot refuse the others.
         let sql = format!(
-            "WITH inputs AS (SELECT input_json FROM ({selected})) \
-             SELECT binding.value FROM inputs, json_each(\
-                 CASE WHEN json_type(input_json, '$.task_ids') = 'array' \
-                 THEN json_extract(input_json, '$.task_ids') ELSE '[]' END) AS binding \
-             WHERE binding.type = 'text' \
-             UNION SELECT json_extract(input_json, '$.task_id') FROM inputs \
-             WHERE json_type(input_json, '$.task_id') = 'text'"
+            "WITH selected_runs AS ({selected}) \
+             SELECT job_run_tasks.task_id FROM job_run_tasks \
+             JOIN selected_runs ON selected_runs.run_id = job_run_tasks.run_id \
+             WHERE job_run_tasks.workspace_id = ?1"
         );
         let conn = self.read()?;
         let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
@@ -184,6 +190,31 @@ impl Store {
     ) -> Result<Option<JobRun>, OrbitError> {
         let conn = self.read()?;
         get_job_run_for_workspace_conn(&conn, workspace_id, run_id)
+    }
+
+    /// The one-column counterpart of [`Self::get_job_run_for_workspace`]:
+    /// no run row, step rows, input or pipeline state.
+    pub fn get_job_run_state_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<JobRunState>, OrbitError> {
+        let conn = self.read()?;
+        let state = conn
+            .query_row(
+                "SELECT state FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+                rusqlite::params![workspace_id, run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)?;
+        state
+            .map(|raw| {
+                parse_job_run_state(&raw).map_err(|error| {
+                    OrbitError::Store(format!("invalid job run state for {run_id}: {error}"))
+                })
+            })
+            .transpose()
     }
 
     /// Every workspace id this store records `run_id` under, ascending,

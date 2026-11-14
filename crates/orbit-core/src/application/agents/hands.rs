@@ -36,16 +36,14 @@ use super::roles::pilot_warnings;
 use crate::OrbitRuntime;
 use crate::application::codebase::{PilotRuns, actor_kind};
 use crate::application::task::BLOCKED_TASK_TRIAGED_EVENT;
+use crate::application::task::blocked_recovery::{
+    self, LegacyBlockedTriageOutcome, LegacyBlockedTriageRecord,
+};
 
 /// A hand's verb on the task.
 const PILOTED: &str = "piloted";
 const REVIEWED: &str = "reviewed";
 const RECOVERED: &str = "recovered";
-/// The decision a blocked-task triage requeue records on its final-recovery
-/// event, telling it apart from final recovery's own requeue.
-const TRIAGE_REQUEUE_DECISION: &str = "blocked_task_triage_requeue";
-/// The lead of the triage comment, whose header names who triaged.
-const TRIAGE_COMMENT_LEAD: &str = "blocked_task_triage ";
 /// Claim recovery's history event: the only claim mutation that records it.
 const CLAIM_REVOKED_EVENT: &str = "claim_revoked";
 /// Who a human recovery is shown as.
@@ -243,8 +241,15 @@ impl OrbitRuntime {
         for entry in &row.history {
             if let Some(hand) = self.final_recovery_hand(entry) {
                 hands.push(hand);
-            } else if entry.event == BLOCKED_TASK_TRIAGED_EVENT && triage_requeued(entry) {
-                hands.push(triage_hand(row, entry));
+            } else if entry.event == BLOCKED_TASK_TRIAGED_EVENT
+                && let Some(record) = blocked_recovery::decode_blocked_task_triaged(
+                    entry,
+                    &row.history,
+                    &row.comments,
+                )
+                && record.outcome == LegacyBlockedTriageOutcome::Requeued
+            {
+                hands.push(recovered_hand_from_legacy_triage(record));
             } else if entry.event == CLAIM_REVOKED_EVENT
                 && entry.to_status == Some(TaskStatus::Backlog)
             {
@@ -264,15 +269,12 @@ impl OrbitRuntime {
             return None;
         }
         let Some(TaskDecision::FinalRecovery {
-            run_id,
-            decision,
-            outcome,
-            ..
+            run_id, outcome, ..
         }) = &entry.decision
         else {
             return None;
         };
-        if decision == TRIAGE_REQUEUE_DECISION
+        if blocked_recovery::is_legacy_triage_requeue_binding(entry)
             || !matches!(
                 outcome,
                 RecordedFinalRecovery::Completed { .. } | RecordedFinalRecovery::Requeued
@@ -294,6 +296,8 @@ impl OrbitRuntime {
                 job_run_id: Some(run_id.to_string()),
                 until: Some(at),
                 limit: RECOVERY_INVOCATION_LIMIT,
+                // Recovery reads activity, timestamp and model only.
+                skip_tool_calls: true,
                 ..InvocationQuery::default()
             })
             .unwrap_or_else(|error| {
@@ -308,41 +312,12 @@ impl OrbitRuntime {
     }
 }
 
-/// A triage marker whose requeue went through.
-fn triage_requeued(entry: &TaskHistoryEntry) -> bool {
-    entry.note.as_deref().is_some_and(|note| {
-        note.split_whitespace()
-            .any(|field| field == "outcome=requeued")
-    })
-}
-
-/// A triage requeue: who asked for the triage, from the comment written
-/// with the marker, and the blocking run its final-recovery decision names.
-fn triage_hand(row: &TaskRow, entry: &TaskHistoryEntry) -> Hand {
-    let mut hand = Hand::new(RECOVERED, entry.at);
+/// A triage requeue hand: the actor and run the shared marker record decoded.
+fn recovered_hand_from_legacy_triage(record: LegacyBlockedTriageRecord) -> Hand {
+    let mut hand = Hand::new(RECOVERED, record.at);
     hand.via = Some("blocked_task_triage");
-    hand.actor = row
-        .comments
-        .iter()
-        .filter(|comment| comment.at == entry.at)
-        .find_map(|comment| {
-            let header = comment
-                .message
-                .strip_prefix(TRIAGE_COMMENT_LEAD)?
-                .lines()
-                .next()?;
-            header
-                .split_whitespace()
-                .find_map(|field| field.strip_prefix("by="))
-                .filter(|by| !by.is_empty())
-                .map(str::to_string)
-        });
-    hand.run_id = row.history.iter().find_map(|other| match &other.decision {
-        Some(TaskDecision::FinalRecovery {
-            run_id, decision, ..
-        }) if other.at == entry.at && decision == TRIAGE_REQUEUE_DECISION => Some(run_id.clone()),
-        _ => None,
-    });
+    hand.actor = record.actor;
+    hand.run_id = record.run_id;
     hand
 }
 

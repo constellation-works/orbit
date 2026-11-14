@@ -221,9 +221,8 @@ fn unsafe_exact_files_are_refused_and_changed_files_are_revalidated_before_spawn
     assert!(!root.join("uncreated-target").exists());
 }
 
-/// Native replay can set ORBIT_TEST_EXACT_FILE_PARENT to an owned fixture
-/// directory outside OS scratch. macOS intentionally permits scratch writes,
-/// so a sibling-denial assertion there would not exercise this boundary.
+/// macOS permits scratch writes, so the native boundary needs a fixture outside
+/// OS scratch. The parent can be overridden for native replay.
 #[cfg(unix)]
 #[test]
 fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
@@ -233,22 +232,25 @@ fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
     ) {
         return;
     }
+    #[cfg(target_os = "macos")]
+    let temp = {
+        let parent = std::env::var_os("ORBIT_TEST_EXACT_FILE_PARENT")
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+        let temp = tempfile::tempdir_in(parent).expect("create native fixture tempdir");
+        harden_dir(temp.path());
+        temp
+    };
+    #[cfg(not(target_os = "macos"))]
     let temp = fixture_tempdir();
     let root = temp.path().canonicalize().unwrap();
     harden_dir(&root);
-    if cfg!(target_os = "macos")
-        && (root.starts_with("/private/tmp") || root.starts_with("/private/var/folders"))
-    {
-        // Printed so the deferred native case shows in the test log as a skip;
-        // a silent return would read as a pass of the sibling-denial boundary.
-        #[allow(clippy::print_stdout)]
-        {
-            println!(
-                "deferred native exact-file sibling test: use ORBIT_TEST_EXACT_FILE_PARENT outside OS scratch"
-            );
-        }
-        return;
-    }
+    assert!(
+        !cfg!(target_os = "macos")
+            || !(root.starts_with("/private/tmp") || root.starts_with("/private/var/folders")),
+        "native exact-file fixture must be outside OS scratch; set ORBIT_TEST_EXACT_FILE_PARENT"
+    );
     let file = root.join("installation_id");
     let sibling = root.join("sibling");
     let auth = root.join("auth.json");

@@ -72,7 +72,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+use orbit_store::contracts::{JobRunOrder, JobRunQuery, TaskListFilter};
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
 use orbit_types::workflow::{
     self, COMPLETION_HOLD_KEY, DEFAULT_BRANCH_PREFIX, DeliveryRefusal, JobRun, JobRunState,
@@ -239,6 +239,43 @@ impl OrbitRuntime {
                     // Malformed bindings in an unrelated historical run cannot
                     // name a task, and must not refuse the other candidates.
                     ids.retain(|id| orbit_types::task::is_valid_orb_task_id(id));
+                    // Narrow by task state before reading envelopes: only a
+                    // task now in review/blocked/backlog can be repaired, so
+                    // intersect the projected ids with that bounded status
+                    // population (answered from the generated index alone)
+                    // and request metadata for at most those ids. A worker
+                    // reads through its owner, which has no local index, so
+                    // it keeps the keyed owner read.
+                    if self.worker_invocation().is_none() {
+                        let open_filter = TaskListFilter {
+                            statuses: Some(vec![
+                                TaskStatus::Review,
+                                TaskStatus::Blocked,
+                                TaskStatus::Backlog,
+                            ]),
+                            ..TaskListFilter::default()
+                        };
+                        match self.task_candidate_keys(&open_filter, usize::MAX) {
+                            Ok(Some(keys)) => {
+                                let open: std::collections::BTreeSet<String> =
+                                    keys.items.into_iter().map(|key| key.id).collect();
+                                ids.retain(|id| open.contains(id));
+                            }
+                            Ok(None) => {
+                                // The index cannot serve this filter: read
+                                // envelopes for the open statuses only (the
+                                // bounded side) and keep the projected ones.
+                                let candidates = self.task_candidates(&open_filter, usize::MAX)?;
+                                return Ok(candidates
+                                    .items
+                                    .into_iter()
+                                    .filter(|envelope| ids.contains(&envelope.id))
+                                    .map(crate::application::task::metadata_task)
+                                    .collect());
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
                     self.list_task_metadata_for_ids(&ids)
                 });
             match tasks {
@@ -406,17 +443,28 @@ impl OrbitRuntime {
             && run.state == JobRunState::Success
             && input.get("completion").and_then(Value::as_str) != Some("done");
         // [ORB-23809] A leaf held on a delivery refusal a fresh forge read
-        // can clear is handed back like a stopped one; every other hold keeps
-        // its own next step.
+        // can clear is handed back like a stopped one. A host-manager stop
+        // is an interruption recorded as a hold and is handed back the same
+        // way. Every other hold keeps its own next step.
+        let mut operator_stopped = false;
         let held = if run.state == JobRunState::Held {
             let refusal = match self.stores().jobs().get_job_run(&run.run_id) {
-                Ok(Some(full)) => held_refusal(&full),
+                Ok(Some(full)) => {
+                    operator_stopped = orbit_types::workflow::is_operator_stopped(
+                        full.state,
+                        full.steps
+                            .last()
+                            .and_then(|step| step.error_code.as_deref()),
+                    );
+                    (!operator_stopped).then(|| held_refusal(&full)).flatten()
+                }
                 Ok(None) => None,
                 Err(error) => {
                     return skip("store_unreadable", format!("read the run's steps: {error}"));
                 }
             };
             match refusal {
+                _ if operator_stopped => None,
                 Some(refusal) if handed_back_hold(refusal) => Some(refusal),
                 refusal => {
                     return Verdict::Ignore(
@@ -438,6 +486,7 @@ impl OrbitRuntime {
         observation.hold_code = held.map(DeliveryRefusal::error_code);
         if !ended_at_review
             && held.is_none()
+            && !operator_stopped
             && !matches!(
                 run.state,
                 JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
@@ -447,8 +496,8 @@ impl OrbitRuntime {
                 "leaf_not_stopped",
                 format!(
                     "its newest delivery run {} ended {}; only a delivery that failed, timed \
-                     out, was interrupted, held on a re-observable delivery hold or ended in \
-                     review is handed back",
+                     out, was interrupted, was stopped by the host manager, held on a \
+                     re-observable delivery hold or ended in review is handed back",
                     run.run_id, run.state
                 ),
             );
@@ -563,7 +612,7 @@ impl OrbitRuntime {
             return skip("live_run", live);
         }
         if run_owner_liveness(run) == RunOwnerLiveness::Alive
-            && run.state == JobRunState::Interrupted
+            && (run.state == JobRunState::Interrupted || operator_stopped)
         {
             return skip("live_run", "the run's worker is still alive".to_string());
         }

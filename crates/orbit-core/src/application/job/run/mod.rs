@@ -15,6 +15,7 @@
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `queued_cancel` — cancelling a run only while it is still queued, refusing one that started.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
+//! - `rescue_candidate` — keeping a stopped run's candidate under a rescue ref.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
 //! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
@@ -40,6 +41,7 @@ mod query;
 mod queued_cancel;
 mod reconcile;
 mod recorded;
+mod rescue_candidate;
 mod root_cause;
 #[cfg(feature = "test-support")]
 pub use root_cause::with_run_root_cause_write_hook;
@@ -70,8 +72,12 @@ pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::running_run_owner_is_stale;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
-    ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
-    job_run_to_json_with_activity_provenance, run_error_step,
+    ActivityInvocationEvidence, BOUNDED_RUN_ANSWER_MAX_BYTES, BOUNDED_RUN_STEP_LIMIT,
+    JobRunListStates, JobRunProjectionEvidence, JobRunProjectionProfile,
+    add_bounded_display_steps_to_json, bound_bounded_agent_invocation_answer,
+    display_steps_with_agent_execution_to_json, job_run_task_ids, job_run_to_json,
+    job_run_to_json_with_activity_provenance, project_job_run, run_error_step,
+    run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
 pub use recorded::{JobRunHolder, RecordedJobRun};
 pub use root_cause::{

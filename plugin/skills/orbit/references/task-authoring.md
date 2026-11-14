@@ -20,9 +20,17 @@ pickup. Do not confuse a task description with a design document or a transcript
   slice to demonstrate behavior that needs its downstream consumer: use the
   agreed interface and isolated fixtures, and assign end-to-end proof to integration.
 - **Decisions and constraints:** separate settled product choices from choices the
-  implementer can make. Include compatibility, authority, rollout or resource
-  constraints only where they affect this task. Ask for a consequential missing
-  decision; do not ask for permission to make ordinary implementation choices.
+  implementer can make. Before filing, resolve every consequential policy or
+  contract choice named by the task, including either/or policy, ownership or
+  sign-off, and contract-scope choices. Record the selected option and its
+  authority or basis in the description; acceptance criteria must describe that
+  outcome instead of asking the implementer to choose. If only an operator can
+  decide, make the handoff the task's explicit outcome: name the decision owner,
+  the choice or action they own, and what work waits for their answer. File a
+  finite-choice handoff as a human-crew decision task with `orbit.decision` (see
+  [Work only a human can do](#work-only-a-human-can-do)), and add a
+  dependency from the implementation task. Keep ordinary implementation choices
+  delegated.
 - **Data and contract semantics:** for analytics or listing tasks, state in the
   acceptance criteria the denominator (or eligible record set), how absent, null
   and empty values differ for relevant fields, and how legacy records are
@@ -123,6 +131,40 @@ orbit tool run orbit.task.add --input '{
   "fields": ["id"]
 }'
 ```
+
+### Bound the footprint and evidence before filing
+
+File only work the pilot can assess. Before creating the task, establish both
+halves of its input:
+
+- **Bounded selectors.** Every `context_files` entry is a verified creation,
+  modification or deletion target at the scoped revision: an existing file,
+  directory or symbol confirmed by inspection, or a known new target filed
+  with `allow_missing_context` and a stated creation intent. See Modification
+  footprint below for granularity, companions and wiring. Never file a sweep
+  of a directory or crate, read-only background, tests or fixtures only
+  consulted, or a shared reference doc as the footprint; background belongs
+  in the description. A task whose batch cannot be reconciled from readable
+  sources — an oldest-first selection with uncovered history, an unreadable
+  predecessor ledger, an unresolvable release reference — has no verified
+  footprint yet. File the smallest bounded investigation that establishes it
+  instead of the full repair, or leave the repair unfiled until the sources
+  are readable.
+- **Readable evidence references.** Every run, log, commit, ledger, tag or
+  predecessor artifact the description or criteria names must be readable
+  through the task record or the lane's granted tools. Quote the failing
+  command and its tested commit rather than a truncated excerpt: a truncated
+  log with no commit identifies no repair. Record each ledger's dates and
+  sources rather than citing it alone: an unreconciled ledger verifies no
+  batch. Resolve release tags and predecessor artifacts before filing. An
+  unreadable reference is a filing block. Make it readable or re-scope the
+  task. Never file the repair expecting the pilot to resolve it.
+- **Check the pilot's answer.** After filing, read the task's readiness and
+  the pilot assessment. A `selectors`, `verified_no_diff` or
+  `host_operational` disposition with its lock footprint is the filing proof.
+  An `unassessed` recommendation, or a holding unestablished-footprint
+  finding, means the filing failed this section. Attach the missing
+  selectors or evidence and request a new pilot assessment.
 
 Write the title as a concrete outcome that fits the commit subject. The pipeline
 writes the title as `<type>: <title>` and cuts that part at 72 characters with
@@ -493,6 +535,36 @@ the full `context_files` list plus `allow_missing_context: true`. Syntax,
 containment and file/directory kind are still checked, and comments, plans or
 agent proposals never grant intent. When task-pilot reports a missing selector
 that carries no such record, re-declare it through that update path.
+
+### Split, migration and other tasks that create files
+
+This rule binds every filer — an operator, an orchestrator, a review, QA or
+health sweep, and any other auto-task template — not only the implementer who
+later creates the file. Before calling `orbit.task.add` for a split, a move or
+migration, a deduplication that unifies copies into a new module, or any other
+task whose outcome creates a file:
+
+1. Scan the draft title, description, scope and acceptance criteria for every
+   path the task names as new, moved-to, split-out or to-be-created. Naming a
+   new file only in prose grants nothing.
+2. List each such path exactly once as its canonical `file:` selector (or
+   `dir:` for a new directory) in `context_files`, alongside the verified
+   existing targets, and file with `allow_missing_context: true`. That call —
+   not a later update, comment or plan — records `context_creation_authorized`
+   for each exact missing selector at filing time.
+3. If an exact destination cannot be named yet, do not file the task. Record
+   the unnamed destination as an evidence gap in your own execution summary or
+   artifact instead; never file first and leave task-pilot to hold promotion
+   for an operator to authorize a footprint the filer could have granted.
+4. Read the filed task back with `orbit.task.show` and confirm its history
+   carries the creation grant for each new path before recording the task as
+   filed. A filed task naming a new file with no such grant is a filing
+   defect: reauthorize it immediately through `orbit.task.update` with the
+   full `context_files` list plus `allow_missing_context: true`, and say so
+   in your summary.
+
+Omitting `allow_missing_context` is correct only when the task creates
+nothing: every `context_files` selector then names an existing target.
 
 A worker updating its own task through `orbit.task.update` or `orbit task
 update` from its run's linked worktree gets the existence relaxation

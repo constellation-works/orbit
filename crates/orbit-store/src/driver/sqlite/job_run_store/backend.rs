@@ -394,6 +394,11 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.read_run(run_id)
     }
 
+    fn get_job_run_state(&self, run_id: &str) -> Result<Option<JobRunState>, OrbitError> {
+        self.store
+            .get_job_run_state_for_workspace(&self.workspace_id, run_id)
+    }
+
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         validate_path_stem(job_id, "job")?;
         self.store.list_job_runs_for_workspace(
@@ -841,10 +846,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     }
 
     fn list_all_pending_or_running_runs(&self) -> Result<Vec<JobRun>, OrbitError> {
+        // No consumer of this listing reads step rows: stale-run
+        // reconciliation classifies from run-row fields and re-reads the
+        // full run before finalizing, and the orphan/parked probes read
+        // only state and owner fields.
         self.store.list_job_runs_for_workspace(
             &self.workspace_id,
             &JobRunQuery {
                 active_only: true,
+                include_steps: false,
                 ..Default::default()
             },
         )

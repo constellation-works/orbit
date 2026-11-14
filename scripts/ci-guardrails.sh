@@ -640,11 +640,15 @@ if [[ "$checks" == false ]]; then
   start_waiting_guard "$repo_root/scripts/test-ci-download-verified.py"
   # Start the longer repository scans first; the pool keeps pool_width running.
   # The dependency-direction self-test set the pool wall on hosted runs
-  # (335-505 s, 2026-11-09 cohort) until it ran its cases four at a time; it
-  # and the QA sweep remain the longest members, so both launch in the first
-  # slots: started late, either tail alone extends the wall past every other
-  # awaited job (longest-processing-time-first makespan scheduling).
+  # (335-505 s, 2026-11-09 cohort) until it ran its cases four at a time; it,
+  # the pr-state workflow self-test and the QA sweep remain the longest
+  # members, so all launch in the first slots: started late, any tail alone
+  # extends the wall past every other awaited job
+  # (longest-processing-time-first makespan scheduling). The pr-state
+  # self-test launched near the end until the 2026-11-14 profile replayed
+  # its start at about 75 s of a 278 s pool wall it alone set.
   run_guard "$repo_root/scripts/test-check-dependency-direction.py"
+  run_guard "$repo_root/scripts/test-pr-state-workflows.py"
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
   # Its inventory check always runs; its fixture self-test (the non-static
@@ -699,7 +703,6 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-release-promotion.py"
   run_guard "$repo_root/scripts/test-release-readiness-adapter.py"
   run_guard "$repo_root/scripts/test-release-breaking-changes.py"
-  run_guard "$repo_root/scripts/test-pr-state-workflows.py"
   run_guard "$repo_root/scripts/test-website-workflow.py"
   run_guard "$repo_root/scripts/test-windows-portability.py"
   run_guard "$repo_root/scripts/test-openpty-portability.py"

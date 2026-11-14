@@ -6,6 +6,28 @@ const PARALLEL_BUNDLE_STAMP_MIN_TASKS: usize = 256;
 const MAX_BUNDLE_STAMP_THREADS: usize = 16;
 
 impl TaskV2Store {
+    pub(crate) fn task_decision_snapshots(
+        &self,
+    ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
+        self.registry.task_decision_snapshots(&self.workspace_id)
+    }
+
+    pub(crate) fn record_task_decision_snapshots(
+        &self,
+        records: &[crate::contracts::TaskDecisionSnapshot],
+    ) -> Result<bool, OrbitError> {
+        self.registry
+            .record_task_decision_snapshots(&self.workspace_id, records)
+    }
+
+    pub(crate) fn decision_request_task_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.registry
+            .decision_request_task_id(&self.workspace_id, request_id)
+    }
+
     /// A task's comments for a reader outside any boundary section.
     ///
     /// When the partition has nothing to recover, only the comment log is

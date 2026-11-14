@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use orbit_common::fs::git::{git_common_dir, run_git};
 use orbit_common::governance::authorization::TASK_GRANT_TOOLS_OPERATION_ID;
@@ -410,14 +411,42 @@ fn canonical_repo_root(runtime: &RuntimeKernel) -> PathBuf {
         .unwrap_or_else(|_| runtime.context.paths().repo_root.clone())
 }
 
-fn active_git_checkout_root(
+/// Memoised checkout roots, keyed by `(canonical cwd, canonical repo root)`.
+/// The facts this resolves do not change for the life of a process, so a
+/// long-lived MCP server pays any git fallback once per cwd instead of on
+/// every tool call.
+type ActiveCheckoutRootCache = HashMap<(PathBuf, PathBuf), Option<PathBuf>>;
+
+static ACTIVE_CHECKOUT_ROOT_CACHE: OnceLock<Mutex<ActiveCheckoutRootCache>> = OnceLock::new();
+
+fn active_checkout_root_cache() -> MutexGuard<'static, ActiveCheckoutRootCache> {
+    ACTIVE_CHECKOUT_ROOT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(crate) fn active_git_checkout_root(
     canonical_repo_root: &Path,
     tool_context: &ToolContext,
 ) -> Option<PathBuf> {
     let cwd = tool_context.cwd.as_deref()?;
     let cwd = Path::new(cwd);
     let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let key = (canonical_cwd.clone(), canonical_repo_root.to_path_buf());
+    if let Some(cached) = active_checkout_root_cache().get(&key) {
+        return cached.clone();
+    }
+    let resolved = active_git_checkout_root_uncached(canonical_repo_root, cwd, &canonical_cwd);
+    active_checkout_root_cache().insert(key, resolved.clone());
+    resolved
+}
 
+fn active_git_checkout_root_uncached(
+    canonical_repo_root: &Path,
+    cwd: &Path,
+    canonical_cwd: &Path,
+) -> Option<PathBuf> {
     // An ordinary path in the runtime checkout needs no git probes. A nested
     // checkout has its own .git marker, even when it is inside this path.
     if canonical_cwd.starts_with(canonical_repo_root) {
@@ -428,6 +457,12 @@ fn active_git_checkout_root(
         if !nested_checkout {
             return Some(canonical_repo_root.to_path_buf());
         }
+    }
+
+    if let Some(checkout_root) =
+        linked_worktree_root_from_gitfile(canonical_cwd, canonical_repo_root)
+    {
+        return Some(checkout_root);
     }
 
     let checkout_root = git_checkout_root(cwd)?;
@@ -444,6 +479,47 @@ fn active_git_checkout_root(
             &checkout_root,
         );
     owned_checkout.then_some(checkout_root)
+}
+
+/// Answer the standard linked-worktree case from files, without git.
+///
+/// The nearest ancestor carrying a `.git` entry decides: only a `.git`
+/// *file* whose `gitdir:`/`commondir` resolve to the main checkout rooted
+/// at `canonical_repo_root` (see
+/// [`crate::paths::resolve_main_repo_from_worktree_gitfile`]) proves the
+/// ancestor is an owned linked worktree. Every other shape — a `.git`
+/// directory, a submodule gitfile, a worktree of another repository, or a
+/// registered checkout that is itself linked (whose main root differs
+/// from `canonical_repo_root`) — is inconclusive and returns `None`, so
+/// the caller falls back to the git probes and stays identical to them.
+/// Git location overrides can relocate git's own answer, so with one set
+/// only git can say.
+fn linked_worktree_root_from_gitfile(
+    canonical_cwd: &Path,
+    canonical_repo_root: &Path,
+) -> Option<PathBuf> {
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    if GIT_LOCATION_OVERRIDES
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return None;
+    }
+    for ancestor in canonical_cwd.ancestors() {
+        let git_path = ancestor.join(".git");
+        if git_path.symlink_metadata().is_err() {
+            continue;
+        }
+        if !git_path.is_file() {
+            return None;
+        }
+        let main_root = crate::paths::resolve_main_repo_from_worktree_gitfile(&git_path)?;
+        let registered = canonical_repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| canonical_repo_root.to_path_buf());
+        return (main_root == registered).then(|| ancestor.to_path_buf());
+    }
+    None
 }
 
 /// The checkout `path` sits in, or `None` when Git cannot say. A Git that

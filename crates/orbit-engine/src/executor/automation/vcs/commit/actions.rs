@@ -13,12 +13,12 @@ use crate::context::RuntimeHost;
 use super::super::super::input::{
     canonicalize_existing_dir, input_string_field, required_job_run_id,
 };
+use super::super::conventions::meaningful_execution_summary;
 use super::super::failure::commit_head_matches_failure_handoff;
 use super::super::git::git_output;
 use super::super::handoff::{
     claimed_attempt_summary, reject_failed_attempt, reject_failed_delivery,
 };
-use super::super::pr::meaningful_execution_summary;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
     PinnedHead, head_descends_from_pin, head_matches_final_recovery, head_matches_settled_review,

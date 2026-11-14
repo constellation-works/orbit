@@ -94,7 +94,7 @@ fn load_queue(
            AND expires_at > ?3
            AND queue_kind IS NOT NULL
            AND queued_files_json IS NOT NULL",
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id),
     );
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt

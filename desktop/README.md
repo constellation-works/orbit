@@ -45,9 +45,12 @@ dashboard's own host switcher.
   probe session, then `/api/fleet/drains`, `/api/job-runs/all?state=failed&since=24h` and
   `/api/tasks/all?status=review` for this host and for each registered remote that the list does not
   already mark unreachable. Remote routes go through `/api/on/<host>/…` and cover every workspace on
-  that host. For each available workspace, it also reads
-  `/api/workflows/auto/readiness?workspace=<id>&limit=500` to find tasks held until the base branch
-  passes; these task holds are separate from the fleet's general hold labels. The menu's drain
+  that host. Baseline-red task holds normally come from that workspace's fleet row
+  (`baseline_red_hold` with `complete: true`); only when the row does not carry the holds
+  complete — an older host with no such field, or a row with `complete: false` — does the tray
+  fall back to reading `/api/workflows/auto/readiness?workspace=<id>&limit=500` to find tasks
+  held until the base branch passes; these task holds are separate from the fleet's general
+  hold labels. The menu's drain
   and failure counts are the sums of the hosts that answered. A host that does not answer is
   unavailable, not zero: the tray does not keep a number that dropped that
   host, and the host's previous runs and review tasks stay remembered, so they are not announced

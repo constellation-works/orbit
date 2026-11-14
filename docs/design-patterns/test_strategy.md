@@ -839,6 +839,13 @@ is restored. After merge the operator runs
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`, retaining the
 executed/gap/failure counts and queue, cache, scope and CPU strata separately.
 
+A 2026-11-14 pass (ORB-24310) follows the ORB-24308 audit (pin `8a8830de9`, runs 43362371670–43377211443: nearest-rank p90 523 s, median 443 s) and the ORB-24333 watch (p90 522 s, median 436 s; its p90 run's guardrails took 515 s with 453 s of self-tests beside a 195 s list-build). Locally at base `a75e7384`, pinned to four cores with `CI_SELF_TESTS=all` (pool width 5 from `build-budget.py`, a shared 32-CPU host, so walls compare layouts rather than predict hosted time), `--guards-core` took 278 s, `--guards-qa` 175 s, the folded list-build 316 s plus a 6 s archive (790 MB), the partition guard 6.7 s proving 3,934 tests exactly once over 12 partitions, and partition 1/12 a 50.9 s nextest Summary (354 passed). The pool's longest member was `test-pr-state-workflows.py` at 202 s, launched near the end: replaying the logged durations as width-5 list scheduling gives 277 s, matching the observed wall, with that member starting at about 75 s and ending last. Standalone it took 189 s, of which one test took 129 s: `test_bubblewrap_apt_failure_reports_elapsed_package_seconds` had no `dpkg` fixture, so `ci-probe-bubblewrap.sh`'s `recover_dpkg` ran the host's real `dpkg --configure -a` through the test's unelevated `sudo` fixture, which exits 2 at once, and retried it until its 60 s deadline — once per apt-failure case, about 120 s measuring nothing. The same fixture shape runs on hosted runners, so the same two deadline loops sit inside the hosted guardrails time whenever the self-tests execute. Two changes, with no check, guard, assertion or runner added or removed:
+
+- That test now writes the same strict `bin/dpkg` fixture shape the dpkg-recovery test uses (`--configure -a` only, exit 0). Its elapsed-package-time assertions still come from the apt fixtures' 2 s sleeps across two attempts per case, and the recovery test keeps covering recovery semantics. A mutation that forced the probe script to report `package_seconds=0` still fails the test. The three bubblewrap tests together now take 8.3 s, and the whole self-test 59.7 s standalone.
+- The guard pool launches `test-pr-state-workflows.py` in its first slots, beside the dependency-direction self-test and the QA sweep, under the existing longest-processing-time-first rule.
+
+Candidate `--guards-core` walls under the same conditions were 143 s and 157 s against the 278 s baseline; the dependency-direction self-test (143–157 s in-pool, 105 s standalone) now sets the pool wall, so it is the next lever, ahead of the QA lane's 175 s. The removed time is two fixed 60 s wall-clock loops plus the late-start tail, so most of the saving transfers to hosted runs whose guardrails execute the self-tests; runs that skip them, and runs bound by the build or the slowest partition, gain nothing. No runner is added, so runner allocation cost is unchanged. This is local phase evidence, not a hosted p90: hosted timings are unavailable before publication, and restored 400-second compliance is claimed only when the operator's post-merge `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` over completed `pull_request` `ci.yml` runs carrying this revision shows it, with executed, skipped, cancelled and missing counts, failures and queue wait reported separately. No test was retired, skipped, retried or weakened; the partition exact-once proof, the shard-1 sandbox and Landlock gates and the changed-input guard selection are unchanged.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
@@ -886,6 +893,26 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 `scripts/unit-test-inventory.py` inventories the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json) records sorted admitted identities as `<path relative to src>::<function name>` per crate (schema version 2). Repeated names in separate inline modules in one file retain their multiplicity. `make ci-fast` fails when a present test is not named in the baseline, even when the crate's total count stays the same. The change that adds or renames unit tests must update the baseline too, so each admission appears as a reviewed diff. Concurrent admissions then either merge with both identities recorded or conflict textually and require reconciliation; identical count bumps can no longer silently lose an admission.
 
 Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes, including the raw identifier spelling `#[r#test]`, without evaluating `cfg` or expanding macros, as in the original retirement measure. A test attribute counts wherever it sits on a masked source line, so `#[cfg(test)]`, `#[allow(dead_code)]`, or another attribute before `#[test]`, `#[r#test]`, or `#[path::test]` does not hide the test. `#[cfg(test)]` by itself is not a test. The baseline stays the reviewed admission list: a scan that newly sees a real test is a missing admission, and the baseline is not rewritten only to conceal it. Rust strings, character literals and comments (including nested block comments) are excluded, so source fixture data does not consume admissions.
+
+ORB-24325's package-wide library deferral is no longer admitted as a unit test.
+`a_package_wide_deferral_is_covered_by_the_same_lib_filter` called the private
+`covers_deferral` helper. A regression belongs at the public boundary the
+workspace rule names, so that admission does not stand. Owner-landing
+`review_gate_settle` now guards the incident in
+`review_evidence_fulfilment::package_wide::a_package_wide_lib_deferral_is_received_when_settlement_runs_that_lib_test`
+and
+`review_evidence_fulfilment::package_wide::a_package_wide_lib_deferral_is_refused_for_a_mismatched_package_target_or_filter`.
+A package-wide `cargo test -p <crate>` record that deferred one library test
+is established only when settlement receives `cargo test -p <crate> --lib <exact test>`,
+including a record with arguments after `--`, one module filter, or
+non-selecting options (`--locked`, `--no-fail-fast`). Settlement refuses a
+different package, a `--test` requirement, a `--lib` requirement against a
+`--test` record, a record that already names `--lib`, `--bins` or
+`--all-targets`, a module-only filter, and a `--lib` requirement with no
+filter, and the host runs nothing. The private test finished in 0.00s. With
+the package-wide match removed, the receipt row stops at `review_gate_blocked`
+and its child exits in 0.41s. With the match restored, a debug run spends
+0.942s on the receipt row and 1.096s on the refusal row (one child, 2.049s).
 
 Admitted unit tests:
 

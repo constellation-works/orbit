@@ -20,7 +20,8 @@
 //! - every command is admitted before anything runs: a `codeql` requirement
 //!   names the local CodeQL script with nothing but its own options and one
 //!   query selector; a `host_sandbox_test` is
-//!   `cargo test -p <crate> --test <target> [<filter>]` or an exact owner
+//!   `cargo test -p <crate> --test <target> [<filter>]`,
+//!   `cargo test -p <crate> --lib [<filter>]`, or an exact owner
 //!   `workflow.required_validation_commands` entry
 //!   ([`HostSandboxCommand::admit`]). So a hold can never make the owner run
 //!   another command;

@@ -14,11 +14,13 @@
 //! - only when the report is otherwise evidence-only, so a review that would
 //!   block anyway runs nothing. A broader required run that passed only by
 //!   deferring tests counts as evidence-only when each deferred test is one
-//!   requirement's exact `cargo test` filter in the same package and target
-//!   [ORB-17043];
-//! - only a command [`HostSandboxCommand::admit`] admits — the `cargo test`
-//!   shape or an owner-required command — refused with a typed reason and
-//!   never run otherwise;
+//!   requirement's exact filter: the same package and `--test` target
+//!   [ORB-17043], or a package-wide run with no target selector and a `--lib`
+//!   filter [ORB-24325];
+//! - only a command [`HostSandboxCommand::admit`] admits — `cargo test -p
+//!   <crate> --test <target> [<filter>]`, `cargo test -p <crate> --lib
+//!   [<filter>]`, or an owner-required command — refused with a typed reason
+//!   and never run otherwise;
 //! - at the final candidate, in a fresh detached worktree, outside the agent
 //!   sandbox ([`run_host_sandbox_test`]).
 //!

@@ -198,7 +198,7 @@ spec:
             type: array
             items:
               type: string
-              description: "`cargo test -p <crate> --test <target> [<filter>]`"
+              description: "`cargo test -p <crate> --test <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]`"
       # Criteria the task pilot typed post-deploy, which only the deployed
       # build can evidence (item 7). The implement step admits each against
       # that finding and fails the step for any other; the delivery then
@@ -621,7 +621,8 @@ spec:
       `no-diff-expected`, when the base already resolves the task but the
       tests that show it skip or defer inside the agent sandbox (and an
       affected-test gate selects none on the unchanged base):
-      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
+      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}` or
+      `{"selectors":["cargo test -p <crate> --lib [<filter>]"]}`.
       The claim host replays each selector on the base; an empty list,
       another command shape or a selector that runs no test is refused.
     - `unfiled_findings`: findings the owner refused to file, as

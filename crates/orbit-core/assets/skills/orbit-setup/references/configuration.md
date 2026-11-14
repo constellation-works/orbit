@@ -817,17 +817,22 @@ rejected. `kind` is exactly `codeql` or `host_sandbox_test`, `os` is
 `linux` or `macos`, `name` and `command` must be non-empty, and `paths`
 must contain at least one valid workspace-relative glob. The `artifact` must
 be a unique relative `.json` path across rules. A `host_sandbox_test`
-command must use the admitted
-`cargo test -p <package> --test <target> [<one-filter>]` form (or use
-`--package` in place of `-p`); shell metacharacters and other command
-shapes are refused.
+command must use an admitted form:
+`cargo test -p <package> --test <target> [<one-filter>]` or
+`cargo test -p <package> --lib [<one-filter>]` (`--package` may stand in
+place of `-p`, and a single `--` may precede the one filter). Shell
+metacharacters and other command shapes are refused. `--lib` is not
+combined with `--test` or any other cargo option.
 
 A `codeql` rule the built-in fulfilment runs must name
 `scripts/codeql-rust-local.sh`, then optional `--ram <mib>` and
 `--toolchain <version>`, then exactly one query selector, as in the example.
 Download that script from
 <https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
-and save it at `scripts/codeql-rust-local.sh` in the workspace.
+and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it
+executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755):
+the fulfilment executes that path directly, so a copy saved without the
+executable bit cannot run.
 Configuration accepts any non-empty `codeql` command, and a custom command
 is not fulfilled by the built-in path: the hold stays, and the refusal names
 this contract and that download.

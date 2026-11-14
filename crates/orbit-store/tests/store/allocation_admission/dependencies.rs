@@ -1,7 +1,9 @@
 //! Dependency satisfaction through the serialized owner admission boundary.
 
 use super::*;
-use orbit_store::contracts::{TaskDocumentUpdateParams, TaskHistoryUpdateParams, TaskListFilter};
+use orbit_store::contracts::{
+    TaskDocumentUpdateParams, TaskHistoryUpdateParams, TaskListFilter, TaskListHydration,
+};
 
 fn owners(root: &Path, cross_workspace: bool) -> (Coordinated, Coordinated) {
     let owner = Coordinated::open_with_fingerprint(root, PARTITION_ID, "repo");
@@ -88,6 +90,7 @@ fn completed_archived_dependencies_are_claimed_locally_and_across_workspaces() {
                         .iter()
                         .all(|id| statuses.get(id) == Some(&TaskStatus::Done))
                 }),
+                TaskListHydration::Full,
             )
             .unwrap();
         assert_eq!(ready.items.len(), dependents.len());

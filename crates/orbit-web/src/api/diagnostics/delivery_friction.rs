@@ -39,7 +39,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::{OrbitRuntime, V2AuditEventFilter};
@@ -47,11 +47,13 @@ use orbit_types::task::{Task, TaskStatus, UNSET_BUCKET, complexity_bucket, compl
 use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// A bucket whose denominator is below this many done tasks is sparse.
 const MIN_DONE: u64 = 3;
@@ -252,6 +254,7 @@ fn parse_filters(q: &DeliveryFrictionQuery) -> Result<Filters, String> {
 }
 
 pub(in crate::api) async fn diagnostics_delivery_friction(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DeliveryFrictionQuery>,
 ) -> Response {
@@ -270,13 +273,44 @@ pub(in crate::api) async fn diagnostics_delivery_friction(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("delivery friction trend", move || {
-        delivery_friction_trend(&runtime, &range, &filters)
-    })
-    .await
+    // Normalized key over every parameter that changes the result: the trend
+    // window plus the parsed families and complexity/crew filters (each in
+    // sorted order). Invalid families, complexities, months and windows
+    // return above and are never cached.
+    let families_key = filters
+        .families
+        .iter()
+        .copied()
+        .map(Family::key)
+        .collect::<Vec<_>>()
+        .join(",");
+    let complexity_key = filters
+        .complexities
+        .as_ref()
+        .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let crew_key = filters
+        .crews
+        .as_ref()
+        .map(|set| set.iter().cloned().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let key = (
+        "delivery_friction".to_string(),
+        format!(
+            "range={}|families={}|complexity={}|crew={}",
+            range.key, families_key, complexity_key, crew_key,
+        ),
+    );
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            delivery_friction_trend(&compute_runtime, &range, &filters)
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

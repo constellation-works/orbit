@@ -1401,9 +1401,13 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence(sa
             "api graphql",
             MERGE_CALL,
         ];
-        for _check in checks.iter().skip(1) {
+        for check in checks.iter().skip(1) {
             expected.push("pr view");
-            expected.push("api graphql");
+            // [ORB-24403] A BLOCKED poll whose rollup still shows the
+            // cached required check pending re-reads no required checks.
+            if *check != "pending" {
+                expected.push("api graphql");
+            }
         }
         if checks.len() == 1 {
             expected.extend(["pr view", "api graphql"]);
@@ -4831,6 +4835,29 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits(sandbox: &Pat
     assert_eq!(fx.remote_tip(BRANCH), fixed_head, "both commits are pushed");
     assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
     assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+    let history = host.history(TASK_ID);
+    let failures: Vec<_> = history
+        .iter()
+        .filter_map(|entry| {
+            orbit_types::workflow::RecordedReviewFixValidationFailure::from_entry(entry)
+                .map(|failure| (entry, failure))
+        })
+        .collect();
+    assert_eq!(failures.len(), 1);
+    let (entry, failure) = &failures[0];
+    assert_eq!(failure.schema_version, 1);
+    assert_eq!(failure.run_id, RUN_ID);
+    assert_eq!(failure.attempt_id.as_deref(), Some("rvw-fixes-1"));
+    assert_eq!(failure.candidate_commit, fixed_head);
+    assert!(entry.decision.is_none(), "no new task decision shape");
+    let comments = host.comments(TASK_ID);
+    let comment = comments.last().unwrap();
+    assert_eq!((entry.at, &entry.by), (comment.at, &comment.by));
+    assert_eq!(
+        orbit_types::workflow::review_fix_validation_failure_times(&history, &comments),
+        vec![comment.at],
+        "the typed event and its escalation comment count once"
+    );
     assert_eq!(
         host.releases()
             .into_iter()

@@ -4,14 +4,17 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
-use orbit_types::workflow::{CI_CHECK_RERUN_EVENT, CiCheckRerunRecord};
+use orbit_types::workflow::{
+    CI_BASE_SUSPECT_EVENT, CI_CHECK_RERUN_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
+    CiCheckRerunRecord,
+};
 
 use super::super::super::super::ci::log_signature;
 use super::super::super::operations::{
-    CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent, CiJobPullRequests,
+    CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent, CiJobObservation,
     CiJobStatus,
 };
 use super::super::super::{
@@ -37,6 +40,48 @@ pub(super) fn cites_changed_candidate(
     let cited = repository_citations(workspace, head, log).map_err(OrbitError::Execution)?;
     let changed = git_output_paths(workspace, &["diff", "--name-only", "-z", base, head])?;
     Ok(cited.iter().any(|path| changed.contains(path)))
+}
+
+/// Lossless projection of a numeric job observation into a base-suspect
+/// legacy field: missing, null and malformed observations keep their shape.
+pub(super) fn base_suspect_legacy_number(
+    observation: &CiJobObservation<u64>,
+) -> CiBaseSuspectLegacy<u64> {
+    match observation {
+        CiJobObservation::Missing => CiBaseSuspectLegacy::Missing,
+        CiJobObservation::Null => CiBaseSuspectLegacy::Null,
+        CiJobObservation::Known { value, .. } => CiBaseSuspectLegacy::Known(*value),
+        CiJobObservation::Malformed(wire) => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+    }
+}
+
+/// Lossless projection of a text job observation; see
+/// [`base_suspect_legacy_number`].
+pub(super) fn base_suspect_legacy_text(
+    observation: &CiJobObservation<String>,
+) -> CiBaseSuspectLegacy<String> {
+    match observation {
+        CiJobObservation::Missing => CiBaseSuspectLegacy::Missing,
+        CiJobObservation::Null => CiBaseSuspectLegacy::Null,
+        CiJobObservation::Known { value, .. } => CiBaseSuspectLegacy::Known(value.clone()),
+        CiJobObservation::Malformed(wire) => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+    }
+}
+
+/// Lossless projection of a job-event observation; the recorded token is
+/// the provider's original text.
+pub(super) fn base_suspect_legacy_event(
+    observation: &CiJobObservation<CiJobEvent>,
+) -> CiBaseSuspectLegacy<String> {
+    match observation {
+        CiJobObservation::Missing => CiBaseSuspectLegacy::Missing,
+        CiJobObservation::Null => CiBaseSuspectLegacy::Null,
+        CiJobObservation::Known { wire, .. } => match wire.as_str() {
+            Some(token) => CiBaseSuspectLegacy::Known(token.to_string()),
+            None => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+        },
+        CiJobObservation::Malformed(wire) => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+    }
 }
 
 /// Independently guard the repair evidence path, including job-level recovery.
@@ -116,13 +161,21 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
             // `has_matching_candidate_rerun`, even when no landing or
             // auto-fix pass runs to record it (for example, completion's
             // final recovery with auto-fix disabled).
-            let record = json!({
-                "base": tip.trim(), "head": head, "check": jobs::job_label(job),
-                "signature": signature, "run_id": job.run_id, "job_id": job.job_id,
-                "run_attempt": job.run_attempt, "pr_number": pr_number,
-                "event": job.event, "started_at": job.started_at,
-                "completed_at": job.completed_at, "reason": reason,
-            });
+            let record = CiBaseSuspectRecord {
+                base: Some(tip.trim().to_string()),
+                head: Some(head.to_string()),
+                check: Some(jobs::job_label(job)),
+                signature: Some(signature.to_string()),
+                run_id: base_suspect_legacy_number(&job.run_id),
+                job_id: base_suspect_legacy_number(&job.job_id),
+                run_attempt: base_suspect_legacy_number(&job.run_attempt),
+                pr_number,
+                event: base_suspect_legacy_event(&job.event),
+                started_at: base_suspect_legacy_text(&job.started_at),
+                completed_at: base_suspect_legacy_text(&job.completed_at),
+                reason: Some(reason.clone()),
+                legacy_pull_requests: Vec::new(),
+            };
             // A refused write must keep the hold: an error here would reach
             // completion's final recovery as an unjudged failure. The next
             // observation of this failure records it again.
@@ -266,12 +319,6 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
         paths.into_iter().take(20).collect::<Vec<_>>().join(", "),
         jobs::job_label(job),
     )))
-}
-
-/// The pull-request numbers a job's provider metadata names, in any of
-/// the shapes the adapter or a history note carries them.
-fn legacy_pull_request_numbers(job: &Value) -> Vec<u64> {
-    CiJobPullRequests::from_legacy(job).numbers
 }
 
 /// Whether `job` is authenticated provider evidence of a `pull_request`
@@ -420,28 +467,23 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                         attempt: rerun.run_attempt,
                     }
                 }
-                "ci_base_suspect" => {
-                    let Some(note) = entry
-                        .note
-                        .as_deref()
-                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                CI_BASE_SUSPECT_EVENT => {
+                    let Some(suspect) =
+                        CiBaseSuspectRecord::from_history_note(entry.note.as_deref())
                     else {
                         continue;
                     };
-                    let noted = legacy_pull_request_numbers(&note);
-                    if names_other_pull_request(noted.into_iter(), pr_number)
-                        || note["check"] != check
-                        || note["signature"] != signature
+                    if names_other_pull_request(suspect.pull_request_numbers(), pr_number)
+                        || suspect.check.as_deref() != Some(check)
+                        || suspect.signature.as_deref() != Some(signature)
                     {
                         continue;
                     }
                     PriorFailure {
-                        head: note["head"].as_str().map(str::to_string),
-                        run: note["run_id"].as_u64(),
-                        completed: note["completed_at"]
-                            .as_str()
-                            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
-                        attempt: note["run_attempt"].as_u64(),
+                        head: suspect.head.clone(),
+                        run: suspect.run_id.value().copied(),
+                        completed: suspect.completed_time(),
+                        attempt: suspect.run_attempt.value().copied(),
                     }
                 }
                 _ => continue,
@@ -493,28 +535,24 @@ fn names_other_pull_request(noted: impl Iterator<Item = u64>, pr_number: Option<
 pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
-    evidence: &Value,
+    evidence: &CiBaseSuspectRecord,
     handoff_id: Option<&str>,
 ) -> Result<(), OrbitError> {
-    let note = serde_json::to_string(evidence)
+    let note = evidence
+        .to_history_note()
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
     for task in tasks {
         if host
             .get_task_history(task)?
             .iter()
-            .filter(|entry| entry.event == "ci_base_suspect")
-            .filter_map(|entry| entry.note.as_deref())
-            .filter_map(|note| serde_json::from_str::<Value>(note).ok())
-            .any(|prior| {
-                ["head", "check", "signature"]
-                    .iter()
-                    .all(|key| evidence[*key].as_str().is_some() && prior[*key] == evidence[*key])
-            })
+            .filter(|entry| entry.event == CI_BASE_SUSPECT_EVENT)
+            .filter_map(|entry| CiBaseSuspectRecord::from_history_note(entry.note.as_deref()))
+            .any(|prior| evidence.same_dedupe_identity(&prior))
         {
             continue;
         }
         if let Some(handoff_id) = handoff_id {
-            host.record_handoff_landing_history(handoff_id, "ci_base_suspect", &note)?;
+            host.record_handoff_landing_history(handoff_id, CI_BASE_SUSPECT_EVENT, &note)?;
         } else {
             host.apply_task_automation_update(
                 task,
@@ -522,7 +560,7 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
                     append_history: vec![orbit_types::task::TaskHistoryEntry {
                         at: chrono::Utc::now(),
                         by: "system".into(),
-                        event: "ci_base_suspect".into(),
+                        event: CI_BASE_SUSPECT_EVENT.into(),
                         note: Some(note.clone()),
                         from_status: None,
                         to_status: None,
@@ -533,7 +571,7 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
                 },
             )?;
         }
-        tracing::warn!(task, %evidence, "base-suspect: waiting for conclusive same-check base and pull-request rerun evidence; no candidate repair");
+        tracing::warn!(task, evidence = %note, "base-suspect: waiting for conclusive same-check base and pull-request rerun evidence; no candidate repair");
     }
     Ok(())
 }

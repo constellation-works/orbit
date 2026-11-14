@@ -595,7 +595,8 @@ pub struct NoDiffCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AlreadyResolved {
-    /// `cargo test -p <crate> --test <target> [<filter>]` selectors.
+    /// `cargo test -p <crate> --test <target> [<filter>]` or
+    /// `cargo test -p <crate> --lib [<filter>]` selectors.
     pub selectors: Vec<String>,
 }
 
@@ -612,15 +613,17 @@ impl AlreadyResolved {
                 .map_err(|error| {
                     format!(
                         "`{ALREADY_RESOLVED_FIELD}` must be `{{\"selectors\": [\"cargo test -p \
-                         <crate> --test <target> [<filter>]\", ...]}}`: {error}"
+                         <crate> --test <target> [<filter>]\" or \"cargo test -p <crate> --lib \
+                         [<filter>]\", ...]}}`: {error}"
                     )
                 }),
         }
     }
 
-    /// Admit every selector as one integration test target in the closed
+    /// Admit every selector in the closed
     /// [`HostSandboxCommand`](super::HostSandboxCommand) grammar, since each
-    /// runs on the claim host outside any agent sandbox. An exact required
+    /// runs on the claim host outside any agent sandbox: one integration
+    /// `--test` target or the package's `--lib` unit tests. An exact required
     /// command is not a selector: validation already runs it, and it need not
     /// run a test.
     pub fn admit(&self) -> Result<Vec<super::HostSandboxCommand>, String> {
@@ -635,7 +638,8 @@ impl AlreadyResolved {
             let command = super::HostSandboxCommand::admit(selector, &[]).map_err(|refusal| {
                 format!(
                     "`{ALREADY_RESOLVED_FIELD}` selector `{selector}` is not admitted ({}): {}; \
-                     a selector is `cargo test -p <crate> --test <target> [<filter>]`",
+                     a selector is `cargo test -p <crate> --test <target> [<filter>]` or \
+                     `cargo test -p <crate> --lib [<filter>]`",
                     refusal.reason.as_str(),
                     refusal.detail
                 )

@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980]
-last_validated: 2026-11-02
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410]
+last_validated: 2026-11-14
 ---
 
 # Upgrade Orbit Safely
@@ -636,10 +636,18 @@ older binary), stops scheduled routines and worktree GC on that host until those
 processes exit. Every such tick says so on stderr (`clock tick refused by upgrade
 admission (N tick(s) in a row since …)`), followed by the refusal, and `orbit doctor`'s
 `clock-unit` row reports an error naming the run of refused ticks and the latest
-refusal until a tick runs again. A claimed worker terminated without a recorded cancellation (an
-external installer or service restart signalling it) is `interrupted` with
-`worker_terminated` whether its supervisor observes SIGTERM or stale-owner
-reconciliation sees the dead process first.
+refusal until a tick runs again. A claimed worker that exits without a
+recorded cancellation has a failure state that depends on which path finalizes
+it. When the supervisor finalizes a running worker's
+non-signal crash exit, the run is `failed` without `worker_terminated`. When
+stale-owner reconciliation finalizes the dead worker first, it records
+`interrupted` with `worker_terminated`. Both states count as failures. A
+recorded terminating signal from `systemd` — a service restart or host
+shutdown — is `held` with `operator_stopped` and is outside the failure query
+when that exit evidence is available before finalization. If reconciliation
+finalizes first, it keeps the interruption even if the supervisor later
+records the `systemd` sender. Unknown senders, signals from other commands,
+and memory or task-limit breaches remain failures.
 
 #### Rollout beside executable-generation-v1 processes
 
@@ -1394,6 +1402,14 @@ advice — but its rationale is the populated-capture rejection above, not an un
 database refusal at schema 88. The frozen v0.48.0 changelog entry overstates the database
 refusal; per the RELEASING.md fix-forward policy it is left untouched, and this runbook is the
 maintained correction.
+
+## Task reservation active-row indexes (schema v89)
+
+Store schema v89 adds two partial indexes on `task_reservations`:
+`(workspace_id, expires_at) WHERE released_at IS NULL` and
+`(workspace_orbit_dir, expires_at) WHERE released_at IS NULL`. Active lock,
+lease and claim reads use them. The migration is index-only, so older binaries
+keep reading and writing and it waits for nothing.
 
 ## Verify the upgrade
 

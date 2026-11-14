@@ -1,11 +1,44 @@
 //! Run detail JSON and supplementary audit projections.
 
+use std::cell::RefCell;
+
 use orbit_core::application::job::{
-    RecordedJobRun, job_run_to_json_with_activity_provenance, run_display_steps,
+    JobRunProjectionEvidence, JobRunProjectionProfile, RecordedJobRun,
+    display_steps_with_agent_execution_to_json, project_job_run, run_display_steps,
 };
-use orbit_core::runtime::audit::run::RunProviderProcess;
+use orbit_core::runtime::audit::run::{RunAuditView, RunProviderProcess};
 use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
+
+/// One lazy scan of a run's audit trail, shared by the steps and
+/// provider-process halves of a single run-detail response.
+///
+/// The view is computed at most once: whichever half asks first pays for
+/// the scan, and a failure is cached too, so an unreadable trail is not
+/// scanned twice. A run whose record steps are already activity-level
+/// never triggers the steps half, so it pays only for the scan the
+/// provider-process half needs. Nothing is cached across requests, so
+/// provider-process liveness is still probed on every fetch.
+struct LazyRunAuditView<'a> {
+    runtime: &'a OrbitRuntime,
+    run_id: &'a str,
+    cached: RefCell<Option<Result<RunAuditView, String>>>,
+}
+
+impl LazyRunAuditView<'_> {
+    fn load_run_audit_view(&self) -> Result<RunAuditView, String> {
+        let mut cached = self.cached.borrow_mut();
+        if let Some(result) = cached.as_ref() {
+            return result.clone();
+        }
+        let computed = self
+            .runtime
+            .collect_run_audit_view(self.run_id)
+            .map_err(|error| error.to_string());
+        *cached = Some(computed.clone());
+        computed
+    }
+}
 
 pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Value {
     // [ORB-10971] Read the run's pipeline state. This projection used to drop
@@ -18,13 +51,15 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         run_id,
         "invocation evidence",
     );
-    let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
-    // The shared projection leaves the submitted input and the claimed worker
-    // identity to each surface. Run detail carries the same three fields MCP
-    // already adds, so the dashboard and `orbit run show --json` name one run.
-    full["input"] = json!(run.input);
-    full["pid"] = json!(run.pid);
-    full["pid_start_time"] = json!(run.pid_start_time);
+    let mut full = project_job_run(
+        run,
+        JobRunProjectionProfile::FullDetailSiblingSteps,
+        JobRunProjectionEvidence {
+            state: state.as_ref(),
+            activity_evidence: Some(&evidence),
+            ..JobRunProjectionEvidence::default()
+        },
+    );
     // Child dispatches persist lineage rather than task input. Resolve their
     // runs first, then share one task-title lookup with the parent header.
     let children = state
@@ -69,39 +104,33 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             }
         }
     }
-    // Keep pass health visible after terminalization, independently of the
-    // live waiting-state fields the shared run projection omits then.
-    full["drain_last_pass"] = serde_json::to_value(
-        state
-            .as_ref()
-            .and_then(|state| state.pull_drain.drain_last_pass.as_ref()),
-    )
-    .unwrap_or(Value::Null);
     // The failure chain and the cancel record are detail-only. One response
     // carries both, so the page does not fetch each child to find the cause.
     super::failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
-    // Reshape into `{run, steps}` per the dashboard contract: the displayed
-    // steps replace the record's own `steps` in the flat projection.
-    if let Some(fields) = full.as_object_mut() {
-        fields.remove("steps");
-    }
-    let steps = run_display_steps(run, || {
-        or_warn(
-            runtime.collect_run_audit_steps(run_id),
-            run_id,
-            "audit steps",
-        )
+    let audit_view = LazyRunAuditView {
+        runtime,
+        run_id,
+        cached: RefCell::new(None),
+    };
+    let steps = run_display_steps(run, || match audit_view.load_run_audit_view() {
+        Ok(view) => view.steps,
+        Err(error) => {
+            tracing::warn!(run_id, section = "audit steps", %error, "run detail omitted a section");
+            Vec::new()
+        }
     });
 
     // [ORB-10496] Provider subprocesses for this run's agent steps, with a
     // liveness verdict for any that have not reported an exit. Without this a
     // healthy long-running ship-pipeline implementation agent is
     // indistinguishable from a dead child without shell access to the host.
-    let provider_processes = or_warn(
-        runtime.collect_run_provider_processes(run_id),
-        run_id,
-        "provider processes",
-    );
+    let provider_processes = match audit_view.load_run_audit_view() {
+        Ok(view) => view.provider_processes,
+        Err(error) => {
+            tracing::warn!(run_id, section = "provider processes", %error, "run detail omitted a section");
+            Vec::new()
+        }
+    };
 
     // A claimed follower leaf names the owner task and claim it works for;
     // every other run has none. The dashboard's cancel confirmation reads this,
@@ -154,7 +183,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "pull_breaker": pull_breaker,
         "refused_settlements": refused_settlements,
         "crew_window": crew_window,
-        "steps": steps.records.iter().map(|step| step.to_json_with_agent_execution(state.as_ref(), &evidence)).collect::<Vec<_>>(),
+        "steps": display_steps_with_agent_execution_to_json(&steps, state.as_ref(), &evidence),
         "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
             .iter()
@@ -176,22 +205,21 @@ pub(super) fn recorded_run_detail_to_json(
     let run = &recorded.run;
     let run_id = run.run_id.as_str();
     let state = recorded.state.as_ref();
-    let mut full = job_run_to_json_with_activity_provenance(run, state, &[]);
-    full["input"] = json!(run.input);
-    full["pid"] = json!(run.pid);
-    full["pid_start_time"] = json!(run.pid_start_time);
+    let mut full = project_job_run(
+        run,
+        JobRunProjectionProfile::FullDetailSiblingSteps,
+        JobRunProjectionEvidence {
+            state,
+            activity_evidence: Some(&[]),
+            ..JobRunProjectionEvidence::default()
+        },
+    );
     let titles = or_warn(
         super::tasks::task_titles(reader, std::iter::once(run)),
         run_id,
         "task titles",
     );
     super::tasks::add_tasks(&mut full, run, &titles);
-    full["drain_last_pass"] =
-        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_last_pass.as_ref()))
-            .unwrap_or(Value::Null);
-    if let Some(fields) = full.as_object_mut() {
-        fields.remove("steps");
-    }
     let steps = run_display_steps(run, Vec::new);
     json!({
         "run": full,
@@ -205,7 +233,7 @@ pub(super) fn recorded_run_detail_to_json(
         "pull_breaker": state.and_then(|state| state.pull_drain.pull_breaker.as_ref()),
         "refused_settlements": [],
         "crew_window": Value::Null,
-        "steps": steps.records.iter().map(|step| step.to_json_with_agent_execution(state, &[])).collect::<Vec<_>>(),
+        "steps": display_steps_with_agent_execution_to_json(&steps, state, &[]),
         "steps_source": steps.source.as_str(),
         "provider_processes": [],
     })

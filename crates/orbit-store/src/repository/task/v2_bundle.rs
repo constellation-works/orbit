@@ -20,10 +20,10 @@ use orbit_types::task::{
 
 use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::driver::file::task_bundle::{
-    PENDING_WRITE_FILE_NAME, append_jsonl_row, append_jsonl_rows,
-    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
-    read_artifact_manifest_at, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
-    read_envelope_at, read_events_at, read_search_docs_at, recover_pending_write, write_bundle_at,
+    PENDING_WRITE_FILE_NAME, append_jsonl_rows, cleanup_partial_bundle_best_effort,
+    is_unpublished_stub, publish_envelope, read_artifact_manifest_at, read_bundle_at,
+    read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
+    read_search_docs_at, recover_pending_write, write_bundle_at,
 };
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
@@ -629,30 +629,6 @@ impl TaskBundleStoreV2 {
         )
     }
 
-    pub(crate) fn append_event(
-        &self,
-        task_id: &str,
-        event: &TaskEventRowV2,
-    ) -> Result<(), OrbitError> {
-        event.validate()?;
-        append_jsonl_row(
-            &self.bundle_path(task_id)?.join(TASK_EVENTS_FILE_NAME),
-            event,
-        )
-    }
-
-    pub(crate) fn append_comment(
-        &self,
-        task_id: &str,
-        comment: &TaskCommentRowV2,
-    ) -> Result<(), OrbitError> {
-        comment.validate()?;
-        append_jsonl_row(
-            &self.bundle_path(task_id)?.join(TASK_COMMENTS_FILE_NAME),
-            comment,
-        )
-    }
-
     /// Append `events` in order with one write and one sync.
     pub(crate) fn append_events(
         &self,
@@ -712,6 +688,10 @@ fn validate_envelope_for(task_id: &str, envelope: &TaskEnvelopeV2) -> Result<(),
 /// place atomically, so one file is always self-consistent, and the index
 /// validation that reads it on every listing pays nothing here.
 fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query", "task_bundle_canonical_read",
+    )
+    .entered();
     // A missing bundle cannot be in a lifecycle transition. Avoid asking the
     // shared-lock helper to create a stable lock target for a filtered miss.
     if !bundle_dir.try_exists()? {
@@ -730,6 +710,10 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
 /// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
 fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query", "task_bundle_lightweight_read",
+    )
+    .entered();
     #[cfg(test)]
     LIGHTWEIGHT_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     if !bundle_dir.try_exists()? {

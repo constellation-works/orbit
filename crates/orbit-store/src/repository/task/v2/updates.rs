@@ -91,6 +91,8 @@ impl TaskV2Store {
                 .transpose()?;
 
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
+            let mut pending_comments: Vec<TaskCommentRowV2> = Vec::new();
             let now = Utc::now();
             for entry in &fields.append_history {
                 let event = TaskEventRowV2 {
@@ -105,7 +107,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: entry.decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
             let status_changed = fields.status != bundle.envelope.status;
@@ -121,7 +123,7 @@ impl TaskV2Store {
                 operation_id: Some(fields.operation_id.clone()),
                 decision: fields.decision.clone(),
             };
-            self.bundle_store.append_event(id, &event)?;
+            pending_events.push(event.clone());
             bundle.events.push(event);
             let comment = TaskCommentRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -131,14 +133,14 @@ impl TaskV2Store {
                 body: fields.audit_note.clone(),
                 operation_id: Some(fields.operation_id.clone()),
             };
-            self.bundle_store.append_comment(id, &comment)?;
+            pending_comments.push(comment);
             append_creation_grant(
-                &self.bundle_store,
                 &mut bundle,
                 &fields.context_files,
                 &[],
                 &fields.actor,
                 now,
+                &mut pending_events,
             )?;
             bundle.envelope.context_files = fields.context_files.clone();
             for target in &fields.add_dependencies {
@@ -160,11 +162,13 @@ impl TaskV2Store {
                         bundle.envelope.tags.clone(),
                         tags.clone(),
                     );
-                    self.bundle_store.append_event(id, &event)?;
+                    pending_events.push(event.clone());
                     bundle.events.push(event);
                 }
                 bundle.envelope.tags = tags;
             }
+            self.bundle_store.append_events(id, &pending_events)?;
+            self.bundle_store.append_comments(id, &pending_comments)?;
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
             bundle.envelope.crew = fields.crew.clone();
@@ -231,7 +235,8 @@ impl TaskV2Store {
                 operation_id: None,
                 decision: None,
             };
-            self.bundle_store.append_event(id, &event)?;
+            self.bundle_store
+                .append_events(id, std::slice::from_ref(&event))?;
             bundle.events.push(event);
             if let Some(after) = required {
                 bundle.envelope.required_tools = after;
@@ -268,6 +273,7 @@ impl TaskV2Store {
             let original_plan = bundle.plan.clone();
             let original_execution_summary = bundle.execution_summary.clone();
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
             let updated_at = Utc::now();
             let mut envelope_changed = false;
             let mut title_changed = false;
@@ -313,12 +319,12 @@ impl TaskV2Store {
             }
             if let Some(value) = &fields.context_files {
                 append_creation_grant(
-                    &self.bundle_store,
                     &mut bundle,
                     value,
                     &fields.context_creation,
                     &fields.actor,
                     updated_at,
+                    &mut pending_events,
                 )?;
                 bundle.envelope.context_files = value.clone();
                 envelope_changed = true;
@@ -487,7 +493,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -499,7 +505,7 @@ impl TaskV2Store {
                     original_envelope.tags.clone(),
                     bundle.envelope.tags.clone(),
                 );
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -577,7 +583,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -590,14 +596,15 @@ impl TaskV2Store {
                 if fields.context_files.is_none() {
                     let context_files = bundle.envelope.context_files.clone();
                     append_creation_grant(
-                        &self.bundle_store,
                         &mut bundle,
                         &context_files,
                         &[],
                         &fields.actor,
                         updated_at,
+                        &mut pending_events,
                     )?;
                 }
+                self.bundle_store.append_events(id, &pending_events)?;
                 bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
@@ -606,6 +613,7 @@ impl TaskV2Store {
                     "task document update",
                 )?;
             } else {
+                self.bundle_store.append_events(id, &pending_events)?;
                 pending.finish();
             }
             Ok(())
@@ -676,6 +684,8 @@ impl TaskV2Store {
         let write = |claimed: bool| {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
+            let mut pending_comments: Vec<TaskCommentRowV2> = Vec::new();
             let now = Utc::now();
             let current_status = bundle.envelope.status;
             // [ORB-11305] Compare-and-set, evaluated against the bundle we just
@@ -728,7 +738,7 @@ impl TaskV2Store {
                         operation_id: None,
                         decision: None,
                     };
-                    self.bundle_store.append_event(id, &event)?;
+                    pending_events.push(event.clone());
                     bundle.events.push(event);
                 }
                 // The document write this replaces sealed any due grant here,
@@ -736,12 +746,12 @@ impl TaskV2Store {
                 if !claimed {
                     let context_files = bundle.envelope.context_files.clone();
                     append_creation_grant(
-                        &self.bundle_store,
                         &mut bundle,
                         &context_files,
                         &[],
                         &fields.actor,
                         now,
+                        &mut pending_events,
                     )?;
                 }
             }
@@ -776,7 +786,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: entry.decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
                 next_event += 1;
             }
@@ -790,7 +800,7 @@ impl TaskV2Store {
                     body: comment.message.clone(),
                     operation_id: None,
                 };
-                self.bundle_store.append_comment(id, &row)?;
+                pending_comments.push(row.clone());
                 bundle.comments.push(row);
                 next_comment += 1;
             }
@@ -812,7 +822,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: fields.status_decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -827,20 +837,24 @@ impl TaskV2Store {
                 if !claimed {
                     let context_files = bundle.envelope.context_files.clone();
                     append_creation_grant(
-                        &self.bundle_store,
                         &mut bundle,
                         &context_files,
                         &[],
                         &fields.actor,
                         now,
+                        &mut pending_events,
                     )?;
                 }
+                self.bundle_store.append_events(id, &pending_events)?;
+                self.bundle_store.append_comments(id, &pending_comments)?;
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
                 self.publish_task_index_and_lease_notices(&bundle.envelope, "task history update")?;
             } else {
+                self.bundle_store.append_events(id, &pending_events)?;
+                self.bundle_store.append_comments(id, &pending_comments)?;
                 pending.finish();
             }
             Ok(())

@@ -267,6 +267,19 @@ fn select_task_snapshot_items<T>(
     candidates
 }
 
+/// How `query_task_rows` materializes the rows that fill a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskListHydration {
+    /// Read each selected task's bundle (body documents and sidecars).
+    #[default]
+    Full,
+    /// Build each row from its candidate envelope only: no bundle read,
+    /// with empty body documents and sidecars. Every field of a compact
+    /// task-list row is envelope-derived, so a page projected to those
+    /// fields is identical to a hydrated page.
+    EnvelopeOnly,
+}
+
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
 #[derive(Debug, Clone, Default)]
 pub struct TaskCandidates {

@@ -433,7 +433,7 @@ resource throttle's memory percentage both measure non-reclaimable memory.
 - Every Linux worker, contained or not, starts with an `oom_score_adj` of at least 500, inherited by everything it runs, so a host-wide OOM kills a worker before the user systemd manager (100) or the drain that launched it. It is not configurable; scope units take no `OOMScoreAdjust=`, so the worker sets it on itself before `systemd-run` execs it.
 - `machine.worker_cpu_quota` adds `CPUQuota=` to each scope, so one run cannot take every core. Only an unsigned integer loads, with no upper bound. `orbit doctor`'s `worker-containment` row reads `info` while it is unset and `ok` once it is set. systemd enforces it only where the user manager delegates the cpu controller; elsewhere the property is accepted and not enforced.
 - A macOS watchdog breach names top-consuming child commands and memory bytes in `orbit run show`. The same snapshot is kept with the run as resource evidence, one bounded record per run until that run is deleted, and survives worker termination; `orbit run show --json` returns it under `worker_resource_limit`.
-- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. A run interrupted because its worker vanished names the worker's exit and scope evidence instead ([stuck job runs › How the worker ended](runbooks/stuck-job-runs.md#how-the-worker-ended)). Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
+- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. A run interrupted because its worker vanished names the worker's exit and scope evidence instead ([stuck job runs › How the worker ended](runbooks/stuck-job-runs.md#how-the-worker-ended)). A run the host manager stopped (a terminating signal whose recorded sender is `systemd`, with no memory or task-limit breach) is `held` with `operator_stopped` and is not a failure. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
 - Admitted names reach the contained worker through its environment, not the `systemd-run` command line. Orbit passes each name as `--setenv=NAME` with no value. systemd (211 and later, including 259) copies the value from the wrapper process, which already holds the allow-listed environment. That includes pass-listed provider credentials and clock-file defaults. A toolchain `PATH` override, an explicit removal, and the workspace allowlist are unchanged. Agent subprocesses still start from a cleared environment.
 
 ---
@@ -1910,7 +1910,8 @@ same watcher, crew pool and attempt ledger described below.
 
 A delivery leaf whose worker dies after it opened its pull request and
 promoted its task to `review` does not leave that pull request unwatched. The
-owner drain's next pass resumes the interrupted leaf from its checkpoints, once
+owner drain's next pass resumes that leaf from its checkpoints, including one
+the host manager stopped (`held` with `operator_stopped`), once
 (a resumed attempt that dies again is left to an operator), when it holds the same `--complete` and `--auto-fix` grants
 the leaf was started with, so the watcher repairs the same pull request and
 head under the run's retry lineage and attempt ledger. The resumed run's crew
@@ -1918,8 +1919,8 @@ comes from the leaf's own input, not the adopting drain's `--allow-crew`. See
 [adopting a dead leaf's pull request](runbooks/stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
 
 An `--auto-fix` drain also repairs Orbit pull requests that no run is watching
-any more. When a task's newest delivery leaf ended `failed`, `timeout` or
-`interrupted` and the task waits in `review`, or was blocked or requeued by that
+any more. When a task's newest delivery leaf ended `failed`, `timeout`,
+`interrupted`, or `held` because the host manager stopped it, and the task waits in `review`, or was blocked or requeued by that
 leaf's own delivery or final recovery, each pass reads the task's recorded pull
 request. If it conflicts with its base or a required check failed on its head,
 the pass resumes the leaf at the last completion round it reached, which pins
@@ -2588,7 +2589,7 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
 - A `host_sandbox_test` rule is owed on a host of `os`, which runs it outside the agent sandbox at settlement, so its command must be one settlement admits. A held `linux` rule the leaf could not run is fulfilled by a Linux owner whose host can create namespaces.
 - The owner captures the rules on each claim. The reviewer records an owed check `not_run` and never attempts it, and a verdict whose only gaps are owed checks holds for them instead of blocking.
 
-Example: the [CodeQL runbook](runbooks/codeql-local.md#non-linux-hosts) rule (`kind = "codeql"`, `paths = ["**/*.rs"]`, `os = "linux"`, `command = "scripts/codeql-rust-local.sh …"`, `artifact = "evidence/codeql-rust-linux.json"`, and `hosted_check` only where a hosted job runs that command). The built-in fulfilment runs only that script, with optional `--ram` and `--toolchain` and one query selector. Obtain it from <https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh> and save it at `scripts/codeql-rust-local.sh` in the workspace. A custom `codeql` command still loads, and that fulfilment does not run it. Design: [owed evidence](design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545).
+Example: the [CodeQL runbook](runbooks/codeql-local.md#non-linux-hosts) rule (`kind = "codeql"`, `paths = ["**/*.rs"]`, `os = "linux"`, `command = "scripts/codeql-rust-local.sh …"`, `artifact = "evidence/codeql-rust-linux.json"`, and `hosted_check` only where a hosted job runs that command). The built-in fulfilment runs only that script, with optional `--ram` and `--toolchain` and one query selector. Obtain it from <https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh> and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755): the fulfilment executes that path directly, so a copy saved without the executable bit cannot run. A custom `codeql` command still loads, and that fulfilment does not run it. Design: [owed evidence](design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545).
 
 #### Distributed PR delivery
 

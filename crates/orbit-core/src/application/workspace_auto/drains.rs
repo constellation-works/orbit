@@ -1,4 +1,4 @@
-use chrono::SecondsFormat;
+use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
 use orbit_types::workflow::{
@@ -68,6 +68,7 @@ pub(super) fn live_drain_state(runtime: &OrbitRuntime, input: &Value) -> Option<
 /// an operator has since set.
 pub(super) struct ActiveDrain {
     pub(super) run_id: String,
+    pub(super) created_at: DateTime<Utc>,
     pub(super) input: Value,
     submitted: u32,
     pub(super) limit: Option<DrainWorkerLimit>,
@@ -200,6 +201,7 @@ pub(super) fn workspace_drains(
         let stop = state.and_then(|state| state.pull_drain.drain_admissions_stop);
         active = Some(ActiveDrain {
             run_id: run.run_id,
+            created_at: run.created_at,
             input,
             submitted,
             limit,

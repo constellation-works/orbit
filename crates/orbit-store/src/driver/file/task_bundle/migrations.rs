@@ -2,8 +2,8 @@
 //!
 //! Empty chains today: every bundle on disk is already at
 //! [`TASK_ARTIFACT_SCHEMA_VERSION`]. Future schema bumps add a single
-//! `add_step(prev, fn)` call here per artifact; the read path is already
-//! wired through the task repository.
+//! `add_step(prev, fn)` call here per artifact; the bundle read path already
+//! calls `envelope_plan`.
 //!
 //! See `docs/design/task-artifacts/4_decisions.md` ADR-008 for the framework
 //! design constraints (forward-only, untyped `Value -> Value`, read-time only,

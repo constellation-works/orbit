@@ -63,6 +63,10 @@ mod worker;
 
 pub(crate) use admission::input_hash;
 pub use notices::{SubmissionKind, SubmissionNotices};
+pub use submit::{
+    AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt, AutoDrainSubmissionSource,
+    ShipModeResolutionProfile,
+};
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
@@ -74,7 +78,9 @@ pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
 pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
-pub(crate) use worker::exit::reconciled_worker_exit_clause;
+#[cfg(test)]
+pub(crate) use worker::exit::WORKER_EXIT_AUDIT;
+pub(crate) use worker::exit::{reconciled_worker_exit_clause, recorded_host_manager_stop};
 #[cfg(test)]
 pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;

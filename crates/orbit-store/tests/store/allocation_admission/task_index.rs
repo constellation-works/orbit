@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use orbit_store::compose::{WorkspaceTaskBackends, workspace_observational_backends};
-use orbit_store::contracts::{TaskDocumentUpdateParams, TaskListFilter};
+use orbit_store::contracts::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
 use serde_json::Value;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
@@ -808,7 +808,12 @@ fn residual_continuation_counts_before_cursor_on_index_and_scan() {
                 !selective || task.title.starts_with("keep")
             };
         let first = backend
-            .query_task_rows(&TaskListFilter::default(), 1, Some(&predicate))
+            .query_task_rows(
+                &TaskListFilter::default(),
+                1,
+                Some(&predicate),
+                TaskListHydration::Full,
+            )
             .unwrap();
         let row = &first.items[0].task;
         let filter = TaskListFilter {
@@ -816,7 +821,7 @@ fn residual_continuation_counts_before_cursor_on_index_and_scan() {
             ..Default::default()
         };
         let indexed = backend
-            .query_task_rows(&filter, 10, Some(&predicate))
+            .query_task_rows(&filter, 10, Some(&predicate), TaskListHydration::Full)
             .unwrap();
         assert_eq!(indexed.total_without_cursor, if selective { 2 } else { 3 });
         assert_eq!(indexed.total, indexed.total_without_cursor - 1);
@@ -825,7 +830,7 @@ fn residual_continuation_counts_before_cursor_on_index_and_scan() {
             .unwrap();
         let scan = observer(root.path())
             .task
-            .query_task_rows(&filter, 10, Some(&predicate))
+            .query_task_rows(&filter, 10, Some(&predicate), TaskListHydration::Full)
             .unwrap();
         assert_eq!(
             (scan.total, scan.total_without_cursor),

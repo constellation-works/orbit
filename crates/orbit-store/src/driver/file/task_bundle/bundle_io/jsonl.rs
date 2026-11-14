@@ -49,13 +49,6 @@ where
     scan_jsonl_records(path, &raw)
 }
 
-pub(crate) fn append_jsonl_row<T>(path: &Path, row: &T) -> Result<(), OrbitError>
-where
-    T: serde::Serialize,
-{
-    append_jsonl_rows(path, std::slice::from_ref(row))
-}
-
 /// Append `rows` in order with one write and one sync; nothing at all, not
 /// even the file, for no rows.
 pub(crate) fn append_jsonl_rows<T>(path: &Path, rows: &[T]) -> Result<(), OrbitError>

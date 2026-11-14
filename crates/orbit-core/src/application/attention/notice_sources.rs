@@ -12,7 +12,7 @@ use orbit_types::{
 };
 use serde_json::json;
 
-use super::sources::{Subject, attention_reason, finalize_attention_item};
+use super::sources::{SharedOpenTasks, Subject, attention_reason, finalize_attention_item};
 
 fn notice_attention_severity(notice: &Notice, now: DateTime<Utc>) -> AttentionSeverity {
     use AttentionSeverity as S;
@@ -169,8 +169,10 @@ pub(super) fn friction_attention_items(
         let ws = workspace.id.replace('\'', "'\\''");
         let next = AttentionNext {
             summary: "Triage the friction record".into(),
-            tool: Some("orbit.friction.update".into()),
-            input: Some(json!({"id": record.id, "workspace": workspace.id, "status": "triaged"})),
+            tool: Some("orbit.friction".into()),
+            input: Some(
+                json!({"action": "update", "id": record.id, "workspace": workspace.id, "status": "triaged"}),
+            ),
             command: format!(
                 "orbit --workspace '{ws}' friction update {} --status triaged",
                 record.id
@@ -236,10 +238,11 @@ pub(super) fn resident_stalled_items(
     workspace: &AttentionWorkspace,
     host: &AttentionHost,
     now: DateTime<Utc>,
+    open_tasks: &SharedOpenTasks,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
     let cycle_routine_disabled = runtime.resident_cycle_routine_disabled();
     let mut items = Vec::new();
-    for metadata in runtime.observe_task_metadata()? {
+    for metadata in open_tasks.get(runtime)? {
         if metadata.status.is_terminal()
             || !metadata
                 .tags

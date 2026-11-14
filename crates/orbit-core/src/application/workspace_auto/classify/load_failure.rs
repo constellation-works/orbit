@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_store::V2AuditEventFilter;
-use orbit_types::workflow::{JobRunState, JobTargetType};
+use orbit_types::workflow::{ChildDispatchPhase, JobRunState, JobTargetType};
 
 use crate::OrbitRuntime;
 use crate::application::admission::pass_error::PassError;
@@ -54,6 +54,23 @@ pub(super) fn leaf_load_failure_holds(
     for dispatch in &state.child_dispatches {
         if dispatch.job_name != LEAF_JOB_NAME {
             continue;
+        }
+        // The settlement step already recorded this leaf's final status on
+        // the dispatch. A terminal non-failed status can never produce a
+        // hold, so skip the store read. Open dispatches, missing statuses,
+        // and recorded failures are still read, so a settlement the store
+        // could not record is retried here.
+        if dispatch.phase == ChildDispatchPhase::Terminal {
+            match dispatch
+                .child_status
+                .as_deref()
+                .map(str::parse::<JobRunState>)
+            {
+                Some(Ok(recorded)) if recorded.is_terminal() && recorded != JobRunState::Failed => {
+                    continue;
+                }
+                _ => {}
+            }
         }
         let Some(run) = jobs
             .get_job_run(&dispatch.child_run_id)

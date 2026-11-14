@@ -4,7 +4,8 @@ use super::super::super::super::operations;
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    CI_CHECK_RERUN_EVENT, CiCheckRerunEvent, CiCheckRerunJob, CiCheckRerunRecord, CiRerunAdmission,
+    CI_CHECK_RERUN_EVENT, CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiCheckRerunEvent,
+    CiCheckRerunJob, CiCheckRerunRecord, CiInfrastructureRetryBackoffRecord, CiRerunAdmission,
     CiRerunPlan,
 };
 use serde_json::json;
@@ -136,14 +137,16 @@ pub(in crate::executor::automation::vcs::landing::checks) fn infrastructure_back
     for entry in history
         .iter()
         .rev()
-        .filter(|entry| entry.event == "ci_infrastructure_retry_backoff")
+        .filter(|entry| entry.event == CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT)
     {
-        let record: serde_json::Value =
-            serde_json::from_str(entry.note.as_deref().unwrap_or_default()).map_err(|error| {
-                OrbitError::Execution(format!("unreadable CI retry backoff: {error}"))
-            })?;
-        if record["head"] == head && record["pr_number"] == pr {
-            let not_before = record["not_before_ms"].as_u64().ok_or_else(|| {
+        let record = CiInfrastructureRetryBackoffRecord::from_history_note(entry.note.as_deref())
+            .map_err(|error| {
+            OrbitError::Execution(format!("unreadable CI retry backoff: {error}"))
+        })?;
+        if record.head.value().map(String::as_str) == Some(head)
+            && record.pr_number.value().map(String::as_str) == Some(pr)
+        {
+            let not_before = record.not_before_ms.value().copied().ok_or_else(|| {
                 OrbitError::Execution("CI retry backoff has no not-before".into())
             })?;
             return Ok((now < not_before)

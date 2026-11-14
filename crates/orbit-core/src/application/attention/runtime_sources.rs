@@ -1,6 +1,6 @@
 //! Observational runtime sources. Never use run listing/show or resume planners
 //! here: those entry points may reconcile owners or recover coordination journals.
-use super::sources::{AttentionCandidates, attention_reason};
+use super::sources::{AttentionCandidates, SharedOpenTasks, attention_reason};
 use crate::{
     OrbitRuntime,
     application::job::{self, RunOwnerLiveness},
@@ -37,6 +37,10 @@ struct RuntimeAttention<'a> {
     host: &'a AttentionHost,
     now: DateTime<Utc>,
     tasks: BTreeMap<String, Task>,
+    /// Run-referenced tasks outside the shared open slice whose registry
+    /// status is terminal, so a failed run for a settled task stays
+    /// suppressed as it was when this map held every task.
+    terminal_tasks: BTreeSet<String>,
     claims: Vec<ClaimInspection>,
 }
 
@@ -105,15 +109,10 @@ impl RuntimeAttention<'_> {
                 "Inspect the run"
             }
             .into(),
-            tool: Some(
-                if resume {
-                    "orbit.workflow.run.resume"
-                } else {
-                    "orbit.workflow.run.show"
-                }
-                .into(),
+            tool: Some("orbit.run".into()),
+            input: Some(
+                json!({"action": if resume { "resume" } else { "show" }, "id": run.run_id, "workspace": self.workspace.id}),
             ),
-            input: Some(json!({"id": run.run_id, "workspace": self.workspace.id})),
             command: format!(
                 "orbit --workspace '{}' {} {}",
                 self.workspace.id,
@@ -205,10 +204,13 @@ impl RuntimeAttention<'_> {
                 let is_newest = newest.insert((run.job_id.clone(), task_id.clone()));
                 if folded.contains(&run.run_id)
                     || (kind == AttentionKind::RunFailed
-                        && task_id
-                            .as_ref()
-                            .and_then(|id| self.tasks.get(id))
-                            .is_some_and(|task| task.status.is_terminal()))
+                        && task_id.as_ref().is_some_and(|id| {
+                            self.terminal_tasks.contains(id)
+                                || self
+                                    .tasks
+                                    .get(id)
+                                    .is_some_and(|task| task.status.is_terminal())
+                        }))
                 {
                     continue;
                 }
@@ -379,8 +381,10 @@ impl RuntimeAttention<'_> {
             }
             let next = AttentionNext {
                 summary: "Recover the possibly stale claim after inspection".into(),
-                tool: Some("orbit.task.recover_claim".into()),
-                input: Some(json!({"claim_id": claim.claim_id, "workspace": self.workspace.id})),
+                tool: Some("orbit.task.recover".into()),
+                input: Some(
+                    json!({"action": "recover_claim", "claim_id": claim.claim_id, "workspace": self.workspace.id}),
+                ),
                 command: format!(
                     "orbit --workspace '{}' task recover-claim {} --reason '<reason>' --request '<request_key>' --phase '<expected_phase>' --status '<status>'",
                     self.workspace.id, claim.claim_id
@@ -422,6 +426,7 @@ fn parse_claim_time(time: &str) -> Result<DateTime<Utc>, OrbitError> {
         .map_err(|error| OrbitError::Store(format!("invalid claim timestamp: {error}")))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn read_runtime_attention(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -430,6 +435,7 @@ pub(super) fn read_runtime_attention(
     now: DateTime<Utc>,
     operator: bool,
     candidates: &mut AttentionCandidates,
+    open_tasks: &SharedOpenTasks,
 ) {
     let kinds = RUNTIME_KINDS
         .into_iter()
@@ -458,10 +464,10 @@ pub(super) fn read_runtime_attention(
     let started = Instant::now();
     let sources = (|| {
         let tasks = if owner {
-            runtime
-                .observe_task_metadata()?
-                .into_iter()
-                .map(|task| (task.id.clone(), task))
+            open_tasks
+                .get(runtime)?
+                .iter()
+                .map(|task| (task.id.clone(), task.clone()))
                 .collect()
         } else {
             BTreeMap::new()
@@ -477,10 +483,11 @@ pub(super) fn read_runtime_attention(
             host,
             now,
             tasks,
+            terminal_tasks: BTreeSet::new(),
             claims,
         })
     })();
-    let sources = match sources {
+    let mut sources = match sources {
         Ok(sources) => sources,
         Err(error) => {
             candidates.degraded.extend(
@@ -547,6 +554,36 @@ pub(super) fn read_runtime_attention(
                 .as_ref()
                 .is_none_or(|origin| origin.machine_id == host.machine_id)
         });
+    }
+    // The shared slice holds only open tasks; a run naming a settled task
+    // needs its terminal status from the registry projection (no envelope
+    // read) so `run_failed` suppression keeps its former meaning.
+    if owner && let Ok(runs) = &runs {
+        let missing = runs
+            .iter()
+            .flat_map(|run| {
+                let mut ids = Vec::new();
+                if let Some(input) = &run.input {
+                    if let Some(id) = input["task_id"].as_str() {
+                        ids.push(id.to_owned());
+                    }
+                    if let Some(list) = input["task_ids"].as_array() {
+                        ids.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
+                    }
+                }
+                ids
+            })
+            .filter(|id| !sources.tasks.contains_key(id))
+            .collect::<BTreeSet<_>>();
+        if !missing.is_empty()
+            && let Ok(index) = runtime.task_status_index_for(&missing)
+        {
+            sources.terminal_tasks = index
+                .into_iter()
+                .filter(|(_, status)| status.is_terminal())
+                .map(|(id, _)| id)
+                .collect();
+        }
     }
     let folded = candidates
         .items

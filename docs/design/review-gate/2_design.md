@@ -843,9 +843,10 @@ notice). A requirement without a filter, a module filter, another package or
 target, or a command outside the grammar covers nothing. The broader run may
 also carry `--locked`, `--frozen`, `--offline`, `--no-fail-fast`, `-q` or
 `--quiet`, which select no target and change no build. Any other option, such
-as a target selector (`--lib`, `--bins`, `--all-targets`, `--workspace` and the
-like) or a build option (`--release`, `--features`, `--profile`, `--target`),
-leaves its notices uncovered. When every notice on the record is covered, the
+as a target selector on that record (`--lib`, `--bins`, `--all-targets`,
+`--workspace` and the like) or a build option (`--release`, `--features`,
+`--profile`, `--target`), leaves its notices uncovered. A `--lib` requirement
+is a separate shape, below. When every notice on the record is covered, the
 review counts as evidence-only, so it holds or
 a claimed host replays the requirements. Each passing result clears only the
 notice it covers and notes its result and log on the broader record, which
@@ -854,6 +855,17 @@ an unavailable sandbox leaves its notice, and the review holds for that
 requirement. A failing replay fails its own record and the broader one. One
 uncovered notice keeps the record `not_run`, the review is not evidence-only,
 and nothing is replayed. A record that failed keeps its failure.
+
+A package-wide required run, `cargo test -p <crate>` with no target selector,
+can defer a library unit test the same way [ORB-24325]. A requirement covers
+that notice only when its command is admitted as
+`cargo test -p <crate> --lib <test>`, with that same package and a filter
+equal to the test the notice names. The run may carry one positional filter
+and the non-selecting options above. A `--test` requirement does not cover
+it, and a `--lib` requirement does not cover a `--test` record. A record that
+itself carries `--lib`, `--bins`, `--all-targets` or another target selector
+stays uncovered, as does a requirement for a different package or a filter
+that is only the test's module.
 
 The implementer lane follows the same reading [ORB-15287]. An affected-test
 gate that exits 0 with only deferral notices is handed off by naming the
@@ -1181,7 +1193,18 @@ failure handoff — for any failure of `review_gate_admit`, `review`,
 no verdict yet (§5), commits leftover reviewer work under the reviewer
 identity (`partial_repair_commit`), leaves the implementation and reviewer
 commits as they are, pushes the candidate branch, and opens no PR.
-Substantive failures block with `review_gate_escalation`. A reviewer wall-clock
+Substantive failures block with `review_gate_escalation`. When `review_validate`
+fails, that same task update also appends `review_fix_validation_failed`: its
+JSON note is a version-1 `RecordedReviewFixValidationFailure` containing the run,
+optional admitted attempt and preserved candidate commit. Existing status notes
+and escalation comments are unchanged. For failed-fix scoring, agents read the
+typed event once, suppress its paired comment by timestamp and author, and decode older
+comment-only failures through one compatibility reader. Settlement comments
+retain precedence when their findings quote escalation text. Failure attribution
+still uses the nearest earlier settled review; the recorded attempt is provenance
+and does not change that policy.
+
+A reviewer wall-clock
 failure permits one automatic requeue per task and implementation tree,
 recording `review_timeout_incomplete`, `candidate_tree` and
 `implementation_tree` in durable task history. The implementation tree is the
@@ -1300,7 +1323,8 @@ The run first admits every command against its kind's allowlist:
   query selector;
 - `host_sandbox_test` [ORB-14334]: the same grammar as a claimed leaf's
   settlement below, an exact owner-required command or
-  `cargo test -p <crate> --test <target> [<filter>]` using only
+  `cargo test -p <crate> --test <target> [<filter>]` or
+  `cargo test -p <crate> --lib [<filter>]` using only
   `[A-Za-z0-9._/:@+=-]` and spaces. A single `--` may immediately precede
   the one filter; it normalizes to the same command as the plain filter.
 
@@ -1359,7 +1383,8 @@ otherwise be an evidence-only hold, including a broader run whose every
 deferred test a requirement covers (above), it runs each requirement whose
 `os` is this host's and that no accepted result already satisfies. The command must be
 either an exact owner-required validation command or
-`cargo test -p <crate> --test <target> [<filter>]`, with an optional single
+`cargo test -p <crate> --test <target> [<filter>]` or
+`cargo test -p <crate> --lib [<filter>]`, with an optional single
 `--` immediately before the one filter. A bare separator, extra arguments
 and test-harness options are refused, and the command may use only
 `[A-Za-z0-9._/:@+=-]` and spaces. A

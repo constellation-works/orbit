@@ -70,6 +70,19 @@ class RelativeImportTests(unittest.TestCase):
         # The guard scans this single-file module and fails closed when it is
         # absent [ORB-23019].
         (self.app / "tag_instructions.rs").write_text("")
+        # [ORB-24097] The vcs conventions guard scans these engine files
+        # directly; they must exist (empty) so ripgrep reports no match and
+        # no IO error on stderr.
+        for relative in (
+            "crates/orbit-engine/src/executor/automation/vcs/conventions.rs",
+            "crates/orbit-engine/src/executor/automation/vcs/handoff.rs",
+            "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs",
+            "crates/orbit-engine/src/executor/automation/vcs/commit/summary.rs",
+            "crates/orbit-engine/src/executor/automation/vcs/commit/already_resolved.rs",
+        ):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
         self.prepare_config_paths()
 
     def prepare_config_paths(self):

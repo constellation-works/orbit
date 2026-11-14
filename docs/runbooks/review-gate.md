@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
-last_validated: 2026-10-27
+last_validated: 2026-11-14
 ---
 
 # Operate the Review Gate
@@ -357,11 +357,42 @@ Repeated stops of the same review leave its preservation evidence unchanged.
 
 Final recovery may repair a rejected candidate once. If it appends a commit,
 the engine records the exact HEAD advance around that invocation and resumes
-at commit or an earlier requested step. Required validation and before-PR
+at commit or an earlier requested step. Required validation and the applicable
 review run again for the new candidate; the rejected attempt cannot approve
-it. The commit guard accepts only the recorded repair HEAD in the same
-worktree, descended from the pinned base. Any later unrecorded HEAD change
-still fails with `worktree_head_changed`.
+it. On the final-recovery route the commit guard accepts only the recorded
+repair HEAD in the same worktree, descended from the pinned base. Any later
+unrecorded HEAD change still fails with `worktree_head_changed`.
+
+There is a second, independent route that needs no final-recovery repair
+receipt. A before-landing reviewer may commit its own repair in the same
+worktree and settle with that commit as its final candidate. The commit
+step admits that HEAD, when it descends from the pinned base, only from
+trusted settlement evidence:
+
+- the typed settlement in the task's history, which the gate writes with
+  the verdict and which an ordinary task comment cannot create
+- a legacy comment settlement from before that typed record, and only when
+  the comment's stored author is `system` (the host stamp on a system
+  write)
+
+The comment's sentences are display text. An implementer, reviewer, or
+other caller can post the same format through the public task update, and
+that comment does not admit HEAD: the step still fails with
+`worktree_head_changed` before it stages anything. A clean tree whose HEAD
+matches trusted evidence is accepted as already committed. A resumed
+implementation that edits on top of that HEAD has its changes committed as
+one workflow-authored commit on top of it. The match is exact: an extra
+commit above the recorded final commit, a HEAD no trusted settlement
+recorded, or a recorded HEAD that does not descend from the pin still fails
+closed. Legacy settlements that abbreviate the commit id only authorize the
+commit their hexadecimal prefix resolves to; a symbolic revision such as
+`HEAD` proves nothing. Settlements from a before-PR review never grant this
+permission, so a before-PR verdict still needs its own delivery route.
+
+Admission is not approval. Neither route accepts the candidate for landing:
+the admitted HEAD re-enters the pipeline at the commit step and still needs
+fresh required validation and a fresh review verdict for its tree, exactly
+like any other newly committed candidate.
 
 For file repairs made before review, final recovery's resume uses the host's
 guarded recovery commit path before rewinding delivery. The agent's Git metadata
@@ -583,6 +614,12 @@ When a broader run, such as `cargo test -p <crate> --test <target> <module>`,
 defers some of its tests, name each one as a `host_sandbox_test` requirement
 whose command is `cargo test -p <crate> --test <target> <test>`. Use the same
 package and target, and the full test path the notice prints as the filter.
+A package-wide run, `cargo test -p <crate>` with no target selector, that
+defers a library unit test is named the same way with
+`cargo test -p <crate> --lib <test>`: the same package and that exact filter.
+A `--test` requirement does not cover the package-wide run, and a `--lib`
+requirement does not cover a `--test` run. A broader command that itself
+carries `--lib` or another target selector stays uncovered.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
@@ -702,8 +739,9 @@ claimed leaf's host could not run it — is fulfilled by a Linux owner whose
 host can create Bubblewrap namespaces. The owner's clock sweep dispatches
 `review_evidence_fulfilment_pipeline` for it, one run at a time, and stands
 down on a follower, a worker, another platform or a host without namespaces.
-The run admits only an exact owner-required validation command or
-`cargo test -p <crate> --test <target> [<filter>]`, written in
+The run admits only an exact owner-required validation command,
+`cargo test -p <crate> --test <target> [<filter>]`, or
+`cargo test -p <crate> --lib [<filter>]`, written in
 `[A-Za-z0-9._/:@+=-]` and spaces. A single `--` immediately before the
 one filter is also admitted and normalized to the same host command;
 a bare `--`, further arguments and test-harness options remain refused.

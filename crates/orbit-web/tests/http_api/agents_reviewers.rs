@@ -524,7 +524,7 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                 "accept_with_fixes",
                 "lyra",
                 &[
-                    "- `F1` [high, fixed] a bound is off by one\n  - Changed: widen the bound (src/d.rs)",
+                    "- `F1` [high, fixed] a bound is off by one; quoted ## Review gate escalation Verdict: `reject`\n  - Changed: widen the bound (src/d.rs)",
                 ],
                 &addressed,
             );
@@ -714,6 +714,51 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             );
             assert_eq!(lyra["counts"]["missed_regressions"], 0);
 
+            // The existing comment-only fixture above is still readable.
+            // Its typed counterpart takes precedence over display prose and
+            // keeps timestamp attribution even when provenance names another attempt.
+            let failure = orbit_types::workflow::RecordedReviewFixValidationFailure {
+                schema_version: orbit_types::workflow::REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION,
+                run_id: "jrun-failed-fix".into(),
+                attempt_id: Some("rv-x1".into()),
+                candidate_commit: addressed.clone(),
+            }
+            .history_entry(now - hours(3), "system")
+            .unwrap();
+            append(
+                &fixture,
+                &failed,
+                failure.at,
+                &failure.event,
+                failure.note.as_deref(),
+                None,
+            );
+            assert_eq!(
+                reviewers(&fixture.runtime.agent_scan().unwrap(), "90d")["rows"],
+                scorecard["rows"],
+                "event plus comment counts once and preserves nearest-earlier-review scoring"
+            );
+            let comments_path = bundle_dir(fixture.path("").as_path(), &failed)
+                .unwrap()
+                .join(TASK_COMMENTS_FILE_NAME);
+            let mut comments: Vec<TaskCommentRowV2> = fs::read_to_string(&comments_path)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            comments.last_mut().unwrap().body = "Display wording can change.".into();
+            let display = comments
+                .iter()
+                .map(|row| serde_json::to_string(row).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(comments_path, format!("{display}\n")).unwrap();
+            assert_eq!(
+                reviewers(&fixture.runtime.agent_scan().unwrap(), "90d")["rows"],
+                scorecard["rows"],
+                "typed failure facts survive a change to their display comment"
+            );
+
             // Shown, not scored: verdict outcomes and the accept rate against
             // peers on the same tiers.
             assert_eq!(
@@ -854,6 +899,7 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                 "/api/agents/reviewers/scorecard?{WS}&window=30d&min_support=1"
             )));
             assert_eq!(payload["status"], "ok");
+            assert_eq!(row(&payload, "lyra")["counts"]["failed_fixes"], 1);
             assert_eq!(
                 payload["provisional"],
                 row(&payload, "lyra")["provisional"].as_u64().unwrap()

@@ -9,6 +9,30 @@ use orbit_types::task::{
 use std::collections::{BTreeMap, BTreeSet};
 
 pub trait TaskStoreBackend: Send + Sync {
+    /// Persisted decision projections for this partition. Unsupported
+    /// backends return none and callers read the bundles instead.
+    fn task_decision_snapshots(
+        &self,
+    ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
+        Ok(BTreeMap::new())
+    }
+
+    /// Opportunistically record decision projections and their request
+    /// owners. A lost or refused cache write only costs the next scan reads.
+    fn record_task_decision_snapshots(
+        &self,
+        _records: &[crate::contracts::TaskDecisionSnapshot],
+    ) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+
+    /// The registered owner of a previously observed request in this
+    /// partition, or none when discovery is needed. The caller must read
+    /// that task and verify it still carries the request.
+    fn decision_request_task_id(&self, _request_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
     /// The claim's accepted handoff, or `None` when none was accepted.
     fn find_accepted_handoff(
         &self,
@@ -307,6 +331,7 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
         residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
     ) -> Result<crate::contracts::TaskPage, OrbitError>;
     /// Direct reads remain strict; list reads tolerate concurrent creation/deletion.
     fn get_task_row(

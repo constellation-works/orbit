@@ -808,12 +808,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_audit_session_model,
     },
+    // Partial indexes over unreleased task-reservation rows. Index-only:
+    // older binaries keep reading and writing the table.
+    Migration {
+        version: 89,
+        name: "task_reservation_unreleased_expires",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_reservation_unreleased_expires_indexes,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 88;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 89;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

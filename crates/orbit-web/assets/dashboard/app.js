@@ -54,6 +54,7 @@ import {
   getActiveRunId,
   setActiveRunId,
   getActiveRunDetail,
+  loadedRunDetailIsTerminal,
   setActiveRunDetail,
   setActiveRunDetailError,
   getActiveRunEvents,
@@ -1799,6 +1800,11 @@ function activeRefreshJobs({ poll = false } = {}) {
       renderRunDetailEmpty("Select a workspace to view this run.");
       return jobs;
     }
+    // A terminal run cannot change: the periodic tick re-reads nothing for
+    // it. First load (no detail yet), explicit refresh (poll is false),
+    // cancel/replay actions and run change notices fetch directly, outside
+    // this branch, so they still refresh the view.
+    if (poll && loadedRunDetailIsTerminal(getActiveRunId())) return jobs;
     add("Run detail", fetchAndRenderRunDetail());
     add("Run events", fetchAndRenderRunEvents());
     add("Timeline retries", fetchAndRenderRunRetries());
@@ -1925,12 +1931,21 @@ function wireChangeStream() {
     if (activeTab !== "tasks" || isAggregateView() || document.hidden || !taskLocksShown()) return;
     quietly("Locked files", fetchAndRenderTaskLocks);
   });
-  onChange(["run"], () => {
+  onChange(["run"], (notices) => {
     if (isAggregateView() || document.hidden) return;
     const includeRunningRuns = activeTab === "tasks" && activeStatuses.has("in-progress");
     const request = fetchJson(`/api/job-runs?state=active&limit=1${includeRunningRuns ? "&include_running=true" : ""}`);
     quietly("Jobs in flight", () => fetchJobsInFlight(request));
     if (includeRunningRuns) quietly("Running runs", () => fetchRunningRuns(request));
+    // A notice naming the open run still fetches its detail directly, even
+    // once that run is terminal and the periodic tick has stopped polling it.
+    if (activeTab === "run-detail" && getActiveRunId()
+      && notices.some((notice) => notice.id === getActiveRunId())) {
+      quietly("Run detail", () => fetchAndRenderRunDetail());
+      quietly("Run events", () => fetchAndRenderRunEvents());
+      quietly("Timeline retries", () => fetchAndRenderRunRetries());
+      quietly("Run logs", () => fetchAndRenderRunLogs());
+    }
   });
   // Readiness depends on tasks and locks as well as runs and drain phase:
   // removing a dependency or finishing a filtered-out dependency leaves run

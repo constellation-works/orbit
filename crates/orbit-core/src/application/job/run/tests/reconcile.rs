@@ -13,16 +13,18 @@ use std::process::{Child, Command, Stdio};
 use chrono::Utc;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 use serde_json::json;
 
 use super::super::WORKER_TERMINATED_ERROR_CODE;
 use super::super::actions::{CANCELLATION_REQUEST_AUDIT, CancellationRequest};
 use super::super::owner::signal_run_owner_process;
+use super::super::root_cause::{RunFailureContextProfile, RunFailureRead};
 use super::super::types::JobRunCancelOutcome;
 use super::drain_cancel::in_progress_task;
 use super::{insert_pending_run, test_runtime};
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::WORKER_EXIT_AUDIT;
 use crate::application::tests::run_isolated_test;
 
 /// A process alone in its own group, as a pipeline worker runs.
@@ -195,5 +197,310 @@ fn reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish() 
             Some(WORKER_TERMINATED_ERROR_CODE),
             "{case}"
         );
+    }
+}
+
+fn git(repo: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Orbit Test")
+        .env("GIT_AUTHOR_EMAIL", "orbit@example.com")
+        .env("GIT_COMMITTER_NAME", "Orbit Test")
+        .env("GIT_COMMITTER_EMAIL", "orbit@example.com")
+        .output()
+        .expect("git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A host-manager stop keeps the worker's uncommitted candidate under its
+/// rescue ref before finalization, and the run record names that ref after
+/// the worktree itself is removed.
+#[test]
+fn reconciliation_keeps_a_rescue_candidate_for_a_host_manager_stopped_worker() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &reconciliation_keeps_a_rescue_candidate_for_a_host_manager_stopped_worker,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let repo = runtime.paths().repo_root.clone();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("tracked.txt"), "base\n").expect("tracked file");
+    git(&repo, &["add", "tracked.txt"]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+
+    let run = insert_pending_run(&runtime, "task_pr_pipeline");
+    let worktree = orbit_engine::run_worktree_paths(&repo, &run)
+        .expect("worktree paths")
+        .into_iter()
+        .next()
+        .expect("one worktree path");
+    std::fs::create_dir_all(worktree.parent().expect("worktree parent")).expect("worktree root");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("orbit/{}", run.run_id),
+            worktree.to_str().expect("worktree path"),
+        ],
+    );
+    std::fs::write(worktree.join("rescued.txt"), "kept\n").expect("uncommitted file");
+    let head = git(&worktree, &["rev-parse", "HEAD"]);
+
+    let mut state = orbit_types::workflow::PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        json!({}),
+    );
+    state.pipeline["worktree"] = json!({"workspace_path": worktree});
+    runtime
+        .write_run_state(&run.run_id, &state)
+        .expect("write run state");
+
+    let mut owner = spawn_process();
+    let running = mark_running(&runtime, &run, &owner);
+    let pid = running.pid.expect("owner pid");
+    owner.kill().expect("end owner");
+    owner.wait().expect("reap owner");
+    runtime
+        .record_pipeline_audit(
+            WORKER_EXIT_AUDIT,
+            Some(&running.run_id),
+            Some("supervisor"),
+            AuditEventStatus::Success,
+            json!({
+                "worker_pid": pid,
+                "exit_status": format!("signal: {}", libc::SIGTERM),
+                "exit_code": null,
+                "signal": libc::SIGTERM,
+                "signal_name": "SIGTERM",
+                "core_dumped": false,
+                "scope": null,
+                "signal_sender": {"pid": 1, "uid": 0, "command": "systemd"},
+                "observed_at": Utc::now().to_rfc3339(),
+            }),
+            None,
+        )
+        .expect("record worker exit");
+
+    let shown = runtime.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(shown.state, JobRunState::Held);
+    let rescue_ref = format!("refs/orbit/rescue/{}", run.run_id);
+    let message = shown
+        .steps
+        .last()
+        .and_then(|step| step.error_message.as_deref())
+        .unwrap_or("");
+    assert!(
+        message.contains(&format!("rescue candidate kept at `{rescue_ref}`")),
+        "{message}"
+    );
+    let kept = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state")
+        .expect("state exists");
+    let record = &kept.pipeline["rescue_candidate"];
+    assert_eq!(record["rescue_ref"], rescue_ref.as_str(), "{record}");
+    let commit = record["rescue_commit"].as_str().expect("rescue commit");
+    assert_eq!(git(&repo, &["rev-parse", &rescue_ref]), commit);
+    assert_eq!(
+        git(&repo, &["rev-parse", &format!("{commit}^")]),
+        head,
+        "the rescue commit sits on the candidate head"
+    );
+    assert_eq!(
+        git(&repo, &["show", &format!("{commit}:rescued.txt")]),
+        "kept"
+    );
+
+    // After the worktree is torn down, the ref still resolves and the
+    // retained-candidate read names it instead of reporting manual salvage.
+    git(
+        &repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            worktree.to_str().expect("worktree path"),
+        ],
+    );
+    assert!(!worktree.exists());
+    assert_eq!(git(&repo, &["rev-parse", &rescue_ref]), commit);
+    let task = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Stopped worker task".into(),
+            ..Default::default()
+        })
+        .expect("add task");
+    let retained = runtime.retained_candidate(&task, Some(&run.run_id), Some(&shown));
+    assert!(
+        retained.summary().contains(&rescue_ref),
+        "{}",
+        retained.summary()
+    );
+}
+
+/// A dead owner whose recorded exit names a systemd-sent signal is a hold.
+/// An unknown sender, a crash, a signal from `orbit`, and a systemd signal
+/// after a memory-limit breach stay interrupted failures.
+#[test]
+fn reconciliation_holds_a_worker_the_host_manager_stopped() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &reconciliation_holds_a_worker_the_host_manager_stopped,
+    )) {
+        return;
+    }
+
+    struct ExitCase {
+        label: &'static str,
+        signal: Option<i32>,
+        exit_code: Option<i32>,
+        command: Option<&'static str>,
+        oom_kills: Option<u64>,
+        held: bool,
+    }
+    let cases = [
+        ExitCase {
+            label: "systemd SIGTERM",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: Some("systemd"),
+            oom_kills: None,
+            held: true,
+        },
+        ExitCase {
+            label: "unknown sender",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: None,
+            oom_kills: None,
+            held: false,
+        },
+        ExitCase {
+            label: "crash exit",
+            signal: None,
+            exit_code: Some(1),
+            command: None,
+            oom_kills: None,
+            held: false,
+        },
+        ExitCase {
+            label: "orbit SIGTERM",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: Some("orbit"),
+            oom_kills: None,
+            held: false,
+        },
+        ExitCase {
+            label: "systemd SIGTERM after oom",
+            signal: Some(libc::SIGTERM),
+            exit_code: None,
+            command: Some("systemd"),
+            oom_kills: Some(1),
+            held: false,
+        },
+    ];
+
+    for case in cases {
+        let (_root, runtime) = test_runtime();
+        let run = insert_pending_run(&runtime, "task_pr_pipeline");
+        let mut owner = spawn_process();
+        let running = mark_running(&runtime, &run, &owner);
+        let pid = running.pid.expect("owner pid");
+        owner.kill().expect("end owner");
+        owner.wait().expect("reap owner");
+
+        let signal_sender = case.command.map(|command| {
+            json!({
+                "pid": 1,
+                "uid": 0,
+                "command": command,
+            })
+        });
+        let scope = case.oom_kills.map(|oom_kills| {
+            json!({
+                "unit": "orbit-worker-test.scope",
+                "oom_kills": oom_kills,
+                "tasks_refused": 0,
+            })
+        });
+        runtime
+            .record_pipeline_audit(
+                WORKER_EXIT_AUDIT,
+                Some(&running.run_id),
+                Some("supervisor"),
+                AuditEventStatus::Success,
+                json!({
+                    "worker_pid": pid,
+                    "exit_status": case.signal.map(|signal| format!("signal: {signal}"))
+                        .unwrap_or_else(|| "exit status: 1".to_string()),
+                    "exit_code": case.exit_code,
+                    "signal": case.signal,
+                    "signal_name": case.signal.map(|_| "SIGTERM"),
+                    "core_dumped": false,
+                    "scope": scope,
+                    "signal_sender": signal_sender,
+                    "observed_at": Utc::now().to_rfc3339(),
+                }),
+                None,
+            )
+            .expect("record worker exit");
+
+        let reconciled = runtime.show_job_run(&run.run_id).expect("show run");
+        let code = reconciled
+            .steps
+            .last()
+            .and_then(|step| step.error_code.as_deref());
+        let message = reconciled
+            .steps
+            .last()
+            .and_then(|step| step.error_message.as_deref())
+            .unwrap_or("");
+        let context = runtime
+            .run_failure_context(
+                &reconciled,
+                None,
+                RunFailureContextProfile::AllFailedLeaves(RunFailureRead::Observe),
+                &mut |_| {},
+            )
+            .expect("failure query");
+        let counted = context
+            .causes
+            .iter()
+            .any(|cause| cause.run_id == reconciled.run_id);
+        if case.held {
+            assert_eq!(reconciled.state, JobRunState::Held, "{}", case.label);
+            assert_eq!(code, Some(OPERATOR_STOPPED_ERROR_CODE), "{}", case.label);
+            assert!(
+                message.contains("marked held because the host manager stopped its worker"),
+                "{}: {message}",
+                case.label
+            );
+            assert!(
+                !counted,
+                "{} must be absent from the failure query",
+                case.label
+            );
+        } else {
+            assert_eq!(reconciled.state, JobRunState::Interrupted, "{}", case.label);
+            assert_eq!(code, Some(WORKER_TERMINATED_ERROR_CODE), "{}", case.label);
+            assert!(
+                message.contains("marked interrupted"),
+                "{}: {message}",
+                case.label
+            );
+            assert!(counted, "{} must count as a failure", case.label);
+        }
     }
 }

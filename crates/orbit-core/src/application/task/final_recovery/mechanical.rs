@@ -22,8 +22,9 @@ use orbit_common::governance::friction::normalize_title;
 use orbit_store::contracts::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed};
-use serde_json::Value;
+use orbit_types::workflow::{
+    CI_BASE_SUSPECT_EVENT, CiBaseSuspectRecord, PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed,
+};
 
 use super::super::blocked_recovery::{
     BLOCKED_TASK_TRIAGE_RESUMED_EVENT, BlockSource, blocking_run_of,
@@ -38,7 +39,7 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
 
 /// Events that may own an inherited failure within the current block episode.
-const BASE_RED_EVENTS: [&str; 2] = [PR_AUTO_FIX_BASE_RED_EVENT, "ci_base_suspect"];
+const BASE_RED_EVENTS: [&str; 2] = [PR_AUTO_FIX_BASE_RED_EVENT, CI_BASE_SUSPECT_EVENT];
 
 /// Tags whose tasks only an operator requeues.
 const OPERATOR_ONLY_TAGS: [&str; 2] = ["security", "security-review"];
@@ -487,13 +488,8 @@ pub(in crate::application::task) fn base_red_owner(
     }
     history
         .iter()
-        .any(|entry| {
-            entry.event == "ci_base_suspect"
-                && entry
-                    .note
-                    .as_deref()
-                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                    .is_some_and(|note| note["head"] == head)
-        })
-        .then_some("ci_base_suspect")
+        .filter(|entry| entry.event == CI_BASE_SUSPECT_EVENT)
+        .filter_map(|entry| CiBaseSuspectRecord::from_history_note(entry.note.as_deref()))
+        .any(|record| record.head.as_deref() == Some(head))
+        .then_some(CI_BASE_SUSPECT_EVENT)
 }

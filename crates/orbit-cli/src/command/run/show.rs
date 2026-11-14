@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 use orbit_core::application::job::{
     RunFailureCause, RunFailureContextProfile, RunFailureRead, agent_invoke_result,
+    display_steps_with_agent_execution_to_json,
 };
 use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
@@ -22,7 +23,7 @@ use super::format::{
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
 use super::steps::{
-    RunDisplaySteps, RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
+    RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
     run_display_steps, run_header_text_with_lock_holders, step_record_payload, step_summary_table,
 };
 
@@ -121,10 +122,8 @@ pub(crate) fn run_show_payload(
             orbit_core::runtime::audit::tag_instructions::RunTagInstructions::unavailable()
         });
 
-    let RunDisplaySteps {
-        records: steps,
-        source: steps_source,
-    } = run_display_steps(&run, audit.steps);
+    let display_steps = run_display_steps(&run, audit.steps);
+    let steps_source = display_steps.source;
     let root_causes = collect_failed_leaf_causes(runtime, &run, state.as_ref(), read)?;
     // Who holds the locks a waiting run is blocked on, read live: the run
     // only persists the selectors.
@@ -141,6 +140,9 @@ pub(crate) fn run_show_payload(
         }
     }
 
+    let rescue_candidate = state
+        .as_ref()
+        .and_then(|state| state.pipeline.get("rescue_candidate").cloned());
     let mut run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
     // [ORB-13899] The same audit scan holds the invocation's child: its live
@@ -202,10 +204,11 @@ pub(crate) fn run_show_payload(
             .map(CatalogReferenceLayer::to_json)
             .collect::<Vec<_>>(),
         "pipeline_state": state,
+        "rescue_candidate": rescue_candidate,
         // The steps the view below renders, whichever source answered. The
         // record's own `run.steps` stay exactly as stored, so a caller can
         // still tell the two apart [ORB-12113].
-        "steps": steps.iter().map(|step| step.to_json_with_agent_execution(state.as_ref(), &effort_evidence)).collect::<Vec<_>>(),
+        "steps": display_steps_with_agent_execution_to_json(&display_steps, state.as_ref(), &effort_evidence),
         "steps_source": steps_source.as_str(),
         // What a drain's leaves did; null for any run that is not a drain.
         // The drain's own `state` only says the coordinator ran.
@@ -281,6 +284,16 @@ pub(crate) fn run_show_payload(
                 .unwrap_or("unknown crew"),
             launch.model.as_deref().unwrap_or("unknown model"),
             effort
+        ));
+    }
+    if let Some(record) = &rescue_candidate
+        && let Some(reference) = record["rescue_ref"].as_str()
+    {
+        header.push_str(&format!(
+            "\n{} {} (commit {})",
+            crate::output::color::bold("Rescue candidate:"),
+            reference,
+            record["rescue_commit"].as_str().unwrap_or_default(),
         ));
     }
     if let Some(line) = review_layer_line(&doc["run"]["review_layer"]) {
@@ -533,7 +546,7 @@ pub(crate) fn run_show_payload(
             ));
         }
     }
-    if steps_source == StepSource::Audit && !steps.is_empty() {
+    if steps_source == StepSource::Audit && !display_steps.records.is_empty() {
         header.push_str(&format!(
             "\n{} reconstructed from the run audit trail; the run record holds no per-step history",
             crate::output::color::bold("Steps:"),
@@ -560,7 +573,7 @@ pub(crate) fn run_show_payload(
         doc,
         vec![
             Block::prose(header),
-            Block::table(step_summary_table(&steps)),
+            Block::table(step_summary_table(&display_steps.records)),
         ],
     )
     .into())

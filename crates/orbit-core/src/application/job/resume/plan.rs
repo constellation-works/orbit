@@ -5,7 +5,9 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState};
+use orbit_types::workflow::{
+    DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState, is_operator_stopped,
+};
 use serde_json::Value;
 
 use super::binding::{
@@ -234,10 +236,21 @@ impl OrbitRuntime {
                 .and_then(|step| step.error_code.as_deref())
                 .and_then(DeliveryRefusal::from_error_code)
                 .is_some_and(crate::application::job::pr_repair::handed_back_hold);
+        // A host-manager stop is held, and the interruption note tells the
+        // operator to resume it. The alive-owner guard below covers it too:
+        // an observer writes the hold, the same way it writes `interrupted`.
+        let operator_stopped = is_operator_stopped(
+            source.state,
+            source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref()),
+        );
         if !forge_held
             && !base_chase_held
             && !review_handoff
             && !held_handback
+            && !operator_stopped
             && !matches!(
                 source.state,
                 JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
@@ -245,7 +258,8 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
-                 or one held because the forge refused its push, could not be read, or the base chase exhausted",
+                 one held because the host manager stopped its worker, or one held because the \
+                 forge refused its push, could not be read, or the base chase exhausted",
                 source_run_id, source.state
             )));
         }
@@ -271,7 +285,7 @@ impl OrbitRuntime {
         // *confirmed*-alive owner, so an unprobeable one (foreign PID
         // namespace, non-Unix) does not make a legitimately dead run
         // unresumable.
-        if source.state == JobRunState::Interrupted
+        if (source.state == JobRunState::Interrupted || operator_stopped)
             && run_owner_liveness(&source) == RunOwnerLiveness::Alive
         {
             return Err(OrbitError::JobValidation(format!(

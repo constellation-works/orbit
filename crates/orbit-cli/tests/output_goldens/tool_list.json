@@ -2569,7 +2569,7 @@
       },
       {
         "name": "origin",
-        "description": "Why the task was filed.",
+        "description": "Category, not free text: operator_request, orchestrator_initiative, automation.",
         "param_type": "string",
         "required": false
       },
@@ -3359,7 +3359,7 @@
       },
       {
         "name": "origin",
-        "description": "Why the task was filed.",
+        "description": "Category, not free text: operator_request, orchestrator_initiative, automation.",
         "param_type": "string",
         "required": false
       },

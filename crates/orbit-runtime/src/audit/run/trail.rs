@@ -356,6 +356,15 @@ const RUN_AUDIT_PAGE_SIZE: usize = 50_000;
 #[cfg(test)]
 const RUN_AUDIT_PAGE_SIZE: usize = 8;
 
+/// Payload `body_kind`s the step projections read. Shared with the bounded
+/// run-detail reader so the two cannot drift.
+pub(super) const STEP_LIFECYCLE_KINDS: [&str; 4] = [
+    "step_started",
+    "step_finished",
+    "step_skipped",
+    "step_denied",
+];
+
 /// What one scan of a run's v2 audit trail says about its execution: every
 /// step it started, and every provider child those steps spawned.
 ///
@@ -549,7 +558,7 @@ impl RuntimeKernel {
 
     pub fn collect_run_audit_steps(&self, run_id: &str) -> Result<Vec<RunAuditStep>, OrbitError> {
         Ok(audit_steps_from_events(
-            &self.collect_run_audit_events(run_id)?,
+            &self.collect_step_lifecycle_events(run_id)?,
         ))
     }
 
@@ -560,8 +569,64 @@ impl RuntimeKernel {
         run_id: &str,
     ) -> Result<Vec<RunAuditStep>, OrbitError> {
         Ok(audit_step_attempts_from_events(
-            &self.collect_run_audit_events(run_id)?,
+            &self.collect_step_lifecycle_events(run_id)?,
         ))
+    }
+
+    /// Lifecycle rows for one run, oldest first, paging until the trail ends.
+    ///
+    /// The store filter keeps the rows the step projections would have kept
+    /// from [`Self::collect_run_audit_events`]: valid JSON, a string
+    /// `event_id`, and one of [`STEP_LIFECYCLE_KINDS`]. Order is `ts ASC, id
+    /// ASC`, the order left after that reader reverses its newest-first pages.
+    /// A repeated `event_id` keeps the last payload in that order, as the full
+    /// trail does. Paging bounds each read; it is not a row cap.
+    fn collect_step_lifecycle_events(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<RunAuditEvent>, OrbitError> {
+        let mut rows = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = self.list_v2_audit_events(V2AuditEventFilter {
+                workspace_id: String::new(),
+                run_id: Some(run_id.to_string()),
+                source: Some("v2_envelope".to_string()),
+                oldest_first: true,
+                body_kinds: STEP_LIFECYCLE_KINDS.map(str::to_string).to_vec(),
+                limit: Some(RUN_AUDIT_PAGE_SIZE),
+                offset: Some(offset),
+                ..Default::default()
+            })?;
+            let page_len = page.len();
+            rows.extend(page);
+            if page_len < RUN_AUDIT_PAGE_SIZE {
+                break;
+            }
+            offset += page_len;
+        }
+
+        let mut events_by_id = HashMap::new();
+        let mut ordered_ids = Vec::new();
+        for row in rows {
+            let value: Value = match serde_json::from_str(&row.payload_json) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(event_id) = value.get("event_id").and_then(Value::as_str) else {
+                continue;
+            };
+            ordered_ids.push(event_id.to_string());
+            events_by_id.insert(event_id.to_string(), value);
+        }
+
+        Ok(ordered_ids
+            .into_iter()
+            .filter_map(|event_id| {
+                let raw = events_by_id.get(&event_id).cloned()?;
+                Some(run_audit_event(event_id, raw, &events_by_id))
+            })
+            .collect())
     }
 
     /// Recover the most recent bounded recovery-attempt evidence for a run.

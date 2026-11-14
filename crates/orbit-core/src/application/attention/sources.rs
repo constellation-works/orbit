@@ -7,8 +7,8 @@ use crate::{
     },
 };
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::{
     task::{
         DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
@@ -22,6 +22,7 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 use std::{
+    cell::OnceCell,
     collections::BTreeMap,
     time::{Duration, Instant},
 };
@@ -30,6 +31,29 @@ pub(super) struct AttentionCandidates {
     pub items: Vec<AttentionItem>,
     pub degraded: Vec<AttentionDegraded>,
     pub timings: BTreeMap<String, u128>,
+}
+
+/// The one open-task metadata listing shared by every attention source in
+/// a single `attention_query` for one workspace. Loaded lazily on first
+/// use, so a query that selects no task-backed source pays no listing, and
+/// every later source reuses the first source's result (or its error,
+/// rendered by each source in its own degraded shape).
+#[derive(Default)]
+pub(super) struct SharedOpenTasks {
+    cell: OnceCell<Result<Vec<Task>, String>>,
+}
+
+impl SharedOpenTasks {
+    pub(super) fn get(&self, runtime: &OrbitRuntime) -> Result<&[Task], OrbitError> {
+        match self.cell.get_or_init(|| {
+            runtime
+                .observe_open_task_metadata()
+                .map_err(|e| e.to_string())
+        }) {
+            Ok(tasks) => Ok(tasks),
+            Err(message) => Err(OrbitError::Store(message.clone())),
+        }
+    }
 }
 pub(super) struct Subject<'a> {
     pub(super) runtime: &'a OrbitRuntime,
@@ -75,32 +99,53 @@ impl Subject<'_> {
             fingerprint: String::new(),
         }
     }
+    /// A next action naming a standalone tool (not a family operation).
+    /// `tool` must be a callable tool name; family operations go through
+    /// [`Self::family_tool_next`] so the stored `tool` is the family a
+    /// caller invokes.
     pub(super) fn tool_next(&self, tool: &str, summary: &str) -> AttentionNext {
-        let mut input = json!({"id": self.task.id, "workspace": self.workspace.id});
-        let mut needs = Vec::new();
-        let extra = if tool == "orbit.task.requeue" {
-            needs.push("reason".to_string());
-            " --reason '<reason>'"
-        } else {
-            ""
-        };
-        // Repair actions accept id; no fabricated audit arguments are supplied.
-        if let Some(object) = input.as_object_mut() {
-            object.remove("reason");
-        }
+        let input = json!({"id": self.task.id, "workspace": self.workspace.id});
         AttentionNext {
             summary: summary.into(),
             tool: Some(tool.into()),
             input: Some(input),
             command: format!(
-                "orbit --workspace '{}' {} {}{extra}",
+                "orbit --workspace '{}' {} {}",
                 self.workspace.id,
                 tool.strip_prefix("orbit.")
                     .unwrap_or(tool)
                     .replace('.', " "),
                 self.task.id
             ),
-            needs,
+            needs: Vec::new(),
+            also: Vec::new(),
+        }
+    }
+    /// A next action naming one action of a tool family: `tool` is the
+    /// callable family, `input` carries its `action`, and `command` keeps
+    /// the CLI verb form (`cli_verb`, such as `task requeue`). Arguments
+    /// needing operator judgment stay out of `input`, are named in
+    /// `needs`, and appear in `command` through `extra`.
+    pub(super) fn family_tool_next(
+        &self,
+        family: &str,
+        action: &str,
+        cli_verb: &str,
+        summary: &str,
+        needs: &[&str],
+        extra: &str,
+    ) -> AttentionNext {
+        AttentionNext {
+            summary: summary.into(),
+            tool: Some(family.into()),
+            input: Some(
+                json!({"action": action, "id": self.task.id, "workspace": self.workspace.id}),
+            ),
+            command: format!(
+                "orbit --workspace '{}' {} {}{extra}",
+                self.workspace.id, cli_verb, self.task.id
+            ),
+            needs: needs.iter().map(|need| (*need).to_string()).collect(),
             also: Vec::new(),
         }
     }
@@ -190,8 +235,10 @@ pub(super) fn finalize_attention_item(
         if item.kind == AttentionKind::DecisionOpen {
             let mut next = subject.show_next();
             next.summary = "Read the decision options".into();
-            next.tool = Some("orbit.decision.show".into());
-            next.input = Some(json!({"id": request.id, "workspace": subject.workspace.id}));
+            next.tool = Some("orbit.decision".into());
+            next.input = Some(
+                json!({"action": "show", "id": request.id, "workspace": subject.workspace.id}),
+            );
             next.command = format!(
                 "orbit --workspace '{}' decision show {}",
                 subject.workspace.id, request.id
@@ -223,6 +270,18 @@ fn review_hold_attention_item(
     kind: AttentionKind,
     hold: &crate::application::job::ReviewHold,
 ) -> AttentionItem {
+    // `next_tool` names the serving operation; store its family call.
+    let mut hold_next = AttentionNext {
+        summary: hold.next_summary.clone(),
+        tool: hold.next_tool().map(str::to_owned),
+        input: hold
+            .next_tool()
+            .map(|_| json!({"id": hold.run_id, "workspace": subject.workspace.id})),
+        command: hold.next_command(&subject.workspace.id, &subject.task.id),
+        needs: vec![],
+        also: vec![subject.show_next()],
+    };
+    hold_next.name_tool_family();
     let mut item = subject.item(
         kind,
         hold.since,
@@ -237,16 +296,7 @@ fn review_hold_attention_item(
             "pr_number": hold.pr_number,
             "run_id": hold.run_id,
         }),
-        AttentionNext {
-            summary: hold.next_summary.clone(),
-            tool: hold.next_tool().map(str::to_owned),
-            input: hold
-                .next_tool()
-                .map(|_| json!({"id": hold.run_id, "workspace": subject.workspace.id})),
-            command: hold.next_command(&subject.workspace.id, &subject.task.id),
-            needs: vec![],
-            also: vec![subject.show_next()],
-        },
+        hold_next,
     );
     item.refs["run_id"] = json!(hold.run_id);
     if let Some(number) = &hold.pr_number {
@@ -284,9 +334,13 @@ fn derive_subject_kind(
                         .is_some_and(|receipt| receipt.operation_id == held.operation_id)
                 })
                 .map_or(task.updated_at, |comment| comment.at);
-            let mut next = subject.tool_next(
-                "orbit.task.repilot",
+            let mut next = subject.family_tool_next(
+                "orbit.task.recover",
+                "repilot",
+                "task repilot",
                 "Re-pilot after fixing the cited warning",
+                &[],
+                "",
             );
             next.also.push(subject.show_next());
             // Keep the display bounded without truncating fingerprint material.
@@ -353,7 +407,14 @@ fn derive_subject_kind(
                 .or_else(|| receipt.map(|comment| comment.message.clone()))
                 .unwrap_or_else(|| task.title.clone());
             let next = if matches!(hold, PilotAdmissionHold::StaleAssessment(_)) {
-                subject.tool_next("orbit.task.repilot", "Re-pilot the changed requirements")
+                subject.family_tool_next(
+                    "orbit.task.recover",
+                    "repilot",
+                    "task repilot",
+                    "Re-pilot the changed requirements",
+                    &[],
+                    "",
+                )
             } else {
                 subject.show_next()
             };
@@ -380,8 +441,14 @@ fn derive_subject_kind(
             ) else {
                 return Ok(None);
             };
-            let mut next =
-                subject.tool_next("orbit.task.requeue", "Requeue after resolving the block");
+            let mut next = subject.family_tool_next(
+                "orbit.task.recover",
+                "requeue",
+                "task requeue",
+                "Requeue after resolving the block",
+                &["reason"],
+                " --reason '<reason>'",
+            );
             next.also.push(subject.show_next());
             // Put the leaf error before run metadata so the bounded reason
             // shows what the operator needs to resolve.
@@ -493,8 +560,10 @@ fn derive_subject_kind(
                 } else {
                     AttentionNext {
                         summary: "Reset the exhausted review budget".into(),
-                        tool: Some("orbit.task.review_reset".into()),
-                        input: Some(json!({"id": task.id, "workspace": subject.workspace.id})),
+                        tool: Some("orbit.task.recover".into()),
+                        input: Some(
+                            json!({"action": "review_reset", "id": task.id, "workspace": subject.workspace.id}),
+                        ),
                         command: format!(
                             "orbit --workspace '{}' task review-reset {} --lineage '<lineage>' --reason '<reason>'",
                             subject.workspace.id, task.id
@@ -538,6 +607,7 @@ pub(super) fn read_attention_sources(
     host: &AttentionHost,
     filter: &AttentionFilter,
     now: DateTime<Utc>,
+    open_tasks: &SharedOpenTasks,
 ) -> Result<AttentionCandidates, OrbitError> {
     use AttentionKind as K;
     let mut result = AttentionCandidates {
@@ -630,7 +700,8 @@ pub(super) fn read_attention_sources(
     if filter.selected(K::ResidentStalled) {
         let started = Instant::now();
         let read = if runtime.coordination_task_reads_visible() {
-            resident_stalled_items(runtime, workspace, host, now).map_err(|error| error.to_string())
+            resident_stalled_items(runtime, workspace, host, now, open_tasks)
+                .map_err(|error| error.to_string())
         } else {
             Err("Task records on a replica are not authoritative; read the workspace owner".into())
         };
@@ -705,13 +776,13 @@ pub(super) fn read_attention_sources(
         return Ok(result);
     }
     let started = Instant::now();
-    let tasks = runtime.observe_task_metadata()?;
+    let tasks: &[Task] = open_tasks.get(runtime)?;
     result
         .timings
         .insert("task_index".into(), started.elapsed().as_micros());
     let wants_decisions = filter.selected(K::DecisionOpen);
     let mut elapsed = BTreeMap::<String, Duration>::new();
-    for metadata in &tasks {
+    for metadata in tasks {
         if metadata.status.is_terminal() {
             continue;
         }
@@ -734,20 +805,28 @@ pub(super) fn read_attention_sources(
         let hydrated = (|| {
             // Revision-bound decisions hash description and acceptance criteria;
             // bodyless index metadata cannot establish an effective request.
-            let task = if needs_decisions {
-                runtime.get_task(&metadata.id)?
-            } else {
-                metadata.clone()
-            };
-            let comments = runtime.get_task_pilot_comments(&metadata.id)?;
+            // One listed (settled, lightweight) bundle read per candidate task
+            // supplies the full task, its comments and its history together,
+            // replacing the former canonical `get_task` + pilot-comments +
+            // history reads. A missing settled row degrades exactly as the
+            // former `get_task` not-found did.
+            let row = runtime
+                .get_listed_task_row(&metadata.id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, metadata.id.clone()))?;
+            let crate::application::task::TaskRow {
+                task,
+                comments: raw_comments,
+                history: row_history,
+                ..
+            } = row;
+            let comments = runtime.resolve_task_pilot_comments(&metadata.id, &raw_comments)?;
             let (history, requests) = if needs_decisions {
-                let history = runtime.get_task_history(&metadata.id)?;
                 let requests = runtime
-                    .task_decision_requests_in(&task, &history, &comments, now)?
+                    .task_decision_requests_in(&task, &row_history, &comments, now)?
                     .into_iter()
                     .filter(|request| request.state == DecisionRequestState::Open)
                     .collect::<Vec<_>>();
-                (history, requests)
+                (row_history, requests)
             } else {
                 (Vec::new(), Vec::new())
             };
@@ -804,7 +883,7 @@ pub(super) fn read_attention_sources(
                 continue;
             }
             let started = Instant::now();
-            match derive_subject_kind(&subject, kind, &comments, &history, request, &tasks) {
+            match derive_subject_kind(&subject, kind, &comments, &history, request, tasks) {
                 Ok(Some(item)) => {
                     if let Some(request) = request {
                         folded.push(request.id.clone());

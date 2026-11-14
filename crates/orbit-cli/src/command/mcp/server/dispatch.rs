@@ -119,6 +119,8 @@ impl McpHost for ServerMcpHost {
         // in-process destination reaches Core through this method too.
         let list_policy =
             TaskListResultPolicy::for_call(name, &input, TaskListResultProfile::Default);
+        let mut input = input;
+        list_policy.apply_compact_hint(&mut input);
         self.call_public_tool(name, input, context)
             .map(|value| list_policy.finalize(value))
     }

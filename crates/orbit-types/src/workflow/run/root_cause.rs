@@ -18,6 +18,7 @@
 //! Owner-local runs also hold on capacity and usage limits: admission can
 //! choose another crew while the task keeps its provider failure hold.
 
+use super::super::JobRunState;
 use super::DeliveryRefusal;
 use super::failure_classification_text;
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,21 @@ pub const CHILD_CANCELLED_ERROR_CODE: &str = "child_cancelled";
 /// wait on it expired. The child's failure handoff keeps its candidate under
 /// this code, and the parent's wait result leads its error with it.
 pub const CHILD_TIMEOUT_ERROR_CODE: &str = "child_timeout";
+
+/// Error code of a run the host manager stopped. With recorded sender
+/// evidence, the run is `held`, not `interrupted`, and failure queries do not
+/// count it. A supervisor-observed non-signal crash is `failed` without
+/// `worker_terminated`; stale-owner reconciliation can instead record a dead
+/// worker as `interrupted` with that code. If reconciliation finalizes before
+/// the sender evidence is recorded, later evidence does not rewrite the state.
+pub const OPERATOR_STOPPED_ERROR_CODE: &str = "operator_stopped";
+
+/// Whether `state` and `error_code` record a host-manager stop: `held` under
+/// [`OPERATOR_STOPPED_ERROR_CODE`].
+#[must_use]
+pub fn is_operator_stopped(state: JobRunState, error_code: Option<&str>) -> bool {
+    state == JobRunState::Held && error_code == Some(OPERATOR_STOPPED_ERROR_CODE)
+}
 
 /// The leaf failure a cascaded parent failure echoes.
 ///

@@ -261,6 +261,20 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
     ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
+        self.pilot_admission_hold_with_audit(task, comments, history, &|receipt| {
+            self.task_pilot_audit(&task.id, receipt)
+        })
+    }
+
+    /// The same hold projection with an aggregate's artifact reader, so a
+    /// decision scan does not reopen the bundle for its pilot receipt.
+    pub(crate) fn pilot_admission_hold_with_audit(
+        &self,
+        task: &Task,
+        comments: &[TaskComment],
+        history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+        audit: &dyn Fn(orbit_types::task::CommentReceipt<'_>) -> Result<Value, OrbitError>,
+    ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
         // [ORB-21238] An operator's `no-pilot` skip bypasses stale assessments
         // and ordinary pilot findings. A current host-operational hold is
         // checked below first because skipping a pilot cannot resolve the
@@ -291,7 +305,7 @@ impl OrbitRuntime {
             let Some((_, receipt)) = receipts.next() else {
                 continue;
             };
-            let audit = self.task_pilot_audit(&task.id, receipt)?;
+            let audit = audit(receipt)?;
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;

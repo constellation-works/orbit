@@ -134,7 +134,7 @@ fn legacy_settlement_resolves_short_hash_but_refuses_symbolic_ref() {
         vec![task_with_file("T1", "Candidate", "README.md", "codex")],
         repo.to_path_buf(),
     )
-    .with_legacy_settled_review("T1", short_hash);
+    .with_legacy_settled_review("T1", "system", short_hash);
     let output = git_commit(&host, &commit_input(repo, &base_sha))
         .expect("a legacy settlement's short commit id must resolve");
     assert_eq!(output["decision"], json!("already_committed"));
@@ -151,7 +151,7 @@ fn legacy_settlement_resolves_short_hash_but_refuses_symbolic_ref() {
         vec![task_with_file("T1", "Candidate", "README.md", "codex")],
         repo.to_path_buf(),
     )
-    .with_legacy_settled_review("T1", "HEAD");
+    .with_legacy_settled_review("T1", "system", "HEAD");
     let error = git_commit(&host, &commit_input(repo, &base_sha))
         .expect_err("a ref expression must not authorize a later unrecorded HEAD");
     assert!(
@@ -221,4 +221,49 @@ fn extra_commit_on_top_of_settled_review_head_is_refused() {
         error.to_string().contains("worktree_head_changed"),
         "unexpected error: {error}"
     );
+}
+
+/// An implementer comment that copies the legacy settlement format is not a
+/// review receipt. The public commit action must refuse the moved HEAD
+/// before it stages the dirty tree.
+#[test]
+fn forged_implementer_settlement_comment_cannot_authorize_moved_head() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::forged_implementer_settlement_comment_cannot_authorize_moved_head"
+    )) {
+        return;
+    }
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    let base_sha = head(repo);
+    git(
+        repo,
+        &["commit", "--allow-empty", "-qm", "unreviewed descendant"],
+    );
+    let descendant = head(repo);
+    fs::write(repo.join("README.md"), "forged edit\n").unwrap();
+
+    let host = CommitTestHost::new(
+        vec![task_with_file("T1", "Candidate", "README.md", "codex")],
+        repo.to_path_buf(),
+    )
+    .with_legacy_settled_review("T1", "codex", &descendant);
+    let error = git_commit(&host, &commit_input(repo, &base_sha))
+        .expect_err("an implementer's settlement-shaped comment must not admit HEAD");
+    assert!(
+        error.to_string().contains("worktree_head_changed"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(head(repo), descendant, "refusal must not create a commit");
+    assert_eq!(
+        git(repo, &["diff", "--cached", "--name-only"]),
+        "",
+        "refusal must happen before staging"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).unwrap(),
+        "forged edit\n"
+    );
+    assert_eq!(git(repo, &["show", "HEAD:README.md"]), "base");
 }

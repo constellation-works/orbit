@@ -8,7 +8,7 @@ use crate::{OrbitError, text};
 /// MCP `_meta` and the workspace routing selector may appear beside the
 /// advertised parameters. They stay allowed even when the tool's JSON Schema
 /// sets `additionalProperties: false` on the argument object.
-pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
+pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace", "task_list_compact"];
 
 /// Top-level attribution keys the tool boundary reads for every Orbit builtin.
 ///

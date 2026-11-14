@@ -60,6 +60,10 @@ pub use triage::{
     BLOCKED_TASK_TRIAGE_RESUMED_EVENT, BLOCKED_TASK_TRIAGED_EVENT, BlockedTriageView, TriageBasis,
     TriageCandidacy, TriageEpisode, TriageTarget, triage_candidacy,
 };
+pub(crate) use triage::{
+    LegacyBlockedTriageDisposition, LegacyBlockedTriageOutcome, LegacyBlockedTriageRecord,
+    decode_blocked_task_triaged, is_legacy_triage_requeue_binding,
+};
 
 use std::path::{Path, PathBuf};
 

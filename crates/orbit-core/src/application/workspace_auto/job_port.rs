@@ -16,4 +16,8 @@ impl JobAutoConcurrencyPort for OrbitRuntime {
     ) -> Result<(), OrbitError> {
         self.capture_auto_concurrency(job_name, input, retain_snapshot)
     }
+
+    fn captured_auto_concurrency(&self, run_id: &str) -> Result<Value, OrbitError> {
+        self.run_auto_concurrency(run_id)
+    }
 }
