@@ -52,6 +52,7 @@ mod listing;
 mod query;
 mod relations;
 mod repair_gate;
+mod row_cache;
 pub(crate) mod sequencing;
 mod sidecars;
 mod updates;
@@ -66,6 +67,7 @@ pub(crate) use artifacts::review_report_history;
 use creation_grant::{append_creation_grant, creation_state, reject_forged_grant};
 use envelope_cache::{EnvelopeCache, EnvelopeStamp, persisted_file_stamp};
 use relations::{relations_from_create_params, replace_relations};
+use row_cache::RowCache;
 use sequencing::{next_event_id, next_sequence};
 pub(crate) use sidecars::{task_comment_from_row, task_history_from_events};
 
@@ -75,6 +77,8 @@ pub(crate) struct TaskV2Store {
     workspace_id: String,
     /// Envelope parses reused across listings; see [`envelope_cache`].
     envelope_cache: EnvelopeCache,
+    /// Hydrated rows reused across listings; see [`row_cache`].
+    row_cache: RowCache,
     /// The partition's durable commit boundary, when this store was composed
     /// with one ([`crate::compose::workspace_coordinated_backends`]).
     ///
@@ -103,6 +107,7 @@ impl TaskV2Store {
             registry,
             workspace_id,
             envelope_cache: EnvelopeCache::default(),
+            row_cache: RowCache::default(),
             coordination: None,
         }
     }

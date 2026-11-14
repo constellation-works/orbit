@@ -302,7 +302,31 @@ impl TaskV2Store {
                 }
                 continue;
             }
+            // A settled bundle with a provable freshness stamp may serve
+            // its remembered row; anything else is read exactly as before.
+            // The stamp is taken before any read below, so it labels that
+            // read or something older, never something newer.
+            let stamp = match self.bundle_store.settled_bundle_dir(&candidate.id) {
+                Ok(Some(bundle_dir)) => {
+                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
+                }
+                _ => None,
+            };
+            if let Some(stamp) = &stamp
+                && let Some((envelope, row)) = self.row_cache.cached_row(&candidate.id, stamp)
+            {
+                if envelope != candidate {
+                    // An update raced selection. One strict scan re-evaluates
+                    // filters before the limit; no stale row escapes.
+                    return self.scan_task_page(&filter, limit, residual);
+                }
+                if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
+                    items.push(row);
+                }
+                continue;
+            }
             let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
+                self.row_cache.forget(&candidate.id);
                 continue;
             };
             if bundle.envelope != candidate {
@@ -310,7 +334,12 @@ impl TaskV2Store {
                 // before the limit; no retry loop or stale selected row escapes.
                 return self.scan_task_page(&filter, limit, residual);
             }
+            let envelope = bundle.envelope.clone();
             let row = self.row_from_bundle(bundle)?;
+            if let Some(stamp) = stamp {
+                self.row_cache
+                    .remember(&candidate.id, stamp, envelope, row.clone());
+            }
             if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
                 items.push(row);
             }
