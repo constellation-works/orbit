@@ -20,7 +20,6 @@ use serde_json::json;
 
 const CHILD_ENV: &str = "ORBIT_DEPENDABOT_COLLECT_CHILD";
 const LOG_ENV: &str = "ORBIT_FAKE_GH_LOG";
-const MARKER_ENV: &str = "ORBIT_FAKE_GH_MARKER";
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
 /// A credential-shaped marker the fake `gh` prints to stderr. Built at
@@ -33,7 +32,9 @@ fn credential_shaped_marker() -> String {
 
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
-log=${ORBIT_FAKE_GH_LOG:?}
+# gh runs under a cleared environment: only HOME reaches it, so state is files under it.
+log=$HOME/calls
+child=$(cat "$HOME/child")
 printf '%s\n' "$*" >> "$log"
 case "$1" in
   auth)
@@ -48,12 +49,12 @@ case "$1" in
       echo "fake gh: unsupported call: $*" >&2
       exit 2
     fi
-    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_failure_degrades_without_losing_alert_families" ]; then
+    if [ "$child" = "repo_view_failure_degrades_without_losing_alert_families" ]; then
       echo "transient repo view failure" >&2
       exit 1
     fi
-    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_credential_shaped_stderr_is_redacted" ]; then
-      echo "gh: authentication failed with token ${ORBIT_FAKE_GH_MARKER:?}" >&2
+    if [ "$child" = "repo_view_credential_shaped_stderr_is_redacted" ]; then
+      echo "gh: authentication failed with token $(cat "$HOME/marker")" >&2
       exit 1
     fi
     for arg in "$@"; do
@@ -334,6 +335,8 @@ fn spawn_isolated(test: &str) {
     fs::write(&gh, FAKE_GH).expect("write fake gh");
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).expect("chmod fake gh");
     let log = sandbox.path().join("calls");
+    fs::write(sandbox.path().join("child"), test).expect("write child name");
+    fs::write(sandbox.path().join("marker"), credential_shaped_marker()).expect("write marker");
     let mut path = vec![bin];
     path.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
@@ -360,7 +363,6 @@ fn spawn_isolated(test: &str) {
         .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .env(CHILD_ENV, test)
         .env(LOG_ENV, &log)
-        .env(MARKER_ENV, credential_shaped_marker())
         .env("PATH", std::env::join_paths(path).expect("PATH"))
         .env("HOME", sandbox.path())
         .env("TMPDIR", sandbox.path());

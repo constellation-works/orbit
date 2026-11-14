@@ -3,7 +3,9 @@
 //!
 //! `PATH` is process-global, so each test body re-runs in an isolated child of
 //! this binary with the substitute first on `PATH`. The substitute answers
-//! from files the child writes under `ORBIT_FAKE_GH_STATE`.
+//! from files the child writes under `$HOME/gh-state` (the substitute runs under a
+//! cleared environment, so `HOME` is the only channel); the child also gets
+//! `ORBIT_FAKE_GH_STATE` pointing there for its own use.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,7 +21,8 @@ const STATE_ENV: &str = "ORBIT_FAKE_GH_STATE";
 
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
-state=${ORBIT_FAKE_GH_STATE:?}
+# gh runs under a cleared environment: only HOME reaches it.
+state=$HOME/gh-state
 printf '%s\n' "$*" >> "$state/calls"
 # `rate-limited` holds a reset epoch: every API read is GitHub's primary
 # rate-limit answer until the test removes it.
@@ -67,10 +70,11 @@ pub(crate) fn isolated_with_fake_gh(test: &str) -> bool {
     std::fs::write(&gh, FAKE_GH).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let primer = TempDir::new().unwrap();
+    std::fs::create_dir_all(primer.path().join("gh-state")).unwrap();
     orbit_common::test_env::prime_executable(
         std::process::Command::new(&gh)
             .args(["auth", "status"])
-            .env(STATE_ENV, primer.path()),
+            .env("HOME", primer.path()),
     );
     let mut path = vec![bin];
     path.extend(std::env::split_paths(

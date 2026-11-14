@@ -115,7 +115,8 @@ impl Fixture {
         std::fs::create_dir_all(&bin).unwrap();
         let auth_exit = if auth_ok { 0 } else { 1 };
         let script = format!(
-            "#!/bin/sh\nstate=${{ORBIT_FAKE_GH_STATE:?}}\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit {auth_exit} ;;\n  \"run list\") cat \"$state/runs.json\" ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n"
+            "#!/bin/sh\nstate='{state_dir}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit {auth_exit} ;;\n  \"run list\") cat \"$state/runs.json\" ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+            state_dir = state.display()
         );
         let gh = bin.join("gh");
         std::fs::write(&gh, script).unwrap();
@@ -131,7 +132,6 @@ impl Fixture {
         // SAFETY: scenario tables run in an isolated child process.
         unsafe {
             std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
-            std::env::set_var("ORBIT_FAKE_GH_STATE", &state);
         }
         std::fs::write(state.join("calls"), "").unwrap();
         std::fs::write(state.join("runs.json"), "[]").unwrap();

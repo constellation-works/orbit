@@ -292,8 +292,8 @@ pub(crate) fn git_run_bytes(
 
 /// Compose host VCS environments by name. Git needs the SSH agent socket for
 /// authenticated remotes, but never the provider's credentials or ORBIT_* envelope.
-/// GitHub CLI callers explicitly supply their own authentication names.
-pub(super) fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
+/// GitHub CLI callers take [`gh_environment`], which adds its authentication names.
+fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
     AGENT_SUBPROCESS_BASELINE_VARS
         .iter()
         .copied()
@@ -304,6 +304,21 @@ pub(super) fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
                 .map(|value| (name.to_string(), value))
         })
         .collect()
+}
+
+/// The one environment every host-side `gh` child runs under: the baseline
+/// plus GitHub's authentication, host and config names, never the provider's
+/// credentials or the ORBIT_* envelope.
+pub(in crate::executor::automation) fn gh_environment() -> Vec<(String, String)> {
+    vcs_environment(&[
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_HOST",
+        "GH_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+    ])
 }
 
 fn git_environment() -> Vec<(String, String)> {
