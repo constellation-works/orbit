@@ -6,6 +6,7 @@ use super::{
     task_fields::{TaskSidecarSearchText, task_fields_with_sidecars},
 };
 use orbit_common::OrbitError;
+use orbit_common::text::contains_lowercased;
 use orbit_types::task::Task;
 use rusqlite::{Connection, params};
 use serde::Serialize;
@@ -149,8 +150,14 @@ impl LexicalStore {
         stored.sort();
         // Any difference — including no stored chunks, so a task left
         // unindexed by an earlier failure is still repaired by its next
-        // write — takes today's delete-and-insert path below.
+        // write — takes today's delete-and-insert path below. Unchanged
+        // chunks still record today's coverage, so an index built before
+        // a coverage version bump is upgraded by the next write instead
+        // of needing an unrelated text change.
         if !stored.is_empty() && stored == desired {
+            if sidecar_coverage {
+                record_coverage(&conn, &task.id, FIELDS_VERSION_SIDECARS)?;
+            }
             return Ok(stored.len());
         }
         let tx = conn.transaction().map_err(err)?;
@@ -266,29 +273,47 @@ impl LexicalStore {
     }
     /// The task ids with a chunk containing `query` as a substring, with the
     /// bundle matcher's case-insensitive, diacritics-intact semantics.
-    /// Queries of three or more characters go through the trigram index as
-    /// one phrase; shorter ones (which form no trigram) and stores opened
-    /// read-only before the trigram table existed fall back to an `instr`
-    /// scan over chunk text — still no bundle reads either way.
+    /// ASCII queries of three or more characters go through the trigram
+    /// index as one phrase over the raw chunk text, so internal whitespace
+    /// must match exactly. Shorter queries (which form no trigram),
+    /// non-ASCII queries and stores opened read-only before the trigram
+    /// table existed scan chunk text in Rust with
+    /// [`contains_lowercased`]: SQLite's `lower()` folds ASCII only, while
+    /// the bundle matcher folds Unicode on both the stored text and the
+    /// query, and only the Rust scan makes the two sides equivalent for
+    /// needles such as `ÉN`. Still no bundle reads either way.
     pub fn substring_task_ids(&self, query: &str) -> Result<BTreeSet<String>, OrbitError> {
         let conn = self.lock()?;
-        let use_trigram =
-            query.chars().count() >= 3 && migration::table_exists(&conn, "corpus_substring_fts")?;
-        let (sql, needle) = if use_trigram {
-            (
+        let use_trigram = query.chars().count() >= 3
+            && query.is_ascii()
+            && migration::table_exists(&conn, "corpus_substring_fts")?;
+        if !use_trigram {
+            let lowered = query.to_lowercase();
+            let mut stmt = conn
+                .prepare("SELECT source_id, content FROM chunks WHERE source_kind = ?1")
+                .map_err(err)?;
+            let rows = stmt
+                .query_map(params![SOURCE_KIND_TASK], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(err)?;
+            let mut ids = BTreeSet::new();
+            for row in rows {
+                let (source_id, content) = row.map_err(err)?;
+                if contains_lowercased(&content, &lowered) {
+                    ids.insert(source_id);
+                }
+            }
+            return Ok(ids);
+        }
+        let needle = format!("\"{}\"", query.replace('"', "\"\""));
+        let mut stmt = conn
+            .prepare(
                 "SELECT DISTINCT chunks.source_id FROM corpus_substring_fts \
                  JOIN chunks ON chunks.id = corpus_substring_fts.rowid \
                  WHERE corpus_substring_fts MATCH ?1 AND chunks.source_kind = ?2",
-                format!("\"{}\"", query.replace('"', "\"\"")),
             )
-        } else {
-            (
-                "SELECT DISTINCT source_id FROM chunks \
-                 WHERE source_kind = ?2 AND instr(lower(content), ?1) > 0",
-                query.to_lowercase(),
-            )
-        };
-        let mut stmt = conn.prepare(sql).map_err(err)?;
+            .map_err(err)?;
         let rows = stmt
             .query_map(params![needle, SOURCE_KIND_TASK], |row| {
                 row.get::<_, String>(0)
@@ -334,8 +359,13 @@ impl LexicalStore {
 /// Coverage of a task indexed from its [`Task`] fields alone.
 const FIELDS_VERSION_TASK_ONLY: i64 = 1;
 /// Coverage of a task also indexed with its comment bodies and artifact
-/// paths: every field the bundle matcher reads is in `chunks`.
-const FIELDS_VERSION_SIDECARS: i64 = 2;
+/// paths: every field the bundle matcher reads is in `chunks`. Version 2
+/// chunks joined words with single spaces and answered short needles with
+/// SQLite's ASCII-only `lower()`, so they do not preserve raw-whitespace
+/// or Unicode substring matches; only version 3 (raw-preserving chunks)
+/// counts as covered, and earlier rows fall back to the bundle matcher
+/// until a write or reindex rebuilds them.
+const FIELDS_VERSION_SIDECARS: i64 = 3;
 
 fn record_coverage(
     conn: &Connection,
