@@ -324,16 +324,11 @@ fn completion_hold_record<H: RuntimeHost + ?Sized>(
         ),
         operation_id: None,
     };
-    let entry = TaskHistoryEntry {
-        at: now,
-        by: "system".to_string(),
-        event: COMPLETION_HELD_EVENT.to_string(),
-        note: Some(summary),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: Some(orbit_types::task::TaskDecision::CompletionHeld(record)),
-    };
+    let entry = TaskHistoryEntry::new(now, "system", COMPLETION_HELD_EVENT)
+        .with_note(Some(summary))
+        .with_decision(Some(orbit_types::task::TaskDecision::CompletionHeld(
+            record,
+        )));
     Ok(Some((comment, entry)))
 }
 

@@ -54,15 +54,9 @@ pub fn pending_resolves_entries(
 ) -> Vec<TaskHistoryEntry> {
     targets
         .iter()
-        .map(|target| TaskHistoryEntry {
-            at,
-            by: actor.to_string(),
-            event: RESOLVES_SIDE_EFFECT_PENDING_EVENT.to_string(),
-            note: Some(format!("{RESOLVES_TARGET_NOTE_PREFIX}{target}")),
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: None,
+        .map(|target| {
+            TaskHistoryEntry::new(at, actor, RESOLVES_SIDE_EFFECT_PENDING_EVENT)
+                .with_note(Some(format!("{RESOLVES_TARGET_NOTE_PREFIX}{target}")))
         })
         .collect()
 }

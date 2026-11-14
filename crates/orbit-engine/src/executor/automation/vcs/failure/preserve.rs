@@ -88,16 +88,9 @@ fn carry_held_candidate<H: RuntimeHost + ?Sized>(
 /// The history entry admission reads to offer `held` to the task's next
 /// claim, on whichever host.
 fn held_history(held: &HeldCandidate) -> TaskHistoryEntry {
-    TaskHistoryEntry {
-        at: Utc::now(),
-        by: "system".to_string(),
-        event: CANDIDATE_HELD_EVENT.to_string(),
-        note: Some(held.text()),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: Some(TaskDecision::CandidateHeld(held.clone())),
-    }
+    TaskHistoryEntry::new(Utc::now(), "system", CANDIDATE_HELD_EVENT)
+        .with_note(Some(held.text()))
+        .with_decision(Some(TaskDecision::CandidateHeld(held.clone())))
 }
 
 /// Where `held` is, for the hold's comment: on `origin`, or only on this

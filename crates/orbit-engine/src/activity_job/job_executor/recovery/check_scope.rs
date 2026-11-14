@@ -293,16 +293,14 @@ fn record_no_edit_rerun(
             .apply_task_automation_update(
                 task,
                 crate::context::TaskAutomationUpdate {
-                    append_history: vec![orbit_types::task::TaskHistoryEntry {
-                        at: chrono::Utc::now(),
-                        by: "system".into(),
-                        event: PR_AUTO_FIX_NO_EDIT_RERUN_EVENT.into(),
-                        note: Some(note),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                    }],
+                    append_history: vec![
+                        orbit_types::task::TaskHistoryEntry::new(
+                            chrono::Utc::now(),
+                            "system",
+                            PR_AUTO_FIX_NO_EDIT_RERUN_EVENT,
+                        )
+                        .with_note(Some(note)),
+                    ],
                     ..crate::context::TaskAutomationUpdate::default()
                 },
             )

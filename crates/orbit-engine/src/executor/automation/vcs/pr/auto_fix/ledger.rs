@@ -175,16 +175,11 @@ fn append_history_note<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             task,
             TaskAutomationUpdate {
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: event.into(),
-                    note: Some(note.to_owned()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: decision.clone(),
-                }],
+                append_history: vec![
+                    orbit_types::task::TaskHistoryEntry::new(chrono::Utc::now(), "system", event)
+                        .with_note(Some(note.to_owned()))
+                        .with_decision(decision.clone()),
+                ],
                 ..TaskAutomationUpdate::default()
             },
         )?;

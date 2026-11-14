@@ -199,16 +199,11 @@ fn record_draft_recovery<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
-                append_history: vec![TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: PR_DRAFT_RECOVERY_EVENT.into(),
-                    note: Some(format!("{}: {reason}.", record.pr_url)),
-                    decision: Some(TaskDecision::PrDraftRecovery(record.clone())),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                }],
+                append_history: vec![
+                    TaskHistoryEntry::new(chrono::Utc::now(), "system", PR_DRAFT_RECOVERY_EVENT)
+                        .with_note(Some(format!("{}: {reason}.", record.pr_url)))
+                        .with_decision(Some(TaskDecision::PrDraftRecovery(record.clone()))),
+                ],
                 ..TaskAutomationUpdate::default()
             },
         )?;

@@ -184,16 +184,11 @@ pub(super) fn record_section_gap<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
-                append_history: vec![TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".to_string(),
-                    event: PR_SECTION_GAP_EVENT.to_string(),
-                    note: Some(note.clone()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(TaskDecision::PrSectionGap(gap.clone())),
-                }],
+                append_history: vec![
+                    TaskHistoryEntry::new(chrono::Utc::now(), "system", PR_SECTION_GAP_EVENT)
+                        .with_note(Some(note.clone()))
+                        .with_decision(Some(TaskDecision::PrSectionGap(gap.clone()))),
+                ],
                 ..TaskAutomationUpdate::default()
             },
         )?;

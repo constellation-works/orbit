@@ -128,16 +128,14 @@ pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RuntimeH
     host.apply_task_automation_update(
         task_id,
         TaskAutomationUpdate {
-            append_history: vec![orbit_types::task::TaskHistoryEntry {
-                at: Utc::now(),
-                by: "system".to_string(),
-                event: PR_AUTO_FIX_PUSHED_EVENT.to_string(),
-                note: Some(note),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
+            append_history: vec![
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    "system",
+                    PR_AUTO_FIX_PUSHED_EVENT,
+                )
+                .with_note(Some(note)),
+            ],
             ..TaskAutomationUpdate::default()
         },
     )

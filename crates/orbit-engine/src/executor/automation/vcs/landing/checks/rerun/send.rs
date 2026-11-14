@@ -69,16 +69,14 @@ pub(super) fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
                 host.apply_task_automation_update(
                     task,
                     crate::context::TaskAutomationUpdate {
-                        append_history: vec![orbit_types::task::TaskHistoryEntry {
-                            at: chrono::Utc::now(),
-                            by: "system".into(),
-                            event: CI_CHECK_RERUN_EVENT.into(),
-                            note: Some(note.clone()),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        }],
+                        append_history: vec![
+                            orbit_types::task::TaskHistoryEntry::new(
+                                chrono::Utc::now(),
+                                "system",
+                                CI_CHECK_RERUN_EVENT,
+                            )
+                            .with_note(Some(note.clone())),
+                        ],
                         ..Default::default()
                     },
                 )?;
@@ -102,16 +100,14 @@ pub(super) fn record_cancellation_exhausted<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             task,
             crate::context::TaskAutomationUpdate {
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: "ci_check_rerun_exhausted".into(),
-                    note: Some(reason.to_string()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
+                append_history: vec![
+                    orbit_types::task::TaskHistoryEntry::new(
+                        chrono::Utc::now(),
+                        "system",
+                        "ci_check_rerun_exhausted",
+                    )
+                    .with_note(Some(reason.to_string())),
+                ],
                 ..Default::default()
             },
         )?;
@@ -192,16 +188,14 @@ pub(super) fn record_retry_history<H: RuntimeHost + ?Sized>(
             host.apply_task_automation_update(
                 task,
                 crate::context::TaskAutomationUpdate {
-                    append_history: vec![orbit_types::task::TaskHistoryEntry {
-                        at: chrono::Utc::now(),
-                        by: "system".into(),
-                        event: event.into(),
-                        note: Some(note.to_string()),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                    }],
+                    append_history: vec![
+                        orbit_types::task::TaskHistoryEntry::new(
+                            chrono::Utc::now(),
+                            "system",
+                            event,
+                        )
+                        .with_note(Some(note.to_string())),
+                    ],
                     ..Default::default()
                 },
             )?;
