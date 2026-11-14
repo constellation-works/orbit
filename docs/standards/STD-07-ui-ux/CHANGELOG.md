@@ -16,3 +16,6 @@ removed or changed in meaning.
   figure) and R37 (a behaviour change keeps the control's look). From the owner's dashboard
   corrections in session 7995d040 (ORB-24111, ORB-24113, ORB-24114, ORB-24118, ORB-24120,
   ORB-24124).
+- **v4 (2026-11-14):** adds R38 (a row of controls uses the full width available before it
+  wraps, and a bar that belongs to the whole view spans the view). From the owner's Tasks
+  status-chip correction in session f09993e5 (ORB-24686, F2026-11-288).

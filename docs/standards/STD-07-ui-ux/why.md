@@ -194,6 +194,11 @@ A rule is here only when its correction recurred.
   before the change" (7995d040, ORB-24111). ORB-23882 made the rail workspace select
   multi-select by replacing the native control with a custom popup; ORB-24027 restored
   single-select but kept the new chrome and coloured options, which nobody had approved.
+- **R38 (controls use the width before wrapping).** "the task status pills can use the entire
+  remaining width. no need to use 2 rows when there is more space" (f09993e5, ORB-24686,
+  F2026-11-288). The Tasks status chips sat in the list column, so they wrapped after four
+  chips while the space beside them, above the drain panel, stayed empty. R23 covered second
+  columns and tables, not a row of controls.
 
 ## Process
 

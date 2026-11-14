@@ -46,4 +46,5 @@ the same review by hand at 375px, 768px and 1440px in each theme it ships.
 | R35 | review-only at 768px and 1440px. A candidate for a `ui.chart-text-scale` rule (compare the computed size of SVG `text` with the page's body and muted text) |
 | R36 | review-only: read the ranked column down each tied group |
 | R37 | review-only: compare the control with the previous release in the PR's screenshots |
+| R38 | review-only at 768px and 1440px. A candidate for a `ui.early-wrap` rule (for a wrapping flex row of controls, fail when it has more than one line and its first line plus the next item would fit the width of the view that holds it) |
 | R26 | review-only: the fix task quotes the correction and names the rule, or the friction it filed |
