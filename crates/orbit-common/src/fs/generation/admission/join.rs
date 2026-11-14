@@ -10,9 +10,7 @@ use super::super::MAX_QUIESCE_TIMEOUT;
 use super::super::identity::{Access, Envelope};
 use super::super::paths::{GENERATION_LOCK, validated_generation_root};
 use super::super::records::{Record, open, read_compat, read_generation, write_compat};
-use super::super::refusal::{
-    INCOMPATIBLE, WRITES_WHILE_FOREIGN, quiesce_timeout, refusal, unwritable, upgrade_pending,
-};
+use super::super::refusal::{self, INCOMPATIBLE, WRITES_WHILE_FOREIGN, quiesce_timeout};
 use super::super::registry::{self, PendingClaim, PendingSwitch};
 use super::super::update::GenerationUpdate;
 use super::guard::{GenerationGuard, Participant};
@@ -20,7 +18,7 @@ use super::legacy::{legacy_schema_check, reseed_if_unheld};
 use super::lock::{
     Admission, QUIESCE_POLL, admission, admitted_past_pending, lock_generation_exclusive,
 };
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 /// The live store schema, read at most once per join.
 struct LiveSchema<F> {
@@ -79,7 +77,9 @@ impl GenerationGuard {
         let admission = admitted_past_pending(root, participant, Admission::Shared, quiesce)?;
         let mut generation = open(root, GENERATION_LOCK)?;
         // Only exclusive admission takes the generation lock exclusively.
-        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        FileExt::try_lock_shared(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         let recorded = read_generation(&mut generation.file)?;
         let (identity, access) = (participant.identity, participant.access);
         let joined_foreign = match read_compat(root, &recorded) {
@@ -130,7 +130,9 @@ impl GenerationGuard {
     {
         let admission = admitted_past_pending(root, participant, Admission::Exclusive, quiesce)?;
         let mut generation = open(root, GENERATION_LOCK)?;
-        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        FileExt::try_lock_shared(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         let recorded = read_generation(&mut generation.file)?;
         let Some(envelope) = read_compat(root, &recorded) else {
             return Self::join_legacy(
@@ -154,7 +156,8 @@ impl GenerationGuard {
                     let written = if generation.writable {
                         write_compat(root, &recorded, &widened)
                     } else {
-                        Err(unwritable(
+                        Err(refusal::upgrade_admission_unwritable(
+                            UpgradeAdmissionRefusalKind::Other,
                             "joining would widen the recorded generation, which cannot be \
                              written from here",
                         ))
@@ -175,15 +178,19 @@ impl GenerationGuard {
             }
             Some(reason) if access == Access::Write && envelope.is_superseded_by(identity) => {
                 if participant.in_activity {
-                    return Err(upgrade_pending(format!(
-                        "this binary ({identity}) would switch the store generation: {reason}"
-                    )));
+                    return Err(refusal::upgrade_admission_pending(
+                        UpgradeAdmissionRefusalKind::Other,
+                        format!(
+                            "this binary ({identity}) would switch the store generation: {reason}"
+                        ),
+                    ));
                 }
                 Self::quiesce(root, admission, generation, participant, quiesce, &reason)
             }
-            Some(reason) => Err(refusal(format!(
-                "this binary ({identity}) {INCOMPATIBLE}: {reason}"
-            ))),
+            Some(reason) => Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Incompatible,
+                format!("this binary ({identity}) {INCOMPATIBLE}: {reason}"),
+            )),
         }
     }
 
@@ -221,9 +228,14 @@ impl GenerationGuard {
             drop(admission);
             return Ok(guard);
         }
-        FileExt::unlock(&generation.file).map_err(refusal)?;
+        FileExt::unlock(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         if !lock_generation_exclusive(&generation) {
-            return Err(refusal(WRITES_WHILE_FOREIGN));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::WritesWhileForeign,
+                WRITES_WHILE_FOREIGN,
+            ));
         }
         GenerationUpdate {
             root: validated_generation_root(root)?,
@@ -263,7 +275,9 @@ impl GenerationGuard {
             refresh: false,
         };
         let claim: PendingClaim = registry::claim_pending(root, &switch)?;
-        FileExt::unlock(&generation.file).map_err(refusal)?;
+        FileExt::unlock(&generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         tracing::info!(
             target: "orbit.generation",
             wait_secs = bound.as_secs(),

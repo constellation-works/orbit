@@ -3,8 +3,8 @@
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
-use super::refusal::refusal;
-use crate::OrbitError;
+use super::refusal;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 pub(super) const ADMISSION_LOCK: &str = ".generation-admission.lock";
 pub(super) const GENERATION_LOCK: &str = ".generation.lock";
@@ -19,7 +19,10 @@ fn generation_record_name(name: &str) -> Result<&'static str, OrbitError> {
         COMPAT_RECORD => Ok(COMPAT_RECORD),
         IMAGE_DIGEST_CACHE => Ok(IMAGE_DIGEST_CACHE),
         CLOCK_HOLD => Ok(CLOCK_HOLD),
-        _ => Err(refusal("invalid generation record name")),
+        _ => Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "invalid generation record name",
+        )),
     }
 }
 
@@ -32,10 +35,16 @@ fn generation_path_is_contained(path: &Path, base: &Path) -> bool {
 
 fn generation_leaf_name(root: &Path) -> Result<&OsStr, OrbitError> {
     let Some(name) = root.file_name() else {
-        return Err(refusal("generation root must not be empty"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root must not be empty",
+        ));
     };
     if name == "." || name == ".." {
-        return Err(refusal("generation root escapes its start"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root escapes its start",
+        ));
     }
     Ok(name)
 }
@@ -43,7 +52,10 @@ fn generation_leaf_name(root: &Path) -> Result<&OsStr, OrbitError> {
 fn contained_under_parent(parent: &Path, name: &OsStr) -> Result<PathBuf, OrbitError> {
     let contained = parent.join(name);
     if !generation_path_is_contained(&contained, parent) {
-        return Err(refusal("generation root escapes its parent"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root escapes its parent",
+        ));
     }
     Ok(contained)
 }
@@ -58,26 +70,41 @@ fn contained_under_parent(parent: &Path, name: &OsStr) -> Result<PathBuf, OrbitE
 /// `..` cannot walk outside the starting location before `create_dir_all`.
 pub(crate) fn validated_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
     if root.as_os_str().is_empty() {
-        return Err(refusal("generation root must not be empty"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root must not be empty",
+        ));
     }
     match root.canonicalize() {
         Ok(canonical) => existing_generation_root(canonical),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing_generation_root(root),
-        Err(error) => Err(refusal(error)),
+        Err(error) => Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            error,
+        )),
     }
 }
 
 fn existing_generation_root(canonical: PathBuf) -> Result<PathBuf, OrbitError> {
     let name = generation_leaf_name(&canonical)?;
-    let parent = canonical
-        .parent()
-        .ok_or_else(|| refusal("generation root must be a directory"))?;
+    let parent = canonical.parent().ok_or_else(|| {
+        refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root must be a directory",
+        )
+    })?;
     let contained = parent.join(name);
     if !contained.starts_with(parent) {
-        return Err(refusal("generation root escapes its parent"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root escapes its parent",
+        ));
     }
     if !contained.is_dir() {
-        return Err(refusal("generation root must be a directory"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root must be a directory",
+        ));
     }
     Ok(contained)
 }
@@ -92,7 +119,10 @@ fn missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             normalize_missing_generation_root(root)
         }
-        Err(error) => Err(refusal(error)),
+        Err(error) => Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            error,
+        )),
     }
 }
 
@@ -111,13 +141,19 @@ fn normalize_missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError>
                 ) {
                     normalized.pop();
                 } else {
-                    return Err(refusal("generation root escapes its start"));
+                    return Err(refusal::upgrade_admission_refusal(
+                        UpgradeAdmissionRefusalKind::Other,
+                        "generation root escapes its start",
+                    ));
                 }
             }
         }
     }
     if normalized.as_os_str().is_empty() {
-        return Err(refusal("generation root must not be empty"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root must not be empty",
+        ));
     }
     match (normalized.parent(), normalized.file_name()) {
         (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
@@ -152,10 +188,16 @@ pub(super) fn validated_generation_record_path(
     let name = generation_record_name(name)?;
     let path = root.join(name);
     if !generation_path_is_contained(&path, &root) {
-        return Err(refusal("generation record path escapes the root"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation record path escapes the root",
+        ));
     }
     if path.parent() != Some(root.as_path()) {
-        return Err(refusal("generation record path escapes the root"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation record path escapes the root",
+        ));
     }
     Ok(path)
 }

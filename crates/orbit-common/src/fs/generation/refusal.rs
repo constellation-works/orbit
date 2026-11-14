@@ -6,7 +6,7 @@ use super::QUIESCE_TIMEOUT_ENV;
 use super::handoff::HandoverCandidate;
 use super::registry::{ParticipantRecord, ParticipantRole, PendingSwitch};
 use super::update::{Standing, standing};
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind};
 
 const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
      then retry. Do not delete admission files or replay a mutation whose reply was lost";
@@ -37,27 +37,44 @@ const IN_ACTIVITY: &str = "This command runs inside an Orbit-managed activity, w
 const CONTENDED: &str = "Retry the command; nothing is upgrading. If startups on this host \
      routinely take this long, raise the admission wait";
 
-pub(crate) fn refusal(detail: impl std::fmt::Display) -> OrbitError {
-    refused(detail, QUIESCE)
+pub(crate) fn upgrade_admission_refusal(
+    kind: UpgradeAdmissionRefusalKind,
+    detail: impl std::fmt::Display,
+) -> OrbitError {
+    refused(kind, detail, QUIESCE)
 }
 
-pub(super) fn unwritable(detail: impl std::fmt::Display) -> OrbitError {
-    refused(detail, UNWRITABLE)
+pub(super) fn upgrade_admission_unwritable(
+    kind: UpgradeAdmissionRefusalKind,
+    detail: impl std::fmt::Display,
+) -> OrbitError {
+    refused(kind, detail, UNWRITABLE)
 }
 
 /// A command inside a managed activity met an upgrade it may not wait for.
-pub(super) fn upgrade_pending(detail: impl std::fmt::Display) -> OrbitError {
+pub(super) fn upgrade_admission_pending(
+    kind: UpgradeAdmissionRefusalKind,
+    detail: impl std::fmt::Display,
+) -> OrbitError {
     refused(
+        kind,
         format!("{} {detail}", orbit_types::workflow::UPGRADE_PENDING_MARKER),
         IN_ACTIVITY,
     )
 }
 
-fn refused(detail: impl std::fmt::Display, remedy: &str) -> OrbitError {
-    OrbitError::Execution(format!(
-        "upgrade admission refused: {detail}; leave the installation and stores unchanged. \
-         {remedy}"
-    ))
+fn refused(
+    kind: UpgradeAdmissionRefusalKind,
+    detail: impl std::fmt::Display,
+    remedy: &str,
+) -> OrbitError {
+    OrbitError::UpgradeAdmissionRefused(Box::new(UpgradeAdmissionRefusal {
+        kind,
+        message: format!(
+            "upgrade admission refused: {detail}; leave the installation and stores unchanged. \
+             {remedy}"
+        ),
+    }))
 }
 
 pub(super) fn switch_pending(switch: &PendingSwitch) -> String {
@@ -77,19 +94,24 @@ pub(super) fn switch_pending(switch: &PendingSwitch) -> String {
 /// generation exclusively.
 pub(super) fn upgrade_holds_admission(pending: Option<&PendingSwitch>) -> OrbitError {
     match pending {
-        Some(switch) => refusal(format!(
-            "an upgrade is pending ({})",
-            switch_pending(switch)
-        )),
-        None => refusal(
+        Some(switch) => upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::SwitchPending,
+            format!("an upgrade is pending ({})", switch_pending(switch)),
+        ),
+        None => upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
             "an upgrade is in progress: an Orbit update or generation takeover holds admission",
         ),
     }
 }
 
 /// Admission stayed held past `wait` by other startups alone.
-pub(super) fn contended(wait: Duration) -> OrbitError {
+pub(super) fn upgrade_admission_contended(
+    kind: UpgradeAdmissionRefusalKind,
+    wait: Duration,
+) -> OrbitError {
     refused(
+        kind,
         format!(
             "admission stayed contended by other starting Orbit processes for {wait:?}, \
              with no upgrade pending"
@@ -103,11 +125,14 @@ pub(super) fn quiesce_timeout(
     bound: Duration,
     blockers: &[ParticipantRecord],
 ) -> OrbitError {
-    refusal(format!(
-        "{BREAKING_WAITING} ({reason}), and these Orbit processes did not yield within {}s: {}",
-        bound.as_secs(),
-        describe_blockers(blockers)
-    ))
+    upgrade_admission_refusal(
+        UpgradeAdmissionRefusalKind::BreakingWaiting,
+        format!(
+            "{BREAKING_WAITING} ({reason}), and these Orbit processes did not yield within {}s: {}",
+            bound.as_secs(),
+            describe_blockers(blockers)
+        ),
+    )
 }
 
 const UNREGISTERED: &str = "processes that did not register (executable-generation-v1 \
@@ -119,10 +144,13 @@ pub(super) fn holders_refused(
     holders: &[ParticipantRecord],
     candidate: Option<&HandoverCandidate>,
 ) -> OrbitError {
-    refusal(format!(
-        "Orbit clients or commands are still running: {}",
-        describe_holders(holders, candidate)
-    ))
+    upgrade_admission_refusal(
+        UpgradeAdmissionRefusalKind::Other,
+        format!(
+            "Orbit clients or commands are still running: {}",
+            describe_holders(holders, candidate)
+        ),
+    )
 }
 
 /// Short-lived participants did not finish within `bound`.
@@ -131,12 +159,15 @@ pub(super) fn holders_outlasted(
     holders: &[ParticipantRecord],
     candidate: Option<&HandoverCandidate>,
 ) -> OrbitError {
-    refusal(format!(
-        "Orbit clients or commands are still running after waiting {}s for them to finish \
-         ({QUIESCE_TIMEOUT_ENV}): {}",
-        bound.as_secs(),
-        describe_holders(holders, candidate)
-    ))
+    upgrade_admission_refusal(
+        UpgradeAdmissionRefusalKind::Other,
+        format!(
+            "Orbit clients or commands are still running after waiting {}s for them to finish \
+             ({QUIESCE_TIMEOUT_ENV}): {}",
+            bound.as_secs(),
+            describe_holders(holders, candidate)
+        ),
+    )
 }
 
 fn describe_holders(
@@ -181,16 +212,19 @@ pub(super) fn refresh_outlasted(
     asked: &[ParticipantRecord],
     remaining: &[ParticipantRecord],
 ) -> OrbitError {
-    refusal(format!(
-        "these Orbit processes run the installed executable but did not hand over to it in \
-         place within {}s ({QUIESCE_TIMEOUT_ENV}): {}; nothing was pinned or converged. A \
-         session hands over once its in-flight requests are answered, and only a build that \
-         understands an in-place refresh does; asked: {}. Retry once they are idle, or close \
-         their clients",
-        bound.as_secs(),
-        describe_blockers(remaining),
-        describe_blockers(asked)
-    ))
+    upgrade_admission_refusal(
+        UpgradeAdmissionRefusalKind::Other,
+        format!(
+            "these Orbit processes run the installed executable but did not hand over to it in \
+             place within {}s ({QUIESCE_TIMEOUT_ENV}): {}; nothing was pinned or converged. A \
+             session hands over once its in-flight requests are answered, and only a build that \
+             understands an in-place refresh does; asked: {}. Retry once they are idle, or close \
+             their clients",
+            bound.as_secs(),
+            describe_blockers(remaining),
+            describe_blockers(asked)
+        ),
+    )
 }
 
 /// What ends `holder`'s hold on the generation.

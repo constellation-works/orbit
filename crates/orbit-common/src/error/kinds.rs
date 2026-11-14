@@ -444,6 +444,34 @@ impl std::fmt::Display for CandidateAbsorbed {
     }
 }
 
+/// Why executable-generation admission refused an operation.
+///
+/// Clock ticks select quiet holds and recorded upgrade refusals by this kind;
+/// the accompanying message remains diagnostic only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeAdmissionRefusalKind {
+    /// A writer cannot join the still-running foreign generation.
+    WritesWhileForeign,
+    /// A pending generation switch holds admission, including an expired waiter.
+    SwitchPending,
+    /// Live participants did not yield for a breaking migration in time.
+    BreakingWaiting,
+    /// This binary cannot run beside the live participants.
+    Incompatible,
+    /// Another admission refusal, with no special clock handling.
+    Other,
+}
+
+/// A typed admission refusal that retains the execution error's wire message.
+/// Boxed in [`crate::OrbitError`] to keep its size bounded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeAdmissionRefusal {
+    /// The admission decision, independent of its wording.
+    pub kind: UpgradeAdmissionRefusalKind,
+    /// The diagnostic and remedy, without the execution error prefix.
+    pub message: String,
+}
+
 /// Orbit could not read or authenticate the evidence a workflow prerequisite
 /// decision needs. Callers branch on this type; `reason` is diagnostic only.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -36,7 +36,8 @@ pub use error::{
     NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass,
     ProviderReadThrottle, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
     SourceRepairRunStateRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
-    WorkflowEvidenceUnavailable, WorkspaceClaimHeld, is_lock_busy_message,
+    UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld, is_lock_busy_message,
 };
 pub use model::pricing::derive_cost_usd;
 pub use tracing;

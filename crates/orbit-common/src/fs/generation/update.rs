@@ -46,13 +46,12 @@ use super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::paths::{GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_generation, write_compat};
 use super::refusal::{
-    SWITCH_PENDING, handover_outlasted, holders_outlasted, holders_refused, refresh_outlasted,
-    refusal, unwritable,
+    self, SWITCH_PENDING, handover_outlasted, holders_outlasted, holders_refused, refresh_outlasted,
 };
 use super::registry::{
     self, ParticipantRecord, ParticipantRole, PendingClaim, PendingSwitch, pending_switch,
 };
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 /// How often an updater looks again for short-lived participants to exit.
 const SETTLE_POLL: Duration = Duration::from_millis(100);
@@ -170,7 +169,8 @@ impl CurrentAdmission {
         identity: Option<&CompatibilityIdentity>,
     ) -> Result<GenerationGuard, OrbitError> {
         if digest != self.digest {
-            return Err(refusal(
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
                 "the generation to pin is not the one admission was taken for",
             ));
         }
@@ -390,7 +390,7 @@ impl GenerationUpdate {
         FileExt::try_lock_exclusive(&self.admission.file)
             .and_then(|()| FileExt::try_lock_exclusive(&self.generation.file))
             .map_err(|error| {
-                refusal(format!(
+                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, format!(
                     "the update's exclusive hold on this generation authority was lost while it \
                      was lent to a convergence step ({error})"
                 ))
@@ -400,10 +400,13 @@ impl GenerationUpdate {
 
 fn refuse_pending_switch(root: &Path) -> Result<(), OrbitError> {
     match pending_switch(root) {
-        Some(switch) => Err(refusal(format!(
-            "{SWITCH_PENDING} (pid {} is waiting to migrate to {})",
-            switch.pid, switch.target
-        ))),
+        Some(switch) => Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::SwitchPending,
+            format!(
+                "{SWITCH_PENDING} (pid {} is waiting to migrate to {})",
+                switch.pid, switch.target
+            ),
+        )),
         None => Ok(()),
     }
 }
@@ -528,7 +531,8 @@ impl GenerationUpdate {
         if self.generation.writable {
             return Ok(());
         }
-        Err(unwritable(
+        Err(refusal::upgrade_admission_unwritable(
+            UpgradeAdmissionRefusalKind::Other,
             "this authority's generation record cannot be written from here, so a \
              candidate generation could never be recorded there",
         ))
@@ -563,12 +567,16 @@ impl GenerationUpdate {
         participant: Option<&Participant<'_>>,
     ) -> Result<GenerationGuard, OrbitError> {
         if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(refusal("invalid executable digest"));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "invalid executable digest",
+            ));
         }
         if !self.generation.writable {
             // Admitting here would leave joiners reading a record that names
             // a generation other than the one actually running.
-            return Err(unwritable(
+            return Err(refusal::upgrade_admission_unwritable(
+                UpgradeAdmissionRefusalKind::Other,
                 "this executable generation differs from the recorded one and the record \
                  cannot be written from here",
             ));
@@ -581,14 +589,24 @@ impl GenerationUpdate {
         self.generation
             .file
             .seek(SeekFrom::Start(0))
-            .map_err(refusal)?;
+            .map_err(|error| {
+                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+            })?;
         self.generation
             .file
             .write_all(format!("1:{digest}\n").as_bytes())
-            .map_err(refusal)?;
-        self.generation.file.set_len(67).map_err(refusal)?;
-        crate::fs::io::sync_file(&self.generation.file).map_err(refusal)?;
-        FileExt::lock_shared(&self.generation.file).map_err(refusal)?;
+            .map_err(|error| {
+                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+            })?;
+        self.generation.file.set_len(67).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
+        crate::fs::io::sync_file(&self.generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
+        FileExt::lock_shared(&self.generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         let guard = GenerationGuard::holding(self.generation, false);
         let guard = match participant {
             Some(participant) => guard.registered(&self.root, participant),

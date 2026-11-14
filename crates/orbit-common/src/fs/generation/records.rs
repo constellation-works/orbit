@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::GENERATION_CONTRACT;
 use super::identity::Envelope;
 use super::paths::{COMPAT_RECORD, validated_generation_record_path, validated_generation_root};
-use super::refusal::{refusal, unwritable};
-use crate::OrbitError;
+use super::refusal;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 /// An admission file and whether this process may rewrite its bytes.
 ///
@@ -45,13 +45,21 @@ impl Drop for Record {
 pub(super) fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     let root = validated_generation_root(root)?;
     let path = validated_generation_record_path(&root, name)?;
-    let parent = root
-        .parent()
-        .ok_or_else(|| refusal("generation root must be a directory"))?;
+    let parent = root.parent().ok_or_else(|| {
+        refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation root must be a directory",
+        )
+    })?;
     if !root.starts_with(parent) || !path.starts_with(&root) {
-        return Err(refusal("generation record path escapes the root"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "generation record path escapes the root",
+        ));
     }
-    crate::fs::io::create_private_dir_all(&root).map_err(refusal)?;
+    crate::fs::io::create_private_dir_all(&root).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
     match OpenOptions::new()
         .read(true)
         .write(true)
@@ -74,23 +82,35 @@ pub(super) fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
             // the participating open was refused — and since not even an
             // absent record could be created here, the root's writability is
             // the remedy rather than quiescing processes.
-            .map_err(|_| unwritable(format!("the generation record cannot be opened ({error})"))),
+            .map_err(|_| {
+                refusal::upgrade_admission_unwritable(
+                    UpgradeAdmissionRefusalKind::Other,
+                    format!("the generation record cannot be opened ({error})"),
+                )
+            }),
     }
 }
 
 pub(super) fn read_generation(file: &mut File) -> Result<String, OrbitError> {
-    file.seek(SeekFrom::Start(0)).map_err(refusal)?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
     let mut record = String::new();
     file.take(128)
         .read_to_string(&mut record)
-        .map_err(refusal)?;
+        .map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
     if record.is_empty() {
         return Ok(record);
     }
     let digest = record.strip_prefix("1:").and_then(|s| s.strip_suffix('\n'));
     match digest {
         Some(s) if s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) => Ok(s.into()),
-        _ => Err(refusal("invalid generation record")),
+        _ => Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "invalid generation record",
+        )),
     }
 }
 
@@ -134,6 +154,10 @@ pub(super) fn write_compat(
         record_digest: digest.to_string(),
         envelope: envelope.clone(),
     })
-    .map_err(refusal)?;
-    crate::fs::io::atomic_write_text(&path, &encoded).map_err(unwritable)
+    .map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
+    crate::fs::io::atomic_write_text(&path, &encoded).map_err(|error| {
+        refusal::upgrade_admission_unwritable(UpgradeAdmissionRefusalKind::Other, error)
+    })
 }

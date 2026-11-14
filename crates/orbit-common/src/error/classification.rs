@@ -96,6 +96,7 @@ impl OrbitError {
             OrbitError::RemoteTool { code, .. } => code.as_str(),
             OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
             OrbitError::Execution(_)
+            | OrbitError::UpgradeAdmissionRefused(_)
             | OrbitError::PrivateVcs(_)
             | OrbitError::ForgeUnavailable(_)
             | OrbitError::WorkflowEvidenceUnavailable(_)

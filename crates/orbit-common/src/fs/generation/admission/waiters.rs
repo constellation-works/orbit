@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 
 use super::super::paths::validated_generation_root;
-use super::super::refusal::refusal;
+use super::super::refusal;
 use super::super::registry::collect_abandoned_stage;
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 const WAITERS_DIR: &str = ".generation-admission-waiters";
 
@@ -36,21 +36,37 @@ impl ExclusiveWaiter {
         let root = validated_generation_root(root)?;
         let dir = root.join(WAITERS_DIR);
         if !dir.starts_with(&root) {
-            return Err(refusal("admission waiter directory escapes the root"));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "admission waiter directory escapes the root",
+            ));
         }
         match crate::fs::io::create_private_dir_all(&dir) {
             Ok(()) => {}
             Err(error) if read_only(&error) => return Ok(None),
-            Err(error) => return Err(refusal(error)),
+            Err(error) => {
+                return Err(refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::Other,
+                    error,
+                ));
+            }
         }
-        if dir.canonicalize().map_err(refusal)? != dir {
-            return Err(refusal("admission waiter directory must not be a symlink"));
+        if dir.canonicalize().map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })? != dir
+        {
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "admission waiter directory must not be a symlink",
+            ));
         }
         // A crash releases its lock; the next exclusive waiter collects the
         // abandoned record. Shared observers never need write permission.
         let _ = pending(&root, true)?;
         let mut nonce = [0u8; 8];
-        getrandom::fill(&mut nonce).map_err(refusal)?;
+        getrandom::fill(&mut nonce).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         let name = format!(
             "{}-{}",
             std::process::id(),
@@ -59,7 +75,10 @@ impl ExclusiveWaiter {
         let staged = dir.join(format!("{name}.staged"));
         let path = dir.join(format!("{name}.waiting"));
         if !staged.starts_with(&dir) || !path.starts_with(&dir) {
-            return Err(refusal("admission waiter record escapes its directory"));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "admission waiter record escapes its directory",
+            ));
         }
         let file = match OpenOptions::new()
             .read(true)
@@ -69,13 +88,22 @@ impl ExclusiveWaiter {
         {
             Ok(file) => file,
             Err(error) if read_only(&error) => return Ok(None),
-            Err(error) => return Err(refusal(error)),
+            Err(error) => {
+                return Err(refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::Other,
+                    error,
+                ));
+            }
         };
         let mut waiter = Self { file, path: staged };
-        FileExt::try_lock_exclusive(&waiter.file).map_err(refusal)?;
+        FileExt::try_lock_exclusive(&waiter.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         // Publish only after locking: a collector cannot remove a record
         // between its creation and its owner's first lock.
-        std::fs::rename(&waiter.path, &path).map_err(refusal)?;
+        std::fs::rename(&waiter.path, &path).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         waiter.path = path;
         Ok(Some(waiter))
     }
@@ -94,24 +122,42 @@ pub(super) fn pending(root: &Path, collect: bool) -> Result<bool, OrbitError> {
     let root = validated_generation_root(root)?;
     let dir = root.join(WAITERS_DIR);
     if !dir.starts_with(&root) {
-        return Err(refusal("admission waiter directory escapes the root"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "admission waiter directory escapes the root",
+        ));
     }
     match dir.canonicalize() {
         Ok(canonical) if canonical != dir => {
-            return Err(refusal("admission waiter directory must not be a symlink"));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "admission waiter directory must not be a symlink",
+            ));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(refusal(error)),
+        Err(error) => {
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                error,
+            ));
+        }
     }
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(refusal(error)),
+        Err(error) => {
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                error,
+            ));
+        }
     };
     let mut live = false;
     for entry in entries {
-        let entry = entry.map_err(refusal)?;
+        let entry = entry.map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
         let path = entry.path();
         if !path.starts_with(&dir) {
             continue;
@@ -119,7 +165,12 @@ pub(super) fn pending(root: &Path, collect: bool) -> Result<bool, OrbitError> {
         let kind = match entry.file_type() {
             Ok(kind) => kind,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(refusal(error)),
+            Err(error) => {
+                return Err(refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::Other,
+                    error,
+                ));
+            }
         };
         if !kind.is_file() {
             continue;
@@ -135,7 +186,12 @@ pub(super) fn pending(root: &Path, collect: bool) -> Result<bool, OrbitError> {
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(refusal(error)),
+            Err(error) => {
+                return Err(refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::Other,
+                    error,
+                ));
+            }
         };
         match FileExt::try_lock_shared(&file) {
             Ok(()) => {
@@ -145,7 +201,12 @@ pub(super) fn pending(root: &Path, collect: bool) -> Result<bool, OrbitError> {
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => live = true,
-            Err(error) => return Err(refusal(error)),
+            Err(error) => {
+                return Err(refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::Other,
+                    error,
+                ));
+            }
         }
     }
     Ok(live)
