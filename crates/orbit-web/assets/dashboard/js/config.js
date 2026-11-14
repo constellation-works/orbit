@@ -10,11 +10,11 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 //
-// Topic pages (Workflow, Execution, Review, Machine, All keys) live in
+// Topic pages (Workflow, Execution, Review, Machine, Other) live in
 // config-topics.js; this module owns the tab, Crews and the throttle panel.
 
 import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
-import { renderAllKeys, renderExecution, renderMachine, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
+import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
@@ -34,10 +34,10 @@ const SUBTAB_SOURCES = {
   review: { path: "/api/config/effective", scope: "workspace" },
   crews: { path: "/api/config/effective", scope: "workspace" },
   machine: { path: "/api/config/file?scope=global", scope: "global" },
-  "all-keys": { path: "/api/config/effective", scope: "workspace" },
+  other: { path: "/api/config/effective", scope: "workspace" },
   hosts: { path: "/api/hosts", scope: null },
 };
-const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
+const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
 /// The System tab is the resource throttle only: its keys, in display order.
 const THROTTLE_PREFIX = "workflow.resource_throttle.";
@@ -158,7 +158,7 @@ function renderPanels(payload, body) {
   }
   if (activeSubtab === "execution") { renderExecution(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
   if (activeSubtab === "review") { renderReview(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
-  if (activeSubtab === "all-keys") { renderAllKeys(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
+  if (activeSubtab === "other") { renderOther(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
   renderWorkflow(body, payload, ctx);
   $("config-count").textContent = countSummary(payload);
 }

@@ -1,28 +1,20 @@
-// Settings topic pages: Workflow, Execution, Review, Machine, All keys.
+// Settings topic pages: Workflow, Execution, Review, Machine, Other.
 // Rows come from /api/config/effective; the shared drawer writes via
 // PUT/DELETE /api/config/keys/:key and re-reads via context.reload.
 import { captureWorkspaceVisit, el, fetchJson, requestJson } from './common.js';
 
 let drawer = null; // {row, scope, text, error, pending, visit, lockGlobal}
 let bulkRemoval = null;
-let layerFilter = 'all';
-let topicFilter = 'all';
-let allKeysQuery = '';
-let allKeysPage = 0;
 let workflowQuery = '';
 let workflowCollapsed = new Set(); // the saved layout, in force when no search is active
 let workflowSearchCollapsed = new Set(); // sections collapsed while a search is active
-// The deep key each source (the ?key= link, the open drawer) last landed the
-// All keys pager on, so later renders leave the pager where the user moved it.
-let allKeysLanded = { link: null, drawer: null };
-const ALL_KEYS_PAGE_SIZE = 25;
 let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null; // {text, failed}: the last bulk removal's outcome
 const NOTICE_MS = 10000;
 
-export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -562,6 +554,16 @@ export function renderMachine(body, payload, context, throttleNode) {
   nodes.push(section('Auto-concurrency', flatten(eff).filter((r) => r.key.startsWith('machine.auto_concurrency.')), context, { lockGlobal: true }));
   nodes.push(section('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !identity.includes(r)), context, { lockGlobal: true }));
   if (throttleNode) nodes.push(throttleNode);
+  // The throttle panel shows only the enabled flag and the per-resource
+  // marks; any other throttle key (today cpu_source) still belongs on this
+  // page, so no machine-topic key is left without a page.
+  const throttleShown = new Set(['workflow.resource_throttle.enabled']);
+  for (const resource of ['cpu', 'memory', 'disk', 'io']) {
+    throttleShown.add(`workflow.resource_throttle.${resource}_high_percent`);
+    throttleShown.add(`workflow.resource_throttle.${resource}_resume_percent`);
+  }
+  const throttleRest = flatten(eff).filter((r) => r.key.startsWith('workflow.resource_throttle.') && !throttleShown.has(r.key));
+  if (throttleRest.length) nodes.push(section('Other throttle keys', throttleRest, context, { lockGlobal: true }));
   nodes.push(section('Tasks', ['tasks.id_start'].map((k) => map.get(k)).filter(Boolean), context, { lockGlobal: true }));
   finish(body, eff, context, nodes);
 }
@@ -602,49 +604,15 @@ function isFallbackPreserving(row) {
   if (row.fallback == null) return false;
   return valuesEqual(row.value, row.fallback.value);
 }
-// Pages to the page holding `key` the first time `source` names it. Once it has
-// landed, later renders with the same key leave the pager where the user moved
-// it; a render with no key re-arms the landing for the next time it is named.
-function landAllKeysPage(source, key, filtered) {
-  if (!key) { allKeysLanded[source] = null; return; }
-  if (key === allKeysLanded[source]) return;
-  const at = filtered.findIndex((r) => r.key === key);
-  if (at < 0) return;
-  allKeysPage = Math.floor(at / ALL_KEYS_PAGE_SIZE);
-  allKeysLanded[source] = key;
-}
-export function renderAllKeys(body, payload, context) {
-  const rows = flatten(payload);
-  const nodes = [];
-  const controls = el('div', { class: 'topic-controls' });
-  const mkSelect = (label, value, options, onChange) => {
-    const s = el('select', { class: 'config-input' }); s.setAttribute('aria-label', label);
-    for (const o of options) { const opt = el('option', { text: o }); opt.value = o; if (o === value) opt.selected = true; s.appendChild(opt); }
-    s.addEventListener('change', () => onChange(s.value)); return s;
-  };
-  controls.append(el('span', { text: 'Layer' }), mkSelect('Layer filter', layerFilter, ['all','built-in','global','workspace'], (v) => { layerFilter = v; allKeysPage = 0; context.rerender?.(); }),
-    el('span', { text: 'Topic' }), mkSelect('Topic filter', topicFilter, ['all','workflow','execution','review','machine','crews','housekeeping'], (v) => { topicFilter = v; allKeysPage = 0; context.rerender?.(); }));
-  const search = el('input', { class: 'config-filter all-keys-search' });
-  search.type = 'search'; search.placeholder = 'Search key, label or value…'; search.value = allKeysQuery;
-  search.setAttribute('aria-label', 'Search keys');
-  search.addEventListener('input', () => {
-    allKeysQuery = search.value; allKeysPage = 0; context.rerender?.();
-    // The rerender rebuilt this input; put the caret back at its end so the
-    // next keystroke lands in the new field instead of the detached one.
-    const rebuilt = document.querySelector('input.all-keys-search');
-    if (rebuilt) { rebuilt.focus({ preventScroll: true }); rebuilt.setSelectionRange(rebuilt.value.length, rebuilt.value.length); }
-  });
-  controls.append(el('span', { text: 'Search' }), search);
-  const jumpRaw = el('button', { class: 'config-action ghost all-keys-jump-raw', text: 'Jump to Raw TOML' }); jumpRaw.type = 'button';
-  jumpRaw.addEventListener('click', () => {
-    const target = document.getElementById('config-raw-toml');
-    if (!target) return;
-    target.scrollIntoView({ block: 'start' });
-    target.querySelector('button')?.focus({ preventScroll: true });
-  });
-  controls.appendChild(jumpRaw);
-  nodes.push(controls);
-  const restates = rows.filter(isFallbackPreserving);
+// Topics that have their own Settings page. Other shows every key
+// topicOf() files elsewhere, so a key added later cannot end up on no page.
+const TOPIC_PAGES = new Set(['workflow', 'execution', 'review', 'machine', 'crews']);
+export function renderOther(body, payload, context) {
+  const rows = flatten(payload).filter((r) => !TOPIC_PAGES.has(topicOf(r.key)));
+  const nodes = [section('Other', rows, context)];
+  // The cleanup section moved here whole from All keys: it lists every
+  // workspace value whose removal keeps the effective value, on any topic.
+  const restates = flatten(payload).filter(isFallbackPreserving);
   if (restates.length) {
     const sec = section('Keys that only repeat the global or built-in value', restates, context);
     const bulk = el('button', { class: 'config-action', text: `Remove all ${restates.length} workspace values` }); bulk.type = 'button';
@@ -677,27 +645,6 @@ export function renderAllKeys(body, payload, context) {
     });
     sec.appendChild(bulk); nodes.push(sec);
   }
-  const query = allKeysQuery.trim().toLowerCase();
-  const filtered = rows.filter((r) => (layerFilter === 'all' || (r.source?.layer || r.state) === layerFilter || (layerFilter === 'built-in' && r.state !== 'set')) && (topicFilter === 'all' || topicOf(r.key) === topicFilter)
-    && (!query || `${r.key} ${r.label || ''} ${display(r.value)}`.toLowerCase().includes(query)));
-  // A deep link (?key=…) or an open drawer names an intended key: land on the
-  // page holding it, once per key, so Next and Previous are not snapped back.
-  landAllKeysPage('link', new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key'), filtered);
-  landAllKeysPage('drawer', drawer?.row?.key || null, filtered);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / ALL_KEYS_PAGE_SIZE));
-  allKeysPage = Math.min(Math.max(0, allKeysPage), pageCount - 1);
-  const pageStart = allKeysPage * ALL_KEYS_PAGE_SIZE;
-  const pageRows = filtered.slice(pageStart, pageStart + ALL_KEYS_PAGE_SIZE);
-  nodes.push(section('All keys', pageRows, context));
-  const pager = el('div', { class: 'all-keys-pager' });
-  const prev = el('button', { class: 'config-action ghost', text: 'Previous' }); prev.type = 'button'; prev.disabled = allKeysPage === 0;
-  prev.addEventListener('click', () => { allKeysPage = Math.max(0, allKeysPage - 1); context.rerender?.(); });
-  const next = el('button', { class: 'config-action ghost', text: 'Next' }); next.type = 'button'; next.disabled = allKeysPage >= pageCount - 1;
-  next.addEventListener('click', () => { allKeysPage = Math.min(pageCount - 1, allKeysPage + 1); context.rerender?.(); });
-  const range = filtered.length ? `Showing ${pageStart + 1}–${pageStart + pageRows.length} of ${filtered.length} keys · Page ${allKeysPage + 1} of ${pageCount}` : 'No keys match';
-  const rangeNode = el('span', { class: 'all-keys-range', text: range }); rangeNode.setAttribute('aria-live', 'polite');
-  pager.append(prev, rangeNode, next);
-  nodes.push(pager);
   const raw = el('section', { class: 'panel config-section' });
   raw.id = 'config-raw-toml';
   raw.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Raw TOML' })]));
@@ -713,4 +660,11 @@ export function renderAllKeys(body, payload, context) {
   }
   raw.appendChild(rb); nodes.push(raw);
   finish(body, payload, context, nodes);
+  // A deep link (?key=…) that lands here names a row on this short page:
+  // bring it into view; the router already sent other keys to their page.
+  const linked = new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key');
+  if (linked && rows.some((r) => r.key === linked)) {
+    const target = document.getElementById(`key-${linked.replace(/[^a-z0-9]+/gi, '-')}`);
+    if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
+  }
 }
