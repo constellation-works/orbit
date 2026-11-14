@@ -22,22 +22,31 @@ pub(super) fn terminal_run_error(run_id: &str, state: JobRunState) -> OrbitError
     ))
 }
 
+/// Whether [`OrbitRuntime::update_or_create_run_state`] initialises a
+/// missing pipeline state row before applying the caller's update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RunStateCreation {
+    /// Initialise an empty state from `job_id`/`input` and retry the
+    /// transaction; never returns [`RunStateUpdate::NoState`].
+    CreateIfMissing,
+    /// Keep the "no state row → do nothing" behaviour: return
+    /// [`RunStateUpdate::NoState`] without initialising.
+    PreserveMissing,
+}
+
 impl OrbitRuntime {
     /// Apply `update` to `run_id`'s pipeline state in the store's
     /// transaction, initialising an empty state from `job_id`/`input`
-    /// first when the run has none yet.
+    /// first when the run has none yet and `creation` allows it.
     ///
-    /// `create = false` keeps the "no state row → do nothing" behaviour:
-    /// it returns [`RunStateUpdate::NoState`] without initialising. A
-    /// missing run is a not-found error either way. On success the result
-    /// is [`RunStateUpdate::Updated`]; `create = true` never returns
-    /// `NoState`, because initialisation retries the transaction.
+    /// A missing run is a not-found error either way. On success the
+    /// result is [`RunStateUpdate::Updated`].
     pub(super) fn update_or_create_run_state(
         &self,
         run_id: &str,
         job_id: &str,
         input: Option<&Value>,
-        create: bool,
+        creation: RunStateCreation,
         update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
     ) -> Result<RunStateUpdate, OrbitError> {
         loop {
@@ -51,7 +60,9 @@ impl OrbitRuntime {
                         run_id.to_string(),
                     ));
                 }
-                RunStateUpdate::NoState if !create => return Ok(RunStateUpdate::NoState),
+                RunStateUpdate::NoState if creation == RunStateCreation::PreserveMissing => {
+                    return Ok(RunStateUpdate::NoState);
+                }
                 RunStateUpdate::NoState => {
                     #[cfg(test)]
                     run_run_state_write_hook();

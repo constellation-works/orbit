@@ -46,6 +46,7 @@ use super::actions::{CancellationRequest, cancellation_note, cancellation_result
 use super::owner::{
     RunOwnerLiveness, run_owner_liveness, run_owner_unstoppable_reason, signal_run_owner_confirmed,
 };
+use super::state_write::RunStateCreation;
 use super::types::{JobRunCancelOutcome, JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
 use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
@@ -190,7 +191,7 @@ impl OrbitRuntime {
             &run.run_id,
             &run.job_id,
             run.input.as_ref(),
-            true,
+            RunStateCreation::CreateIfMissing,
             &mut update,
         )?;
         if terminal {
