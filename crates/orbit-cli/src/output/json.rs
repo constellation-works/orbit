@@ -1,4 +1,3 @@
-use orbit_common::{LOCK_BUSY_ERROR_CODE, RemoteToolCode};
 use orbit_core::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
@@ -19,72 +18,10 @@ pub fn error_payload(error: &OrbitError) -> Value {
     if let OrbitError::RemoteTool { payload, .. } = error {
         return payload.clone();
     }
-    let mut payload = json!({
-        "error": error.to_string(),
-        "code": error_code(error),
-    });
-    if let Some((host, path, _)) = error.host_configuration_details()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("host".to_string(), json!(host));
-        object.insert("path".to_string(), json!(path));
-    }
-    if let Some(did_you_mean) = error.did_you_mean()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("did_you_mean".to_string(), json!(did_you_mean));
-    }
-    if let Some(artifact_origin) = error.artifact_origin()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("artifact_origin".to_string(), json!(artifact_origin));
-    }
-    if let Some(refusal) = error.force_overridable()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("guard".to_string(), json!(refusal.kind.as_str()));
-        if let Some(run_id) = &refusal.run_id {
-            object.insert("run_id".to_string(), json!(run_id));
-        }
-        if let Some(run_state) = &refusal.run_state {
-            object.insert("run_state".to_string(), json!(run_state));
-        }
-        if let Some(task_status) = &refusal.task_status {
-            object.insert("task_status".to_string(), json!(task_status));
-        }
-    }
-    if let Some((source_run_id, run_id)) = error.resume_run_in_flight()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("source_run_id".to_string(), json!(source_run_id));
-        object.insert("run_id".to_string(), json!(run_id));
-    }
-    if let OrbitError::TmpGcActiveRuns { run_ids } = error
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("run_ids".to_string(), json!(run_ids));
-    }
-    if let Some((task_id, path, reason)) = error.task_bundle_corruption()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("task_id".to_string(), json!(task_id));
-        object.insert("path".to_string(), json!(path));
-        object.insert("reason".to_string(), json!(reason));
-    }
-    if let Some(details) = error.friction_not_local_details()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("friction_id".to_string(), json!(details.friction_id));
-        object.insert("task_id".to_string(), json!(details.task_id));
-        object.insert("workspace_id".to_string(), json!(details.workspace_id));
-        object.insert("found_in".to_string(), json!(details.found_in));
-    }
-    if let Some(tag) = error.dropped_system_tag()
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("tag".to_string(), json!(tag));
-    }
-    payload
+    let mut fields = error.wire_details();
+    fields.insert("error".into(), json!(error.to_string()));
+    fields.insert("code".into(), json!(error_code(error)));
+    Value::Object(fields)
 }
 
 /// The error object for an argv clap rejected, in the same shape as
@@ -99,7 +36,6 @@ pub fn usage_error_payload(message: &str) -> Value {
 
 fn error_code(error: &OrbitError) -> &str {
     match error {
-        OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task => "task_not_found",
@@ -111,82 +47,15 @@ fn error_code(error: &OrbitError) -> &str {
             NotFoundKind::Workspace => "workspace_not_found",
         },
         OrbitError::NoJobRuns => "job_run_not_found",
-        OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
-        // Catalog-role refusal, not an operator capability grant: the CLI
-        // surfaces the same stable code MCP does [ORB-11012].
-        OrbitError::CapabilityRefused(_) => const { RemoteToolCode::CapabilityRefused.as_str() },
-        OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
-        OrbitError::DecisionRefused { code, .. } => code.as_str(),
-        OrbitError::NoticeRefused { code, .. } => code.as_str(),
-        OrbitError::TaskPilotRefused { code, .. } => code.as_str(),
-        OrbitError::HostRegistry { code, .. } => code.as_str(),
-        OrbitError::UnknownSelector(_) => "unknown_selector",
-        OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
-        OrbitError::UnreachableDestination(_) => "unreachable_destination",
-        // `--host` resolution reads a host's live list: the same codes the
-        // federated route reports [ORB-14449].
-        OrbitError::StaleRoute(_) => "stale_route",
-        OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
-        OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
-        OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
-        OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
-        OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
-        OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
-        OrbitError::HostConfiguration { .. } => {
-            const { RemoteToolCode::HostConfiguration.as_str() }
-        }
-        OrbitError::ForceOverridable(_) => "force_overridable",
-        OrbitError::InvalidInput(_)
-        | OrbitError::InvalidInputDiagnostic { .. }
-        | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
-        OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
-        OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
-        OrbitError::TaskScheduled { .. } => "task_scheduled",
-        OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
-        OrbitError::JobValidation(_) => "job_validation_failed",
-        OrbitError::SourceRepairRunStateRefused { .. } => "job_validation_failed",
-        OrbitError::SourceRepairAuthorityRefused(code) => {
-            if code.reports_as_execution() {
-                "execution_failed"
-            } else {
-                "job_validation_failed"
-            }
+        OrbitError::JobValidation(_) | OrbitError::SourceRepairRunStateRefused { .. } => {
+            "job_validation_failed"
         }
-        OrbitError::AgentProtocolViolation(_) => "agent_protocol_violation",
-        OrbitError::UnsupportedAgentProvider(_) => "unsupported_agent_provider",
-        OrbitError::OwnerUnavailable(_) => "owner_unavailable",
-        OrbitError::OwnerNegotiation(_) => "owner_negotiation",
-        OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
-        OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::Execution(_)
-        | OrbitError::PrivateVcs(_)
-        | OrbitError::ForgeUnavailable(_)
-        | OrbitError::WorkflowEvidenceUnavailable(_)
-        | OrbitError::ExecutionTimeout { .. } => "execution_failed",
-        OrbitError::ProcessTimeout { .. } => "process_timeout",
-        OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
-        OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
-        OrbitError::Store(_) => "store_error",
-        // The same retryable code MCP reports [ORB-15088].
-        OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
+        OrbitError::SourceRepairAuthorityRefused(code) if !code.reports_as_execution() => {
+            "job_validation_failed"
+        }
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
-        OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
-        OrbitError::JobRunControlConflict(_) => "conflict",
-        OrbitError::WorkspaceError(_) => "workspace_error",
-        OrbitError::Io(_) => "io_error",
-        OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
-        OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
-        OrbitError::FrictionNotLocal(_) => "friction_not_local",
-        OrbitError::Migration(_) => "migration_failed",
-        OrbitError::StorageAccessDenied { .. } => "storage_access_denied",
-        OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
-        OrbitError::CallbackWorkspaceOutsideSandbox(_) => "callback_workspace_outside_sandbox",
-        OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
-        OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
-        OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",
-        // New OrbitError variants must remain JSON-serializable before this
-        // boundary assigns them a dedicated stable code.
-        _ => "internal_error",
+        OrbitError::UnsupportedAgentProvider(_) => "unsupported_agent_provider",
+        _ => error.wire_code(),
     }
 }
