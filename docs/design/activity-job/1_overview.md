@@ -123,6 +123,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | CLI agent runtime path | `crates/orbit-engine/src/activity_job/cli_runner/mod.rs` | [T20260419-0104] |
 | `fsProfile` enforcement | `crates/orbit-policy`, `tool_context_for_activity`, CLI describe/get surfaces | [T20260419-0503] |
 | Delivery-leaf job ids and membership predicates (one owner for store, runtime, engine and core) | `crates/orbit-types/src/workflow/job.rs` | [ORB-24042] |
+| Shared task projections for delivery conventions, PR rendering, commit and handoff admission (owned by the lower conventions module) | `crates/orbit-engine/src/executor/automation/vcs/conventions.rs` | [ORB-24097] |
 | Seeded reference activities and pipeline jobs | `crates/orbit-core/assets/activities/`, `crates/orbit-core/assets/jobs/` | [T20260419-2347], [T20260419-0622-3], [T20260419-0623] |
 
 ---
@@ -130,6 +131,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 ## Task References
 
 - **[ORB-24042]** — Give the delivery-leaf job ids one owner in `orbit-types`.
+- **[ORB-24097]** — Cut delivery conventions' dependency on PR rendering: `vcs::conventions` owns the shared task projections; PR rendering, commit admission and handoff admission consume that owner.
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.

@@ -21,9 +21,9 @@ use orbit_types::task::Task;
 use orbit_types::workflow::handoff::AlreadyResolved;
 use serde_json::{Value, json};
 
+use super::super::conventions::meaningful_execution_summary;
 use super::super::git::git_output;
 use super::super::handoff::reports_failure;
-use super::super::pr::meaningful_execution_summary;
 
 /// Checkpoint decision for an already-resolved clean base.
 pub(super) const DECISION: &str = "verified_already_resolved";
