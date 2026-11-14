@@ -70,8 +70,12 @@ pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::running_run_owner_is_stale;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
-    ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
-    job_run_to_json_with_activity_provenance, run_error_step,
+    ActivityInvocationEvidence, BOUNDED_RUN_ANSWER_MAX_BYTES, BOUNDED_RUN_STEP_LIMIT,
+    JobRunListStates, JobRunProjectionEvidence, JobRunProjectionProfile,
+    add_bounded_display_steps_to_json, bound_bounded_agent_invocation_answer,
+    display_steps_with_agent_execution_to_json, job_run_task_ids, job_run_to_json,
+    job_run_to_json_with_activity_provenance, project_job_run, run_error_step,
+    run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
 pub use recorded::{JobRunHolder, RecordedJobRun};
 pub use root_cause::{

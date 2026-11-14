@@ -10,12 +10,12 @@ use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 
 use crate::application::job::{
-    ActivityInvocationEvidence, JobRunListParams, SubmissionKind, job_run_to_json,
-    job_run_to_json_with_activity_provenance, run_display_steps,
+    ActivityInvocationEvidence, JobRunListParams, JobRunProjectionEvidence,
+    JobRunProjectionProfile, SubmissionKind, project_job_run, run_display_steps,
+    run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
 use crate::runtime::audit::run::{
-    MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
-    RunRecoveryAttempts,
+    MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunRecoveryAttempts,
 };
 use crate::runtime::audit::tag_instructions::RunTagInstructions;
 use crate::{OrbitRuntime, ShipMode};
@@ -168,7 +168,7 @@ fn show(runtime: &OrbitRuntime, input: Value, observed: bool) -> Result<Value, O
         state.as_ref(),
         Some(&evidence),
         recovery.as_ref(),
-    )?;
+    );
     let progress = runtime
         .collect_run_execution_progress(&run.run_id)
         .unwrap_or_else(|_| RunExecutionProgress::unavailable());
@@ -180,20 +180,8 @@ fn show(runtime: &OrbitRuntime, input: Value, observed: bool) -> Result<Value, O
         progress.provider_processes.last(),
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
-    // The parsed answer already contains the useful result fields. Its raw
-    // final message repeats the provider envelope, and preview repeats the
-    // beginning of that same captured stream. Keep the durable blob refs for
-    // callers that need the complete output.
-    if let Some(invocation) = value["agent_invocation"].as_object_mut()
-        && invocation.get("answer").is_some_and(Value::is_object)
-    {
-        invocation.remove("preview");
-        invocation.remove("preview_truncated");
-        if let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) {
-            answer.remove("final_message");
-        }
-    }
-    value["execution_progress"] = execution_progress_json(&progress);
+    trim_full_show_agent_invocation_answer(&mut value);
+    value["execution_progress"] = run_execution_progress_to_json(&progress);
     // Which trusted tag instructions each activity's prompt carried, so a
     // reader can tell why an agent followed them; `unavailable` when the
     // audit trail cannot be read.
@@ -204,41 +192,9 @@ fn show(runtime: &OrbitRuntime, input: Value, observed: bool) -> Result<Value, O
     Ok(value)
 }
 
-/// [ORB-11752] What the run is doing right now, for the reader that asked
-/// about exactly one run.
-///
-/// Without it this surface can report a `running` wrapper PID and nothing
-/// else, so a healthy implementation agent and an abandoned wrapper look
-/// identical here and an orchestrator has to fall back to an operator command.
-/// `list` deliberately does not carry it: the evidence costs an audit scan plus
-/// a liveness probe per open child, which is the right price for one deliberate
-/// read and the wrong one for a 200-run page.
-///
-/// The projection is identifiers, timestamps and process facts plus each
-/// child's newest assistant message, which the engine bounded and redacted
-/// before persisting it [ORB-13899]. An
-/// unreadable audit trail degrades to `unavailable` rather than failing the
-/// durable run read, as every other evidence field here does.
-fn execution_progress_json(progress: &RunExecutionProgress) -> Value {
-    json!({
-        "state": progress.state,
-        "active_step": progress.active_step.as_ref().map(|step| json!({
-            "step_id": step.step_id,
-            "step_index": step.step_index,
-            "started_at": step.started_at.map(|value| value.to_rfc3339()),
-        })),
-        "provider_processes": {
-            "limit": progress.limit,
-            "truncated": progress.truncated,
-            "items": progress
-                .provider_processes
-                .iter()
-                .map(RunProviderProcess::to_json)
-                .collect::<Vec<_>>(),
-        },
-    })
-}
-
+/// `list` deliberately does not carry `execution_progress` [ORB-11752]:
+/// that evidence costs an audit scan plus a liveness probe per open child,
+/// the right price for one deliberate `show` and the wrong one for a page.
 fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let state = optional_string(&input, "state")?;
     let terminal_only = state.as_deref() == Some("terminal");
@@ -316,7 +272,7 @@ fn project_workflow_run_list(
                 recoveries.get(&run.run_id),
             )
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
     Ok((items, reads))
 }
 
@@ -369,65 +325,31 @@ fn parse_limit(input: &Value) -> Result<usize, OrbitError> {
     usize::try_from(limit).map_err(|_| OrbitError::InvalidInput("`limit` is too large".to_string()))
 }
 
-/// One run on the MCP surface: the shared run projection, the displayed steps
-/// every run view chooses by one rule, and this surface's own additions.
-///
-/// The additions are the submitted `input` and the claimed worker's
-/// `pid`/`pid_start_time`, which the shared projection leaves to each
-/// surface, plus the drain and recovery evidence this surface has always
-/// carried on every run.
+/// One run on the MCP surface, under the shared embedded-steps profile:
+/// worker fields, displayed steps, drain and recovery evidence all come
+/// from `project_job_run`; this only gathers the audit steps it needs.
+/// [ORB-12255] A worker that left the record empty still has its steps in
+/// the audit trail; `steps_source` names which one answered.
 fn run_json_enriched(
     runtime: &OrbitRuntime,
     run: &JobRun,
     state: Option<&PipelineState>,
     evidence: Option<&[ActivityInvocationEvidence]>,
     recovery: Option<&RunRecoveryAttempts>,
-) -> Result<Value, OrbitError> {
-    let mut value = match evidence {
-        Some(evidence) => job_run_to_json_with_activity_provenance(run, state, evidence),
-        None => job_run_to_json(run, state),
-    };
-    value["input"] = json!(run.input);
-    value["pid"] = json!(run.pid);
-    value["pid_start_time"] = json!(run.pid_start_time);
-    // [ORB-12255] A worker that left the record empty still has its steps in
-    // the audit trail; `steps_source` names which one answered.
+) -> Value {
     let steps = run_display_steps(run, || {
         runtime
             .collect_run_audit_steps(&run.run_id)
             .unwrap_or_default()
     });
-    let effort_evidence = evidence.unwrap_or_default();
-    value["steps"] = json!(
-        steps
-            .records
-            .iter()
-            .map(|step| step.to_json_with_agent_execution(state, effort_evidence))
-            .collect::<Vec<_>>()
-    );
-    value["steps_source"] = json!(steps.source.as_str());
-    // [ORB-13901] A drain's last admission pass, including the host resource
-    // throttle that held it; null for every run that is not a drain.
-    value["drain_last_pass"] =
-        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_last_pass.as_ref()))
-            .map_err(serialize_error("serialize drain last pass"))?;
-    // [ORB-14117] What an `--approve-proposed` drain approved and held.
-    value["drain_approvals"] =
-        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_approvals.as_ref()))
-            .map_err(serialize_error("serialize drain approvals"))?;
-    // Recovery evidence remains separate from the run and step errors above:
-    // a successful or failed recovery attempt never rewrites the original
-    // workflow failure that triggered it. Older/unreadable audit trails remain
-    // observable as `unavailable` rather than making existing run-show callers
-    // fail their ordinary durable run read.
-    value["recovery_attempts"] = match recovery {
-        Some(attempts) => attempts.to_json(),
-        None => json!({
-            "state": "unavailable",
-            "limit": MAX_RECOVERY_ATTEMPTS,
-            "truncated": false,
-            "items": [],
-        }),
-    };
-    Ok(value)
+    project_job_run(
+        run,
+        JobRunProjectionProfile::FullDetailEmbeddedSteps,
+        JobRunProjectionEvidence {
+            state,
+            activity_evidence: evidence,
+            display_steps: Some(&steps),
+            recovery,
+        },
+    )
 }

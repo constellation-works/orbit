@@ -90,17 +90,21 @@ pub(in crate::application) use review_hook::ReviewAdmissionHook;
 pub(crate) use run::CodebaseDeliveryScan;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
-    ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopOutcome,
-    DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWindowExtensionChange,
-    DrainWindowExtensionOutcome, DrainWindowExtensionRequest, DrainWorkerLimitChange,
-    DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome, DrainWorkerLimitRequest,
-    JOB_FAILURE_STREAK_WARN, JobFailureStreak, JobRunCancelOutcome, JobRunCancelResult,
-    JobRunCancelResultProfile, JobRunHolder, JobRunListParams, JobRunListStates, JobRunOrder,
-    RecordedJobRun, RemainingDrainChild, RunDisplayStep, RunDisplaySteps, RunFailureCause,
-    RunFailureContext, RunFailureContextProfile, RunFailureContextWarning, RunFailureEvidence,
-    RunFailureRead, RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf, fold_run_incidents,
-    job_run_task_ids, job_run_to_json, job_run_to_json_with_activity_provenance, run_display_steps,
-    run_error_step, run_upgrade_paused,
+    ActivityInvocationEvidence, BOUNDED_RUN_ANSWER_MAX_BYTES, BOUNDED_RUN_STEP_LIMIT,
+    DrainAdmissionsStopChange, DrainAdmissionsStopOutcome, DrainAdmissionsStopRequest,
+    DrainAdmissionsStopResult, DrainWindowExtensionChange, DrainWindowExtensionOutcome,
+    DrainWindowExtensionRequest, DrainWorkerLimitChange, DrainWorkerLimitChangeProfile,
+    DrainWorkerLimitOutcome, DrainWorkerLimitRequest, JOB_FAILURE_STREAK_WARN, JobFailureStreak,
+    JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunHolder,
+    JobRunListParams, JobRunListStates, JobRunOrder, JobRunProjectionEvidence,
+    JobRunProjectionProfile, RecordedJobRun, RemainingDrainChild, RunDisplayStep, RunDisplaySteps,
+    RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
+    RunFailureEvidence, RunFailureRead, RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf,
+    add_bounded_display_steps_to_json, bound_bounded_agent_invocation_answer,
+    display_steps_with_agent_execution_to_json, fold_run_incidents, job_run_task_ids,
+    job_run_to_json, job_run_to_json_with_activity_provenance, project_job_run, run_display_steps,
+    run_error_step, run_execution_progress_to_json, run_upgrade_paused,
+    trim_full_show_agent_invocation_answer,
 };
 pub(crate) use run::{
     RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness,

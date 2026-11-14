@@ -13,8 +13,11 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::{RunStepSource, run_display_steps};
-use crate::runtime::audit::run::RunProviderProcess;
+use crate::application::job::{
+    JobRunProjectionEvidence, JobRunProjectionProfile, RunStepSource,
+    add_bounded_display_steps_to_json, bound_bounded_agent_invocation_answer, project_job_run,
+    run_display_steps, run_execution_progress_to_json,
+};
 use crate::runtime::audit::run_logs::{
     BOUNDED_EXCERPT_MAX_BYTES, RunCliInvocationProfile, bounded_redacted_text,
 };
@@ -22,7 +25,6 @@ use crate::runtime::audit::run_logs::{
 const MAX_PAGE: usize = 50;
 const MAX_RUN_PREFIX: usize = 10_000;
 const MAX_LOG_PREFIX: usize = 200;
-const ANSWER_BYTES: usize = 4096;
 
 pub(super) fn read(
     runtime: &OrbitRuntime,
@@ -216,11 +218,11 @@ fn runs(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Or
 }
 
 fn run_summary(run: &JobRun) -> Value {
-    json!({"id": run.run_id, "run_id": run.run_id, "job_id": run.job_id,
-        "state": run.state, "attempt": run.attempt, "scheduled_at": run.scheduled_at,
-        "started_at": run.started_at, "finished_at": run.finished_at,
-        "created_at": run.created_at, "duration_ms": run.duration_ms,
-        "usage": {"state": "unavailable"}})
+    project_job_run(
+        run,
+        JobRunProjectionProfile::BoundedSummary,
+        JobRunProjectionEvidence::default(),
+    )
 }
 
 fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, OrbitError> {
@@ -241,33 +243,8 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     let steps = run_display_steps(&run, || detail.steps.clone());
     let steps_complete = steps.source == RunStepSource::Record || detail.steps_complete;
     // Reuse the lifecycle window; never replay an unbounded trail to populate
-    // missing record steps. Provider responses and original inputs stay absent.
-    value["steps"] = json!(
-        steps
-            .records
-            .iter()
-            .take(MAX_PAGE)
-            .map(|step| {
-                let output = step.command_output_summary(state.as_ref());
-                let exit_code = step.exit_code.map(|code| json!(code)).or_else(|| output.as_ref().map(|output| output["exit_code"].clone()));
-                let mut step_value = json!({
-                    "step_index":step.step_index, "target_id":step.target_id,
-                    "target_type":step.target_type, "state":step.state,
-                    "started_at":step.started_at, "finished_at":step.finished_at,
-                    "duration_ms":step.duration_ms, "exit_code":exit_code,
-                    "error_code":step.error_code,
-                    "error_message":step.error_message.as_deref().map(|message| bounded_redacted_text(message,4096).0),
-                });
-                if let Some(output) = output {
-                    step_value["output"] = output;
-                }
-                step_value
-            })
-            .collect::<Vec<_>>()
-    );
-    value["steps_source"] = json!(steps.source.as_str());
-    value["steps_total"] = json!(steps_complete.then_some(steps.records.len()));
-    value["steps_truncated"] = json!(!steps_complete || steps.records.len() > MAX_PAGE);
+    // missing record steps.
+    add_bounded_display_steps_to_json(&mut value, &steps, state.as_ref(), steps_complete);
     let progress = &detail.progress;
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,
@@ -277,11 +254,14 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     .map_err(super::super::json::serialize_error(
         "serialize agent invocation result",
     ))?;
-    bound_agent_answer(&mut value["agent_invocation"], input, &id)?;
-    let execution_progress = json!({"state": progress.state,
-        "active_step": progress.active_step.as_ref().map(|s| json!({"step_id": s.step_id,"step_index":s.step_index,"started_at":s.started_at})),
-        "provider_processes": {"limit":progress.limit,"truncated":progress.truncated,
-            "items":progress.provider_processes.iter().map(RunProviderProcess::to_json).collect::<Vec<_>>()}});
+    bound_bounded_agent_invocation_answer(
+        &mut value["agent_invocation"],
+        json!({
+            "tool": "orbit.run",
+            "arguments": {"action": "show", "workspace": input["workspace"], "id": id},
+        }),
+    )?;
+    let execution_progress = run_execution_progress_to_json(progress);
     let total = detail.logs_total;
     let logs = detail
         .logs
@@ -294,79 +274,6 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
             "items":logs,"total":total,"available_through":MAX_LOG_PREFIX.min(total),"excerpt_max_bytes":BOUNDED_EXCERPT_MAX_BYTES},
         "audit_metadata":{"complete":detail.complete,"rows_read":detail.rows_read,"row_budget":detail.row_budget}}),
     )
-}
-
-/// Bound the compact projection only; persisted and full-view answers stay intact.
-fn bound_agent_answer(invocation: &mut Value, input: &Value, id: &str) -> Result<(), OrbitError> {
-    let Some(invocation) = invocation.as_object_mut() else {
-        return Ok(());
-    };
-    let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) else {
-        return Ok(());
-    };
-    // These repeat the structured answer, as in the full run projection.
-    answer.remove("final_message");
-    let mut original = std::mem::take(answer);
-    let mut omitted = Vec::new();
-    let mut truncated = false;
-    // Reserve space for a useful summary before considering other whole fields.
-    let summary = original.remove("summary");
-    for (key, mut field) in summary
-        .map(|value| ("summary".to_string(), value))
-        .into_iter()
-        .chain(original)
-    {
-        if key == "summary"
-            && let Some(text) = field.as_str()
-        {
-            // {"summary": ...} costs 12 bytes in addition to the JSON string.
-            let prefix = json_string_prefix(text, ANSWER_BYTES - 12);
-            truncated |= prefix.len() < text.len();
-            field = json!(prefix);
-        }
-        answer.insert(key.clone(), field);
-        let bytes = serde_json::to_vec(answer)
-            .map_err(super::super::json::serialize_error("compact agent answer"))?;
-        if bytes.len() > ANSWER_BYTES {
-            answer.remove(&key);
-            omitted.push(key);
-            truncated = true;
-        }
-    }
-    let summary = answer.get("summary").cloned().unwrap_or(Value::Null);
-    invocation.remove("preview");
-    invocation.remove("preview_truncated");
-    invocation.insert("summary".into(), summary);
-    invocation.insert("answer_max_bytes".into(), json!(ANSWER_BYTES));
-    invocation.insert("answer_truncated".into(), json!(truncated));
-    invocation.insert("answer_omitted_fields".into(), json!(omitted));
-    invocation.insert(
-        "answer_retrieval".into(),
-        json!({
-            "tool": "orbit.run",
-            "arguments": {"action": "show", "workspace": input["workspace"], "id": id},
-        }),
-    );
-    Ok(())
-}
-
-/// Prefix measured as a JSON string, including quotes and escaped characters.
-fn json_string_prefix(text: &str, max_bytes: usize) -> &str {
-    let mut remaining = max_bytes.saturating_sub(2);
-    let mut end = 0;
-    for (index, ch) in text.char_indices() {
-        let bytes = match ch {
-            '"' | '\\' | '\n' | '\r' | '\t' | '\u{0008}' | '\u{000c}' => 2,
-            ch if ch <= '\u{001f}' => 6,
-            ch => ch.len_utf8(),
-        };
-        if bytes > remaining {
-            break;
-        }
-        remaining -= bytes;
-        end = index + ch.len_utf8();
-    }
-    &text[..end]
 }
 
 fn pagination(offset: usize, limit: usize, returned: usize, total: usize, cap: usize) -> Value {
