@@ -10,9 +10,9 @@ use orbit_core::application::auto_tasks::{
     AutoTaskUpdateParams, cursor_state_path,
 };
 use orbit_core::{
-    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, OrbitError, OrbitRuntime,
-    TaskComplexity, TaskPriority, TaskStatus, TaskType,
+    AutoTaskAddParams, OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
 };
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
 #[test]
 fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() {

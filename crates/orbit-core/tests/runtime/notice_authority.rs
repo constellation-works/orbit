@@ -1304,7 +1304,7 @@ fn attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id() 
         OrbitRuntime::from_roots_with_binding(
             &global,
             &orbit,
-            orbit_core::WorkspaceRuntimeBinding {
+            orbit_core::runtime::WorkspaceRuntimeBinding {
                 logical_workspace_id: logical.into(),
                 task_partition_id: format!("{}-5c61b3", logical.trim_start_matches("ws_")),
                 owner_machine_id: None,

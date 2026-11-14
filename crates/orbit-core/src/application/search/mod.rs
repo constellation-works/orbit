@@ -8,9 +8,6 @@ mod request;
 mod runtime;
 mod types;
 
-// Compatibility shim: selector matching belongs to task. Retiring this
-// search path after its consumers migrate is a follow-up.
-pub(crate) use crate::application::task::task_selectors_contain_path;
 pub use request::{SearchRequest, SearchRequestProfile};
 pub(crate) use types::whitespace_query_note;
 pub use types::{

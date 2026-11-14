@@ -119,7 +119,7 @@ fn a_pull_captures_the_shipping_modes_authoritative_tag_instructions() {
                     OrbitRuntime::from_roots_with_binding(
                         &owner.global_root(),
                         &repo.join(".orbit"),
-                        orbit_core::WorkspaceRuntimeBinding {
+                        orbit_core::runtime::WorkspaceRuntimeBinding {
                             logical_workspace_id: owner.workspace_id().unwrap(),
                             task_partition_id: owner.workspace_id().unwrap(),
                             owner_machine_id: Some(super::OWNER.into()),

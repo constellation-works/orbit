@@ -65,7 +65,6 @@ pub mod bootstrap;
 pub mod composition;
 pub mod metrics;
 pub mod runtime;
-pub use orbit_runtime::context;
 use orbit_runtime::paths;
 
 /// Allow this production Orbit binary to re-execute itself as a pipeline
@@ -206,14 +205,14 @@ pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
     reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
-pub use context::ActorIdentity;
 /// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
 pub use orbit_config::ComplexityCrewPools;
 pub use orbit_config::TaskTypeDefinition;
+pub use orbit_runtime::context::ActorIdentity;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
-pub use application::auto_tasks::{AutoTaskAddParams, AutoTaskDeleteParams};
+pub use application::auto_tasks::AutoTaskAddParams;
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{
@@ -225,10 +224,7 @@ pub use orbit_types::task::{
     TaskStatus, TaskType,
 };
 pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
-pub use orbit_types::workflow::{
-    AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRun, JobRunState,
-    JobRunStep, JobTargetType,
-};
+pub use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
 pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
 // the dashboard's incident and audit-summary surfaces.
@@ -241,5 +237,5 @@ pub use orbit_store::{
 pub use orbit_store::contracts::LandedDiffStats;
 // Stored backlog forecasts behind the dashboard's Analytics › Forecast.
 pub use orbit_store::contracts::StoredBacklogForecast;
+pub use runtime::OrbitRuntime;
 pub use runtime::engine::ResolvedCrewProjection;
-pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

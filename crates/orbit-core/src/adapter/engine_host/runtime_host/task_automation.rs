@@ -96,8 +96,10 @@ fn apply_task_automation_update_under_lock(
         runtime.ensure_mutation_proposals_applied(&existing_task)?;
         runtime.ensure_resolves_are_workspace_local(&existing_task)?;
     }
-    let (agent, model) =
-        crate::context::trusted_write_identity(update.agent.as_deref(), update.model.as_deref());
+    let (agent, model) = crate::runtime::context::trusted_write_identity(
+        update.agent.as_deref(),
+        update.model.as_deref(),
+    );
     let runtime_model_identity = <OrbitRuntime as RuntimeHost>::actor_model_identity(runtime);
     let attribution = assemble_task_attribution(
         &existing_task,

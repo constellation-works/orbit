@@ -8,9 +8,8 @@
 use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::review::review_switches;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{
-    OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding,
-};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::workflow::PipelineState;

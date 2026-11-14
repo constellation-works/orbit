@@ -38,7 +38,7 @@ fn pull_request_ids(pair: &Pair) -> Vec<String> {
 /// logical workspace, as `orbit run auto --pull` opens it.
 fn bound_follower(pair: &Pair) -> (OrbitRuntime, String) {
     let logical = "ws_replica".to_string();
-    let binding = orbit_core::WorkspaceRuntimeBinding {
+    let binding = orbit_core::runtime::WorkspaceRuntimeBinding {
         logical_workspace_id: logical.clone(),
         task_partition_id: pair.follower.workspace_id().unwrap(),
         owner_machine_id: None,

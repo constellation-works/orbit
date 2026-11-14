@@ -64,7 +64,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
             OrbitRuntime::from_roots_with_binding(
                 &unbound.global_root(),
                 &unbound.paths().repo_root.join(".orbit"),
-                orbit_core::WorkspaceRuntimeBinding {
+                orbit_core::runtime::WorkspaceRuntimeBinding {
                     logical_workspace_id: "ws_catalog_owner".into(),
                     task_partition_id: partition,
                     owner_machine_id: None,

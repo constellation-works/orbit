@@ -10,7 +10,7 @@ use orbit_store::contracts::{
 use orbit_types::task::Task;
 
 use super::params::TaskRecordUpdateParams;
-use crate::context::OrbitStores;
+use crate::runtime::context::OrbitStores;
 
 /// Coordinated task-record writes over [`OrbitStores`], which the runtime
 /// kernel crate owns.

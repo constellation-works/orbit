@@ -242,23 +242,6 @@ impl OrbitRuntime {
             .collect()
     }
 
-    /// Pending deterministic append proposals for one task, exposed through
-    /// task history as well. The caller materializes these in a reviewed PR.
-    pub fn agent_corpus_append_proposals(
-        &self,
-        task_id: &str,
-    ) -> Result<Vec<AgentCorpusAppend>, OrbitError> {
-        self.get_task_history(task_id)?
-            .into_iter()
-            .filter(|entry| entry.event == CORPUS_APPEND_EVENT)
-            .map(|entry| {
-                serde_json::from_str(entry.note.as_deref().unwrap_or("")).map_err(|error| {
-                    OrbitError::Execution(format!("invalid corpus append outbox record: {error}"))
-                })
-            })
-            .collect()
-    }
-
     pub(crate) fn decision_corpus_append(
         &self,
         request: &DecisionRequest,

@@ -5,7 +5,8 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, ShipMode, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_store::contracts::{
     InvocationInsertParams, ResourceUsageStoreBackend, RunResourceMinute,
 };

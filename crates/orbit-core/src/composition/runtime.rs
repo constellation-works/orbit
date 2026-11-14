@@ -35,12 +35,8 @@ use crate::runtime::{
 
 impl OrbitRuntime {
     pub fn initialize() -> Result<Self, OrbitError> {
-        Self::initialize_with_root_override(None)
-    }
-
-    pub fn initialize_with_root_override(root_override: Option<&Path>) -> Result<Self, OrbitError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let roots = Self::resolve_roots_for_cwd(&cwd, root_override)?;
+        let roots = Self::resolve_roots_for_cwd(&cwd, None)?;
         Self::initialize_from_resolved_roots(roots, None)
     }
 
@@ -81,7 +77,6 @@ impl OrbitRuntime {
             &roots.shared_root,
             &roots.local_root,
             binding,
-            true,
             HostLifetime::ShortLived,
             false,
             task_prefix,
@@ -99,7 +94,6 @@ impl OrbitRuntime {
             &roots.shared_root,
             &roots.local_root,
             binding,
-            false,
             HostLifetime::ShortLived,
             true,
             None,
@@ -157,26 +151,13 @@ impl OrbitRuntime {
         workspace_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        Self::from_roots_with_binding_for(
+        Self::from_resolved_roots_with_binding_for_task_prefix(
             global_root,
+            workspace_root,
             workspace_root,
             binding,
             HostLifetime::ShortLived,
-        )
-    }
-
-    pub fn from_roots_with_binding_for(
-        global_root: &Path,
-        workspace_root: &Path,
-        binding: WorkspaceRuntimeBinding,
-        host_lifetime: HostLifetime,
-    ) -> Result<Self, OrbitError> {
-        Self::from_resolved_roots_with_binding_for(
-            global_root,
-            workspace_root,
-            workspace_root,
-            binding,
-            host_lifetime,
+            None,
         )
     }
 
@@ -202,48 +183,14 @@ impl OrbitRuntime {
             shared_root,
             local_root,
             None,
-            true,
             HostLifetime::ShortLived,
             false,
             task_prefix,
         )
     }
 
-    pub fn from_resolved_roots_with_binding(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
-        binding: WorkspaceRuntimeBinding,
-    ) -> Result<Self, OrbitError> {
-        Self::from_resolved_roots_with_binding_for(
-            global_root,
-            shared_root,
-            local_root,
-            binding,
-            HostLifetime::ShortLived,
-        )
-    }
-
-    /// Open a runtime for the constructing host's lifetime.
-    pub fn from_resolved_roots_with_binding_for(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
-        binding: WorkspaceRuntimeBinding,
-        host_lifetime: HostLifetime,
-    ) -> Result<Self, OrbitError> {
-        Self::from_resolved_roots_with_binding_for_task_prefix(
-            global_root,
-            shared_root,
-            local_root,
-            binding,
-            host_lifetime,
-            None,
-        )
-    }
-
-    /// [`Self::from_resolved_roots_with_binding_for`] that projects
-    /// `task_prefix` onto the task-registry handle this open creates. See
+    /// [`Self::from_roots_with_binding`] with a `task_prefix` projection
+    /// onto the task-registry handle this open creates. See
     /// [`Self::initialize_from_resolved_roots_with_task_prefix`].
     pub fn from_resolved_roots_with_binding_for_task_prefix(
         global_root: &Path,
@@ -258,7 +205,6 @@ impl OrbitRuntime {
             shared_root,
             local_root,
             Some(binding),
-            true,
             host_lifetime,
             false,
             task_prefix,
@@ -276,7 +222,6 @@ impl OrbitRuntime {
             shared_root,
             local_root,
             Some(binding),
-            false,
             HostLifetime::ShortLived,
             true,
             None,
@@ -379,7 +324,6 @@ fn build_runtime(
     shared_root: &Path,
     local_root: &Path,
     binding: Option<WorkspaceRuntimeBinding>,
-    reconcile_stale_runs: bool,
     host_lifetime: HostLifetime,
     read_only: bool,
     task_prefix: Option<&str>,
@@ -450,7 +394,7 @@ fn build_runtime(
     };
     let runtime = OrbitRuntime::from_kernel(kernel);
     let _generation = generation;
-    if reconcile_stale_runs && !write_free && !managed_run_context_from_env() {
+    if !read_only && !write_free && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();
     }
     if !write_free && !read_only && !managed_run_context_from_env() {

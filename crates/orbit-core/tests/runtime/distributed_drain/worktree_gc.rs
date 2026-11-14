@@ -34,7 +34,7 @@ fn replica_gc(mut pair: Pair, config: &str) -> Pair {
         OrbitRuntime::from_roots_with_binding(
             &global,
             &pair.follower_repo.join(".orbit"),
-            orbit_core::WorkspaceRuntimeBinding {
+            orbit_core::runtime::WorkspaceRuntimeBinding {
                 logical_workspace_id: pair.wire.owner.workspace_id().unwrap(),
                 task_partition_id: pair.follower.workspace_id().unwrap(),
                 owner_machine_id: Some(OWNER.into()),

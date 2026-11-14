@@ -10,7 +10,8 @@ use crate::application::task::TaskListFilter;
 
 use super::convert::{fill_task_record_fields, lexical_task_hit};
 use super::filters::{SearchStatusFilters, resolve_task_statuses, task_has_all_tags};
-use super::{GlobalSearchHit, GlobalSearchParams, task_selectors_contain_path};
+use super::{GlobalSearchHit, GlobalSearchParams};
+use crate::application::task::task_selectors_contain_path;
 
 /// Ranked any-term chunks read per requested result by the partial-match fill.
 const OR_SCAN_CHUNKS_PER_RESULT: usize = 20;
