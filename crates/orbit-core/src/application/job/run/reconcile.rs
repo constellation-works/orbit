@@ -10,7 +10,7 @@ use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
 use crate::application::job::pipeline::{
-    reconciled_worker_exit_clause, recorded_host_manager_stop,
+    self, reconciled_worker_exit_clause, recorded_host_manager_stop,
 };
 
 use super::WORKER_TERMINATED_ERROR_CODE;
@@ -276,7 +276,15 @@ impl OrbitRuntime {
             return Ok(false);
         }
 
-        let finished_at = self.orphaned_run_finished_at(&current);
+        let observed_exit_at = self.orphaned_worker_exit_at(&current);
+        let finished_at = observed_exit_at.unwrap_or_else(Utc::now);
+        let message = if observed_exit_at.is_none() {
+            format!(
+                "{message}; finish time is orphan detection time (upper bound; worker exit time unobserved)"
+            )
+        } else {
+            message
+        };
         let duration_ms = current.started_at.map(|started_at| {
             finished_at
                 .signed_duration_since(started_at)
@@ -448,36 +456,26 @@ impl OrbitRuntime {
         guard == ProviderFinalizationGuard::Clear
     }
 
-    /// When an orphaned run actually stopped doing work.
-    ///
-    /// [ORB-10594] The sweep can notice a dead owner arbitrarily long after the
-    /// fact — orphan scans only run when some process opens the workspace — so
-    /// stamping `Utc::now()` records the moment of *detection*, not the end of
-    /// work, and inflates `duration_ms` by the whole detection lag. The run's
-    /// own audit trail stops when its work stopped, so its last event is the
-    /// better estimate. Falls back to now when the run left no trail, and
-    /// never accepts a timestamp outside `[started_at, now]` so a clock skew or
-    /// a back-dated event cannot produce a negative or absurd duration.
-    fn orphaned_run_finished_at(&self, run: &JobRun) -> DateTime<Utc> {
+    /// A matching supervisor's exit observation, if recorded within the run's
+    /// lifetime. The last activity is only a lower bound: a deterministic step
+    /// can run silently for minutes, then fail to persist its outcome under
+    /// contention. Without an observed exit, reconciliation uses detection
+    /// time and labels that upper bound rather than inventing an early exit.
+    fn orphaned_worker_exit_at(&self, run: &JobRun) -> Option<DateTime<Utc>> {
         let now = Utc::now();
         let floor = run.started_at.unwrap_or(run.scheduled_at);
-        self.last_run_activity_at(&run.run_id)
+        pipeline::recorded_worker_exit(self.stores().audit_events(), &run.run_id, run.pid?)
             .unwrap_or_else(|error| {
                 tracing::debug!(
                     target: "orbit.core.job_run",
                     run_id = %run.run_id,
                     error = %error,
-                    "orphaned run audit trail unreadable; stamping detection time",
+                    "orphaned worker exit unreadable; stamping detection time",
                 );
                 None
             })
-            .filter(|activity| *activity >= floor && *activity <= now)
-            .unwrap_or(now)
-    }
-
-    /// Timestamp of the most recent audit event recorded for a run.
-    fn last_run_activity_at(&self, run_id: &str) -> Result<Option<DateTime<Utc>>, OrbitError> {
-        self.latest_run_audit_timestamp(run_id)
+            .map(|exit| exit.observed_at)
+            .filter(|observed| *observed >= floor && *observed <= now)
     }
 
     pub(super) fn reconcile_job_run_records_with_pass(

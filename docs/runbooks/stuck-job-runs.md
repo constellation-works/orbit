@@ -261,11 +261,16 @@ worker; once it has, the two race to settle the run. A run interrupted with
   user manager) reads `no worker scope evidence is available`; nothing is inferred.
 - `…; afterwards its supervisor reaped pid <pid> at <time>: …`: reconciliation won the
   race to settle the run after the observer had already reaped the worker. The observer
-  can record that exit afterward. `finished_at` is the run's last audit activity, not
-  the interruption time. The displayed reap-observation time is stamped when the
-  observer records the reaped status, so it can be later than reconciliation's
-  `Interrupted` write. That later timestamp does not mean the worker was still running
-  when the run was interrupted.
+  can record that exit afterward. Reconciliation uses a matching worker's recorded
+  exit-observation time for `finished_at` when it falls within the run's lifetime.
+  Otherwise it uses detection time and labels the duration as an upper bound in
+  the diagnostic. The last audit activity is only a lower bound: a silent step
+  can keep working long after it, and failed bookkeeping can leave no final event.
+  The displayed reap-observation time is stamped when the observer records the
+  reaped status, so it can be later than reconciliation's `Interrupted` write.
+  That later timestamp does not mean the worker was still running when the run
+  was interrupted. Historical records may still carry the old last-activity estimate;
+  a short recorded duration alone does not establish an early interruption.
 
 ```text
 job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=4242, pid_start_time=…); worker exit: no supervisor observed or recorded its exit status; worker scope 'orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope' was already gone: no unit result or counters remain (see `journalctl --user -u orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope`)
@@ -1749,9 +1754,10 @@ and auto-fix on the same pull request and head. The retry lineage carries the
 run's repair ledger and authority. Completion still refuses a head the run did not
 publish. A leaf is adopted only when all of these hold:
 
-- its run ended within the last 24 hours, measured from its last recorded activity
-  (the time orphan reconciliation stamps as its end), not at an upgrade boundary
-  (the clock resumes those), and it is not a claimed execution;
+- its run ended within the last 24 hours. For an interrupted run, its last
+  recorded activity also bounds this window when available, so a late orphan
+  detection does not extend it. It did not stop at an upgrade boundary (the
+  clock resumes those), and it is not a claimed execution;
 - its worker is dead and no retry has resumed it yet;
 - it is an original attempt, not itself a resume: a leaf that dies again after a
   drain or an operator resumed it is left for you to resume. The test reads the run
