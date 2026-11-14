@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980]
-last_validated: 2026-11-02
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410]
+last_validated: 2026-11-14
 ---
 
 # Upgrade Orbit Safely
@@ -1398,6 +1398,14 @@ advice — but its rationale is the populated-capture rejection above, not an un
 database refusal at schema 88. The frozen v0.48.0 changelog entry overstates the database
 refusal; per the RELEASING.md fix-forward policy it is left untouched, and this runbook is the
 maintained correction.
+
+## Task reservation active-row indexes (schema v89)
+
+Store schema v89 adds two partial indexes on `task_reservations`:
+`(workspace_id, expires_at) WHERE released_at IS NULL` and
+`(workspace_orbit_dir, expires_at) WHERE released_at IS NULL`. Active lock,
+lease and claim reads use them. The migration is index-only, so older binaries
+keep reading and writing and it waits for nothing.
 
 ## Verify the upgrade
 

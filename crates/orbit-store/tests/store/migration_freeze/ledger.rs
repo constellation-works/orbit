@@ -538,6 +538,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0088".to_string(),
                 "audit_session_model".to_string()
             ),
+            (
+                "migration.v0089".to_string(),
+                "task_reservation_unreleased_expires".to_string()
+            ),
         ]
     );
 }
