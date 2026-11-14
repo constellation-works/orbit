@@ -13,7 +13,6 @@ import { rankFrontierNode } from './agents-rank-frontier.js';
 
 const BODY_ID = "agents-body";
 const COUNT_ID = "agents-count";
-const TIER_SHORT = { low: "L", medium: "M", hard: "H", xhard: "X", unassessed: "U" };
 // A contribution bar fills half its track at this many points.
 const CONTRIB_SCALE = 25;
 const NOT_SCORED_REASONS = {

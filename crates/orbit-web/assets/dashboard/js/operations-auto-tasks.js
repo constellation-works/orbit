@@ -152,11 +152,6 @@ function lastEvaluationText(definition) {
   return `Baselined ${time(evaluation.baseline_at)}; no fire yet`;
 }
 
-function lastOutcomeText(definition) {
-  if (definition.last_minted_task_id) return lastMintedText(definition);
-  return lastEvaluationText(definition);
-}
-
 // Grouping, counts, row state and the switch follow the effective switch.
 // The raw `enabled` flag stays the compare-and-set token the toggle posts.
 function autoTaskOn(definition) {

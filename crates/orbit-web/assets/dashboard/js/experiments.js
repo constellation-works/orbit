@@ -75,11 +75,6 @@ let draft = null;
 // request }`, kept apart from the panel request so the record renders first.
 let readoutState = null;
 
-/// The experiment on screen, or null for the list.
-export function getExperimentId() {
-  return selectedId;
-}
-
 /// Select experiment `id` and its tab (an unknown or missing tab is Result).
 export function setExperimentId(id, tab = null) {
   const next = id ? String(id) : null;

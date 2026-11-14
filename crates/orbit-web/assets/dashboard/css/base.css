@@ -23,8 +23,7 @@
 
   --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
-  --font-display: var(--font-sans);
-  
+
   --bg: #0b0d10;
   --bg-elev: #121519;
   --bg-rail: #0e1115;
@@ -54,16 +53,9 @@
   --status-triaged: #5cc8f0;
   --status-resolved: #63d297;
   
-  --priority-high: #ef4444;
   --priority-medium: #f59e0b;
-  --priority-low: #71717a;
-  --priority-critical: #f87171;
-  --complexity-low: #71717a;
-  --complexity-medium: #f59e0b;
-  --complexity-hard: #ef4444;
-  
+
   --state-success: #63d297;
-  --state-active: #63d297;
   --state-running: #5cc8f0;
   --state-pending: #f2b24c;
   --state-held: #c4a7ff;

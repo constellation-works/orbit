@@ -407,12 +407,6 @@
   gap: 4px 6px;
 }
 
-.property-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 /* The detail's head: the levers as one row of chips, the lifecycle strip,
    then the delivery card. */
 .task-meta-block {

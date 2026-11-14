@@ -79,15 +79,6 @@ const GROUP_HINTS = {
 // Groups whose rows carry where their run is and how long it has been going.
 const RUN_GROUPS = new Set(["in-progress", "blocked"]);
 
-// How an empty open group reads in the "Nothing …" line above the cards.
-const EMPTY_GROUP_PHRASES = {
-  blocked: "blocked",
-  "in-progress": "in progress",
-  review: "in review",
-  proposed: "proposed",
-  backlog: "in the backlog",
-};
-
 // The rows loaded against the matching total, so a list whose sections are
 // partly loaded never reads as complete.
 export function formatTaskCount(filteredCount, fetchedCount, meta) {

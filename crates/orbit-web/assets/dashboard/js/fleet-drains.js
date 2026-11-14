@@ -26,10 +26,6 @@ function publishPartial(rows, sources) {
   }
 }
 
-export function peekFleetPartial() {
-  return partialPayload;
-}
-
 function fleetSources() {
   const hosts = getRegisteredHosts();
   return hosts.length ? hosts : [{ name: getHost() || 'This host', selector: getHost(), fallback: true }];

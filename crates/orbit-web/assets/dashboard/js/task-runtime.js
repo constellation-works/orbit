@@ -83,11 +83,6 @@ export function taskLockFiles(taskId) {
   return lockFiles.get(taskId) || [];
 }
 
-/// Every file locked in the workspace, or null before the first read.
-export function lockedFileTotal() {
-  return lockTotal;
-}
-
 /// Elapsed time at minute resolution (`42m`, `3h 05m`, `2d 4h`), so a row
 /// redraws once a minute rather than on every poll.
 export function elapsedLabel(ms) {
