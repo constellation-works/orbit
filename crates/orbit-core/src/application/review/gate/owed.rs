@@ -53,6 +53,7 @@ use orbit_types::workflow::{
 };
 
 use super::super::evidence::{RecordedCargoScope, deferred_test, recorded_cargo_scope};
+use super::super::fulfilment::fulfilment_artifact_paths;
 
 use crate::OrbitRuntime;
 
@@ -303,18 +304,25 @@ impl Judgement {
                         .collect::<String>();
                     let mut artifact = format!("evidence/host-sandbox/bubblewrap-{slug}.json");
                     let mut suffix = 2;
-                    while named.iter().any(|known| known.artifact == artifact)
-                        || owed.iter().any(|known| {
-                            known.artifact == artifact
-                                && (known.kind != ReviewEvidenceKind::HostSandboxTest
-                                    || known.command != command)
+                    while {
+                        let (cand_res, cand_log) = match fulfilment_artifact_paths(&artifact) {
+                            Ok(paths) => paths,
+                            Err(_) => (artifact.clone(), format!("{artifact}.log.json")),
+                        };
+                        named.iter().any(|known| {
+                            review_evidence_paths_collide(
+                                &cand_res, &cand_log, &command, known, false,
+                            )
+                        }) || owed.iter().any(|known| {
+                            review_evidence_paths_collide(
+                                &cand_res, &cand_log, &command, known, true,
+                            )
+                        }) || requirements.iter().any(|known| {
+                            review_evidence_paths_collide(
+                                &cand_res, &cand_log, &command, known, true,
+                            )
                         })
-                        || requirements
-                            .iter()
-                            .any(|known: &ReviewEvidenceRequirement| {
-                                known.artifact == artifact && known.command != command
-                            })
-                    {
+                    } {
                         artifact = format!("evidence/host-sandbox/bubblewrap-{slug}-{suffix}.json");
                         suffix += 1;
                     }
@@ -334,7 +342,14 @@ impl Judgement {
                 // another command. Keep the notice blocking rather than clear it
                 // for a requirement that is never owed.
                 if owed.iter().any(|known| {
-                    known.artifact == requirement.artifact
+                    let alias_match = match (
+                        fulfilment_artifact_paths(&known.artifact),
+                        fulfilment_artifact_paths(&requirement.artifact),
+                    ) {
+                        (Ok((known_res, _)), Ok((req_res, _))) => known_res == req_res,
+                        _ => known.artifact == requirement.artifact,
+                    };
+                    alias_match
                         && (known.kind != requirement.kind || known.command != requirement.command)
                 }) {
                     continue;
@@ -551,4 +566,47 @@ fn append_note(record: &mut ReviewValidation, note: &str) {
         Some(previous) if !previous.trim().is_empty() => format!("{previous}; {note}"),
         _ => note.to_string(),
     });
+}
+
+/// [ORB-24665] Whether a candidate requirement's canonical result and derived log
+/// paths collide with an existing requirement's reserved canonical keys.
+fn review_evidence_paths_collide(
+    cand_res: &str,
+    cand_log: &str,
+    command: &str,
+    known: &ReviewEvidenceRequirement,
+    allow_same_command: bool,
+) -> bool {
+    let (known_res, known_log) = match fulfilment_artifact_paths(&known.artifact) {
+        Ok((res, log)) => (res, log),
+        Err(_) => {
+            let overlap = known.artifact == cand_res || known.artifact == cand_log;
+            if !overlap {
+                return false;
+            }
+            if allow_same_command
+                && known.kind == ReviewEvidenceKind::HostSandboxTest
+                && known.command == command
+            {
+                return false;
+            }
+            return true;
+        }
+    };
+    let overlap = cand_res == known_res
+        || cand_res == known_log
+        || cand_log == known_res
+        || cand_log == known_log;
+    if !overlap {
+        return false;
+    }
+    if allow_same_command
+        && known.kind == ReviewEvidenceKind::HostSandboxTest
+        && known.command == command
+        && cand_res == known_res
+        && cand_log == known_log
+    {
+        return false;
+    }
+    true
 }

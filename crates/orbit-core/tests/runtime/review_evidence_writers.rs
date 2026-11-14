@@ -410,6 +410,156 @@ fn a_named_run_of_the_same_test_in_another_package_does_not_cover_a_bubblewrap_d
     assert_eq!(status(&fixture), TaskStatus::InProgress);
 }
 
+/// [ORB-24665] When Bubblewrap evidence synthesis encounters an independent named
+/// requirement whose canonical locator or derived log would collide with the
+/// default synthesized locator (e.g. `evidence/host-sandbox/bubblewrap-probe.log.json`),
+/// it allocates a noncolliding derived locator (`...-2.json`) and reaches an
+/// evidence hold instead of blocking.
+fn synthesized_bubblewrap_requirements_avoid_derived_log_collisions() {
+    let mut fixture = Fixture::new();
+    fixture.admit();
+    let test = "probe";
+    let command = format!("cargo test -p orbit-cli --test tool {test}");
+    let independent_command = "cargo test -p orbit-cli --test tool independent_probe";
+    let colliding_log_artifact = "evidence/host-sandbox/bubblewrap-probe.log.json";
+
+    fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept", "summary": "Checked the change; no findings.",
+        "findings": [],
+        "external_evidence": [{
+            "kind": "host_sandbox_test", "name": "independent probe", "command": independent_command,
+            "artifact": colliding_log_artifact, "os": "linux",
+        }],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": "cargo test -p orbit-cli --test tool module", "outcome": "passed", "role": "required",
+             "deferred": [format!(
+                 "DEFERRED: bubblewrap unavailable: {test}: \
+                 bwrap: No permissions to create a new namespace"
+             )]},
+            {"id": "V3", "command": independent_command, "outcome": "not_run", "role": "required"},
+        ],
+    }));
+    let refused = fixture
+        .settle()
+        .expect_err("a deferred sandbox test holds for host evidence, not a pass")
+        .to_string();
+    assert!(
+        refused.contains("review_awaiting_evidence"),
+        "held, not blocked: {refused}"
+    );
+    assert!(!refused.contains("review_gate_blocked"), "{refused}");
+    let hold: ReviewEvidenceHold = artifact(&fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert_eq!(hold.requirements.len(), 2, "{hold:?}");
+    let synthesized = hold
+        .requirements
+        .iter()
+        .find(|req| req.command == command)
+        .expect("the synthesized requirement is in the hold");
+    assert_eq!(
+        synthesized.artifact, "evidence/host-sandbox/bubblewrap-probe-2.json",
+        "synthesized requirement avoided the colliding derived log: {synthesized:?}"
+    );
+    let independent = hold
+        .requirements
+        .iter()
+        .find(|req| req.command == independent_command)
+        .expect("independent requirement is in the hold");
+    assert_eq!(independent.artifact, colliding_log_artifact);
+
+    // Noncolliding control: an independent requirement with a disjoint locator
+    // leaves the default synthesized locator intact.
+    let mut control_fixture = Fixture::new();
+    control_fixture.admit();
+    let control_artifact = "evidence/host-sandbox/independent.json";
+    control_fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": control_fixture.input["admission"]["attempt_id"],
+        "verdict": "accept", "summary": "Checked the change; no findings.",
+        "findings": [],
+        "external_evidence": [{
+            "kind": "host_sandbox_test", "name": "independent probe", "command": independent_command,
+            "artifact": control_artifact, "os": "linux",
+        }],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": "cargo test -p orbit-cli --test tool module", "outcome": "passed", "role": "required",
+             "deferred": [format!(
+                 "DEFERRED: bubblewrap unavailable: {test}: \
+                 bwrap: No permissions to create a new namespace"
+             )]},
+            {"id": "V3", "command": independent_command, "outcome": "not_run", "role": "required"},
+        ],
+    }));
+    let control_refused = control_fixture
+        .settle()
+        .expect_err("holds for evidence")
+        .to_string();
+    assert!(
+        control_refused.contains("review_awaiting_evidence"),
+        "control held: {control_refused}"
+    );
+    let control_hold: ReviewEvidenceHold =
+        artifact(&control_fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert_eq!(control_hold.requirements.len(), 2, "{control_hold:?}");
+    let control_synthesized = control_hold
+        .requirements
+        .iter()
+        .find(|req| req.command == command)
+        .expect("control synthesized requirement in hold");
+    assert_eq!(
+        control_synthesized.artifact, "evidence/host-sandbox/bubblewrap-probe.json",
+        "control synthesized requirement uses default locator: {control_synthesized:?}"
+    );
+
+    // Canonical alias collision avoidance: an independent requirement with leading/trailing
+    // spaces or alias formatting still reserves its canonical keys and triggers
+    // noncolliding locator allocation.
+    let mut alias_fixture = Fixture::new();
+    alias_fixture.admit();
+    let alias_log_artifact = " evidence/host-sandbox/bubblewrap-probe.log.json ";
+    alias_fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": alias_fixture.input["admission"]["attempt_id"],
+        "verdict": "accept", "summary": "Checked the change; no findings.",
+        "findings": [],
+        "external_evidence": [{
+            "kind": "host_sandbox_test", "name": "independent probe alias", "command": independent_command,
+            "artifact": alias_log_artifact, "os": "linux",
+        }],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": "cargo test -p orbit-cli --test tool module", "outcome": "passed", "role": "required",
+             "deferred": [format!(
+                 "DEFERRED: bubblewrap unavailable: {test}: \
+                 bwrap: No permissions to create a new namespace"
+             )]},
+            {"id": "V3", "command": independent_command, "outcome": "not_run", "role": "required"},
+        ],
+    }));
+    let alias_refused = alias_fixture
+        .settle()
+        .expect_err("holds for evidence")
+        .to_string();
+    assert!(
+        alias_refused.contains("review_awaiting_evidence"),
+        "alias held: {alias_refused}"
+    );
+    let alias_hold: ReviewEvidenceHold = artifact(&alias_fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert_eq!(alias_hold.requirements.len(), 2, "{alias_hold:?}");
+    let alias_synthesized = alias_hold
+        .requirements
+        .iter()
+        .find(|req| req.command == command)
+        .expect("alias synthesized requirement in hold");
+    assert_eq!(
+        alias_synthesized.artifact, "evidence/host-sandbox/bubblewrap-probe-2.json",
+        "synthesized requirement avoided the colliding alias: {alias_synthesized:?}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission_scenarios,
@@ -417,5 +567,6 @@ crate::scenario_table!(
     agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold,
     mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity,
     an_accepted_bubblewrap_deferral_the_reviewer_did_not_name_holds_for_host_evidence,
-    a_named_run_of_the_same_test_in_another_package_does_not_cover_a_bubblewrap_deferral
+    a_named_run_of_the_same_test_in_another_package_does_not_cover_a_bubblewrap_deferral,
+    synthesized_bubblewrap_requirements_avoid_derived_log_collisions
 );
