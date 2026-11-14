@@ -47,5 +47,5 @@ pub use support::*;
 pub use crew_source::{CrewSource, RedrawReason};
 pub use task::*;
 pub(crate) use task::{
-    LazyTaskReferenceIndex, resolve_task_dependencies_lazily, resolve_task_relations_lazily,
+    LazyTaskReferenceIndex, project_task_relations_lazily, resolve_task_dependencies_lazily,
 };

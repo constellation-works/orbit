@@ -425,40 +425,17 @@ fn resolve_task_dependencies_by(
         .collect()
 }
 
-/// Project typed relations with a marker on unresolved foreign-prefix task
-/// targets. Resolvable and locally missing targets retain their stored shape.
-pub fn resolve_task_relations(
-    task: &Task,
-    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
-) -> Vec<ResolvedTaskRelation> {
-    resolve_task_relations_lazily(task, &LazyTaskReferenceIndex::new(status_by_id))
-}
-
-/// [`resolve_task_relations`] over a [`LazyTaskReferenceIndex`] the caller
-/// shares between the projections of one task.
-pub(crate) fn resolve_task_relations_lazily(
+/// Project typed relations using a shared lazy reference index.
+pub(crate) fn project_task_relations_lazily(
     task: &Task,
     reference_index: &LazyTaskReferenceIndex<'_>,
 ) -> Vec<ResolvedTaskRelation> {
-    resolve_task_relations_by(task, |target| {
+    project_task_relations_by(task, |target| {
         reference_index.is_not_verifiable_here(task, target)
     })
 }
 
-/// Resolve relation targets using prefix knowledge derived from one status
-/// projection. Callers that inspect several tasks from the same projection
-/// should create one [`TaskReferenceIndex`] and reuse it.
-pub fn resolve_task_relations_with_index(
-    task: &Task,
-    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
-    reference_index: &TaskReferenceIndex,
-) -> Vec<ResolvedTaskRelation> {
-    resolve_task_relations_by(task, |target| {
-        reference_index.is_not_verifiable_here(task, target, status_by_id)
-    })
-}
-
-fn resolve_task_relations_by(
+fn project_task_relations_by(
     task: &Task,
     is_not_verifiable_here: impl Fn(&str) -> bool,
 ) -> Vec<ResolvedTaskRelation> {
@@ -482,7 +459,6 @@ fn resolve_task_relations_by(
 #[derive(Debug)]
 pub struct TaskReferenceIndex {
     known_prefixes: BTreeSet<String>,
-    indexed_task_count: usize,
 }
 
 impl TaskReferenceIndex {
@@ -493,14 +469,7 @@ impl TaskReferenceIndex {
                 .keys()
                 .filter_map(|id| task_id_prefix(id).map(ToOwned::to_owned))
                 .collect(),
-            indexed_task_count: status_by_id.len(),
         }
-    }
-
-    /// Number of task IDs examined while building this snapshot's prefix set.
-    /// This provides bounded-work evidence without depending on wall-clock time.
-    pub fn indexed_task_count(&self) -> usize {
-        self.indexed_task_count
     }
 
     /// Whether a missing valid task target belongs to a prefix this snapshot

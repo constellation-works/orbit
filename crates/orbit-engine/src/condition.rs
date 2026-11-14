@@ -1,6 +1,6 @@
 //! Expression-based step condition evaluator.
 //!
-//! Evaluates `StepCondition::Expr` strings against a `TemplateContext`.
+//! Evaluates condition expressions against a `TemplateContext`.
 //!
 //! Expression syntax (parsed before template resolution; each operand is
 //! rendered on its own):
@@ -17,7 +17,7 @@ use orbit_common::OrbitError;
 use crate::template::{self, TemplateContext};
 
 /// Evaluate a boolean expression whose operands are templates. Shared between
-/// v1's `StepCondition::Expr` and v2's `when:` / loop `break_when:` constructs
+/// `when:` and loop `break_when:` constructs
 /// (`docs/design/activity-job/4_decisions.md`, "Condition guards stay
 /// equality-only"); the grammar is documented on `evaluate_with`.
 ///

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -83,18 +82,6 @@ pub fn is_delivery_leaf_job(job: &str) -> bool {
 /// this admits any `task_claimed_*` id, which the source-repair paths rely on.
 pub fn is_delivery_leaf_job_by_claimed_prefix(job: &str) -> bool {
     is_owner_delivery_leaf_job(job) || job.starts_with(CLAIMED_DELIVERY_LEAF_PREFIX)
-}
-
-pub const fn default_job_max_active_runs() -> u32 {
-    1
-}
-
-pub const fn default_max_iterations() -> u32 {
-    1
-}
-
-pub const fn default_retry_backoff_seconds() -> u64 {
-    10
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -351,54 +338,6 @@ impl FromStr for JobRunState {
     }
 }
 
-/// Step execution condition.
-///
-/// Keyword shorthands (`always`, `on_success`, `on_failure`, `on_timeout`) are
-/// kept for backwards compatibility. Any other string is treated as an
-/// expression that is evaluated at runtime against the template context.
-///
-/// Expression syntax (after template resolution):
-///   `<lhs> == <rhs>`, `<lhs> != <rhs>`, combined with `&&` / `||`.
-///   `&&` binds tighter than `||`.
-///
-/// Example:
-///   `"{{steps.plan.state.status}} == success && {{steps.gate.output.match}} == true"`
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum StepCondition {
-    #[default]
-    Always,
-    OnSuccess,
-    OnFailure,
-    OnTimeout,
-    /// A runtime expression evaluated against the template context.
-    Expr(String),
-}
-
-impl Serialize for StepCondition {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Always => serializer.serialize_str("always"),
-            Self::OnSuccess => serializer.serialize_str("on_success"),
-            Self::OnFailure => serializer.serialize_str("on_failure"),
-            Self::OnTimeout => serializer.serialize_str("on_timeout"),
-            Self::Expr(expr) => serializer.serialize_str(expr),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for StepCondition {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Ok(match s.as_str() {
-            "always" => Self::Always,
-            "on_success" => Self::OnSuccess,
-            "on_failure" => Self::OnFailure,
-            "on_timeout" => Self::OnTimeout,
-            _ => Self::Expr(s),
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentRunError {
     pub code: String,
@@ -419,96 +358,6 @@ pub struct AgentResponseEnvelope {
     #[serde(default)]
     #[serde(rename = "durationMs")]
     pub duration_ms: Option<u64>,
-}
-
-/// A single step within a job definition.
-///
-/// `Default::default()` matches serde defaults for all fields:
-/// - `retry_backoff_seconds` defaults to 10 (matching `#[serde(default = "default_retry_backoff_seconds")]`)
-/// - `timeout_seconds` defaults to 0; callers must set this explicitly
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct JobStep {
-    /// Optional step identifier for DAG execution. When any step in a job has
-    /// `upstream`, ALL steps must have an `id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Steps that must complete before this step can start. Empty means no
-    /// dependencies. When any step has `upstream`, DAG execution is used.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub upstream: Vec<String>,
-    pub target_type: JobTargetType,
-    pub target_id: OrbitId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_input: Option<Value>,
-    #[serde(default)]
-    pub agent_cli: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub executor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub timeout_seconds: u64,
-    /// Additional env var names to pass through in hermetic mode, on top of the global allowlist.
-    #[serde(default)]
-    pub env_extra: Vec<String>,
-    /// Explicit env var key-value pairs injected into the step's environment.
-    /// Unlike `env_extra` (which passes names from the parent env), these set
-    /// fixed values regardless of what the parent env contains.  Entries here
-    /// override same-named vars from `env_extra` or the global allowlist.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env_set: HashMap<String, String>,
-    /// Maximum number of total attempts (including the first). Zero means no retry.
-    #[serde(default)]
-    pub retry_max_attempts: u32,
-    /// Initial backoff delay in seconds before the first retry; doubles with each attempt.
-    #[serde(default = "default_retry_backoff_seconds")]
-    pub retry_backoff_seconds: u64,
-    #[serde(default)]
-    pub condition: StepCondition,
-    /// Rename output keys before merging into the next step's input.
-    /// Each entry maps `source_key -> target_key`. Unmapped keys pass through unchanged.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub output_map: HashMap<String, String>,
-}
-
-impl Default for JobStep {
-    fn default() -> Self {
-        Self {
-            id: None,
-            upstream: Vec::new(),
-            target_type: JobTargetType::default(),
-            target_id: OrbitId::default(),
-            default_input: None,
-            agent_cli: String::new(),
-            executor: None,
-            model: None,
-            timeout_seconds: 0,
-            env_extra: Vec::new(),
-            env_set: HashMap::new(),
-            retry_max_attempts: 0,
-            retry_backoff_seconds: default_retry_backoff_seconds(),
-            condition: StepCondition::Always,
-            output_map: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Job {
-    pub job_id: OrbitId,
-    pub state: JobScheduleState,
-    #[serde(default)]
-    pub default_input: Option<Value>,
-    #[serde(default = "default_job_max_active_runs")]
-    pub max_active_runs: u32,
-    /// Maximum number of times the step sequence is executed. Defaults to 1
-    /// (single pass). Values > 1 enable loop semantics: after all steps
-    /// complete successfully, the sequence restarts from step 0 until
-    /// `max_iterations` is reached or a step outputs `loop_exit: true`.
-    #[serde(default = "default_max_iterations")]
-    pub max_iterations: u32,
-    pub steps: Vec<JobStep>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// How a job run was submitted [ORB-12255].

@@ -230,17 +230,3 @@ pub fn decision_requests_from_history(
     }
     requests
 }
-
-/// The open decision requests in `task`'s history, oldest first.
-/// Current binding inputs follow [`decision_requests_from_history`].
-pub fn open_decision_requests(
-    task: &Task,
-    history: &[TaskHistoryEntry],
-    pilot_operation: Option<&str>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Vec<DecisionRequest> {
-    decision_requests_from_history(task, history, pilot_operation, now)
-        .into_iter()
-        .filter(|request| request.state == DecisionRequestState::Open)
-        .collect()
-}
