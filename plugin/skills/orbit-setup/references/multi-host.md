@@ -58,6 +58,11 @@ not necessarily rejected by older binaries. Layout version 8 also protects
 script output files and parallel script-branch checkpoints. Before any host
 opens or migrates a workspace to version 9, update the Orbit binary on every
 host that can access it, including replicas. Plan one coordinated rollout.
+Auto-task tool grants need the same lockstep: an older binary refuses a
+definition or settings file that sets `granted_tools`, so upgrade every host
+before setting a grant. See [Granting tools to every minted
+task](auto-tasks.md#granting-tools-to-every-minted-task) and inspect the
+stored grant with `orbit auto-task show <name>`.
 
 `orbit update` run inside an initialized workspace immediately runs
 `migrate --confirm` followed by `workspace sync` as post-replacement

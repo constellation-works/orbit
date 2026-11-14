@@ -211,6 +211,10 @@ not a template field: a `template` replacement or flag edit never changes
 it. `--granted-tools ""` clears it. `orbit auto-task add` takes the same
 flag.
 
+Compatibility: an older binary refuses a definition or settings file that
+sets `granted_tools`. Upgrade every host before setting a grant, then
+inspect the stored grant with `orbit auto-task show <name>`.
+
 Only an operator session may supply the field. Any other caller that
 supplies it, an agent's `orbit.auto_task` call or a mutation proposal
 included, is refused naming the missing operator authority, never silently
