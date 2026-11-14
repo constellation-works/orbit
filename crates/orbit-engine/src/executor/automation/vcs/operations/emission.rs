@@ -285,16 +285,10 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         unreadable,
     )?;
     let old_base = required_string(input, "accepted_base")?;
-    if !super::super::git::git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", old_base, &base_sha],
-    )? || !super::super::git::git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", old_base, head],
-    )? || super::super::git::git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", &base_sha, head],
-    )? {
+    if !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, &base_sha)?
+        || !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, head)?
+        || crate::executor::automation::vcs::git::is_ancestor(workspace, &base_sha, head)?
+    {
         return Err(unreadable("base is not a fresh descendant advance"));
     }
     let merged = git(

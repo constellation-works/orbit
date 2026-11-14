@@ -1,6 +1,5 @@
 //! Host-certified rebase recovery checkpoint lookup.
 use super::super::super::input::required_input_string;
-use super::super::git::git_command_success;
 use super::super::handoff::HandoffContext;
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
@@ -118,10 +117,7 @@ pub(super) fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
             )?;
         }
         let target = required_input_string(checkpoint, "base_sha")?;
-        if !git_command_success(
-            workspace,
-            &["merge-base", "--is-ancestor", target, head_sha],
-        )? {
+        if !crate::executor::automation::vcs::git::is_ancestor(workspace, target, head_sha)? {
             return Err(OrbitError::Execution(
                 "recovered candidate does not descend from its pinned base".to_string(),
             ));

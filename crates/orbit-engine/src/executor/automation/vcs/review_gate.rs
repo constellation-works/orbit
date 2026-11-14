@@ -20,8 +20,8 @@ use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    BaseSyncMode, git_command_success, git_failure_error, git_output, git_output_raw,
-    git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
+    BaseSyncMode, git_failure_error, git_output, git_output_raw, git_run_bytes, git_success,
+    git_timeout_error, resolve_worktree_start_point,
 };
 pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
 pub use super::interrupted_review::{
@@ -360,16 +360,7 @@ pub fn contains_commit(
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, OrbitError> {
-    git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            ancestor,
-            descendant,
-        ],
-    )
+    crate::executor::automation::vcs::git::is_ancestor(workspace_path, ancestor, descendant)
 }
 
 /// Publish a held candidate `commit` on `origin` as

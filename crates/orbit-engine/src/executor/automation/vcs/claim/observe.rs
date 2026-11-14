@@ -114,15 +114,10 @@ pub fn observe_candidate(
              no-diff delivery is not part of this route",
         ));
     }
-    let ancestor = git_command_success(
+    let ancestor = crate::executor::automation::vcs::git::is_ancestor(
         workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            &base.commit,
-            &candidate.commit,
-        ],
+        &base.commit,
+        &candidate.commit,
     )?;
     if !ancestor {
         return Err(refused(format!(
@@ -177,15 +172,10 @@ pub(super) fn observe_with(
         claimed_base_sync(context, input)?,
     )?;
     if let Some(declared) = input_string_field(input, "base_sha") {
-        let contains_declared = git_command_success(
+        let contains_declared = crate::executor::automation::vcs::git::is_ancestor(
             workspace_path,
-            &[
-                "merge-base",
-                "--is-ancestor",
-                "--end-of-options",
-                &declared,
-                &candidate.candidate.commit,
-            ],
+            &declared,
+            &candidate.candidate.commit,
         )?;
         if !contains_declared {
             return Err(refused(format!(

@@ -132,9 +132,10 @@ fn merge_with_rebase_retry(
         let before = git_output(base_checkout, &["rev-parse", "HEAD"])?;
         let after = git_output(workspace_path, &["rev-parse", "HEAD"])?;
         if before.trim() != after.trim()
-            && git_command_success(
+            && crate::executor::automation::vcs::git::is_ancestor(
                 repo_root,
-                &["merge-base", "--is-ancestor", before.trim(), after.trim()],
+                before.trim(),
+                after.trim(),
             )?
         {
             record_intent(before.trim().into(), after.trim().into())?;

@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
-use super::super::git::{git_command_success, git_output};
+use super::super::git::git_output;
 use super::already_landed::{self, AlreadyLanded};
 use super::already_resolved;
 use super::clean_tree::Verifier;
@@ -224,10 +224,7 @@ pub(super) fn head_descends_from_pin(
     base_sha: &str,
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
-    git_command_success(
-        workspace_path,
-        &["merge-base", "--is-ancestor", base_sha, head_sha],
-    )
+    crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, head_sha)
 }
 
 /// Accept only the exact repair HEAD observed during final recovery, after its

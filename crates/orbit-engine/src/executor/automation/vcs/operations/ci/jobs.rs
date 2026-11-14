@@ -432,16 +432,10 @@ pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
                 continue;
             }
             let sha = run["head_sha"].as_str().unwrap_or_default();
-            if !super::super::super::git::git_command_success(
-                workspace_path,
-                &["merge-base", "--is-ancestor", commit, sha],
-            )
-            .unwrap_or(false)
-                || !super::super::super::git::git_command_success(
-                    workspace_path,
-                    &["merge-base", "--is-ancestor", sha, tip],
-                )
+            if !crate::executor::automation::vcs::git::is_ancestor(workspace_path, commit, sha)
                 .unwrap_or(false)
+                || !crate::executor::automation::vcs::git::is_ancestor(workspace_path, sha, tip)
+                    .unwrap_or(false)
             {
                 continue;
             }

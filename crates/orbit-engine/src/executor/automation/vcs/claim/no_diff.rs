@@ -20,9 +20,7 @@ use serde_json::{Value, json};
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
-use super::super::git::{
-    BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
-};
+use super::super::git::{BaseSyncMode, git_output, resolve_worktree_start_point};
 use super::super::review_gate::revision;
 use super::already_resolved;
 use super::delivery::repository;
@@ -247,15 +245,10 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     let submitted = &handoff.candidate;
     let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, base_sync)?;
     let tip = revision(workspace, &base_ref)?;
-    let contained = git_command_success(
+    let contained = crate::executor::automation::vcs::git::is_ancestor(
         workspace,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            &submitted.base.commit,
-            &tip.commit,
-        ],
+        &submitted.base.commit,
+        &tip.commit,
     )?;
     if !contained {
         return Err(refused(format!(

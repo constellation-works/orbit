@@ -32,7 +32,7 @@ use super::super::baseline::{
     BaseCommandResult, FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until,
     compare_with_base_until, hold_failures, known_red, run_validation_command_until,
 };
-use super::super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
+use super::super::git::{BaseSyncMode, resolve_worktree_start_point};
 use super::super::required::command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
 
 /// The share of a [`ReplayBudget`] reserved for the base replay: one part in
@@ -642,16 +642,7 @@ pub fn verify_claimed_known_red_base(
                 "this owner could not read its base '{base_branch}': {error}"
             ))
         })?;
-    match git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            base_sha,
-            &tip,
-        ],
-    ) {
+    match crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, &tip) {
         Ok(true) => Ok(()),
         Ok(false) => Err(Inconclusive(format!(
             "base {base_sha} is not in the history of this owner's {tip}, so its failures are \
