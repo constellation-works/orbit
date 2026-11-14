@@ -354,14 +354,25 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<ClaimInspection>, String> {
-        let claims = self
-            .stores()
-            .tasks()
-            .inspect_execution_claims()
-            .map_err(|_| "its execution claims cannot be read".to_string())?;
+        match self.stores().tasks().inspect_execution_claims() {
+            Ok(claims) => Self::unsettled_task_claim_with_claims(task, Some(&claims)),
+            Err(_) => Self::unsettled_task_claim_with_claims(task, None),
+        }
+    }
+
+    /// [`Self::unsettled_task_claim`] over an already-read claim ledger:
+    /// `None` means the ledger could not be read.
+    pub(super) fn unsettled_task_claim_with_claims(
+        task: &Task,
+        claims: Option<&[ClaimInspection]>,
+    ) -> Result<Option<ClaimInspection>, String> {
+        let Some(claims) = claims else {
+            return Err("its execution claims cannot be read".to_string());
+        };
         Ok(claims
-            .into_iter()
-            .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled()))
+            .iter()
+            .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled())
+            .cloned())
     }
 
     /// Whether the task's next run resumes the candidate its shelving kept:
@@ -424,10 +435,23 @@ impl OrbitRuntime {
     /// claims, or a failed read, contributes none: those PRs then stay open
     /// rather than being guessed at.
     pub(super) fn accepted_handoff_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
-        let tasks = self.stores().tasks();
-        let Ok(claims) = tasks.inspect_execution_claims() else {
+        match self.stores().tasks().inspect_execution_claims() {
+            Ok(claims) => self.accepted_handoff_pull_requests_with_claims(task_id, Some(&claims)),
+            Err(_) => self.accepted_handoff_pull_requests_with_claims(task_id, None),
+        }
+    }
+
+    /// [`Self::accepted_handoff_pull_requests`] over an already-read claim
+    /// ledger: `None` (an unreadable ledger) contributes no PRs.
+    pub(super) fn accepted_handoff_pull_requests_with_claims(
+        &self,
+        task_id: &str,
+        claims: Option<&[ClaimInspection]>,
+    ) -> BTreeMap<u64, String> {
+        let Some(claims) = claims else {
             return BTreeMap::new();
         };
+        let tasks = self.stores().tasks();
         claims
             .iter()
             .filter(|claim| claim.claim.task_id == task_id)

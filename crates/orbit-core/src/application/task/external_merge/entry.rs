@@ -16,6 +16,7 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let carried = self.live_leaf_task_ids()?;
         let mut candidates = Vec::new();
+        let mut claims_cache = None;
         for status in SETTLEABLE_STATUSES {
             for task in self.stores().tasks().list_tasks_filtered(
                 Some(status),
@@ -25,7 +26,9 @@ impl OrbitRuntime {
                 None,
                 None,
             )? {
-                if let Ok(candidate) = self.settlement_candidate(task, &carried) {
+                if let Ok(candidate) =
+                    self.settlement_candidate_with_claims(task, &carried, &mut claims_cache)
+                {
                     candidates.push(candidate);
                 }
             }
