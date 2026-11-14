@@ -105,13 +105,16 @@ impl OrbitToolServer {
             .flatten();
         let mut schema = match definition.input_schema.as_ref().and_then(Value::as_object) {
             Some(declared) => super::schema::declared_input_schema(declared),
-            None => super::schema::build_input_schema_with_friction_taxonomy(
+            None => super::schema::build_input_schema(
                 &definition.schema.name,
                 &definition.schema.parameters,
-                taxonomy.as_deref(),
-                definition.rules.input_decoration,
             ),
         };
+        super::schema::apply_input_decoration(
+            &mut schema,
+            definition.rules.input_decoration,
+            taxonomy.as_deref(),
+        );
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
         slim_advertised_property_descriptions(&mut schema, &definition.schema.name);
         Ok(schema)
