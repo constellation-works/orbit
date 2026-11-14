@@ -17,7 +17,7 @@ This document describes the current implementation of Orbit agent families and c
 
 ## 1. Family Registry
 
-The family registry spans `crates/orbit-types/src/identity/actor.rs` and `crates/orbit-types/src/identity/agent_pair.rs`. `all_agent_families()` returns the supported family identifiers ([ORB-00042] onboarded Grok as one); `agent_from_model()` and `provider_from_model()` infer family and provider from model strings in `actor.rs`; and `infer_agent_family_from_model()` in `agent_pair.rs` remains the conservative recovery helper for older persisted artifacts.
+The family registry spans `crates/orbit-types/src/identity/actor.rs` and `crates/orbit-types/src/identity/agent_pair.rs`. `all_agent_families()` returns the supported family identifiers ([ORB-00042] onboarded Grok as one); `agent_from_model()` infers a family from a model string, while `provider_for_agent_family()` maps a family identifier to its provider in `actor.rs`; and `infer_agent_family_from_model()` in `agent_pair.rs` remains the conservative recovery helper for older persisted artifacts.
 
 Adding a family is still a cross-cutting change: executor assets, sandbox behavior, provider inference, review automation, and scoreboard code all need review. The fixed registry forces that audit instead of silently accepting unknown families.
 
