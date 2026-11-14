@@ -1163,6 +1163,25 @@ if dependency_matches -n 'ReviewStoreBackend|review_certificate_record|review_re
   fail=1
 fi
 
+# [ORB-24097] `vcs::conventions` is the lower owner of the shared task
+# projections; it must not name `pr` again, and the named commit/handoff
+# consumers must read the projections from conventions, not PR rendering.
+# Unrelated PR operations in those consumers stay legal.
+vcs_src="$repo_root/crates/orbit-engine/src/executor/automation/vcs"
+if dependency_matches -n '\bpr\b' "$vcs_src/conventions.rs"; then
+  echo "orbit-engine vcs conventions must not reference pr; it owns the shared task projections"
+  fail=1
+fi
+projection_names='meaningful_execution_summary|render_acceptance_criteria|task_url|is_placeholder_execution_summary'
+for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_resolved.rs; do
+  if dependency_matches -n "\b(pr|body)::(${projection_names})\b|\bpr::\*|\bpr::body::\b" "$vcs_src/$consumer" ||
+    dependency_matches -n -U "\bpr::\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer" ||
+    dependency_matches -n -U "\bpr::body::\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer"; then
+    echo "orbit-engine vcs ${consumer} must read task projections from conventions, not pr"
+    fail=1
+  fi
+done
+
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi

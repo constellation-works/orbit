@@ -2,6 +2,11 @@
 //! values PR titles and bodies and commit messages share, and the commit
 //! subject budget. Templates were parsed when the configuration loaded, so
 //! rendering never meets an unknown placeholder.
+//!
+//! This lower module owns the shared task projections
+//! (`render_acceptance_criteria`, `meaningful_execution_summary`,
+//! `task_url`); PR rendering, commit admission and handoff admission
+//! consume them from here. It must not depend on PR rendering.
 
 use orbit_types::task::{Task, TaskType};
 use orbit_types::workflow::{
@@ -11,7 +16,6 @@ use orbit_types::workflow::{
 use crate::context::PrConfig;
 
 use super::freshness::BranchFreshness;
-use super::pr::{meaningful_execution_summary, render_acceptance_criteria, task_url};
 
 /// The values one task supplies to a text template. `freshness` is known
 /// only when a pull request is opened; elsewhere `{{freshness}}` is empty.
@@ -159,4 +163,62 @@ pub(super) fn render_freshness_list(freshness: &BranchFreshness) -> String {
         "- Base ref: `{}`\n- Head ref: `{}`\n- Behind base: {}\n- Ahead of base: {}",
         freshness.base_ref, freshness.head_ref, freshness.commits_behind, freshness.commits_ahead
     )
+}
+
+pub(in crate::executor::automation::vcs) fn render_acceptance_criteria(
+    criteria: &[String],
+) -> String {
+    criteria
+        .iter()
+        .map(|criterion| format!("- {criterion}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(in crate::executor::automation::vcs) fn meaningful_execution_summary(
+    summary: &str,
+) -> Option<&str> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() || is_placeholder_execution_summary(trimmed) {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn is_placeholder_execution_summary(summary: &str) -> bool {
+    let normalized = summary
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let lower = normalized.to_ascii_lowercase();
+    let stripped = lower.trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace());
+    stripped.is_empty()
+        || matches!(
+            stripped,
+            "todo"
+                | "tbd"
+                | "n/a"
+                | "na"
+                | "none"
+                | "placeholder"
+                | "execution summary"
+                | "summary"
+                | "no execution summary"
+                | "no summary provided"
+                | "no execution summary provided"
+                | "to be authored by executing agent at start time"
+        )
+}
+
+pub(in crate::executor::automation::vcs) fn task_url(
+    task: &Task,
+    pr_config: &PrConfig,
+) -> Option<String> {
+    pr_config
+        .task_url_template
+        .as_ref()
+        .map(|template| template.replace("{task_id}", &task.id))
 }

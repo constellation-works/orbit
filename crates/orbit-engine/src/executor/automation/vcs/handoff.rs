@@ -12,7 +12,7 @@ use super::super::input::{
     canonicalize_existing_dir, input_string_field, required_input_string, required_job_run_id,
 };
 use super::claim::{carries_implementer_output, implementer_summary};
-use super::pr::meaningful_execution_summary;
+use super::conventions::meaningful_execution_summary;
 
 pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 

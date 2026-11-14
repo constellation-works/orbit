@@ -14,6 +14,7 @@ use super::super::conventions::{TaskValues, render_freshness_list};
 use super::super::forge_text;
 use super::super::freshness::BranchFreshness;
 use super::screenshots::Screenshots;
+use super::{meaningful_execution_summary, render_acceptance_criteria, task_url};
 
 pub(super) const GITHUB_PR_BODY_BYTE_LIMIT: usize = 65_536;
 
@@ -517,16 +518,6 @@ pub(super) fn render_branch_freshness_section(freshness: &BranchFreshness) -> St
     )
 }
 
-pub(in crate::executor::automation::vcs) fn render_acceptance_criteria(
-    criteria: &[String],
-) -> String {
-    criteria
-        .iter()
-        .map(|criterion| format!("- {criterion}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 pub(super) fn render_legacy_task_section(task: &Task, pr_config: &PrConfig) -> String {
     let line = render_task_line(task, pr_config);
     match meaningful_execution_summary(&task.execution_summary) {
@@ -537,44 +528,6 @@ pub(super) fn render_legacy_task_section(task: &Task, pr_config: &PrConfig) -> S
         }
         None => line,
     }
-}
-
-pub(in crate::executor::automation::vcs) fn meaningful_execution_summary(
-    summary: &str,
-) -> Option<&str> {
-    let trimmed = summary.trim();
-    if trimmed.is_empty() || is_placeholder_execution_summary(trimmed) {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-pub(super) fn is_placeholder_execution_summary(summary: &str) -> bool {
-    let normalized = summary
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let lower = normalized.to_ascii_lowercase();
-    let stripped = lower.trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace());
-    stripped.is_empty()
-        || matches!(
-            stripped,
-            "todo"
-                | "tbd"
-                | "n/a"
-                | "na"
-                | "none"
-                | "placeholder"
-                | "execution summary"
-                | "summary"
-                | "no execution summary"
-                | "no summary provided"
-                | "no execution summary provided"
-                | "to be authored by executing agent at start time"
-        )
 }
 
 pub(super) fn render_task_line(task: &Task, pr_config: &PrConfig) -> String {
@@ -602,16 +555,6 @@ pub(super) fn render_task_ref(task: &Task, pr_config: &PrConfig) -> String {
         Some(url) => format!("[{}]({url})", task.id),
         None => task.id.clone(),
     }
-}
-
-pub(in crate::executor::automation::vcs) fn task_url(
-    task: &Task,
-    pr_config: &PrConfig,
-) -> Option<String> {
-    pr_config
-        .task_url_template
-        .as_ref()
-        .map(|template| template.replace("{task_id}", &task.id))
 }
 
 /// The pull request title: `pr.title_template` rendered on one line for a
