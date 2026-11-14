@@ -52,11 +52,11 @@ class CiP90ReplayTests(unittest.TestCase):
                     job("Test shard 2/3", ended=260),
                     job("Test shard 3/3", ended=255),
                     job("Test extra partition", ended=270),
-                    job(last, ended=495),
+                    job(last, ended=495, started=400),
                 ]}])
                 self.assertEqual(summary["check_seconds"], 500)
                 self.assertEqual(summary["last_awaited_job"], last)
-                self.assertEqual(summary["job_seconds"][last], 495)
+                self.assertEqual(summary["job_seconds"][last], 95)
 
 
 

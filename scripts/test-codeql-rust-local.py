@@ -3,6 +3,7 @@
 
 import fcntl
 import functools
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -678,13 +679,26 @@ class LocalCodeqlTests(unittest.TestCase):
             directory.chmod(0o555)
         self.addCleanup(lambda: [d.chmod(0o755) for d in (self.cache, self.cache / "rust-1.97.0",
                                                           self.cache / "slots")])
-        before = sorted(self.cache.rglob("*"))
+        def snapshot(root):
+            state = {}
+            for path in sorted(root.rglob("*")):
+                rel = path.relative_to(root).as_posix()
+                if path.is_dir():
+                    state[rel] = ("dir",)
+                elif path.is_file():
+                    state[rel] = ("file", path.stat().st_mtime_ns, path.stat().st_size,
+                                  hashlib.sha256(path.read_bytes()).hexdigest())
+                else:
+                    state[rel] = ("other",)
+            return state
+        before = snapshot(self.cache)
         self.calls_file.write_text("")
         result = self.run_script("--fresh", "fixture.ql")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
         self.assertIn("acquired CodeQL slot", result.stderr)
-        self.assertEqual(sorted(self.cache.rglob("*")), before)
+        self.assertEqual(snapshot(self.cache), before,
+                         "warm read-only cache must not add, remove or modify any entry")
 
     def test_persistent_count_waits_for_existing_lock_on_cold_and_warm_caches(self):
         # Pause the admission retry at a FIFO, rather than infer ordering from

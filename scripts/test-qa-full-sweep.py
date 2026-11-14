@@ -1108,8 +1108,9 @@ def validate_inventory(repo: Path, inventory: dict):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral cases")
         if "required_rows" in scenario:
             rows = scenario["required_rows"]
-            if (not isinstance(rows, list) or not rows or len(rows) != len(set(rows))
-                    or any(not isinstance(row, str) or not row.strip() for row in rows)):
+            if (not isinstance(rows, list) or not rows
+                    or any(not isinstance(row, str) or not row.strip() for row in rows)
+                    or len(rows) != len(set(rows))):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral rows")
         if is_node_test(scenario.get("command", [])) and "required_cases" not in scenario:
             errors.append(f"scenario {scenario['id']} has no required browser cases")
@@ -1460,7 +1461,7 @@ def finalize_result(evidence, assertions, candidate_id, failure=None, accept_non
         failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
     failed = (type(evidence["exit_code"]) is not int
               or (evidence["exit_code"] != 0 and not accept_nonzero)
-              or evidence.get("cleanup_verified") is False or bool(failure))
+              or evidence.get("cleanup_verified") is not True or bool(failure))
     if notices:
         evidence["missing_capabilities"] = notices
     if notices and not failed:
@@ -2594,7 +2595,7 @@ spec:
             port = sock.getsockname()[1]
     except OSError as error:
         evidence = {"command": ["bind", "127.0.0.1"], "exit_code": None,
-                    "stdout": "", "stderr": str(error)}
+                    "stdout": "", "stderr": str(error), "cleanup_verified": True}
         add_result(results, "dashboard-api-boundary",
                    finalize_result(evidence, web_assertions, candidate_id,
                                    "loopback listener unavailable"))
@@ -2627,6 +2628,7 @@ spec:
         except subprocess.TimeoutExpired:
             web.kill()
         captured_stdout, captured_stderr = web.communicate()
+        web_evidence["cleanup_verified"] = True
         if failure:
             web_evidence["stdout"] = captured_stdout
             web_evidence["stderr"] = captured_stderr or web_evidence["stderr"]
@@ -4129,6 +4131,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 "stdout": json.dumps({"producer": body["producer"],
                                       "source_revision": body["source_revision"]}, sort_keys=True),
                 "stderr": "", "outcome": "PASS", "assertions": body["assertions"],
+                "cleanup_verified": True,
                 "candidate_id": candidate_id, "imported_from": str(path),
                 "evidence_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 "native_evidence": body,
@@ -4161,6 +4164,9 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 raise ValueError(f"{path}: imported assertions do not match the required guarantees")
             if scenario.get("capability") == "macos":
                 validate_hosted_macos_evidence(result.get("native_evidence", {}), scenario, candidate, repo)
+                # Validated native execution records each prove verified
+                # cleanup, so the imported row earns it from them.
+                result = {**result, "cleanup_verified": True}
             if scenario.get("capability") == "linux" and body.get("environment", {}).get("os") != "Linux":
                 raise ValueError(f"{path}: Linux cases require Linux execution evidence")
             validate_cargo_test_evidence(result["command"], result, scenario.get("required_tests", []),

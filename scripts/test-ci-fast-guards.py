@@ -241,11 +241,22 @@ jobs:
         self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
+    # Real test-* files that ci-guardrails.sh does not run as self-tests
+    # (bench/manual fixtures and a data allowlist), enumerated independently
+    # of the fixture stubs so a dropped run_guard line cannot shrink the
+    # expected set together with the actual set.
+    NON_GUARD_TEST_FILES = {
+        "test-bench-compiler-cache.py", "test-check-npm-package.py",
+        "test-codeql-path-barriers.py", "test-desktop-advisories.py",
+        "test-shell-waits-allowlist.json", "test-state-backup.py",
+        "test-visual-fixture-server.py",
+    }
+
     def assert_self_tests(self, ran, mode="--guards"):
-        # Discover the fixture's executable tests; assertions are about what
-        # the runner executed, not a pinned source-list or count.
-        expected = {path.name for path in self.scripts.glob("test-*")
-                    if path.name != "test-qa-full-sweep.py"}
+        expected = {path.name for path in SCRIPTS.glob("test-*")
+                    if path.is_file() and path.suffix in (".py", ".sh")
+                    and path.name not in self.NON_GUARD_TEST_FILES
+                    and path.name != "test-qa-full-sweep.py"}
         actual = {path.name for path in self.guard_calls.iterdir()} & expected
         self.assertEqual(actual, expected if ran and mode != "--guards-qa" else set())
         self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").exists(),

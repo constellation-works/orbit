@@ -262,6 +262,9 @@ def response(exit_code=0, http="200", body=BODY, **extra):
 HANG_QUIET_SECONDS = 120
 HANG_ABSOLUTE_SECONDS = 300
 SLOW_FIXTURE_SECONDS = 12
+# Bounded capture: a child writing forever must be stopped by bytes as well
+# as time, so run_step never buffers unbounded output in memory.
+MAX_STREAM_BYTES = 8 * 1024 * 1024
 
 
 def _read_chunk(stream):
@@ -281,6 +284,9 @@ def _take(stream, bucket):
     while True:
         chunk, eof = _read_chunk(stream)
         if chunk:
+            if sum(len(part) for part in bucket) + len(chunk) > MAX_STREAM_BYTES:
+                raise AssertionError(
+                    f"step output exceeded {MAX_STREAM_BYTES} bytes; capture is bounded")
             bucket.append(chunk)
             progressed = True
         if eof or not chunk:
