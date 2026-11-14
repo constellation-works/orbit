@@ -19,17 +19,16 @@ use std::os::unix::fs::MetadataExt;
 use crate::application::job::log_best_effort;
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    AuditEventInsertParams, ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams,
-    JobRunStepParams, KeyedJobRunAdmission, KeyedJobRunParams, TaskReservationReleaseReason,
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, KeyedJobRunAdmission,
+    KeyedJobRunParams, TaskReservationReleaseReason,
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobScheduleState, JobTargetType,
+    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobScheduleState,
 };
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
@@ -77,12 +76,11 @@ pub use wait::{PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
-pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
+pub(crate) use worker::command::workspace_auto_run_input;
+// Shim for the path's old home; retire it once the remaining callers import
+// `job::run::definition` directly (follow-up).
 #[cfg(test)]
-pub(crate) use worker::exit::WORKER_EXIT_AUDIT;
-pub(crate) use worker::exit::{
-    reconciled_worker_exit_clause, recorded_host_manager_stop, recorded_worker_exit,
-};
+pub(crate) use super::run::definition::run_definition_snapshot_path;
 #[cfg(test)]
 pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;

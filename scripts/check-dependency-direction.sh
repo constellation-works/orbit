@@ -624,7 +624,7 @@ def visibility(toks, i, parts):
             if inner[:1] == ["in"] and inner[1:2] == ["crate"]:
                 return inner[2:]
     return None
-lower_path = [app.name, *([module] if module else [])]
+lower_path = [app.name, *[part for part in module.split("/") if part]]
 names = set()
 for top in upper:
     # A module is a directory or, like `tag_instructions`, a single file.
@@ -1183,6 +1183,27 @@ for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_re
     fail=1
   fi
 done
+
+# [ORB-24781] `job::run` (a run record's lifecycle: queries, cancellation,
+# reconciliation and drain controls) sits below `job::pipeline` (submission,
+# admission and worker execution). Run owns its audit trail (`audit_record`),
+# worker-exit evidence and scope reads (`worker_exit`, `worker_scope`) and
+# definition reads (`definition`); pipeline imports those and never the
+# reverse. A path, a grouped tree or a `super::` chain from production code
+# under `job/run` into `pipeline`, or a call to an inherent method an `impl
+# OrbitRuntime` block under `job/pipeline` defines (derived, so a new method is
+# covered without being listed), is a reintroduced edge.
+run_src="$app_src/job/run"
+if dependency_matches -n '\b(crate::application::job|super::super|super)::pipeline\b' \
+  "$run_src" -g '*.rs' -g '!**/tests/**' ||
+  dependency_matches -n -U '\b(crate::application::job|super::super|super)::\{[^}]*\bpipeline\b' \
+    "$run_src" -g '*.rs' -g '!**/tests/**' ||
+  dependency_matches -n -U 'crate::application::\{[^}]*\bjob::(pipeline\b|\{[^}]*\bpipeline\b)' \
+    "$run_src" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" job/run pipeline '' '' "$app_src/job"; then
+  echo "orbit-core job::run must not reach job::pipeline; run owns its audit writer, worker-exit evidence and definition reads"
+  fail=1
+fi
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

@@ -90,15 +90,17 @@ impl OrbitRuntime {
                             tracing::error!(%error, "could not persist watchdog resource evidence");
                         }
                         let started_at = run.started_at.unwrap_or(run.scheduled_at);
-                        if let Err(error) = crate::application::job::pipeline::worker::record::watchdog_diagnostic_step(
-                            runtime.stores().jobs(),
-                            &run,
-                            started_at,
-                            Utc::now(),
-                            Some(WORKER_RESOURCE_LIMIT_ERROR_CODE),
-                            &message,
-                            JobRunState::Failed,
-                        ) {
+                        if let Err(error) =
+                            crate::application::job::run::audit_record::watchdog_diagnostic_step(
+                                runtime.stores().jobs(),
+                                &run,
+                                started_at,
+                                Utc::now(),
+                                Some(WORKER_RESOURCE_LIMIT_ERROR_CODE),
+                                &message,
+                                JobRunState::Failed,
+                            )
+                        {
                             tracing::error!(%error, "could not persist watchdog diagnostic");
                         }
                         tracing::warn!(run_id = run.run_id, "{message}");
