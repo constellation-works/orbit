@@ -871,7 +871,7 @@ fn doctor_reports_the_worker_cpu_quota() {
 fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
     let f = WorkCheckout::new();
     let global_body = "[workflow]\nbase_branch = \"main\"\n";
-    let workspace_body = "# keep this note\n[workflow]\nbase_branch = \"agent-main\"\nsystem_crew = \"sol\"\n\n[plugin]\nlegacy_callback_identity = true\n\n[scoring]\nenabled = false\n\n[task.approval]\ndelegate_approval = true\n\n[workflow.future]\nenabled = true\n\n[plugins.future]\narbitrary = { nested = true }\n\n[future]\n";
+    let workspace_body = "# keep this note\n[workflow]\nbase_branch = \"agent-main\"\nsystem_crew = \"sol\"\n\n[plugin]\nlegacy_callback_identity = true\n\n[lease]\nenabled = false\n\n[task.approval]\ndelegate_approval = true\n\n[workflow.future]\nenabled = true\n\n[plugins.future]\narbitrary = { nested = true }\n\n[future]\n";
     let (_, gc, wc) = write_configs(&f, global_body, workspace_body);
     let reported = doctor(&f, &[]);
     expect_file(&wc, workspace_body);
@@ -887,7 +887,7 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
         .collect();
     for key in [
         "workflow.system_crew",
-        "scoring.enabled",
+        "lease.enabled",
         "task.approval",
         "workflow.future",
         "future",
@@ -920,7 +920,7 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
     let repair = row(&fixed, "fix-retired-config-keys");
     for needle in [
         "workflow.system_crew",
-        "scoring.enabled",
+        "lease.enabled",
         "plugin.legacy_callback_identity",
     ] {
         msg_has(repair, needle);

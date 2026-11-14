@@ -1304,12 +1304,12 @@ active-model file) to reclaim the former model downloads. This does not affect
 task records or the lexical index. No automatic deletion of that global
 directory is performed.
 
-Legacy `[semantic]` configuration and `search.model` are ignored with a warning
-for the removal release; delete them from config.toml. `orbit doctor` names
-the file, and `orbit doctor --fix-retired-config-keys` backs it up and removes
-the key. Config get/set reject
-these retired keys with migration guidance. The runtime no longer honors
-`ORBIT_SEARCH_COMPANION*` environment overrides.
+Legacy `[semantic]` configuration and `search.model` are ordinary unknown
+settings. Loading ignores them with the generic unknown-key warning; delete
+them from config.toml. `orbit doctor` names the file, and `orbit doctor
+--fix-retired-config-keys` backs it up and removes the unknown table with the
+other unknown paths. `orbit config get` and `set` report an unknown key. The
+runtime no longer honors `ORBIT_SEARCH_COMPANION*` environment overrides.
 
 ## Job run state migration (schema v38)
 

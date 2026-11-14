@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-11-12
+last_validated: 2026-11-14
 ---
 
 # Orbit Configuration
@@ -3048,14 +3048,7 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 
 | Retired | Note |
 |---|---|
-| `operation.preset`, `completion`, `preparation`, `preparation_due_seconds`, `promotion`, `leaf_ceiling`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, `delivery_cap` | Operation mode was removed; review settings live in `[review]` and `workflow.purpose_crews.review`. |
-| `operation.review_repair_cycles`, `operation.review_reviewer_starts` | Each candidate gets one review whose reviewer fixes its findings in one commit, bounded by `review.minutes`. |
-| `[docs]` | The docs corpus was removed. |
-| `[semantic]`, `search.model` | Search is lexical (SQLite FTS5) and needs no model. The legacy `semantic.db` path remains the lexical search database. |
-| `workflow.pilot_max_complexity` | Route a tier with `workflow.<tier>_complexity_crews`, or pin `crew` on the task. |
-| `[duel]`, `[duel.models]` | Retired. |
 | `[routines]` (`role = "source"`) | Every registered owner checkout is a routine source. |
-| `knowledge.task_id_pattern` | Deprecated. |
 | `execution.env.inherit` | Inheritance is fixed off. |
 
 **Deprecated keys warn and are translated or ignored.** Still loaded, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors. `orbit doctor --fix-retired-config-keys` removes ignored keys directly. It rewrites each translated key into its replacement in the same file before removing the old keys, writing only replacements that file does not already set: `operation.review_policy` (`before-pr` or `none`) and the review booleans become `review.timing`, `operation.review_minutes` becomes `review.minutes`, the old pool keys become their `workflow.purpose_crews.*` replacements, and the containment and shell-probe pairs become their modes. A workspace file is rewritten against the global file beneath it, so a workspace that stated one review or shell-probe half gets the mode it already resolved to. Explicit modern values in that file win, preserving global/workspace precedence. Each edited file keeps an original backup; a second successful run writes nothing.
@@ -3076,7 +3069,6 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `workflow.auto_ship` | Ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` drains or `orbit run ship`. Delete the key. |
 | `workflow.crew_performance_types` | Becomes `workflow.task_types`, the same ordered entries. Recognised until 2026-12-07. |
 | `workflow.crew_performance`, `crew_performance_strength`, `crew_performance_cap`, `crew_performance_window_days` | Ignored: crew-performance weighting and its snapshots were removed. Delete the keys. Recognised until 2026-12-07. |
-| `scoring.enabled` | Ignored: the agent-family scoreboard was retired and nothing records scoreboard metrics. Delete the `[scoring]` table. Recognised until 2026-11-12; after that it is an unknown key. |
 | `workflow.crew_ladder.mode`, `rungs`, `tiers`, `explore_rate`, `margin`, `look_every`, `max_sample`, `exclude_types`, `watch_window`, `retry_after_days`, `delivery_quality`, `quality_grade_margin`, `min_grade_coverage` | Ignored: the crew ladder, its standing shadow trials and `orbit agents ladder` were removed. Route each tier with `workflow.<tier>_complexity_crews` and compare crews with [experiments](#experiments--experiments-over-agent-treatments). Delete the `[workflow.crew_ladder]` table. Recognised until 2026-12-07; after that they are unknown keys. |
 | `workflow.regression_risk.enabled`, `window_days`, `min_support`, `threshold_percent`, `max_files` | Ignored: regression-risk prompt marks were removed. Task riskiness scores use a fixed 30-day window and a minimum support of 5, the former defaults. Delete the `[workflow.regression_risk]` table. Recognised until 2026-12-07; after that they are unknown keys. |
 | `workflow.explore_brief.enabled`, `tags`, `deliver` | Ignored: the task pilot's explore brief was removed. The pilot no longer returns a brief, no implement dispatch receives one, and the brief-accuracy diagnostics endpoint is gone. Existing `explore-brief.json` task artifacts and `activity.explore_brief_applied` audit rows stay readable. Delete the `[workflow.explore_brief]` table. Recognised until 2026-12-07; after that they are unknown keys. |

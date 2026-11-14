@@ -16,7 +16,6 @@ pub(crate) struct RawRuntimeConfig {
     // Explicit migration guards below reject retired
     // runtime keys whose continued acceptance would be unsafe or misleading.
     pub(crate) task: Option<RawTaskSection>,
-    pub(crate) knowledge: Option<RawKnowledgeConfig>,
     pub(crate) watch: Option<toml::Value>,
     /// Removed in ORB-00058. Kept only so config loading can reject stale
     /// `[agent.<role>]` tables with an explicit migration error.
@@ -30,15 +29,11 @@ pub(crate) struct RawRuntimeConfig {
     /// not installed is deliberately tolerated here: a workspace that pins a
     /// plugin must still load on a machine that has not installed it yet.
     pub(crate) plugins: Option<BTreeMap<String, toml::Value>>,
-    /// Retired in ORB-10627. Existing workspaces may still carry the section
-    /// written by older `orbit init`; loaders warn and ignore it.
-    pub(crate) duel: Option<toml::Value>,
     /// Retired in ORB-12236. Existing workspaces may still carry
     /// `[routines] role = "source"`; loaders warn and ignore it.
+    /// Delete this guard after 2026-12-01, when the section becomes an
+    /// ordinary unknown table.
     pub(crate) routines: Option<toml::Value>,
-    /// Retired docs-corpus configuration. Kept for one release so existing
-    /// workspaces warn and continue loading while the table is ignored.
-    pub(crate) docs: Option<toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -89,12 +84,6 @@ pub(crate) struct RawCrewEntry {
     pub(crate) implementer: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing)]
     pub(crate) reviewer: Option<BTreeMap<String, String>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RawKnowledgeConfig {
-    /// Deprecated legacy key. Kept only so loaders can warn and ignore it.
-    pub(crate) task_id_pattern: Option<toml::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

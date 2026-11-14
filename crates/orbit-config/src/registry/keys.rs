@@ -20,73 +20,12 @@ pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
 /// with the migration note instead of a did-you-mean, so the operator learns
 /// the key is gone rather than misspelled. Delete an entry together with its
 /// load warning once the release window has passed.
-pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
-    (
-        "plugin.legacy_callback_identity",
-        "plugin callbacks require the host-issued session descriptor; the environment token and \
+pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
+    "plugin.legacy_callback_identity",
+    "plugin callbacks require the host-issued session descriptor; the environment token and \
          process ancestry no longer authorize callbacks. Delete this key and keep file descriptor \
          3 open across backend wrappers, exec and setsid",
-    ),
-    (
-        "workflow.pilot_max_complexity",
-        "the task pilot applies its assessed complexity as-is; route a tier with \
-     workflow.<tier>_complexity_crews or pin `crew` on the task instead",
-    ),
-    (
-        "semantic",
-        "semantic search was removed; delete the table and use lexical search",
-    ),
-    (
-        "search.model",
-        "search uses SQLite FTS5 and no longer selects a model; delete this key",
-    ),
-    // Operation mode was removed on 2026-09-21; the `[operation]` table keeps
-    // only the deprecated `review_crew`. See docs/design/orbit-core/4_decisions.md.
-    ("operation.preset", OPERATION_MODE_REMOVED_NOTE),
-    ("operation.completion", OPERATION_MODE_REMOVED_NOTE),
-    ("operation.preparation", OPERATION_MODE_REMOVED_NOTE),
-    (
-        "operation.preparation_due_seconds",
-        OPERATION_MODE_REMOVED_NOTE,
-    ),
-    ("operation.promotion", OPERATION_MODE_REMOVED_NOTE),
-    ("operation.leaf_ceiling", OPERATION_MODE_REMOVED_NOTE),
-    ("operation.recovery", OPERATION_MODE_REMOVED_NOTE),
-    (
-        "operation.recovery_episodes_per_task",
-        OPERATION_MODE_REMOVED_NOTE,
-    ),
-    (
-        "operation.recovery_minutes_per_task",
-        OPERATION_MODE_REMOVED_NOTE,
-    ),
-    ("operation.delivery_cap", OPERATION_MODE_REMOVED_NOTE),
-    // [ORB-13989] [ORB-13992] Each candidate gets one review, and its
-    // reviewer fixes its findings in one commit; no repair cycle or extra
-    // reviewer start is counted.
-    (
-        "operation.review_repair_cycles",
-        "each candidate gets one review whose reviewer fixes its findings in one commit, so \
-     no repair cycle is counted; review.minutes bounds that review",
-    ),
-    (
-        "operation.review_reviewer_starts",
-        "each candidate gets one review, so reviewer starts are no longer counted; \
-     review.minutes bounds that review",
-    ),
-    // [ORB-15922] The agent-family scoreboard was retired on 2026-10-13 and
-    // nothing records scoreboard metrics any more. Drop this entry after
-    // 2026-11-12, when the key becomes an ordinary unknown setting.
-    (
-        "scoring.enabled",
-        "deprecated and ignored: the agent-family scoreboard was retired and nothing records \
-     scoreboard metrics; delete the [scoring] table. This key stops being recognised after \
-     2026-11-12",
-    ),
-];
-
-const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review settings live in \
-     [review] (timing, minutes) and workflow.purpose_crews.review";
+)];
 
 /// Keys retired from the registry that still load: loading translates each
 /// into its replacement ([`crate::aliases`]) or, where its note says so,
@@ -755,11 +694,6 @@ pub(crate) fn deprecated_key_note(key: &str) -> Option<&'static str> {
 
 /// The migration note for a removed key, or `None` for any other key.
 pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {
-    let key = if key.starts_with("semantic.") {
-        "semantic"
-    } else {
-        key
-    };
     REMOVED_CONFIG_KEYS
         .iter()
         .find(|(removed, _)| *removed == key)

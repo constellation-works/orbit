@@ -40,9 +40,7 @@
 //! `review.minutes`, and `operation.review_crew` becomes
 //! `workflow.purpose_crews.review`. The resolved
 //! [`OperationPolicy`] keeps its two timing booleans, which run records and
-//! claim contracts capture. The retired budget keys
-//! (`operation.review_reviewer_starts`, `operation.review_repair_cycles`) are
-//! warned and ignored (`registry::REMOVED_CONFIG_KEYS`).
+//! claim contracts capture.
 
 mod crew;
 mod hosts;

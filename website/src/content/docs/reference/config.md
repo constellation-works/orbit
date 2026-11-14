@@ -913,7 +913,8 @@ Notes:
   toggle it yourself, and `none` turns neither on. A later release rejects
   them.
 - `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
-  retired and ignored with a warning.
+  unknown settings. Loading ignores them with the generic unknown-key warning;
+  delete them.
 - The keys these consolidate still load with a deprecation warning:
   `operation.review_crew`, `workflow.final_recovery_crews`, the
   `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools,

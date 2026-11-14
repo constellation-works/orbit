@@ -311,7 +311,8 @@ still load, translated with a warning (`before-pr` → `review.timing = "before_
 `after-landing` no longer enables `delivery-code-review` (its own `enabled` flag decides);
 `none` → `review.timing = "off"`), and a later release makes them errors. Move
 them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` and
-`operation.review_repair_cycles` are ignored with a warning; delete them.
+`operation.review_repair_cycles` are unknown settings: load ignores them with
+the generic unknown-key warning; delete them.
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 

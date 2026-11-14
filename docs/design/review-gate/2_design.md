@@ -2,7 +2,7 @@
 title: Review Gate — Design
 owner: codex
 last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_validated: 2026-11-14
 status: Implemented
 feature: review-gate
 doc_role: design
@@ -100,8 +100,9 @@ auto-task list`/`show` report that flag as `effective_enabled`, which now equals
 `enabled`. A `[review]` table in the same file wins over the deprecated spelling.
 `operation.review_minutes` becomes `review.minutes`. The budget keys
 `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
-retired [ORB-13989]: one review per candidate counts neither, so both are
-warned about by name and ignored. The resolved-policy version is 5; the
+unknown settings [ORB-13989]: one review per candidate counts neither, so a
+file that still sets them loads and the generic unknown-key warning names
+them. The resolved-policy version is 5; the
 review-admission contract remains version 1 and refuses unsupported contract
 versions. A snapshot captured before the retirement still carries
 `reviewer_starts` or `repair_cycles`; it reads and the values are ignored.

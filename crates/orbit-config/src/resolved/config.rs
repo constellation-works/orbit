@@ -351,14 +351,7 @@ impl ResolvedConfig {
         );
 
         let compatibility_keys = CompatibilityKeys {
-            deprecated_task_id_pattern: parsed
-                .knowledge
-                .as_ref()
-                .and_then(|section| section.task_id_pattern.as_ref())
-                .is_some(),
-            retired_duel: parsed.duel.is_some(),
             retired_routines: parsed.routines.is_some(),
-            retired_docs: parsed.docs.is_some(),
             removed_keys: removed_keys_present(&document),
             deprecated_keys: deprecated_keys_present(&document),
         };
