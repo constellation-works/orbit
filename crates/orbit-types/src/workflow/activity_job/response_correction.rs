@@ -16,9 +16,9 @@ const READ_ONLY_FS_PROFILE: &str = "reviewer";
 
 /// Registered built-in Orbit tools classified as mutating, including writes
 /// to coordination state outside the worktree, as policy names: a family's
-/// mutating actions appear as `family:action`. Keep this table and the
-/// shipped correction activities' disallow lists in sync with the tool
-/// registry.
+/// mutating actions appear as `family:action`. Keep this table in sync with
+/// the tool registry. A disallow-list activity need not name a new entry:
+/// dispatch denies every entry on top of the activity's own list.
 /// File and process access is separately confined by the filesystem profile.
 pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.auto_task:add",
@@ -107,7 +107,9 @@ pub enum ResponseCorrectionActivityError {
 }
 
 /// Refuse `response_correction` unless workspace writes and the built-in
-/// Orbit mutations above are denied. Called from asset load in either grant mode.
+/// Orbit mutations above are denied. Called from asset load in either grant
+/// mode. A disallow-list activity is admitted whatever the list names: the
+/// dispatch path denies every [`MUTATING_TOOLS`] entry on top of it.
 pub fn validate_response_correction_activity(
     activity: &ActivityV2,
 ) -> Result<(), ResponseCorrectionActivityError> {
@@ -129,11 +131,19 @@ pub fn validate_response_correction_activity(
     if spec.trusted_host_execution {
         return Err(ResponseCorrectionActivityError::TrustedHost);
     }
-    let granted = |tool: &str| match &spec.tool_disallow_list {
-        Some(disallowed) => !tool_allowed(tool, disallowed),
-        None => tool_allowed(tool, &spec.tools),
-    };
-    if let Some(tool) = MUTATING_TOOLS.iter().copied().find(|tool| granted(tool)) {
+    // A disallow list is a deny-by-default-for-mutation grant: the dispatch
+    // path appends every name in `MUTATING_TOOLS` to it, so a mutating tool
+    // a release adds later is denied without the file naming it. Requiring
+    // the list to name each one would turn a previously valid workspace
+    // copy into a refused file on the release that registers the tool
+    // [ORB-24639]. Only an allowlist grant, which names what it grants, is
+    // checked here.
+    if spec.tool_disallow_list.is_none()
+        && let Some(tool) = MUTATING_TOOLS
+            .iter()
+            .copied()
+            .find(|tool| tool_allowed(tool, &spec.tools))
+    {
         return Err(ResponseCorrectionActivityError::MutatingTool { tool });
     }
     Ok(())
