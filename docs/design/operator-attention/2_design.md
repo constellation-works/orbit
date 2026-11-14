@@ -137,7 +137,7 @@ The eight former keys are now fixed constants in code (for example `ATTENTION_CU
 
 Slice 1 consumed cursor TTL, severity thresholds and item caps from the former settings; slices 2–4 consume the remaining fixed values for runtime, provider and fan-out behaviour.
 
-Configuration changes thresholds only. It does not add kinds, change `next`, or change what
+Configuration no longer changes thresholds; the fixed values govern them. It does not add kinds, change `next`, or change what
 counts as a condition; those are code and spec, so two operators' lists mean the same thing.
 
 ## 6. Slices
@@ -149,12 +149,12 @@ References below; all four implementation tasks are done.
    `pilot_warning`, `pilot_hold`, `blocked`, `decision_open` (with folding) and
    `review_waiting`; severity and `next`; every filter in the filter spec; fingerprint and the
    `--since` cursor; single-workspace and local `--all`; goldens, skill reference and docs.
-   Owns the FULL shared `[attention]` configuration: typed settings, validated defaults, registry, resolution and readback for every §5 key. Later slices consume this owner and create no competing schemas.
+   Owned the shared `[attention]` configuration while the §5 keys were live; after [ORB-22808] the bounds are fixed constants (§5) with no competing schemas.
 2. **Done — runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
    `degraded` reporting for sessions without the Operator capability; liveness check
-   documented per platform (the probe and its limitations are described below). Consumes the shared §5 settings from slice 1. Depends on slice 1.
+   documented per platform (the probe and its limitations are described below). Consumes the shared §5 fixed values. Depends on slice 1.
 3. **Done — provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
-   read and the friction adapter; offline degrade. Consumes the shared §5 settings from slice 1. Depends on slice 1.
+   read and the friction adapter; offline degrade. Consumes the shared §5 fixed values. Depends on slice 1.
    The provider read stays behind `github.run.list` (Orbit stays generic); freshness binds to the
    fetched `origin/<base>` head ([ORB-21680]), pending or unknown observations are not green, and `since` is the
    failing run's `updated_at` labelled as an onset-time proxy (`detail.since_source`), because the
@@ -166,7 +166,7 @@ References below; all four implementation tasks are done.
    [attention-federation](./specs/attention-federation.md#candidate-read): the slice calls
    that shape and does not merge a public page, produced by an omitted `limit`, as the
    destination's candidate set. Depends on slice 1; its unreachable-host item is useful
-   before slices 2 and 3 land. It consumes slice 1’s shared fan-out settings.
+   before slices 2 and 3 land. It consumes the shared §5 fixed fan-out value.
 
 No session hook, automation, notification or live configuration change is authorized.
 
