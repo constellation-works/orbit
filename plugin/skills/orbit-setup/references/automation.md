@@ -257,12 +257,18 @@ It never runs on a follower or inside a claimed worker.
 
 This also needs no enablement. On a Linux owner, every clock sweep looks for
 in-progress tasks whose before-PR review is held only for a `codeql` result. A
-macOS reviewer, local or claimed, cannot complete
-`scripts/codeql-rust-local.sh`, so it holds instead. For each such task the
-sweep dispatches one `review_evidence_fulfilment_pipeline` run, one at a time.
-The run executes the named command at the held commit and attaches the result,
-which queues a fresh review. A failed or incomplete run attaches only its log,
-with a typed reason, and the hold stays. Each run needs `min_free_mib` free
+macOS reviewer, local or claimed, cannot complete that check, so it holds
+instead. The built-in fulfilment runs only `scripts/codeql-rust-local.sh`
+with optional `--ram <mib>` and `--toolchain <version>` and exactly one query
+selector. Download the script from
+<https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
+and save it at `scripts/codeql-rust-local.sh` in the workspace. A custom
+command is not fulfilled by the built-in path: the run attaches its log with
+that refusal and the hold stays. For each such task the sweep dispatches one
+`review_evidence_fulfilment_pipeline` run, one at a time. The run executes an
+admitted command at the held commit and attaches the result, which queues
+a fresh review. A failed or incomplete run attaches only its log, with a typed
+reason, and the hold stays. Each run needs `min_free_mib` free
 (30 GiB by default; override it in a workspace copy of the job) and is audited
 as `review.evidence_fulfilment`. It never runs on a follower, inside a claimed
 worker, or on another platform. See

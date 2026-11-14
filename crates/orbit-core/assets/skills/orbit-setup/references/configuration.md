@@ -785,8 +785,9 @@ orbit config set review.baseline_commands '["cargo test -p service --test api"]'
 `[[review.host_evidence]]` has no `config set` key. Add its array-of-tables
 directly to `<workspace>/.orbit/config.toml` or `~/.orbit/config.toml`.
 The workspace list replaces the entire global list, including when set to
-`[]`. Replace the example paths, package, target and analysis command with
-ones that exist in your project:
+`[]`. Replace the example paths, package and target with ones that exist in
+your project. A `codeql` command the built-in fulfilment runs stays on the
+admitted script below; do not replace it with another program.
 
 ```toml
 [review]
@@ -805,7 +806,7 @@ kind = "codeql"
 name = "Linux code analysis"
 paths = ["src/**"]
 os = "linux"
-command = "scripts/run-analysis.sh"
+command = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls"
 artifact = "evidence/linux-code-analysis.json"
 hosted_check = "CodeQL / Analyze"
 ```
@@ -820,6 +821,16 @@ command must use the admitted
 `cargo test -p <package> --test <target> [<one-filter>]` form (or use
 `--package` in place of `-p`); shell metacharacters and other command
 shapes are refused.
+
+A `codeql` rule the built-in fulfilment runs must name
+`scripts/codeql-rust-local.sh`, then optional `--ram <mib>` and
+`--toolchain <version>`, then exactly one query selector, as in the example.
+Download that script from
+<https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
+and save it at `scripts/codeql-rust-local.sh` in the workspace.
+Configuration accepts any non-empty `codeql` command, and a custom command
+is not fulfilled by the built-in path: the hold stays, and the refusal names
+this contract and that download.
 
 A `codeql` rule is owed when the claimed review host has a different OS from
 the rule's `os`, and the owner fulfils it on the named OS. A

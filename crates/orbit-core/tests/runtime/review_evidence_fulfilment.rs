@@ -1052,6 +1052,92 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
     }
 }
 
+/// Published copy of the only script the built-in fulfilment runs, pinned to
+/// the release tag verified with this checkout.
+const PUBLISHED_CODEQL_SCRIPT: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh";
+
+/// A `codeql` command other than the admitted script is refused before
+/// anything runs. The activity output, its log and the task comment name the
+/// admitted command and where to obtain the script.
+#[test]
+fn a_custom_codeql_command_is_refused_with_the_published_script() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::a_custom_codeql_command_is_refused_with_the_published_script",
+    ) {
+        return;
+    }
+    let command = "scripts/run-analysis.sh";
+    let (fixture, hold) = held(Stub::Clean, command);
+    configure_job(&fixture, 1, None);
+    let run = fixture
+        .runtime
+        .submit_pipeline_run(
+            REVIEW_EVIDENCE_FULFILMENT_JOB,
+            json!({
+                "task_id": fixture.task_id,
+                "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit),
+            }),
+            None,
+            Some("system"),
+        )
+        .unwrap();
+    execute(&fixture, &run.run_id);
+    let output = fixture
+        .runtime
+        .read_run_state(&run.run_id)
+        .unwrap()
+        .unwrap()
+        .pipeline["fulfil"]
+        .clone();
+    assert_eq!(output["fulfilled"], false, "{output}");
+    assert_eq!(output["reason"], "command_not_allowed", "{output}");
+    assert_eq!(output["retryable"], false, "{output}");
+    let detail = output["detail"].as_str().unwrap();
+    assert_codeql_refusal_contract(detail);
+    let log = artifact(&fixture, EVIDENCE_LOG).expect("the refusal's log is attached");
+    assert_eq!(log["reason"], "command_not_allowed");
+    assert_eq!(log["detail"].as_str(), Some(detail));
+    assert!(
+        stub_runs(&fixture).is_empty(),
+        "a refused command never runs: {log}"
+    );
+    assert_still_held(&fixture, "custom codeql command");
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    let comment = comments
+        .iter()
+        .rev()
+        .find(|comment| comment.message.contains("command_not_allowed"))
+        .expect("the refusal is commented on the task");
+    assert!(
+        comment.message.contains(PUBLISHED_CODEQL_SCRIPT),
+        "the task comment names the published script: {}",
+        comment.message
+    );
+}
+
+fn assert_codeql_refusal_contract(detail: &str) {
+    assert!(
+        detail.contains(PUBLISHED_CODEQL_SCRIPT),
+        "the refusal names the published script, not only a source-tree path: {detail}"
+    );
+    assert!(
+        detail.contains("`scripts/codeql-rust-local.sh`"),
+        "the refusal names the admitted program: {detail}"
+    );
+    assert!(
+        detail.contains("`--ram <mib>`") && detail.contains("`--toolchain <version>`"),
+        "the refusal names the admitted options: {detail}"
+    );
+    assert!(
+        detail.contains("exactly one query selector"),
+        "the refusal names the selector contract: {detail}"
+    );
+    assert!(
+        detail.contains("A custom command is not fulfilled"),
+        "the refusal says a custom command is not fulfilled: {detail}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review_scenarios,
