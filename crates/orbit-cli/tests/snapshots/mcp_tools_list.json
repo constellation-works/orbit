@@ -416,7 +416,7 @@
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe creation identity."
+          "description": "Retry-safe creation identity; selects guarded creation, which accepts fewer fields."
         }
       },
       "required": [
@@ -914,7 +914,7 @@
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe write identity."
+          "description": "Retry-safe write identity; selects a guarded update, which accepts fewer fields."
         },
         "expected_revision": {
           "type": "string",
