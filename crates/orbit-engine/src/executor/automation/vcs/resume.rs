@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::activity_job::JobV2;
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{FailureHandoffDecision, JobRunState, PipelineState};
 use serde_json::Value;
 
 use crate::DispatchError;
@@ -463,7 +463,8 @@ fn validate_failure_handoff_evidence<'a, H: RuntimeHost + ?Sized>(
     let phase = required_input_string(evidence, "phase")?;
     let decision = required_input_string(evidence, "decision")?;
     if phase != "failure_handoff"
-        || !matches!(decision, "blocked_failure_pr" | "blocked_conflict_pr")
+        || !FailureHandoffDecision::from_output(evidence)
+            .is_some_and(|decision| decision.is_blocked_pull_request())
     {
         return Err(OrbitError::Execution(format!(
             "failure activity result '{phase}/{decision}' is not candidate-preservation evidence"
