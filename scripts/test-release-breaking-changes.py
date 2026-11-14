@@ -22,6 +22,15 @@ import self_test_hang
 from release_schema_oracle import INSTANCES, bounded_schema_pairs, schema_accepts_instance
 
 SCRIPT = Path(__file__).resolve().parent / "release-breaking-changes.py"
+GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def git_environment(source):
+    """Copy an environment without Git variables that redirect repository access."""
+    environment = dict(source)
+    for name in GIT_LOCATION_ENV:
+        environment.pop(name, None)
+    return environment
 
 SCHEMA = "crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs"
 LAYOUT = "crates/orbit-store/src/workflow/layout/registry.rs"
@@ -174,9 +183,10 @@ class FixtureRepo:
     def __init__(self, root):
         self.root = Path(root)
         self.root.mkdir()
-        self.env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
-                        GIT_AUTHOR_NAME="fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
-                        GIT_COMMITTER_NAME="fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid")
+        self.env = git_environment(dict(
+            os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+            GIT_AUTHOR_NAME="fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+            GIT_COMMITTER_NAME="fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid"))
         self.git("init", "-q", "-b", "agent-main")
         self.write(SCHEMA, "pub const SUPPORTED_SCHEMA_VERSION: u32 = 67;\n")
         self.write(LAYOUT, "pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;\n")
@@ -241,7 +251,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
 
     def survey(self, *extra, tasks=None):
         args = [sys.executable, str(SCRIPT), "--repo", str(self.repo.root), *extra]
-        env = dict(self.repo.env)
+        env = git_environment(self.repo.env)
         if tasks is None:
             args.append("--offline")
         else:
@@ -258,6 +268,59 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
 
     def signals(self, report):
         return {(s["task"], s["signal"], s["detail"]) for s in report["signals"]}
+
+    def test_public_entrypoint_ignores_git_location_environment(self):
+        sentinel = Path(self.tmp.name) / "sentinel"
+        sentinel.mkdir()
+        sentinel_env = git_environment(os.environ)
+        sentinel_env.update(
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_AUTHOR_NAME="sentinel",
+            GIT_AUTHOR_EMAIL="sentinel@example.invalid",
+            GIT_COMMITTER_NAME="sentinel",
+            GIT_COMMITTER_EMAIL="sentinel@example.invalid",
+        )
+
+        def sentinel_git(*args):
+            return subprocess.run(
+                ["git", "-C", str(sentinel), *args], env=sentinel_env,
+                capture_output=True, text=True, check=True,
+                timeout=self_test_hang.HANG_CEILING_SECONDS)
+
+        sentinel_git("init", "-q", "-b", "sentinel-main")
+        (sentinel / "sentinel.txt").write_text("keep this repository unchanged\n")
+        sentinel_git("add", "sentinel.txt")
+        sentinel_git("commit", "-q", "-m", "sentinel baseline")
+        sentinel_git("tag", "sentinel-tag")
+
+        def sentinel_snapshot():
+            return {
+                "head_file": (sentinel / ".git/HEAD").read_bytes(),
+                "head_commit": sentinel_git("rev-parse", "HEAD").stdout,
+                "index": (sentinel / ".git/index").read_bytes(),
+                "tags": sentinel_git(
+                    "for-each-ref", "--format=%(refname):%(objectname)", "refs/tags").stdout,
+                "status": sentinel_git("status", "--porcelain=v1").stdout,
+                "file": (sentinel / "sentinel.txt").read_bytes(),
+            }
+
+        before = sentinel_snapshot()
+        child_env = git_environment(os.environ)
+        child_env.update(
+            GIT_DIR=str(sentinel / ".git"),
+            GIT_WORK_TREE=str(sentinel),
+            GIT_INDEX_FILE=str(sentinel / ".git/index"),
+        )
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()),
+             "ReleaseBreakingChangesTest.test_schema_bump_and_deny_unknown_field_decide_minor"],
+            env=child_env, capture_output=True, text=True,
+            timeout=self_test_hang.HANG_CEILING_SECONDS)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sentinel_snapshot(), before,
+                         "the public test entrypoint changed the exported sentinel Git repository")
 
     def test_mcp_schema_bounded_soundness_oracle(self):
         # One real CLI survey batches independent tools so the bounded search
