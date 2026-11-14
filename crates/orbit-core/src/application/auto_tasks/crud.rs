@@ -581,18 +581,31 @@ impl OrbitRuntime {
         &self,
         name: &str,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        let loaded = self
+        self.find_validated_auto_task(name)?
+            .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))
+    }
+
+    /// The validated definition of `name`, or `None` when no definition of
+    /// that name exists. A definition stored at a non-canonical path is an
+    /// error, as in [`Self::require_validated_auto_task`].
+    pub(super) fn find_validated_auto_task(
+        &self,
+        name: &str,
+    ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+        let Some(loaded) = self
             .validated_auto_tasks(name)?
             .definitions
             .into_iter()
             .find(|loaded| loaded.definition.name == name)
-            .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
+        else {
+            return Ok(None);
+        };
         if !self.is_canonical_definition_path(&loaded.path, name) {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task '{name}' must be stored at its canonical .yaml path before editing"
             )));
         }
-        Ok(loaded.definition)
+        Ok(Some(loaded.definition))
     }
 
     /// Whether `loaded` is exactly `<local_dir>/auto_tasks/<name>.yaml`.
