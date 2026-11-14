@@ -5,8 +5,8 @@
 
 use orbit_core::TaskStatus;
 use orbit_types::workflow::{
-    JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewCertificate,
-    ReviewEvidenceHold,
+    EvidenceHostOs, JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
+    ReviewCertificate, ReviewEvidenceHold, ReviewEvidenceKind, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -283,10 +283,82 @@ fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
     }
 }
 
+/// [ORB-24656] An accepted review with no findings whose required check
+/// passed only because a Bubblewrap-confined test self-deferred: settlement
+/// reads the `DEFERRED: bubblewrap unavailable:` notice in the record
+/// itself, holds for the Linux `host_sandbox_test` run of that test, and
+/// does not block as `validation_incomplete`, even though the reviewer
+/// named no `external_evidence` and no narrow record for it.
+fn an_accepted_bubblewrap_deferral_the_reviewer_did_not_name_holds_for_host_evidence() {
+    let mut fixture = Fixture::new();
+    fixture.admit();
+    let command = "cargo test -p orbit-cli --test tool \
+                   claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer";
+    fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept", "summary": "Checked the change; no findings.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": command, "outcome": "passed", "role": "required",
+             "deferred": ["DEFERRED: bubblewrap unavailable: \
+                 claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer: \
+                 bwrap: No permissions to create a new namespace"]},
+        ],
+    }));
+    let refused = fixture
+        .settle()
+        .expect_err("a deferred sandbox test holds for host evidence, not a pass")
+        .to_string();
+    assert!(
+        refused.contains("review_awaiting_evidence"),
+        "held, not blocked: {refused}"
+    );
+    assert!(!refused.contains("review_gate_blocked"), "{refused}");
+    let certificate: ReviewCertificate = artifact(&fixture, REVIEW_GATE_ARTIFACT);
+    assert!(!certificate.verdict.passed(), "{:?}", certificate.verdict);
+    let escalation = certificate.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("owed_evidence")
+            && escalation
+                .contains("claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer"),
+        "the hold names the deferred test, not validation_incomplete: {escalation}"
+    );
+    assert!(
+        !escalation.contains("validation_incomplete"),
+        "{escalation}"
+    );
+    let hold: ReviewEvidenceHold = artifact(&fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert_eq!(hold.requirements.len(), 1, "{hold:?}");
+    let requirement = &hold.requirements[0];
+    assert_eq!(requirement.kind, ReviewEvidenceKind::HostSandboxTest);
+    assert_eq!(requirement.os, Some(EvidenceHostOs::Linux));
+    assert_eq!(requirement.command, command);
+    assert_eq!(
+        certificate.owed_evidence, hold.requirements,
+        "the certificate records the synthesized owed evidence"
+    );
+    let broad = certificate
+        .validation
+        .iter()
+        .find(|record| record.id.as_deref() == Some("V2"))
+        .expect("the record stays on the certificate");
+    assert_eq!(
+        broad.outcome,
+        ValidationOutcome::NotRun,
+        "the deferred pass is reset to the owed record: {broad:?}"
+    );
+    assert!(broad.deferred.is_empty(), "{broad:?}");
+    assert_eq!(status(&fixture), TaskStatus::InProgress);
+    assert_eq!(last_event(&fixture), "review_awaiting_evidence");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission_scenarios,
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission,
     agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold,
-    mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity
+    mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity,
+    an_accepted_bubblewrap_deferral_the_reviewer_did_not_name_holds_for_host_evidence
 );

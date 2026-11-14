@@ -46,10 +46,13 @@ use orbit_common::OrbitError;
 use orbit_engine::review_gate::{CandidateIdentity, committed_paths};
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{
-    CommitIdentity, EvidenceHostOs, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceHold,
-    ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewValidation, ReviewVerdict,
-    ValidationOutcome, ValidationRole, owed_requirements,
+    BUBBLEWRAP_DEFERRAL_PREFIX, CommitIdentity, EvidenceHostOs, HostSandboxCommand,
+    REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceHold, ReviewEvidenceKind,
+    ReviewEvidenceRequirement, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+    owed_requirements,
 };
+
+use super::super::evidence::{RecordedCargoScope, deferred_test, recorded_cargo_scope};
 
 use crate::OrbitRuntime;
 
@@ -183,6 +186,142 @@ impl Judgement {
             }
             owed.push(named.clone());
         }
+    }
+
+    /// [ORB-24656] Detect a Bubblewrap self-deferral in the validation
+    /// records themselves and return the Linux `host_sandbox_test`
+    /// requirements it owes, whether or not the reviewer named them.
+    ///
+    /// Only a passing verdict with no open finding is rerouted: an
+    /// `incomplete` report keeps the strict named-requirement rules, and a
+    /// failed required record is an answer, not missing evidence. A
+    /// requirement is derived from the deferred test a notice names: a
+    /// reviewer-named Linux requirement whose filter is that test (or a
+    /// test path ending in it), else the record's own cargo scope —
+    /// `cargo test -p <package> --test <target> <test>` for an integration
+    /// record and `cargo test -p <package> --lib <test>` for a
+    /// package-wide one. A notice no such command can name stays on its
+    /// record and keeps blocking. Each covered notice is cleared from its
+    /// record with a note naming the owed command, so the broader pass is
+    /// judged with the requirements [`Self::require_owed_evidence`] adds.
+    pub(super) fn synthesized_bubblewrap_requirements(&mut self) -> Vec<ReviewEvidenceRequirement> {
+        if !self.verdict.passed() || self.has_open_findings() {
+            return Vec::new();
+        }
+        let named = self.external_evidence.clone();
+        let mut requirements: Vec<ReviewEvidenceRequirement> = Vec::new();
+        let mut covered: Vec<(usize, String, String, String)> = Vec::new();
+        for (index, record) in self.validation.iter().enumerate() {
+            if record.role != ValidationRole::Required
+                || record.outcome != ValidationOutcome::Passed
+            {
+                continue;
+            }
+            for notice in &record.deferred {
+                if !notice.trim().starts_with(BUBBLEWRAP_DEFERRAL_PREFIX) {
+                    continue;
+                }
+                let Some(test) = deferred_test(notice) else {
+                    continue;
+                };
+                let filter_matches =
+                    |filter: &str| filter == test || filter.ends_with(&format!("::{test}"));
+                let mut requirement = named.iter().find_map(|candidate| {
+                    if candidate.kind != ReviewEvidenceKind::HostSandboxTest
+                        || candidate.os != Some(EvidenceHostOs::Linux)
+                    {
+                        return None;
+                    }
+                    match HostSandboxCommand::admit(&candidate.command, &[]) {
+                        Ok(HostSandboxCommand::CargoTest { filter, .. })
+                        | Ok(HostSandboxCommand::CargoLibTest { filter, .. }) => filter
+                            .as_deref()
+                            .is_some_and(filter_matches)
+                            .then(|| candidate.clone()),
+                        _ => (candidate.command.trim() == record.command.trim())
+                            .then(|| candidate.clone()),
+                    }
+                });
+                if requirement.is_none() {
+                    let command = match recorded_cargo_scope(&record.command) {
+                        Some(RecordedCargoScope::Integration { package, target }) => {
+                            format!("cargo test -p {package} --test {target} {test}")
+                        }
+                        Some(RecordedCargoScope::Package { package }) => {
+                            format!("cargo test -p {package} --lib {test}")
+                        }
+                        None => match HostSandboxCommand::admit(&record.command, &[]) {
+                            Ok(HostSandboxCommand::CargoTest { filter, .. })
+                            | Ok(HostSandboxCommand::CargoLibTest { filter, .. })
+                                if filter.as_deref().is_some_and(filter_matches) =>
+                            {
+                                record.command.trim().to_string()
+                            }
+                            _ => continue,
+                        },
+                    };
+                    if HostSandboxCommand::admit(&command, &[]).is_err() {
+                        continue;
+                    }
+                    let slug = test
+                        .chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                                c
+                            } else {
+                                '-'
+                            }
+                        })
+                        .collect::<String>();
+                    let mut artifact = format!("evidence/host-sandbox/bubblewrap-{slug}.json");
+                    let mut suffix = 2;
+                    while named.iter().any(|known| known.artifact == artifact)
+                        || requirements
+                            .iter()
+                            .any(|known: &ReviewEvidenceRequirement| {
+                                known.artifact == artifact && known.command != command
+                            })
+                    {
+                        artifact = format!("evidence/host-sandbox/bubblewrap-{slug}-{suffix}.json");
+                        suffix += 1;
+                    }
+                    requirement = Some(ReviewEvidenceRequirement {
+                        kind: ReviewEvidenceKind::HostSandboxTest,
+                        name: test.to_string(),
+                        command,
+                        artifact,
+                        os: Some(EvidenceHostOs::Linux),
+                        hosted_check: None,
+                    });
+                }
+                let Some(requirement) = requirement else {
+                    continue;
+                };
+                covered.push((
+                    index,
+                    notice.clone(),
+                    test.to_string(),
+                    requirement.command.clone(),
+                ));
+                if !requirements.iter().any(|known| {
+                    known.kind == requirement.kind && known.command == requirement.command
+                }) {
+                    requirements.push(requirement);
+                }
+            }
+        }
+        for (index, notice, test, command) in covered {
+            let record = &mut self.validation[index];
+            record.deferred.retain(|kept| kept != &notice);
+            append_note(
+                record,
+                &format!(
+                    "deferred Bubblewrap test `{test}` is owed as host_sandbox_test \
+                     evidence: `{command}`"
+                ),
+            );
+        }
+        requirements
     }
 
     /// Hold the verdict to the evidence `owed` names. Each owed requirement

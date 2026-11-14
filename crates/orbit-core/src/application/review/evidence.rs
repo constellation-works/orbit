@@ -162,7 +162,7 @@ pub(super) fn covers_deferral(
 }
 
 /// The test a sandbox deferral notice names: `<prefix> <test>: <detail>`.
-fn deferred_test(notice: &str) -> Option<&str> {
+pub(super) fn deferred_test(notice: &str) -> Option<&str> {
     let notice = notice.trim();
     let rest = [
         BUBBLEWRAP_DEFERRAL_PREFIX,
@@ -177,7 +177,7 @@ fn deferred_test(notice: &str) -> Option<&str> {
 }
 
 /// A required `cargo test` record whose deferrals a host requirement can cover.
-enum RecordedCargoScope<'a> {
+pub(super) enum RecordedCargoScope<'a> {
     /// One package and one `--test` target, with at most one positional filter.
     Integration { package: &'a str, target: &'a str },
     /// One package and no target selector, with at most one positional filter.
@@ -193,7 +193,7 @@ enum RecordedCargoScope<'a> {
 /// targets, and `--release`, `--features`, `--profile` and `--target` change
 /// the build that a host replay does not reproduce, so a record carrying them
 /// stays uncovered.
-fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'_>> {
+pub(super) fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'_>> {
     let mut words = command.split_whitespace();
     if words.next()? != "cargo" || words.next()? != "test" {
         return None;
