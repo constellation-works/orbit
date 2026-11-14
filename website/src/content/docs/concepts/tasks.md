@@ -16,8 +16,13 @@ Every task needs an observable outcome. Don't file one as a scratch note.
 
 The dashboard also shows estimated regression riskiness from task size and
 completed-task history. Before a diff exists, size is the declared path
-count; in review or done, a resolvable diff supplies the changed-line count.
-Insufficient history is shown as no estimate.
+count. In review or done, a resolvable diff supplies the changed-line count
+only when changed-line history has a fit; otherwise, riskiness falls back to
+the declared path count. A missing resolvable diff also uses declared paths.
+Insufficient changed-line history alone does not prevent an estimate when
+declared-path history has a fit. When riskiness falls back to declared paths,
+no estimate means that history lacks a fit or the task has no supported
+declared paths.
 
 A task can also declare `required_tools`: Orbit tools its agent needs beyond
 the activity's baseline. They are fixed at creation; see
