@@ -1176,7 +1176,7 @@ main.tasks-layout.task-page-mode { grid-template-columns: minmax(0, 1fr) !import
 main.tasks-layout.task-page-mode > .controls,
 main.tasks-layout.task-page-mode > .col-tasks,
 main.tasks-layout.task-page-mode > .task-pane-resizer { display: none !important; }
-main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; width: 100%; max-width: 1280px; }
+main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row: 1; justify-self: center; width: 100%; max-width: 1280px; }
 /* A phone has no room beside the list, so the pane becomes a full-screen
    sheet while keeping its close and full-page controls in the head. */
 @media (max-width: 760px) {
