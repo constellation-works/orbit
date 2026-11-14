@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -51,6 +51,155 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
     {
         fs::create_dir(path)
     }
+}
+
+/// Why [`create_private_dir_chain`] refused a directory chain.
+#[derive(Debug)]
+pub enum PrivateDirError {
+    /// A component is a symlink; its target was never followed.
+    Symlink {
+        /// The offending path.
+        path: PathBuf,
+    },
+    /// A component exists but is not a directory.
+    NotDirectory {
+        /// The offending path.
+        path: PathBuf,
+    },
+    /// A component is owned by another user (Unix only).
+    ForeignOwner {
+        /// The offending path.
+        path: PathBuf,
+        /// The uid that owns `path`.
+        uid: u32,
+    },
+    /// Creating or inspecting a component failed.
+    Io {
+        /// The offending path.
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: io::Error,
+    },
+}
+
+impl PrivateDirError {
+    /// The offending path.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Symlink { path }
+            | Self::NotDirectory { path }
+            | Self::ForeignOwner { path, .. }
+            | Self::Io { path, .. } => path,
+        }
+    }
+}
+
+impl std::fmt::Display for PrivateDirError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Symlink { path } => {
+                write!(
+                    formatter,
+                    "private directory path `{}` is a symlink",
+                    path.display()
+                )
+            }
+            Self::NotDirectory { path } => {
+                write!(
+                    formatter,
+                    "private directory path `{}` is not a directory",
+                    path.display()
+                )
+            }
+            Self::ForeignOwner { path, uid } => {
+                write!(
+                    formatter,
+                    "private directory `{}` is owned by uid {uid}, not this host",
+                    path.display()
+                )
+            }
+            Self::Io { path, source } => {
+                write!(
+                    formatter,
+                    "private directory `{}`: {source}",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PrivateDirError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Create `root/relative` one component at a time, refusing unsafe components.
+///
+/// Each component of `relative` is created with [`create_private_dir`]
+/// (an existing entry is tolerated), then re-inspected without following
+/// links. A symlink, a non-directory, or — on Unix — a directory owned by
+/// another uid is refused with the offending path. The non-Unix fallback
+/// creates and checks directory-ness only, as [`create_private_dir`] does.
+pub fn create_private_dir_chain(root: &Path, relative: &Path) -> Result<PathBuf, PrivateDirError> {
+    #[cfg(unix)]
+    // SAFETY: `geteuid` only reads the calling process's credentials.
+    let euid = unsafe { libc::geteuid() };
+    let mut dir = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => dir.push(name),
+            Component::CurDir => continue,
+            _ => {
+                return Err(PrivateDirError::Io {
+                    path: root.join(relative),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "private directory path `{}` must not contain traversal components",
+                            relative.display()
+                        ),
+                    ),
+                });
+            }
+        }
+        match create_private_dir(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(PrivateDirError::Io {
+                    path: dir.clone(),
+                    source: error,
+                });
+            }
+        }
+        let metadata = fs::symlink_metadata(&dir).map_err(|error| PrivateDirError::Io {
+            path: dir.clone(),
+            source: error,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(PrivateDirError::Symlink { path: dir });
+        }
+        if !metadata.is_dir() {
+            return Err(PrivateDirError::NotDirectory { path: dir });
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            let uid = metadata.uid();
+            if uid != euid {
+                return Err(PrivateDirError::ForeignOwner { path: dir, uid });
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = &metadata;
+    }
+    Ok(dir)
 }
 
 /// Create a new secret-bearing file for writing.
