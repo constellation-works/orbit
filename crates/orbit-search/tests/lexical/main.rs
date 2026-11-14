@@ -1,7 +1,7 @@
 //! Query ranking and token semantics through the public SQLite index API.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use orbit_search::{LexicalIndex, bm25_or_page, bm25_page, bm25_top_k};
+use orbit_search::{LexicalIndex, TaskSidecarSearchText, bm25_or_page, bm25_page, bm25_top_k};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
 fn task(id: &str, title: &str) -> Task {
@@ -268,5 +268,52 @@ fn first_open_migrates_legacy_vectors_and_preserves_search() {
             .expect("stats")
             .tasks,
         1
+    );
+}
+
+/// Chunk equality does not imply coverage equality: a task with no comments
+/// or artifacts indexes identical chunks task-only and with empty sidecars,
+/// so each write must still record its own coverage. A task-only write drops
+/// sidecar coverage, so a later comment is not answered from the index alone,
+/// and an empty-sidecar write claims coverage again without a chunk change.
+#[test]
+fn coverage_transitions_follow_each_write_when_chunks_are_unchanged() {
+    let dir = tempfile::tempdir().expect("fixture directory");
+    let index = LexicalIndex::open(&dir.path().join("search.db")).expect("open");
+    let store = index.store().expect("store");
+    let record = task("task-a", "cobalt routing observatory");
+    let no_sidecars = TaskSidecarSearchText::default();
+
+    store
+        .index_task_with_sidecar_text(&record, &no_sidecars)
+        .expect("sidecar-covered index");
+    assert!(
+        store
+            .sidecar_indexed_task_ids()
+            .expect("coverage")
+            .contains("task-a"),
+        "a sidecar write covers the task"
+    );
+
+    store
+        .index_task(&record)
+        .expect("task-only rewrite with unchanged chunks");
+    assert!(
+        !store
+            .sidecar_indexed_task_ids()
+            .expect("coverage")
+            .contains("task-a"),
+        "a task-only write over unchanged chunks must drop sidecar coverage"
+    );
+
+    store
+        .index_task_with_sidecar_text(&record, &no_sidecars)
+        .expect("empty-sidecar rewrite with unchanged chunks");
+    assert!(
+        store
+            .sidecar_indexed_task_ids()
+            .expect("coverage")
+            .contains("task-a"),
+        "an empty-sidecar write must claim coverage without a chunk change"
     );
 }
