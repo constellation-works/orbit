@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
-import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
@@ -29,7 +29,7 @@ import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, runStartedAt, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { taskState } from './js/task-shared.js';
 import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
-import { taskDispatchIdentity } from './js/task-shared.js';
+import { TASK_SECTION_STEP, taskDispatchIdentity } from './js/task-shared.js';
 import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { applyPushedHostResources, fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
@@ -119,14 +119,23 @@ let cancelTaskLookup = () => {};
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
 let elapsedTaskRefreshTimer = null;
-// Paging metadata from task-list envelopes drives the visible range and
-// Previous/Next availability.
+// The board pages inside each status section [ORB-24677]: one grouped read
+// (`group=status`) answers every selected status with its true total, its
+// first rows and a continuation. `lastTasksMeta.sections` holds those per
+// status; `lastTasks` is their rows, flattened in section order.
 let lastTasksMeta = null;
-let taskPageCursor = null;
-let taskPreviousCursors = [];
-let taskPageLoading = false;
-let taskPageError = null;
 let taskFetchSequence = 0;
+// Statuses that load in full; every other section starts at one step.
+const FULL_TASK_SECTIONS = new Set(["in-progress", "review", "blocked", "proposed"]);
+// The server's largest page; a longer section continues in reads this size.
+const TASK_SECTION_MAX_READ = 200;
+// How many rows each section has loaded, per list scope (host, workspace and
+// server-side filters), so a refresh or a return through Back keeps them. In
+// memory only: a reload starts every section at its first step.
+const taskSectionLoaded = new Map();
+// A section's "Show more" read in flight or failed, by status. Cleared with
+// the scope.
+let taskSectionLoads = new Map();
 let taskScrollResetPending = false;
 let lastRuns = [];
 let lastRunsMeta = null;
@@ -192,18 +201,19 @@ function taskContext() {
   return {
     getTasks: () => lastTasks,
     getTasksMeta: () => lastTasksMeta,
-    getTaskPagination: () => ({
-      canPrevious: taskPreviousCursors.length > 0,
-      canNext: Boolean(lastTasksMeta && lastTasksMeta.next_cursor),
-      loading: taskPageLoading,
-      error: taskPageError,
-    }),
-    navigateTaskPage,
+    getTaskSectionLoad: (status) => taskSectionLoads.get(status) || null,
+    loadMoreTaskSection,
     resetTaskPagination,
     replaceTask: (updatedTask) => {
-      const index = lastTasks.findIndex((task) => taskDispatchIdentity(task) === taskDispatchIdentity(updatedTask));
+      const identity = taskDispatchIdentity(updatedTask);
+      const index = lastTasks.findIndex((task) => taskDispatchIdentity(task) === identity);
       if (index >= 0) {
         lastTasks[index] = updatedTask;
+      }
+      // The section keeps the same row, so a later "Show more" keeps the edit.
+      for (const section of lastTasksMeta?.sections?.values() || []) {
+        const at = section.items.findIndex((task) => taskDispatchIdentity(task) === identity);
+        if (at >= 0) section.items[at] = updatedTask;
       }
     },
     cancelTaskLookup: () => cancelTaskLookup(),
@@ -1209,21 +1219,11 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   if (count) count.textContent = "—";
 }
 
-// ORB-10874: the single-workspace list endpoint filters server-side, so the
-// active status chips are sent as `?status=a,b` instead of over-fetching every
-// status and filtering client-side. That keeps the `total`/`limit`/`truncated`
-// envelope meaningful for the filter actually in effect (see formatTaskCount
-// in tasks.js). Omitted only when every status is active; an empty selection is
-// sent explicitly as `status=none` so the server applies it before pagination.
-function resetTaskPagination() {
-  taskPageCursor = null;
-  taskPreviousCursors = [];
-  taskPageError = null;
-  lastTasksMeta = null;
-  taskScrollResetPending = true;
-}
-
-function tasksListPath(base = "/api/tasks", detailId = null, includeRuns = false) {
+// ORB-10874: the list endpoints filter server-side, so the active status chips
+// are sent as `?status=a,b` instead of over-fetching every status and
+// filtering client-side. Omitted only when every status is active; an empty
+// selection is sent explicitly as `status=none` so the server applies it.
+function tasksFilterParams(base) {
   const sp = new URLSearchParams();
   if (base === "/api/tasks/all") for (const id of getSelectedWorkspaces()) sp.append("workspaces", id);
   if (activeStatuses.size > 0 && activeStatuses.size < STATUS_ORDER.length) {
@@ -1233,29 +1233,161 @@ function tasksListPath(base = "/api/tasks", detailId = null, includeRuns = false
   }
   if (searchQuery) sp.set("q", searchQuery);
   if (taskPilotWarningsFilter()) sp.set("pilot", "warnings");
-  if (taskPageCursor) sp.set("cursor", taskPageCursor);
-  if (detailId) sp.set("detail", detailId);
-  if (includeRuns) sp.set("detail_runs", "true");
-  const qs = sp.toString();
+  return sp;
+}
+
+function taskListBase() {
+  return isAggregateView() ? "/api/tasks/all" : "/api/tasks";
+}
+
+// The list the board shows: its endpoint and server-side filters, without the
+// per-section sizes, so loading more rows never reads as a new list.
+function taskListScope(base) {
+  const qs = tasksFilterParams(base).toString();
   return qs ? `${base}?${qs}` : base;
 }
 
-function navigateTaskPage(direction) {
-  if (taskPageLoading) return;
-  if (direction === "next") {
-    const next = lastTasksMeta && lastTasksMeta.next_cursor;
-    if (!next) return;
-    taskPreviousCursors.push(taskPageCursor);
-    taskPageCursor = next;
-  } else if (direction === "previous") {
-    if (taskPreviousCursors.length === 0) return;
-    taskPageCursor = taskPreviousCursors.pop();
-  } else {
-    return;
+function taskSectionLoadedFor(scope) {
+  const key = `${getHostRevision()}|${getWorkspace() || ""}|${scope}`;
+  let loaded = taskSectionLoaded.get(key);
+  if (!loaded) {
+    loaded = new Map();
+    taskSectionLoaded.set(key, loaded);
   }
-  taskPageError = null;
+  return loaded;
+}
+
+// The rows a section reads on a refresh: the open statuses in full (up to the
+// server's page, continued beyond it once more were loaded), every other
+// status what it has loaded, at least one step.
+function taskSectionWanted(status, loaded) {
+  const floor = FULL_TASK_SECTIONS.has(status) ? TASK_SECTION_MAX_READ : TASK_SECTION_STEP;
+  return Math.max(floor, loaded.get(status) || 0);
+}
+
+function resetTaskPagination() {
+  taskSectionLoads = new Map();
+  lastTasksMeta = null;
   taskScrollResetPending = true;
-  fetchAndRenderTasks({ includeCrews: false }).catch((error) => console.error("Failed to navigate task pages", error));
+}
+
+function tasksListPath(base, loaded, detailId = null, includeRuns = false) {
+  const sp = tasksFilterParams(base);
+  sp.set("group", "status");
+  sp.set("limit", String(TASK_SECTION_STEP));
+  const limits = STATUS_ORDER
+    .filter((status) => activeStatuses.has(status))
+    .map((status) => [status, Math.min(TASK_SECTION_MAX_READ, taskSectionWanted(status, loaded))])
+    .filter(([, limit]) => limit !== TASK_SECTION_STEP)
+    .map(([status, limit]) => `${status}:${limit}`);
+  if (limits.length) sp.set("status_limit", limits.join(","));
+  if (detailId) sp.set("detail", detailId);
+  if (includeRuns) sp.set("detail_runs", "true");
+  return `${base}?${sp}`;
+}
+
+// A grouped answer's sections, keyed by status: its true total, the rows
+// read and the continuation of that status alone.
+function taskSectionsFrom(payload) {
+  const sections = Array.isArray(payload?.sections) ? payload.sections : [];
+  return sections
+    .filter((section) => section && typeof section.status === "string")
+    .map((section) => ({
+      status: section.status,
+      total: Number.isFinite(section.total) ? section.total : listItems(section).length,
+      items: listItems(section),
+      next_cursor: section.next_cursor || null,
+    }));
+}
+
+// Rows a continuation read go below the ones shown; a row already shown is
+// never repeated or moved.
+function appendTaskSectionRows(section, more) {
+  const shown = new Set(section.items.map(taskDispatchIdentity));
+  for (const task of more.items) {
+    if (!shown.has(taskDispatchIdentity(task))) section.items.push(task);
+  }
+  section.total = more.total;
+  section.next_cursor = more.items.length > 0 ? more.next_cursor : null;
+}
+
+function readTaskSectionRows(base, status, cursor, limit) {
+  const sp = tasksFilterParams(base);
+  sp.set("group", "status");
+  sp.set("status", status);
+  sp.set("limit", String(limit));
+  sp.set("cursor", cursor);
+  return fetchJson(`${base}?${sp}`).then((payload) => {
+    const section = taskSectionsFrom(payload).find((candidate) => candidate.status === status);
+    if (!section) throw new Error("the server answered without this section");
+    return section;
+  });
+}
+
+// A section that had loaded more than one read returns continues to that
+// count before the refresh paints, so its rows stay on screen.
+async function topUpTaskSections(base, sections, loaded) {
+  for (const section of sections) {
+    const wanted = taskSectionWanted(section.status, loaded);
+    while (section.items.length < wanted && section.next_cursor) {
+      const limit = Math.min(TASK_SECTION_MAX_READ, wanted - section.items.length);
+      appendTaskSectionRows(section, await readTaskSectionRows(base, section.status, section.next_cursor, limit));
+    }
+  }
+}
+
+function applyTaskSections(sections, payload) {
+  lastTasks = sections.flatMap((section) => section.items);
+  const total = Number.isFinite(payload?.total)
+    ? payload.total
+    : sections.reduce((sum, section) => sum + section.total, 0);
+  lastTasksMeta = { total, sections: new Map(sections.map((section) => [section.status, section])) };
+}
+
+// "Show 25 more" and "Show all" at the end of a section: continue that
+// status alone and append its rows. A failure stays at the section's control,
+// which retries.
+function loadMoreTaskSection(status, { all = false } = {}) {
+  const section = lastTasksMeta?.sections?.get(status);
+  if (!section || !section.next_cursor) return Promise.resolve();
+  if (taskSectionLoads.get(status)?.loading) return Promise.resolve();
+  const base = taskListBase();
+  const scope = taskListScope(base);
+  const loaded = taskSectionLoadedFor(scope);
+  const remaining = Math.max(0, section.total - section.items.length);
+  const limit = Math.max(1, Math.min(TASK_SECTION_MAX_READ, all ? remaining : TASK_SECTION_STEP));
+  const cursor = section.next_cursor;
+  const startLength = section.items.length;
+  const previousLoaded = loaded.get(status);
+  const wanted = startLength + limit;
+  // Recorded before the read so a refresh that starts meanwhile asks for them.
+  loaded.set(status, Math.max(previousLoaded || 0, wanted));
+  const loads = taskSectionLoads;
+  const revision = getWorkspaceRevision();
+  const superseded = () => loads !== taskSectionLoads || revision !== getWorkspaceRevision() || taskListScope(taskListBase()) !== scope;
+  loads.set(status, { loading: true, error: null });
+  renderTaskList(lastTasks, taskContext());
+  return readTaskSectionRows(base, status, cursor, limit).then(async (more) => {
+    if (base === "/api/tasks/all") await loadAggregateCrews(more.items);
+    if (superseded()) return;
+    loads.delete(status);
+    const live = lastTasksMeta?.sections?.get(status);
+    if (live && live.next_cursor === cursor && live.items.length === startLength) {
+      appendTaskSectionRows(live, more);
+      lastTasks = [...lastTasksMeta.sections.values()].flatMap((entry) => entry.items);
+    } else if (!live || live.items.length < wanted) {
+      // A refresh replaced the section while this read was out; read the
+      // board again at the recorded count rather than splice into new rows.
+      fetchAndRenderTasks({ includeCrews: false }).catch((error) => console.error("Failed to refresh tasks", error));
+    }
+    renderTaskList(lastTasks, taskContext());
+  }).catch((error) => {
+    if (superseded()) return;
+    if (previousLoaded === undefined) loaded.delete(status);
+    else loaded.set(status, previousLoaded);
+    loads.set(status, { loading: false, error: error.message || String(error) });
+    renderTaskList(lastTasks, taskContext());
+  });
 }
 
 function fetchAndRenderTasks({ includeCrews = true } = {}) {
@@ -1264,20 +1396,11 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
   // all — and let the empty state name the owner.
   if (!isAggregateView() && !getWorkspace() && getUnownedReplicas().length) {
     const sequence = ++taskFetchSequence;
-    taskPageLoading = false;
-    taskPageError = null;
-    const empty = { items: [], total: 0, limit: 0, truncated: false };
+    const empty = { group: "status", sections: [], total: 0 };
     return requestPanel("tasks-body", "unowned-replicas", () => Promise.resolve([empty, null]), ([payload]) => {
       if (sequence !== taskFetchSequence) return;
       cacheCrewPayload({ crews: [] });
-      lastTasks = listItems(payload);
-      lastTasksMeta = {
-        total: payload.total,
-        limit: payload.limit,
-        truncated: payload.truncated,
-        offset: 0,
-        next_cursor: null,
-      };
+      applyTaskSections([], payload);
       renderTaskList(lastTasks, taskContext());
     });
   }
@@ -1288,15 +1411,14 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
   const detailId = !aggregate && !taskState.pinnedExternalTask ? taskState.selectedTaskId : null;
   const detailSnapshot = taskDetailSnapshot({ id: detailId });
   const includeRuns = Boolean(detailId && taskRunsTabActive());
-  const base = aggregate ? "/api/tasks/all" : "/api/tasks";
-  const path = tasksListPath(base, detailId, includeRuns);
+  const base = taskListBase();
   // The panel's scope is the list it shows. The bundled detail of the selected
-  // task is left out, so opening a task does not reset and rebuild the list.
-  const scope = tasksListPath(base);
-  const sequence = ++taskFetchSequence;
-  taskPageLoading = true;
-  taskPageError = null;
-  renderTaskPagination(taskContext());
+  // task and the rows each section has loaded are left out, so opening a task
+  // or loading more rows does not reset and rebuild the list.
+  const scope = taskListScope(base);
+  const loaded = taskSectionLoadedFor(scope);
+  const path = tasksListPath(base, loaded, detailId, includeRuns);
+  ++taskFetchSequence;
   // /api/crews is per-workspace. Aggregate mode has no ambient workspace, so
   // the single-workspace cache stays empty (a stale registry would make My
   // work and comment authors borrow one workspace). Crews for the rows on
@@ -1307,23 +1429,27 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
   // does not ask for them reuses this workspace visit's cached options.
   const revision = getWorkspaceRevision();
   const fetchCrews = !aggregate && (includeCrews || crewsRevision !== revision);
-  const loadTasks = () => Promise.all([
-    fetchJson(path),
-    fetchCrews ? fetchJson("/api/crews") : Promise.resolve(null),
-  ]);
+  const readSections = () => fetchJson(path).then(async (payload) => {
+    const sections = taskSectionsFrom(payload);
+    await topUpTaskSections(base, sections, loaded);
+    return { payload, sections };
+  });
   const load = aggregate
-    ? () => fetchJson(path).then(async (payload) => {
-        await loadAggregateCrews(listItems(payload), { force: includeCrews });
-        return [payload, null];
+    ? () => readSections().then(async (read) => {
+        await loadAggregateCrews(read.sections.flatMap((section) => section.items), { force: includeCrews });
+        return [read, null];
       })
-    : loadTasks;
-  return requestPanel("tasks-body", scope, load, ([payload, crews]) => {
+    : () => Promise.all([
+        readSections(),
+        fetchCrews ? fetchJson("/api/crews") : Promise.resolve(null),
+      ]);
+  return requestPanel("tasks-body", scope, load, ([read, crews]) => {
     if (crews) {
       cacheCrewPayload(crews);
       crewsRevision = revision;
     }
-    // Both task-list endpoints answer `{ items, total, limit, truncated }`.
-    const tasks = listItems(payload);
+    const { payload, sections } = read;
+    const tasks = sections.flatMap((section) => section.items);
     const refreshedDetail = payload && payload.detail;
     const selectedTaskSummary = includeRuns ? tasks.find((task) => task.id === detailId) : null;
     if (refreshedDetail && typeof refreshedDetail.id === "string") {
@@ -1333,17 +1459,8 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
     if (includeRuns && (payload?.detail_runs || payload?.detail_runs_error)) {
       primeTaskRuns(selectedTaskSummary || { id: detailId }, payload.detail_runs || { error: payload.detail_runs_error });
     }
-    lastTasks = tasks;
-    lastTasksMeta = payload && !Array.isArray(payload)
-      ? {
-          total: payload.total,
-          limit: payload.limit,
-          truncated: payload.truncated,
-          offset: payload.offset || 0,
-          next_cursor: payload.next_cursor || null,
-        }
-      : null;
-    renderTaskList(tasks, taskContext());
+    applyTaskSections(sections, payload);
+    renderTaskList(lastTasks, taskContext());
     if (taskState.pinnedExternalTask) {
       void refreshPinnedTask(taskContext()).catch((error) => console.error("Failed to refresh pinned task", error));
     }
@@ -1352,18 +1469,7 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
       if (body) body.scrollTop = 0;
       taskScrollResetPending = false;
     }
-  }, "tasks-count").catch((error) => {
-    if (sequence === taskFetchSequence) {
-      taskPageError = error.message || String(error);
-      renderTaskPagination(taskContext());
-    }
-    throw error;
-  }).finally(() => {
-    if (sequence === taskFetchSequence) {
-      taskPageLoading = false;
-      renderTaskPagination(taskContext());
-    }
-  });
+  }, "tasks-count");
 }
 
 // ORB-00030: discover servable workspaces and, in global mode, install a

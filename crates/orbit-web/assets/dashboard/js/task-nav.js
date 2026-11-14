@@ -1,6 +1,6 @@
-// Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
+// Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters and search.
 
-import { captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, raiseMessageSlot, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
+import { captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
 import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
@@ -38,6 +38,9 @@ let waitingFetchPending = false;
 // an answered decision), so a read that began before it is dropped and redone.
 let waitingGeneration = 0;
 export function waitingOnYouFilter() { return waitingOnly; }
+// Whether a filter only the browser applies (Not ready, My work, Waiting on
+// you) narrows the loaded rows. The server's section totals do not count it.
+export function browserTaskFilterActive() { return notReadyOnly || myWorkOnly || waitingOnly; }
 // Terminal statuses mirror TaskStatus::is_terminal (done, archived, rejected)
 // plus both spellings of cancelled; "All" lists them, but nothing waits on them.
 const TERMINAL_TASK_STATUSES = new Set(["done", "archived", "rejected", "cancelled", "canceled"]);
@@ -485,15 +488,14 @@ export function clearTaskSearch(context) {
   refreshTasks(context).catch((error) => console.error("Failed to clear task search", error));
 }
 
-// Per-status counts for the chips, from the rows this page holds. They are
-// only stated when the page holds every matching task: a paginated list would
-// count one page, and a status that is off was never fetched.
+// Per-status counts for the chips: each section's total under the server-side
+// filter, loaded or not. A status that is off was never read.
 function statusCounts(context) {
   if (!panelCanRender("tasks-body")) return null;
-  const meta = tasksMeta(context);
-  if (meta && (meta.next_cursor || (Number.isFinite(meta.offset) && meta.offset > 0))) return null;
+  const sections = tasksMeta(context)?.sections;
+  if (!sections) return null;
   const counts = new Map();
-  for (const task of taskList(context)) counts.set(task.status, (counts.get(task.status) || 0) + 1);
+  for (const [status, section] of sections) counts.set(status, section.total);
   return counts;
 }
 
@@ -699,32 +701,6 @@ function navigateTasksHash(context) {
   applyTasksHashQuery(new URLSearchParams(hash.split("?")[1] || ""), context, taskState.taskPageId);
   refreshChips(context);
   refreshTasks(context).catch((error) => console.error("Failed to reset task pages", error));
-}
-
-export function renderTaskPagination(context) {
-  const previous = $("tasks-previous");
-  const next = $("tasks-next");
-  const status = $("tasks-page-status");
-  if (!previous || !next || !status) return;
-  const state = context && typeof context.getTaskPagination === "function"
-    ? context.getTaskPagination()
-    : {};
-  previous.disabled = Boolean(state.loading) || !state.canPrevious;
-  next.disabled = Boolean(state.loading) || !state.canNext;
-  // One page needs no pager. Its failure text is in the Tasks message area, so
-  // it neither brings the pager back nor moves the list. A page load shows no
-  // loading text here; the disabled buttons are its visible signal.
-  const pager = previous.closest ? previous.closest(".task-pagination") : null;
-  if (pager) pager.hidden = !state.canPrevious && !state.canNext;
-  const text = state.error ? `Page failed: ${state.error}` : "";
-  if (text && text !== status.textContent) raiseMessageSlot(status);
-  status.textContent = text;
-  status.className = state.error ? "error" : "";
-  if (previous.dataset.wired !== "true") {
-    previous.dataset.wired = "true";
-    previous.addEventListener("click", () => context.navigateTaskPage("previous"));
-    next.addEventListener("click", () => context.navigateTaskPage("next"));
-  }
 }
 
 export function buildChips(context) {

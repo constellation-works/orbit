@@ -5,6 +5,8 @@
 import { bindRunLink, clockStamp, el, formatDateTime, getRegisteredHosts, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
+// Rows a Tasks section loads first and adds per "Show more" [ORB-24677].
+export const TASK_SECTION_STEP = 25;
 
 // Module-level state more than one task module reads or reassigns. An ES
 // module cannot reassign an imported `let`, so each value is a property here.
@@ -34,6 +36,8 @@ export const taskState = {
   focusPaneTitle: false,
   // A status change folded the pane: focus goes back to the row it came from.
   rowFocusAfterRender: null,
+  // A section head just folded or opened: the render keeps focus on it.
+  sectionToggleFocus: null,
   // The last context a render ran with, for the keyboard and pane handlers that
   // are wired once.
   paneContext: null,

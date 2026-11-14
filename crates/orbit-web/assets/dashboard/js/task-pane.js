@@ -4,7 +4,7 @@
 import { el, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
 import { $, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
-import { closeTaskPane, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
+import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 import { buildTaskDetail, buildTaskDetailPlaceholder, detailFeedbackSignature } from './task-detail.js';
 import { osReadoutNote, osReadoutText } from './task-lifecycle.js';
@@ -129,13 +129,17 @@ function refreshDraftComplexityControl(wrap, task, context) {
   if (newFeedback) control.appendChild(newFeedback);
 }
 // The pinned resolver result shares the normal detail's crew control. Only
-// the dock needs the outside-the-list note; full-page CSS hides that box.
+// the dock needs the outside-the-list note; full-page CSS hides that box. A
+// task the filter matches is only further down its section than the rows
+// loaded, so it carries no note [ORB-24677].
 function buildPinnedTask(ptask, context) {
+  const outside = filterTasks([ptask], context).length === 0;
   const row = el("div", { class: "pinned-external" }, [
-    el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
+    outside ? el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }) : null,
   ]);
+  row.hidden = !outside;
   stopRowInteraction(row);
-  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskShared.taskDispatchIdentity(ptask))}`;
+  row.dataset.hash = `${outside}-${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskShared.taskDispatchIdentity(ptask))}`;
 
   const drain = taskDrainState(ptask, context);
   const detail = buildTaskDetail(ptask, context, drain);

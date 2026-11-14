@@ -13,7 +13,7 @@ use super::HISTORY_MAX_LIMIT;
 
 const CURSOR_VERSION: u8 = 1;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TaskCursor {
     version: u8,
     scope: String,
@@ -30,6 +30,7 @@ pub(super) struct TaskCursor {
     checksum: String,
 }
 
+#[derive(Clone)]
 pub(super) struct TaskPageQuery {
     pub(super) workspaces: Vec<String>,
     statuses: Vec<TaskStatus>,
@@ -42,6 +43,12 @@ pub(super) struct TaskPageQuery {
     detail_id: Option<String>,
     detail_runs: bool,
     limit: usize,
+    /// `group=status`: answer one section per status, each with its own
+    /// total, rows and continuation, instead of one page across statuses.
+    group_by_status: bool,
+    /// `status_limit=<status>:<n>`: how many rows a section's first read
+    /// returns, overriding `limit` for that status in the grouped form.
+    status_limits: Vec<(TaskStatus, usize)>,
     raw_cursor: Option<String>,
     cursor: Option<TaskCursor>,
 }
@@ -60,6 +67,8 @@ impl Default for TaskPageQuery {
             detail_id: None,
             detail_runs: false,
             limit: DEFAULT_TASK_LIST_LIMIT,
+            group_by_status: false,
+            status_limits: Vec::new(),
             raw_cursor: None,
             cursor: None,
         }
@@ -108,14 +117,33 @@ impl TaskPageQuery {
                 "cursor" => {
                     query.raw_cursor = Some(value.into_owned()).filter(|value| !value.is_empty())
                 }
+                "group" => match value.trim() {
+                    "" => query.group_by_status = false,
+                    "status" => query.group_by_status = true,
+                    other => {
+                        return Err(format!(
+                            "invalid `group` value `{other}` (expected `status`)"
+                        ));
+                    }
+                },
+                "status_limit" => query.parse_status_limits(&value)?,
                 _ => {}
             }
+        }
+        if !query.status_limits.is_empty() && !query.group_by_status {
+            return Err("`status_limit` needs `group=status`".to_string());
         }
         Ok(query)
     }
 
     pub(super) fn bind_cursor(&mut self, scope: &str) -> Result<(), String> {
         if let Some(raw_cursor) = self.raw_cursor.take() {
+            if self.group_by_status && (self.no_statuses || self.statuses.len() != 1) {
+                return Err(
+                    "a per-status cursor continues one section; pass exactly that one `status`"
+                        .to_string(),
+                );
+            }
             self.cursor = Some(TaskCursor::decode(&raw_cursor, scope, &self.filter_key())?);
         }
         Ok(())
@@ -174,6 +202,41 @@ impl TaskPageQuery {
         self.cursor.as_ref()
     }
 
+    /// Whether the request asked for the per-status form (`group=status`).
+    pub(super) fn groups_by_status(&self) -> bool {
+        self.group_by_status
+    }
+
+    /// The single-status queries of the per-status form, one per requested
+    /// status in request order (every lifecycle status when none was named).
+    /// Each reads its `status_limit`, or `limit`, and mints cursors that
+    /// continue that status alone; a bound cursor goes to its one section.
+    pub(super) fn status_section_queries(&self) -> Vec<(TaskStatus, Self)> {
+        let statuses = if self.no_statuses {
+            Vec::new()
+        } else if self.statuses.is_empty() {
+            TaskStatus::ALL.to_vec()
+        } else {
+            self.statuses.clone()
+        };
+        statuses
+            .into_iter()
+            .map(|status| {
+                let mut section = self.clone();
+                section.statuses = vec![status];
+                section.no_statuses = false;
+                section.limit = self
+                    .status_limits
+                    .iter()
+                    .rev()
+                    .find(|(limited, _)| *limited == status)
+                    .map_or(self.limit, |(_, limit)| *limit);
+                section.status_limits.clear();
+                (status, section)
+            })
+            .collect()
+    }
+
     pub(super) fn next_cursor(
         &self,
         scope: &str,
@@ -223,6 +286,22 @@ impl TaskPageQuery {
         Ok(())
     }
 
+    fn parse_status_limits(&mut self, value: &str) -> Result<(), String> {
+        for raw in split_values(value) {
+            let (status, limit) = raw.rsplit_once(':').ok_or_else(|| {
+                format!("invalid `status_limit` value `{raw}` (expected `<status>:<limit>`)")
+            })?;
+            let status = status
+                .trim()
+                .to_ascii_lowercase()
+                .parse::<TaskStatus>()
+                .map_err(|error| format!("invalid `status_limit` status `{status}`: {error}"))?;
+            let limit = parse_limit(limit.trim())?;
+            self.status_limits.push((status, limit));
+        }
+        Ok(())
+    }
+
     fn filter_key(&self) -> String {
         let mut statuses = self
             .statuses
@@ -244,6 +323,15 @@ impl TaskPageQuery {
             "search": self.search,
             "limit": self.limit,
         });
+        // A per-status cursor continues one section by any page size: the
+        // first read and each "more" read choose their own `limit`. Keyed
+        // only when set, so plain listing cursors keep their binding.
+        if self.group_by_status {
+            key["group"] = json!("status");
+            if let Some(map) = key.as_object_mut() {
+                map.remove("limit");
+            }
+        }
         // Keyed only when set, so a cursor issued before the origin filter
         // existed still binds to the same unfiltered listing.
         if self.pilot_warnings {

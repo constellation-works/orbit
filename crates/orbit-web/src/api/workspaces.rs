@@ -344,6 +344,11 @@ fn fleet_drain_row(
 /// the cursor names the workspace its last row belongs to. Repeated
 /// `workspaces` parameters narrow sources before selection and bind the cursor
 /// to that subset. `total` still sums only selected workspaces that answered.
+///
+/// `group=status` and `status_limit` answer the per-status form documented on
+/// `list_tasks`: each section is cut workspace by workspace like a plain page,
+/// its cursor names the workspace it resumes in, and `unavailable` names each
+/// unreadable workspace once across every section.
 pub(super) async fn list_all_tasks(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
@@ -360,6 +365,9 @@ pub(super) async fn list_all_tasks(
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
         aggregate_resume_index(&aggregate_task_entries(&pinned, &query), &query)?;
+        if query.groups_by_status() {
+            return Ok(all_task_sections_json(&state, &pinned, &query, &scope));
+        }
         Ok(all_tasks_json(&state, &pinned, &query, &scope))
     })
     .await
@@ -701,6 +709,46 @@ fn workspace_job_run_params(
         order_by: JobRunOrder::Recency,
         ..Default::default()
     }
+}
+
+/// The `group=status` answer for `/api/tasks/all`: one aggregate page per
+/// status, with the sources any section could not read named once.
+fn all_task_sections_json(
+    state: &DashboardState,
+    pinned: &Pinned,
+    query: &TaskPageQuery,
+    scope: &str,
+) -> Result<Value, orbit_core::OrbitError> {
+    let mut sections = Vec::new();
+    let mut total = 0_u64;
+    let mut unavailable = Vec::new();
+    let mut unavailable_ids = HashSet::new();
+    for (status, section_query) in query.status_section_queries() {
+        let mut section = all_tasks_json(state, pinned, &section_query, scope)?;
+        if let Value::Object(map) = &mut section {
+            if let Some(Value::Array(sources)) = map.remove("unavailable") {
+                for source in sources {
+                    let id = source["workspace_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    if unavailable_ids.insert(id) {
+                        unavailable.push(source);
+                    }
+                }
+            }
+            map.insert("status".to_string(), json!(status.cli_name()));
+        }
+        total = total.saturating_add(section["total"].as_u64().unwrap_or(0));
+        sections.push(section);
+    }
+    Ok(json!({
+        "group": "status",
+        "sections": sections,
+        "total": total,
+        "limit": query.limit(),
+        "unavailable": unavailable,
+    }))
 }
 
 fn all_tasks_json(
