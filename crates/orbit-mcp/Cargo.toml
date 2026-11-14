@@ -19,7 +19,7 @@ test-support = []
 base64.workspace = true
 # Ordering merged notice timestamps when the mux aggregates owner reads.
 chrono.workspace = true
-# The callers-file trust check compares the file owner to the effective uid.
+# The SSH control-socket owner check and the listener peer credential lookup compare against the effective uid.
 libc.workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }

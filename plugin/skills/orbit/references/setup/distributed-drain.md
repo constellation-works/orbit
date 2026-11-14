@@ -93,9 +93,7 @@ A claimed leaf validates, replays sandbox deferrals and trusts baseline reruns
 against that capture, not against the follower's own lists. A refusal names
 the gate list it checked and its source. A claim from an older owner that
 captured no gates falls back to the follower's lists with a warning.
-A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
-ignored: `orbit doctor` warns; delete the files. Deny a caller by removing its
-key from `~/.ssh/authorized_keys`.
+Deny a caller by removing its key from `~/.ssh/authorized_keys`.
 
 Per-host compiler capacity is independent of drain slots. Keep the shared
 build-budget defaults (two heavy slots, four Cargo jobs) unless the operator

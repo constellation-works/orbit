@@ -38,7 +38,6 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
     }),
     // Machine-global checks: they read the operator's home, not the workspace.
-    DoctorProbe::many("mcp-callers", |_, _| caller_authorization_rows()),
     DoctorProbe::one("clock-unit", |runtime, _| {
         clock_unit_row(&runtime.global_root())
     }),
@@ -560,51 +559,6 @@ fn mcp_registration_row(
             remediation: None,
         }
     }
-}
-
-/// Whether this machine still carries retired destination-side MCP caller
-/// authorization files [ORB-12564].
-///
-/// One row, and never an error. The files grant and refuse nothing now: an SSH
-/// login to this machine is ownership of it, so a session served over SSH holds
-/// the authority its argv asks for, exactly as a local one does. What is worth
-/// saying is that a ceiling an operator wrote is inert, because the operator
-/// who wrote it has no other way to find out.
-fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
-    let Ok(home) = orbit_common::fs::path::home_dir() else {
-        return Vec::new();
-    };
-    let ignored = orbit_mcp::ignored_caller_authorization_paths(&home.join(".orbit"));
-    if ignored.is_empty() {
-        return vec![WorkspaceDoctorResult {
-            duration_ms: 0,
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: "no retired MCP caller-authorization files; a session served over SSH \
-                      holds the authority its argv asks for"
-                .to_string(),
-            remediation: None,
-        }];
-    }
-    let paths = ignored
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    vec![WorkspaceDoctorResult {
-        duration_ms: 0,
-        check_name: "mcp-callers".to_string(),
-        status: WorkspaceDoctorStatus::Warning,
-        message: format!(
-            "left over from destination-side caller authorization and ignored, capping no \
-             remote MCP session: {}",
-            paths.join(", ")
-        ),
-        remediation: Some(format!(
-            "Delete it: `rm -r {}`. To deny a caller, remove its key from \
-             `~/.ssh/authorized_keys` — that is the only boundary this machine ever had.",
-            paths.join(" ")
-        )),
-    }]
 }
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].

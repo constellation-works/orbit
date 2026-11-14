@@ -36,9 +36,8 @@ pub use listener::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure, McpListener};
 pub use remote::{
     FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, HostFacts, McpServerIdentity, McpSessionAuthority,
     RemoteProxyArgs, WORKSPACE_LIST_INCLUDE_CREWS, canonical_mcp_tool_definitions,
-    execute_discovery_tool, execute_federated_workspace_discovery,
-    ignored_caller_authorization_paths, mcp_server_identity, safe_mcp_tool_names,
-    serve_mcp_remote_proxy, warn_ignored_caller_authorization, workspace_list_includes_crews,
+    execute_discovery_tool, execute_federated_workspace_discovery, mcp_server_identity,
+    safe_mcp_tool_names, serve_mcp_remote_proxy, workspace_list_includes_crews,
 };
 pub use stdio_session::{LIFECYCLE_INTERVAL_ENV, RESUME_ENV, StdioExit, stdin_supports_handover};
 pub use toolset::{

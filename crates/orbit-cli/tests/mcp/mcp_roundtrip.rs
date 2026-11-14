@@ -2278,38 +2278,6 @@ fn an_operator_served_mcp_session_reaches_a_governed_tool() {
     assert_run_list_empty(&mut operator);
 }
 
-/// [ORB-12564] A destination upgraded from the retired model keeps its old
-/// files. They must be ignored — named once, never enforced, and never a
-/// reason to refuse a session.
-fn leftover_caller_authorization_files_are_ignored_rather_than_enforced() {
-    let workspace = McpWorkspace::init();
-    let orbit_home = workspace.home.join(".orbit");
-    std::fs::create_dir_all(&orbit_home).expect("global orbit root");
-    // Deliberately unparseable, and deliberately a `deny` shape: neither the
-    // defect nor the denial may reach a session.
-    std::fs::write(
-        orbit_home.join("mcp-callers.toml"),
-        "default = \"deny\"\nthis is not valid toml = [",
-    )
-    .expect("leftover callers file");
-    std::fs::create_dir_all(orbit_home.join("mcp-ssh-acceptance"))
-        .expect("leftover acceptance dir");
-
-    let mut client =
-        workspace.serve_remote(&["--operator", "--remote-caller-machine-id", "hm_caller"]);
-
-    assert_run_list_empty(&mut client);
-    drop(client);
-
-    // And `orbit doctor` is where the operator is told to delete them.
-    let output = workspace.run_ok(&["doctor", "--format", "json"]);
-    let rendered = format!("{}{}", stdout(&output), stderr(&output));
-    assert!(
-        rendered.contains("mcp-callers.toml") && rendered.contains("ignored"),
-        "doctor must suggest deleting the leftover: {rendered}"
-    );
-}
-
 /// Compact reads bound the serialized answer even when the provider capture
 /// admits much more, while the full MCP read retains every structured value.
 #[test]
@@ -5901,10 +5869,7 @@ fn forwarded_caller_authorization() {
 
 #[test]
 fn session_authority_and_unbound_discovery() {
-    rows!(
-        mcp_serve_lists_the_canonical_surface_outside_any_checkout,
-        leftover_caller_authorization_files_are_ignored_rather_than_enforced
-    );
+    rows!(mcp_serve_lists_the_canonical_surface_outside_any_checkout);
 }
 
 #[test]

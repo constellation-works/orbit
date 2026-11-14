@@ -300,18 +300,6 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
     assert_eq!(resources.resources.len(), 1);
     let uri = &resources.resources[0].uri;
     assert_eq!(uri, "ui://orbit/control-center/v1/index.html");
-    let legacy = client
-        .peer()
-        .read_resource(rmcp::model::ReadResourceRequestParams::new(
-            "ui://orbit/task-panel/v1/index.html",
-        ))
-        .await
-        .expect("legacy resource remains reachable");
-    let legacy_wire = serde_json::to_value(legacy).expect("legacy resource JSON");
-    assert_eq!(
-        legacy_wire["contents"][0]["uri"],
-        "ui://orbit/task-panel/v1/index.html"
-    );
     let resource = client
         .peer()
         .read_resource(rmcp::model::ReadResourceRequestParams::new(uri))
@@ -325,9 +313,9 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
     );
     for refused in [
         "file:///etc/passwd",
-        "ui://orbit/task-panel/v1/../secret",
-        "ui://orbit/task-panel/v2/index.html",
-        "ui://orbit/task-panel/v1/index.html?workspace=other",
+        "ui://orbit/control-center/v1/../secret",
+        "ui://orbit/control-center/v2/index.html",
+        "ui://orbit/control-center/v1/index.html?workspace=other",
         "https://example.invalid/index.html",
     ] {
         assert!(

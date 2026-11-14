@@ -2,7 +2,6 @@
 
 mod discovery;
 mod identity;
-mod legacy;
 mod proxy;
 mod ssh;
 mod surface;
@@ -18,7 +17,6 @@ pub use self::discovery::{
     workspace_list_includes_crews,
 };
 pub use self::identity::{McpServerIdentity, McpSessionAuthority, mcp_server_identity};
-pub use self::legacy::{ignored_caller_authorization_paths, warn_ignored_caller_authorization};
 pub use self::proxy::{RemoteProxyArgs, serve_mcp_remote_proxy};
 // The federated mux reuses the v1 remote argv verbatim rather than restating
 // it, so both client paths present one session shape to a destination.
