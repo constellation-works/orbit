@@ -364,6 +364,7 @@ pub(crate) fn build_context_from_roots(
                 )?,
             ),
             runtime_config.snapshot.task_types().to_vec(),
+            runtime_config.snapshot.regression_layers().to_vec(),
             runtime_config.snapshot.decision_channel_enabled,
             lease_policy,
             runtime_config.snapshot.experiments(),

@@ -15,7 +15,7 @@ use rusqlite::OptionalExtension;
 
 use super::input_keys::parse_input_keys;
 use super::state::write_state_json_conn;
-use crate::contracts::{JobRunOrder, JobRunQuery};
+use crate::contracts::{JOB_RUN_TASK_INPUT_KEYS, JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
 
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.
@@ -190,6 +190,67 @@ impl Store {
     ) -> Result<Option<JobRun>, OrbitError> {
         let conn = self.read()?;
         get_job_run_for_workspace_conn(&conn, workspace_id, run_id)
+    }
+
+    /// Run rows for `run_ids` with no step read and only task-label input.
+    ///
+    /// One `run_id IN (...)` statement per chunk of [`STEP_RUN_ID_CHUNK`]
+    /// ids. An id with no row is omitted. A row that cannot be decoded is
+    /// omitted too, so one corrupt record does not blank the rest of the
+    /// chunk. `input` keeps only [`JOB_RUN_TASK_INPUT_KEYS`].
+    pub(super) fn job_runs_by_id_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        if run_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.read()?;
+        let mut runs = Vec::with_capacity(run_ids.len());
+        for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
+            let placeholders = (0..chunk.len())
+                .map(|index| format!("?{}", index + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {JOB_RUN_COLUMNS} FROM job_runs \
+                     WHERE workspace_id = ?1 AND run_id IN ({placeholders})"
+                ))
+                .map_err(sqlite_store_error)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(workspace_id.to_string())];
+            params.extend(
+                chunk
+                    .iter()
+                    .map(|run_id| Box::new(run_id.clone()) as Box<dyn rusqlite::types::ToSql>),
+            );
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|param| param.as_ref()).collect();
+            let mut rows = stmt
+                .query(param_refs.as_slice())
+                .map_err(sqlite_store_error)?;
+            loop {
+                match rows.next() {
+                    Ok(Some(row)) => {
+                        match row_to_job_run_with_input_keys(row, Some(JOB_RUN_TASK_INPUT_KEYS)) {
+                            Ok(run) => runs.push(run),
+                            Err(error) => {
+                                orbit_common::tracing::warn!(
+                                    target: "orbit.store.job_run",
+                                    %error,
+                                    "job run row skipped during batched read"
+                                );
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => return Err(sqlite_store_error(error)),
+                }
+            }
+        }
+        Ok(runs)
     }
 
     /// The one-column counterpart of [`Self::get_job_run_for_workspace`]:

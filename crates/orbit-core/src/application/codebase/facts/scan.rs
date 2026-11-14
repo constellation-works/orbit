@@ -9,6 +9,8 @@ use orbit_types::task::{
     Task, TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
 
+use orbit_config::RegressionLayerDefinition;
+
 use super::super::regression::{PendingLink, RegressionLink};
 use super::block_cause::failed_claim_settlements;
 use super::lock_denial::{lock_denial, requester_identities};
@@ -126,6 +128,10 @@ pub struct CodebaseFacts {
     pub(in crate::application::codebase) lock_denials: Vec<LockDenial>,
     /// When each task was granted a reservation, ascending: its admission.
     pub(in crate::application::codebase) admissions: BTreeMap<String, Vec<DateTime<Utc>>>,
+    /// The `workflow.regression_layers` table every link's layer was
+    /// resolved under: the breakdowns and cross-tabs list its layers, so a
+    /// cached scan never mixes layers of two tables.
+    pub(in crate::application::codebase) regression_layers: Vec<RegressionLayerDefinition>,
 }
 
 /// Scan the workspace once. A task whose history cannot be read keeps its
@@ -266,7 +272,8 @@ pub(in crate::application::codebase) fn scan(
         });
     }
     stored.save(runtime, facts.iter().map(|task| task.id.as_str()));
-    attach_regressions(&mut facts, pending_links);
+    let regression_layers = runtime.regression_layers().to_vec();
+    attach_regressions(&mut facts, pending_links, &regression_layers);
 
     let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
     let mut reservation_tasks: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -316,6 +323,7 @@ pub(in crate::application::codebase) fn scan(
         reservations,
         lock_denials,
         admissions,
+        regression_layers,
     })
 }
 
@@ -350,13 +358,15 @@ pub(in crate::application::codebase) fn scan_regressions(
         };
         facts.push(TaskFacts::from_envelope(task, done_at));
     }
-    attach_regressions(&mut facts, pending_links);
+    let regression_layers = runtime.regression_layers().to_vec();
+    attach_regressions(&mut facts, pending_links, &regression_layers);
     Ok(CodebaseFacts {
         computed_at,
         tasks: facts,
         reservations: Vec::new(),
         lock_denials: Vec::new(),
         admissions: BTreeMap::new(),
+        regression_layers,
     })
 }
 
@@ -388,7 +398,11 @@ fn pending_links(tasks: &[Task]) -> Vec<PendingLink> {
 
 /// Give each regressed task its links. A link's layer reads its regression
 /// task's landed paths, known only once every task is scanned.
-fn attach_regressions(facts: &mut [TaskFacts], pending_links: Vec<PendingLink>) {
+fn attach_regressions(
+    facts: &mut [TaskFacts],
+    pending_links: Vec<PendingLink>,
+    layers: &[RegressionLayerDefinition],
+) {
     let index: BTreeMap<String, usize> = facts
         .iter()
         .enumerate()
@@ -401,7 +415,7 @@ fn attach_regressions(facts: &mut [TaskFacts], pending_links: Vec<PendingLink>) 
         links
             .entry(regressed)
             .or_default()
-            .push(pending.resolve(fix));
+            .push(pending.resolve(fix, layers));
     }
     for (regressed, mut task_links) in links {
         if let Some(at) = index.get(&regressed) {

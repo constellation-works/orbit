@@ -258,7 +258,7 @@ impl TaskV2Store {
         &self,
         id: &str,
         fields: &TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         if fields.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -454,24 +454,30 @@ impl TaskV2Store {
                 )?;
             }
 
+            // Body documents are separate files. The post-write row is this
+            // in-memory bundle, so it has to carry the same bytes just published
+            // or a caller would observe the pre-write description, criteria,
+            // plan or execution summary.
             if let Some(value) = &fields.description {
                 self.bundle_store
                     .rewrite_document(id, TaskDocumentV2::Description, value)?;
+                bundle.description = value.clone();
             }
             if let Some(value) = &fields.acceptance_criteria {
-                self.bundle_store.rewrite_document(
-                    id,
-                    TaskDocumentV2::Acceptance,
-                    &render_acceptance(value),
-                )?;
+                let rendered = render_acceptance(value);
+                self.bundle_store
+                    .rewrite_document(id, TaskDocumentV2::Acceptance, &rendered)?;
+                bundle.acceptance = rendered;
             }
             if let Some(value) = &fields.plan {
                 self.bundle_store
                     .rewrite_document(id, TaskDocumentV2::Plan, value)?;
+                bundle.plan = value.clone();
             }
             if let Some(value) = &fields.execution_summary {
                 self.bundle_store
                     .rewrite_document(id, TaskDocumentV2::ExecutionSummary, value)?;
+                bundle.execution_summary = value.clone();
             }
 
             if title_changed {
@@ -616,7 +622,9 @@ impl TaskV2Store {
                 self.bundle_store.append_events(id, &pending_events)?;
                 pending.finish();
             }
-            Ok(())
+            // The in-memory bundle is the post-write row. Callers answer from
+            // it instead of reading the bundle they just published.
+            self.row_from_bundle(bundle)
         })
     }
 
@@ -658,7 +666,7 @@ impl TaskV2Store {
         &self,
         id: &str,
         fields: &TaskHistoryUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         if fields.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -857,7 +865,9 @@ impl TaskV2Store {
                 self.bundle_store.append_comments(id, &pending_comments)?;
                 pending.finish();
             }
-            Ok(())
+            // Same post-write row as a document update: history runs after
+            // the document commit, so this bundle includes both.
+            self.row_from_bundle(bundle)
         };
         if comment_only {
             self.with_task_comment_lock(id, write)

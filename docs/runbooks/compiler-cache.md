@@ -658,6 +658,7 @@ scripts/cross-revision-check.sh \
 | `--expect-baseline` / `--expect-candidate` | An unexpected failure reported as an ordinary arm result |
 | Per-arm marker required, sibling marker rejected | A stale or foreign test set passing as this revision's |
 | Read-only Git access (`rev-parse`, `archive`, `GIT_OPTIONAL_LOCKS=0`) | Writes to a managed read-only `.git`, or a mutated source checkout |
+| Git location, index and object overrides scrubbed on helper Git calls and arm commands | Inherited Git authority redirecting `--repo`, scratch-checkout validation or a producer's Git discovery to another repository |
 | Explicit and automatic workdirs refused inside the source checkout or Orbit state; only descendants of the declared `ORBIT_SCRATCH_DIR` are allowed beneath `.orbit/` | Scratch trees landing in the state being validated |
 
 In managed executors, use the injected `ORBIT_SCRATCH_DIR` and set `TMPDIR` to
@@ -667,6 +668,12 @@ root even when its checkout lives beneath `.orbit/state/worktrees`; it refuses
 the root itself, nested `.orbit` directories, sibling state paths and symlink
 or traversal escapes. `TMPDIR` alone does not authorize writing Orbit state.
 Both `--workdir` and automatic workdirs use these checks before creating output.
+
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`,
+`GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are removed from
+each helper Git call and arm command. Revisions come from the explicit source
+checkout, scratch authority comes from its declared checkout, and Git commands
+inside an extract cannot inherit the caller's repository through these variables.
 
 The source selected by `--repo` is resolved to its entire Git checkout. That
 checkout remains immutable, including its own `.orbit/tmp`, even when declared
@@ -691,7 +698,9 @@ Limits worth stating in a validation summary:
 
 Regression fixtures for the helper — arm isolation, mtime normalization, cache
 opt-out, producer exit code through bounded output, read-only `.git`, and
-workdir containment (including managed scratch authority and protected TMPDIR)
+workdir containment (including managed scratch authority and protected TMPDIR),
+and inherited Git overrides against a sentinel repository whose HEAD, refs,
+index, config, objects and dirty worktree must remain unchanged
 — run in CI and locally:
 
 ```bash

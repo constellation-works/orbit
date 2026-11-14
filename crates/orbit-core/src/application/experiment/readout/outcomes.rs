@@ -907,6 +907,5 @@ impl OrbitRuntime {
 
 use super::metrics::{failed_check_heads, landing, regressions};
 pub(super) use super::model::{
-    CostSource, Kind, METRIC_SPECS, MetricSpec, Observed, Outcome, ReviewableDenominator,
-    TaskMemoryDelivery, TaskOutcome, metric_spec,
+    CostSource, Observed, Outcome, ReviewableDenominator, TaskMemoryDelivery, TaskOutcome,
 };
