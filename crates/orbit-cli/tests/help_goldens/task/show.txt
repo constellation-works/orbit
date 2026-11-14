@@ -11,7 +11,7 @@ Options:
           Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix
 
       --fields <FIELDS>...
-          Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`.
+          Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.
 
   -h, --help
           Print help (see a summary with '-h')
