@@ -291,15 +291,17 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
         && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
 }
 
-/// Accept HEAD only when a settled review recorded it as its final commit
-/// and it descends from the pinned base.
+/// Accept HEAD only when a settled before-landing review recorded it as its
+/// final commit and it descends from the pinned base.
 ///
-/// A before-landing (or before-PR) reviewer may commit its repair in the
-/// same worktree and settle with that commit as `final_commit`. When final
-/// recovery then resumes implementation, HEAD is still that reviewer commit:
-/// it is the candidate, not unexplained drift. An extra commit on top, a
-/// HEAD no settlement recorded, or a non-descendant HEAD gains no permission
-/// from any settlement.
+/// A before-landing reviewer may commit its repair in the same worktree and
+/// settle with that commit as `final_commit`. When final recovery then
+/// resumes implementation, HEAD is still that reviewer commit: it is the
+/// candidate, not unexplained drift. An extra commit on top, a HEAD no
+/// settlement recorded, a non-descendant HEAD, or a before-PR settlement
+/// gains no permission from any settlement: before-PR settlements must not
+/// authorize another run's HEAD, or the original owner without a final
+/// recovery receipt would also be admitted (ORB-24328 follow-up).
 pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
@@ -314,6 +316,9 @@ pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
     let comments = host.get_task_comments(task_id)?;
     let settlements = orbit_types::task::recorded_review_settlements(&history, &comments);
     for (_, settlement) in settlements {
+        if settlement.gate != orbit_types::task::ReviewSettlementGate::BeforeLanding {
+            continue;
+        }
         let Some(final_commit) = settlement.final_commit.as_deref() else {
             continue;
         };
