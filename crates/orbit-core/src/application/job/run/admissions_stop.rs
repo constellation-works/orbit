@@ -19,7 +19,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
-use super::state_write::terminal_run_error;
+use super::state_write::{RunStateCreation, terminal_run_error};
 use crate::OrbitRuntime;
 use crate::application::job::{JobDrainPort, JobPullSettlementPort};
 
@@ -313,7 +313,7 @@ impl OrbitRuntime {
             &run.run_id,
             &run.job_id,
             run.input.as_ref(),
-            true,
+            RunStateCreation::CreateIfMissing,
             &mut update,
         )?;
 

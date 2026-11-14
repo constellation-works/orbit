@@ -30,6 +30,7 @@ use crate::application::job::{JobPullSettlementPort, log_best_effort};
 #[cfg(unix)]
 use super::owner::{ProviderStop, stop_provider_process};
 use super::owner::{signal_run_owner_confirmed, signal_run_owner_process};
+use super::state_write::RunStateCreation;
 #[cfg(test)]
 use super::state_write::run_run_state_write_hook;
 use super::types::{JobRunCancelOutcome, JobRunCancelResult};
@@ -528,7 +529,7 @@ impl OrbitRuntime {
             &run.run_id,
             &run.job_id,
             run.input.as_ref(),
-            true,
+            RunStateCreation::CreateIfMissing,
             &mut |_, state| {
                 state.task_cancellation_policy = Some(policy.clone());
                 state.updated_at = Utc::now();
@@ -737,7 +738,7 @@ impl OrbitRuntime {
             &run.run_id,
             &run.job_id,
             run.input.as_ref(),
-            false,
+            RunStateCreation::PreserveMissing,
             &mut |_, state| {
                 for (child_run_id, cancellation) in &settled {
                     state.terminalize_child_dispatch(child_run_id, cancellation.clone());
@@ -801,11 +802,16 @@ impl OrbitRuntime {
     /// waits are momentary and meaningless once terminal, but the child a
     /// parent dispatched outlives the parent's own record of waiting for it.
     pub(super) fn mark_cancelled_pipeline_state(&self, run: &JobRun) -> Result<(), OrbitError> {
+        let creation = if run.input.is_some() {
+            RunStateCreation::CreateIfMissing
+        } else {
+            RunStateCreation::PreserveMissing
+        };
         self.update_or_create_run_state(
             &run.run_id,
             &run.job_id,
             run.input.as_ref(),
-            run.input.is_some(),
+            creation,
             &mut |_, state| {
                 if let Some(object) = state.pipeline.as_object_mut() {
                     object.insert(
