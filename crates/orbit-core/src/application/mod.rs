@@ -52,6 +52,7 @@ pub(crate) mod statistics;
 pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
 pub mod task;
+pub mod task_bundle;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod tool_name_migration;

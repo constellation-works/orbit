@@ -93,8 +93,9 @@ source scan, enforces the runtime direction.
   application operations and runtime mechanisms.
 - **Bootstrap** — initialization, managed/default assets, policy seeding, and
   forward-only startup migrations [ORB-10012]. It depends on application for
-  the seed definitions, and implements `contracts::TaskBundleMaintenancePort`
-  so the adapter can publish tasks and count unindexed bundles [ORB-22005].
+  the seed definitions. Request-time task export, import, reindex and
+  publication live in `application::task_bundle`, so the adapter calls them
+  directly [ORB-24534].
 - **Composition** — root resolution and the sole join of `orbit-config`,
   bootstrap, runtime construction, and adapters [ORB-22005].
 - **Runtime roots** — `OrbitRuntimeRoots` carries `global_root`,
@@ -146,7 +147,7 @@ source scan, enforces the runtime direction.
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
 | Tag-instruction-owned experiment overlay port | `crates/orbit-core/src/application/tag_instructions.rs` (`TagInstructionExperimentPort`), implemented in `experiment/tag_instruction_port.rs` | [ORB-23019] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
-| Application-owned port bootstrap implements | `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `bootstrap/task_publication.rs` | [ORB-22005] |
+| Task bundle export/import/reindex and publication | `crates/orbit-core/src/application/task_bundle/{migration,publication}.rs` | [ORB-24534] |
 | Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
