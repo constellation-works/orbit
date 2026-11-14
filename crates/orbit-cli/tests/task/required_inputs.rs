@@ -32,6 +32,21 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
             json!({"workspace": fixture.repo, "request_id": "type-verdict", "id": "missing", "expected_revision": "revision", "verdict": "approve"}),
             "`verdict` must have type object",
         ),
+        (
+            "orbit.task.add",
+            json!({"workspace": fixture.repo, "request_id": "type-criteria-string", "title": "t", "description": "d", "acceptance_criteria": "a"}),
+            "`acceptance_criteria` must have type string_list",
+        ),
+        (
+            "orbit.task.update",
+            json!({"workspace": fixture.repo, "request_id": "type-complete", "id": "missing", "expected_revision": "revision", "verdict": {}, "complete": "true"}),
+            "`complete` must have type boolean",
+        ),
+        (
+            "orbit.task.update",
+            json!({"workspace": fixture.repo, "request_id": "type-verdict-list", "id": "missing", "expected_revision": "revision", "verdict": [{"decision": "accept"}]}),
+            "`verdict` must have type object",
+        ),
     ] {
         let output = fixture
             .command(&["tool", "run", tool, "--input", &input.to_string(), "--json"])
@@ -47,6 +62,34 @@ fn guarded_writes_reject_mistyped_known_fields_before_dispatch() {
             "{error}"
         );
     }
+
+    // A mistyped field outside the guarded set keeps the ORB-24434 selector
+    // refusal rather than the registry's shape refusal.
+    let output = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "workspace": fixture.repo, "request_id": "type-out-of-set",
+                "title": "t", "description": "d", "acceptance_criteria": ["a"],
+                "complexity": 7,
+            })
+            .to_string(),
+            "--json",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    let message = error["error"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("invalid input: unknown field 'complexity'")
+            && message.contains("guarded creation"),
+        "mistyped out-of-set field must keep the guarded refusal: {error}"
+    );
 }
 
 #[test]
