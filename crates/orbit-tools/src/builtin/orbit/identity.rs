@@ -1,7 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::optional_string_alias;
 use orbit_types::identity::{normalize_agent_family_for_model, require_canonical_agent_family};
-use orbit_types::tool::ToolParam;
 use serde_json::Value;
 
 use crate::ToolContext;
@@ -61,12 +60,4 @@ pub(super) fn resolve_identity(
         model,
         actor_label: family,
     })
-}
-
-pub(super) fn identity_params() -> Vec<ToolParam> {
-    Vec::new()
-}
-
-pub(super) fn model_identity_params() -> Vec<ToolParam> {
-    Vec::new()
 }

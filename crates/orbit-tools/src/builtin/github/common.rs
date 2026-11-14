@@ -46,19 +46,7 @@ pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam
     }
 }
 
-pub(super) fn tool_param(
-    name: &str,
-    description: &str,
-    param_type: &str,
-    required: bool,
-) -> ToolParam {
-    ToolParam {
-        name: name.to_string(),
-        description: description.to_string(),
-        param_type: param_type.to_string(),
-        required,
-    }
-}
+pub(super) use crate::tool::tool_param;
 
 macro_rules! gh_tool {
     (

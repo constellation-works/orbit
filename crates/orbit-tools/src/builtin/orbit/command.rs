@@ -25,7 +25,7 @@ pub struct OrbitCommandExecTool;
 
 impl Tool for OrbitCommandExecTool {
     fn schema(&self) -> ToolSchema {
-        let mut parameters = vec![
+        let parameters = vec![
             ToolParam {
                 name: "argv".to_string(),
                 description: "The command as a JSON array of argv strings, program first (e.g. \
@@ -62,7 +62,6 @@ impl Tool for OrbitCommandExecTool {
                 required: false,
             },
         ];
-        parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.command.exec".to_string(),
             description:
@@ -78,11 +77,7 @@ impl Tool for OrbitCommandExecTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        if ctx
-            .orbit_host
-            .as_ref()
-            .is_some_and(|host| host.task_scope().run_id.is_some())
-        {
+        if ctx.is_managed_run() {
             return Err(OrbitError::CapabilityDenied(
                 "managed runs cannot execute remote commands; a leaf agent invoking the CLI \
                  from inside a run would bypass the self-dispatch guard"
