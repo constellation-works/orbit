@@ -21,8 +21,8 @@ use super::super::handoff::{
 use super::super::pr::meaningful_execution_summary;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
-    PinnedHead, head_descends_from_pin, head_matches_final_recovery, validate_pinned_head,
-    verify_clean_tree,
+    PinnedHead, head_descends_from_pin, head_matches_final_recovery, head_matches_settled_review,
+    validate_pinned_head, verify_clean_tree,
 };
 use super::diagnostics::{changed_head_error, empty_stage_error};
 use super::finding_invalid;
@@ -324,6 +324,13 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                         host,
                         input,
                         batch_id,
+                        &task.id,
+                        &workspace_path,
+                        &base_sha,
+                        &head_sha,
+                    )?
+                    && !head_matches_settled_review(
+                        host,
                         &task.id,
                         &workspace_path,
                         &base_sha,

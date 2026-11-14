@@ -291,6 +291,69 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
         && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
 }
 
+/// Accept HEAD only when a settled before-landing review recorded it as its
+/// final commit and it descends from the pinned base.
+///
+/// A before-landing reviewer may commit its repair in the same worktree and
+/// settle with that commit as `final_commit`. When final recovery then
+/// resumes implementation, HEAD is still that reviewer commit: it is the
+/// candidate, not unexplained drift. An extra commit on top, a HEAD no
+/// settlement recorded, a non-descendant HEAD, or a before-PR settlement
+/// gains no permission from any settlement: before-PR settlements must not
+/// authorize another run's HEAD, or the original owner without a final
+/// recovery receipt would also be admitted (ORB-24328 follow-up).
+pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    workspace_path: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<bool, OrbitError> {
+    if !head_descends_from_pin(workspace_path, base_sha, head_sha)? {
+        return Ok(false);
+    }
+    let history = host.get_task_history(task_id)?;
+    let comments = host.get_task_comments(task_id)?;
+    let settlements = orbit_types::task::recorded_review_settlements(&history, &comments);
+    for (_, settlement) in settlements {
+        if settlement.gate != orbit_types::task::ReviewSettlementGate::BeforeLanding {
+            continue;
+        }
+        let Some(final_commit) = settlement.final_commit.as_deref() else {
+            continue;
+        };
+        if final_commit.eq_ignore_ascii_case(head_sha) {
+            return Ok(true);
+        }
+        // Legacy settlements may record a short id; resolve it in this
+        // worktree before comparing. Only hexadecimal object-id prefixes are
+        // valid here: resolving arbitrary revision expressions such as `HEAD`
+        // would let a later, unrecorded commit authorize itself. Unresolvable
+        // records prove nothing.
+        if !(4..=64).contains(&final_commit.len())
+            || !final_commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            continue;
+        }
+        if let Ok(resolved) = git_output(
+            workspace_path,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{final_commit}^{{commit}}"),
+            ],
+        ) && resolved.trim().eq_ignore_ascii_case(head_sha)
+            && resolved
+                .trim()
+                .get(..final_commit.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(final_commit))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Reject anything that is not a full Git object id.
 ///
 /// The commit step's contract is a base pinned at worktree setup; accepting a
