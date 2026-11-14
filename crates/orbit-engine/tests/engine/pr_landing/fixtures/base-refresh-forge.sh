@@ -248,6 +248,10 @@ case "$1 ${2:-}" in
                 old_base=$(cat "$forge/old-base")
                 run="{\"id\":700,\"run_attempt\":1,\"workflow_id\":600,\"check_suite_id\":800,\"path\":\".github/workflows/ci.yml\",\"head_sha\":\"$head\",\"head_branch\":\"$branch\",\"repository\":$repo,\"head_repository\":$repo,\"event\":\"pull_request\",\"actor\":{\"id\":123,\"login\":\"owner\"},\"status\":\"completed\",\"conclusion\":\"success\",\"pull_requests\":[{\"number\":42,\"head\":{\"sha\":\"$head\"},\"base\":{\"sha\":\"$old_base\",\"ref\":\"$base\",\"repo\":$repo}}]}"
                 if [ -f "$forge/push" ]; then run=$(printf '%s' "$run" | sed 's/"event":"pull_request"/"event":"push"/'); fi
+                if [ -f "$forge/workflow-run-status" ]; then
+                    run_status=$(tr -d '\n' < "$forge/workflow-run-status")
+                    run=$(printf '%s' "$run" | sed "s/\"status\":\"completed\",\"conclusion\":\"success\"/\"status\":\"${run_status}\",\"conclusion\":null/")
+                fi
                 case "$2" in *'/700') printf '%s\n' "$run" ;; *) printf '{"total_count":1,"workflow_runs":[%s]}\n' "$run" ;; esac ;;
             *'/actions/workflows/600') echo '{"id":600,"path":".github/workflows/ci.yml"}' ;;
             *'/check-suites/800') printf '{"id":800,"head_sha":"%s","repository":%s,"app":{"id":900,"slug":"github-actions"}}\n' "$head" "$repo" ;;

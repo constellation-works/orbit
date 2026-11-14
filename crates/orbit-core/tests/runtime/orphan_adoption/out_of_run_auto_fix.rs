@@ -338,6 +338,35 @@ impl Fixture {
         );
     }
 
+    /// The forge reports required checks on `leaf`'s open pull request at
+    /// `head_sha`: `passed` have finished and `pending` are still running.
+    /// Replaces an earlier [`Self::blocked`] row for the same pull request.
+    pub(super) fn report_required_checks(
+        &self,
+        leaf: &Leaf,
+        head_sha: &str,
+        author: &str,
+        passed: &[&str],
+        pending: &[&str],
+    ) {
+        self.forge.0.lock().unwrap().blockers.insert(
+            leaf.number,
+            PullRequestBlockers {
+                pull: ForgePullRequest {
+                    number: leaf.number,
+                    head_branch: leaf.head.clone(),
+                    body: format!("Delivers {}.", leaf.task),
+                    author: author.to_string(),
+                },
+                head_sha: head_sha.to_string(),
+                conflicting: false,
+                failed_required_checks: Vec::new(),
+                pending_required_checks: pending.iter().map(|name| (*name).to_string()).collect(),
+                passed_required_checks: passed.iter().map(|name| (*name).to_string()).collect(),
+            },
+        );
+    }
+
     /// Make the selected PR use the production GraphQL parser and report
     /// GitHub's still-calculating mergeability answer.
     #[cfg(unix)]

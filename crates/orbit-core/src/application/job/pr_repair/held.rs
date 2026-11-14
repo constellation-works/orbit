@@ -39,6 +39,11 @@ pub(super) const HELD_BACKOFF_BASE: Duration = Duration::from_secs(300);
 /// (an operator decision, a new head or a new delivery attempt), the clock or
 /// orphan adoption resumes it, or it carries no pull request; the decision
 /// per code is recorded in the out-of-run auto-fix design's decisions.
+///
+/// [`DeliveryRefusal::CheckRunsAbsent`] is in this set [ORB-24457]. The
+/// auto-fix pass still withholds the hand-back, without spending the
+/// ceiling, while the unchanged head reports no pending or passed required
+/// check.
 pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
     match refusal {
         DeliveryRefusal::CheckEvidenceInconclusive
@@ -46,7 +51,8 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::EvidenceStale
         | DeliveryRefusal::RequirementsUnsatisfied
         | DeliveryRefusal::BaseChecksPending
-        | DeliveryRefusal::ForgeObservationUnavailable => true,
+        | DeliveryRefusal::ForgeObservationUnavailable
+        | DeliveryRefusal::CheckRunsAbsent => true,
         DeliveryRefusal::HeadChanged
         | DeliveryRefusal::RepairDispatched
         | DeliveryRefusal::PullRequestDraft
@@ -56,7 +62,6 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
         | DeliveryRefusal::CheckRepairActivityAbsent
-        | DeliveryRefusal::CheckRunsAbsent
         | DeliveryRefusal::VisualNotEstablished
         | DeliveryRefusal::VisualReviewUnresolved
         // The claim already ended. Resuming this hold would land a revoked handoff.

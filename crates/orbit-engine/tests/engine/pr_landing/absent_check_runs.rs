@@ -103,3 +103,45 @@ fn checks_started_by_the_retrigger_are_watched_and_land_the_same_head() {
         },
     );
 }
+
+/// [ORB-24457] A workflow run waiting for a runner has no check runs yet.
+/// That is checks still pending: completion waits out its budget and does
+/// not re-trigger or hold as `delivery_check_runs_absent`. Before the fix
+/// this budget recorded one re-trigger and held on the last poll.
+#[test]
+fn a_queued_or_in_progress_workflow_with_no_check_runs_waits_out_the_budget() {
+    isolated(
+        "absent_check_runs::a_queued_or_in_progress_workflow_with_no_check_runs_waits_out_the_budget",
+        |sandbox| {
+            for status in ["queued", "in_progress"] {
+                let (fx, host, mut input) = absent_check_runs(sandbox);
+                fs::remove_file(fx.forge.join("no-runs")).unwrap();
+                fs::write(fx.forge.join("workflow-run-status"), status).unwrap();
+                input["max_wait_seconds"] = json!(420);
+                input["poll_interval_seconds"] = json!(60);
+                let error = complete_with_logical_clock(&host, &input)
+                    .expect_err("a workflow still waiting for a runner does not merge");
+                match &error {
+                    OrbitError::DeliveryRefused { refusal, message } => {
+                        assert_eq!(
+                            *refusal,
+                            DeliveryRefusal::CompletionBudgetExpired,
+                            "{status}: {message}"
+                        );
+                    }
+                    other => panic!("{status}: expected the completion budget, got {other}"),
+                }
+                assert!(
+                    retriggers(&host).is_empty(),
+                    "{status}: a present workflow run is not re-triggered: {:?}",
+                    retriggers(&host)
+                );
+                assert!(
+                    fx.forge_lines("mutations").is_empty(),
+                    "{status}: the pull request is not closed and reopened: {:?}",
+                    fx.forge_lines("mutations")
+                );
+            }
+        },
+    );
+}

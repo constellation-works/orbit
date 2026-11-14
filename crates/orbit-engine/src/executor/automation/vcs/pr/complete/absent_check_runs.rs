@@ -2,9 +2,10 @@
 //! required check run for.
 //!
 //! GitHub can drop a push's `pull_request` event. The head then reports no
-//! run, queued or otherwise, of any required check, and a completion would
-//! wait out its whole budget for checks that never start. Once that state has
-//! lasted [`ABSENT_CHECK_RUN_GRACE_SECONDS`] on the head this run published,
+//! workflow run at all, and no run, queued or otherwise, of any required
+//! check, and a completion would wait out its whole budget for checks that
+//! never start. Once that state has lasted
+//! [`ABSENT_CHECK_RUN_GRACE_SECONDS`] on the head this run published,
 //! completion re-requests hosted checks once through the forge adapter,
 //! recording the request in the task history before it is made. The history
 //! entry bounds the re-trigger to one per pull request head across every
@@ -12,6 +13,12 @@
 //! none has started [`RETRIGGER_WAIT_SECONDS`] after the request, completion
 //! holds as [`DeliveryRefusal::CheckRunsAbsent`]. Absent checks are never
 //! passing, no merge is requested on them, and no repair is spent.
+//!
+//! [ORB-24457] A workflow run the forge reports for the head, in any state,
+//! is checks still pending. A queued run has no check runs yet; completion
+//! keeps watching it under the ordinary completion budget. The grace, the
+//! one re-trigger and the hold apply only when the adapter reports no
+//! workflow run for the head at all.
 
 use std::path::Path;
 
@@ -68,6 +75,9 @@ pub(super) struct AbsentCheckRunPoll<'a> {
     pub(super) published_head: Option<&'a str>,
     /// Whether this poll observed no run of any required check.
     pub(super) absent: bool,
+    /// Whether the forge adapter reported a workflow run for this head.
+    /// Any state counts as checks still pending, not a dropped event.
+    pub(super) workflow_run_present: bool,
     /// The required checks the head has not reported, for messages.
     pub(super) missing_note: String,
     pub(super) waited_seconds: u64,
@@ -75,15 +85,22 @@ pub(super) struct AbsentCheckRunPoll<'a> {
 }
 
 impl AbsentCheckRuns {
-    /// Re-trigger once, or hold, when the published head has had no run of
-    /// any required check for long enough. `Ok` keeps the ordinary wait.
+    /// Re-trigger once, or hold, when the published head has had no workflow
+    /// run and no run of any required check for long enough. A present
+    /// workflow run keeps the ordinary wait. `Ok` keeps that wait too.
     pub(super) fn observe<H: RuntimeHost + ?Sized>(
         &mut self,
         host: &H,
         poll: &AbsentCheckRunPoll<'_>,
     ) -> Result<(), OrbitError> {
         let head = match poll.status.head_sha.as_deref() {
-            Some(head) if poll.absent && poll.published_head == Some(head) => head,
+            Some(head)
+                if poll.absent
+                    && !poll.workflow_run_present
+                    && poll.published_head == Some(head) =>
+            {
+                head
+            }
             _ => {
                 self.since = None;
                 return Ok(());
@@ -145,12 +162,13 @@ impl AbsentCheckRuns {
         OrbitError::DeliveryRefused {
             refusal: DeliveryRefusal::CheckRunsAbsent,
             message: format!(
-                "pr_complete: pull request #{pr} head {head} has no run of any required check \
-                 {waited}s after its one check re-trigger{outcome}{missing}; the head is \
-                 unchanged, no repair was spent and the task stays in review. Next step: \
-                 confirm the forge runs workflows for this repository, then start the required \
-                 checks on head {head} by hand (or push a new head) and start a new delivery \
-                 attempt",
+                "pr_complete: pull request #{pr} head {head} has no workflow run and no run of \
+                 any required check {waited}s after its one check re-trigger{outcome}{missing}; \
+                 the head is unchanged, no repair was spent and the task stays in review. Next \
+                 step: an auto-fix pass hands the task back once head {head} reports a required \
+                 check run. If none appear, confirm the forge runs workflows for this \
+                 repository, then start the required checks on that head by hand or push a new \
+                 head",
                 pr = poll.pr_number,
                 missing = poll.missing_note,
             ),

@@ -634,7 +634,21 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         .collect();
     let failed_workflow_runs =
         super::failed_workflow::failed_workflow_evidence(deadline, workspace, &current)?;
+    // [ORB-24457] Whether this head has a workflow run, and whether any of
+    // those runs is still waiting for or on a runner. The engine treats any
+    // present run as checks still pending; only `present: false` is the
+    // dropped-event absence completion re-requests checks for.
+    let workflow_runs = complete_list(&current.runs, "workflow_runs")?;
+    let head_workflow_run = json!({
+        "present": !workflow_runs.is_empty(),
+        "pending": workflow_runs.iter().any(|run| {
+            matches!(
+                run["status"].as_str(),
+                Some("queued" | "pending" | "waiting" | "requested" | "in_progress")
+            )
+        }),
+    });
     Ok(
-        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses,"failed_workflow_runs":failed_workflow_runs}),
+        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses,"failed_workflow_runs":failed_workflow_runs,"head_workflow_run":head_workflow_run}),
     )
 }

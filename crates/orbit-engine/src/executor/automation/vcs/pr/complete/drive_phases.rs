@@ -630,8 +630,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     }
 
     /// [ORB-23812] Re-trigger, once per head, the checks of a published head
-    /// the forge started no required check run for, or hold once that
-    /// re-trigger produced none. Any other state keeps the ordinary wait.
+    /// the forge started no workflow run and no required check run for, or
+    /// hold once that re-trigger produced none. A workflow run in any state
+    /// keeps the ordinary wait [ORB-24457].
     fn recover_absent_check_runs(&mut self, observed: &ObservedPoll) -> Result<(), OrbitError> {
         let absent = !observed.infrastructure_wait
             && !self.auto_merge_requested
@@ -652,6 +653,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 status: &observed.status,
                 published_head: self.pin.candidate_sha(),
                 absent,
+                workflow_run_present: self.unreported.head_workflow_present(),
                 missing_note: self.unreported.timeout_note(),
                 waited_seconds: self.waited_seconds,
                 last_poll: self
