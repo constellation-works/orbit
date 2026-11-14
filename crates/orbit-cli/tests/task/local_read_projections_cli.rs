@@ -1163,6 +1163,59 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
     );
 }
 
+/// The requeue fixture shared by the ORB-24468 and ORB-24497 tests: a task
+/// whose earlier pull request (9189) stays recorded after a requeue, and whose
+/// fresh run opened a second one (9244). Storage appends, so 9244 is the last
+/// recorded `github-pr`.
+fn requeued_task_with_fresh_pr(fixture: &Fixture) -> String {
+    let shown_workspace = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown_workspace["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("requeue-pr-fixture"));
+    // The earlier run's pull request, still recorded after the requeue.
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Requeue PR fixture".into(),
+            acceptance_criteria: vec!["Show the fresh pull request".into()],
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::InProgress),
+            external_refs: vec![ExternalRef::github_pr("9189").unwrap()],
+            ..Default::default()
+        })
+        .unwrap();
+    // The requeue back to backlog with a discarded candidate keeps the
+    // old ref; it does not clear `external_refs`.
+    runtime
+        .apply_task_automation_update(
+            &task.id.to_string(),
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Backlog),
+                status_event: Some("status_changed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // The fresh run opens its own pull request, appended after the old one.
+    runtime
+        .apply_task_automation_update(
+            &task.id.to_string(),
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some("jrun-requeue-fresh-pr".into()),
+                external_refs: vec![ExternalRef::github_pr("9244").unwrap()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    task.id.to_string()
+}
+
 /// [ORB-24468] After a requeue with a discarded candidate opens a fresh pull
 /// request, show reports the new pull request, not the closed earlier one.
 /// The old ref stays recorded (storage appends); the show projection presents
@@ -1175,54 +1228,7 @@ fn task_show_reports_latest_pr_after_requeue_with_new_pr() {
         return;
     }
     let fixture = Fixture::new();
-    let shown_workspace = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown_workspace["orbit_root"].as_str().unwrap());
-    let id = {
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
-        );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("requeue-pr-fixture"));
-        // The earlier run's pull request, still recorded after the requeue.
-        let task = runtime
-            .add_task(TaskAddParams {
-                title: "Requeue PR fixture".into(),
-                acceptance_criteria: vec!["Show the fresh pull request".into()],
-                complexity: TaskComplexity::Low,
-                status: Some(TaskStatus::InProgress),
-                external_refs: vec![ExternalRef::github_pr("9189").unwrap()],
-                ..Default::default()
-            })
-            .unwrap();
-        // The requeue back to backlog with a discarded candidate keeps the
-        // old ref; it does not clear `external_refs`.
-        runtime
-            .apply_task_automation_update(
-                &task.id.to_string(),
-                TaskAutomationUpdate {
-                    status: Some(TaskStatus::Backlog),
-                    status_event: Some("status_changed".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        // The fresh run opens its own pull request, appended after the old one.
-        runtime
-            .apply_task_automation_update(
-                &task.id.to_string(),
-                TaskAutomationUpdate {
-                    status: Some(TaskStatus::InProgress),
-                    job_run_id: Some("jrun-requeue-fresh-pr".into()),
-                    external_refs: vec![ExternalRef::github_pr("9244").unwrap()],
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        task.id.to_string()
-    };
+    let id = requeued_task_with_fresh_pr(&fixture);
 
     let shown = fixture.json(&["task", "show", &id, "--json"]);
     assert_eq!(
@@ -1269,5 +1275,84 @@ fn task_show_reports_latest_pr_after_requeue_with_new_pr() {
         fixture.json(&["task", "show", &id, "--json"]),
         shown,
         "show is read-only"
+    );
+}
+
+/// [ORB-24497] The list row, its field projection and a compact write response
+/// order `external_refs` as `orbit task show` does: the latest recorded
+/// `github-pr` first. They share the base record with show, so a consumer that
+/// takes the first pull request from any of them gets the fresh one.
+#[test]
+fn task_list_and_compact_write_response_order_external_refs_like_show() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_list_and_compact_write_response_order_external_refs_like_show",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = requeued_task_with_fresh_pr(&fixture);
+    let expected = json!(["9244", "9189"]);
+    let pr_order = |refs: &Value| -> Value {
+        refs.as_array()
+            .unwrap()
+            .iter()
+            .map(|reference| reference["id"].clone())
+            .collect()
+    };
+
+    let shown = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        pr_order(&shown["external_refs"]),
+        expected,
+        "show presents the fresh pull request first: {shown}"
+    );
+
+    let listed = fixture.json(&["tool", "run", "orbit.task.list", "--full", "--input", "{}"]);
+    let row = listed["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(
+        pr_order(&row["external_refs"]),
+        expected,
+        "list full row agrees with show: {row}"
+    );
+
+    let projection = json!({"fields": ["id", "external_refs"]}).to_string();
+    let projected = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--full",
+        "--input",
+        &projection,
+    ]);
+    let projected_row = projected["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(
+        pr_order(&projected_row["external_refs"]),
+        expected,
+        "list field projection agrees with show: {projected_row}"
+    );
+
+    let update = json!({"id": id, "title": "Requeue PR fixture, retitled"}).to_string();
+    let written = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.task.update",
+        "--full",
+        "--input",
+        &update,
+    ]);
+    assert_eq!(
+        pr_order(&written["external_refs"]),
+        expected,
+        "compact write response agrees with show: {written}"
     );
 }
