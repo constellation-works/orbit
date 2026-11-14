@@ -294,6 +294,7 @@ Retired features are removed from this table along with their folder.
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
 | Backlog Forecast | [docs/design/backlog-forecast/](./backlog-forecast/) | claude |
 | Condition Triggers | [docs/design/condition-triggers/](./condition-triggers/) | claude |
+| Context Index | [docs/design/context-index/](./context-index/) | claude |
 | Conflict Budget | [docs/design/conflict-budget/](./conflict-budget/) | claude |
 | Distributions | [docs/design/distributions/](./distributions/) | claude |
 | Granted Tools | [docs/design/granted-tools/](./granted-tools/) | claude |
