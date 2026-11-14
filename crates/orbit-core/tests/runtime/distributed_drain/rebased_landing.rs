@@ -296,7 +296,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
             "must be refused",
         )
         .is_err(),
-        "the scoped history capability rejects every event outside its two-event allowlist"
+        "the scoped history capability rejects every event outside its supported-event allowlist"
     );
     let wrong_handoff = ClaimMutation::RecordLandingHistory {
         handoff_id: "different-handoff".into(),
