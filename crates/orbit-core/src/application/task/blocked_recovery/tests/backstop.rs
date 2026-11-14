@@ -788,7 +788,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         runtime.get_task(&requeued.id).expect("task").status,
         TaskStatus::Backlog
     );
-    let record = FinalRecoveryRecord::last(&recovery_decisions(&runtime, &requeued.id), &[])
+    let record = FinalRecoveryRecord::last(&recovery_decisions(&runtime, &requeued.id))
         .expect("typed decision");
     assert_eq!(
         (record.run_id.as_str(), record.decision.as_str()),
@@ -891,7 +891,7 @@ fn a_recovery_run_that_ends_without_a_decision_is_escalated_once() {
 
     let decisions = recovery_decisions(&runtime, &task.id);
     assert_eq!(decisions.len(), 1, "one decision for the episode");
-    let record = FinalRecoveryRecord::last(&decisions, &[]).expect("decision");
+    let record = FinalRecoveryRecord::last(&decisions).expect("decision");
     assert_eq!(record.decision, "escalate");
     assert!(
         [run_id.as_str(), resumed.run_id.as_str()].contains(&record.run_id.as_str()),

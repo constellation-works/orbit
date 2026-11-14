@@ -14,7 +14,6 @@ use serde_json::Value;
 
 use super::super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::super::helpers::{self, SYSTEM_ACTOR_LABEL};
-use super::super::legacy_decisions;
 use super::super::lifecycle;
 use super::mechanical::FrictionRef;
 use super::request::{
@@ -218,13 +217,8 @@ impl OrbitRuntime {
         run_id: &str,
     ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
         let history = self.get_task_history(task_id)?;
-        if let Some(outcome) = helpers::authoritative_final_recovery_outcome(&history, run_id) {
-            return Ok(Some(FinalRecoveryOutcome::from(outcome.clone())));
-        }
-        Ok(legacy_decisions::final_recovery_outcome(
-            &self.get_task_comments(task_id)?,
-            run_id,
-        ))
+        Ok(helpers::authoritative_recovery_outcome(&history, run_id)
+            .map(|outcome| FinalRecoveryOutcome::from(outcome.clone())))
     }
 
     fn plan(

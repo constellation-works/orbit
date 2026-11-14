@@ -318,20 +318,14 @@ prose never grants tools.
 
 The same trusted path releases a `pilot_duplicate` or `pilot_already_landed`
 hold with `clear` or `approve-anyway`, recorded as a typed decision on a
-`pilot_admission_decided` history event. Two text forms from before typed
-decisions are still honoured: an operator comment carrying that header alone,
-and an auto drain's approval hold recorded as a
-`[drain-approval-held:<classification>]` marker in the pilot's history note.
-Each counts only when written before its Orbit store's typed-decisions
-boundary, which the first writable open by a binary that records typed
-decisions writes once to `tasks/typed-decisions.since` in the Orbit root. Text
-an older binary wrote before that host upgraded therefore keeps its effect, and
-the same text written later is not a decision. Do not delete that file:
-the next open would record a later boundary and honour text written in
-between. A file an interrupted write left empty or cut short counts from its
-modification time, with a warning naming it, and the next writable open
-writes that instant into it. Until a writable open records it, text written
-from 2026-10-12 on is not a decision.
+`pilot_admission_decided` history event. Only typed decisions count: an
+operator comment carrying that header alone, or a
+`[drain-approval-held:<classification>]` marker in a pilot's history note,
+decides nothing, including text an older binary wrote before typed decisions.
+A task whose only record of such a decision is that older text reads as
+undecided and may be held again; re-record the decision through the trusted
+path. A leftover typed-decisions boundary file (`.since`) beside the task registry is no
+longer read or written and can stay.
 
 An `--approve-proposed` drain and the CI sweep share the pilot promotion
 rule. Each `blocked_by`, `adr_conflicts`, `contract_conflicts`,

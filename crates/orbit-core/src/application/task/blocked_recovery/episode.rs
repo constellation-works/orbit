@@ -8,7 +8,6 @@ use orbit_types::task::{
 use orbit_types::workflow::RecoveryFault;
 
 use super::super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
-use super::super::legacy_decisions;
 use super::backstop::note_field;
 use super::{ATTRIBUTION_SLACK_MS, MAX_EPISODE_AGE_HOURS};
 
@@ -159,27 +158,16 @@ pub struct FinalRecoveryRecord {
 }
 
 impl FinalRecoveryRecord {
-    /// The newest decision recorded on a task with `history` and `comments`.
-    pub fn last(history: &[TaskHistoryEntry], comments: &[TaskComment]) -> Option<Self> {
-        Self::newest_since(history, comments, DateTime::<Utc>::MIN_UTC)
+    /// The newest decision recorded in a task's `history`.
+    pub fn last(history: &[TaskHistoryEntry]) -> Option<Self> {
+        Self::newest_since(history, DateTime::<Utc>::MIN_UTC)
     }
 
-    /// The newest decision recorded at or after `since`: the applier's typed
-    /// decisions, and a legacy decision comment for a run none of them names.
-    pub(super) fn newest_since(
-        history: &[TaskHistoryEntry],
-        comments: &[TaskComment],
-        since: DateTime<Utc>,
-    ) -> Option<Self> {
-        let typed = history.iter().filter_map(Self::typed).collect::<Vec<_>>();
-        let legacy = comments
+    /// The newest typed decision the applier recorded at or after `since`.
+    pub(super) fn newest_since(history: &[TaskHistoryEntry], since: DateTime<Utc>) -> Option<Self> {
+        history
             .iter()
-            .filter_map(legacy_decisions::final_recovery_comment)
-            .filter(|legacy| !typed.iter().any(|typed| typed.run_id == legacy.run_id))
-            .collect::<Vec<_>>();
-        typed
-            .into_iter()
-            .chain(legacy)
+            .filter_map(Self::typed)
             .filter(|record| record.at >= since)
             .max_by_key(|record| record.at)
     }
@@ -240,7 +228,7 @@ pub fn episode_disposition(
     artifacts: &[ArtifactManifestFileV2],
     now: DateTime<Utc>,
 ) -> EpisodeDisposition {
-    if let Some(record) = FinalRecoveryRecord::newest_since(history, comments, episode.blocked_at) {
+    if let Some(record) = FinalRecoveryRecord::newest_since(history, episode.blocked_at) {
         return EpisodeDisposition::Decided(record);
     }
     match later_touch(episode.blocked_at, updated_at, history, comments, artifacts) {

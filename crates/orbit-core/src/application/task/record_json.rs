@@ -157,7 +157,7 @@ pub fn task_show_json(
             serde_json::to_value(next).map_err(serialize_error("next_step"))?,
         );
     }
-    if let Some(record) = super::FinalRecoveryRecord::last(&row.history, &row.comments) {
+    if let Some(record) = super::FinalRecoveryRecord::last(&row.history) {
         object.insert("final_recovery".to_string(), final_recovery_json(&record));
     }
     if let Some(hold) =
@@ -277,19 +277,14 @@ pub(crate) fn task_show_field_json_with_row(
         "open_decisions" => runtime.open_decisions_json(&task.id),
         "final_recovery" => {
             let history_owned;
-            let comments_owned;
-            let (history, comments): (
-                &[orbit_types::task::TaskHistoryEntry],
-                &[orbit_types::task::TaskComment],
-            ) = match row {
-                Some(row) => (&row.history, &row.comments),
+            let history: &[orbit_types::task::TaskHistoryEntry] = match row {
+                Some(row) => &row.history,
                 None => {
                     history_owned = runtime.get_task_history(&task.id)?;
-                    comments_owned = runtime.get_task_comments(&task.id)?;
-                    (&history_owned, &comments_owned)
+                    &history_owned
                 }
             };
-            Ok(super::FinalRecoveryRecord::last(history, comments)
+            Ok(super::FinalRecoveryRecord::last(history)
                 .map_or(Value::Null, |record| final_recovery_json(&record)))
         }
         "completion_hold" => {

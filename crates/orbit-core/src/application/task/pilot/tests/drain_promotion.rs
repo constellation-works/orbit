@@ -486,10 +486,7 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         NO_AUTO_APPROVE_TAG
     );
     let entry = pilot_entry(runtime, &held.id);
-    assert_eq!(
-        held_classification(runtime, &entry),
-        Some(NO_AUTO_APPROVE_TAG)
-    );
+    assert_eq!(held_classification(&entry), Some(NO_AUTO_APPROVE_TAG));
     let note = entry.note.as_deref().expect("pilot history note");
     assert!(
         note.contains(forged),
@@ -524,7 +521,7 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         "{entry:?}"
     );
     assert_eq!(
-        held_classification(runtime, &entry),
+        held_classification(&entry),
         None,
         "a marker in an agent-written note has no effect: {entry:?}"
     );
@@ -764,7 +761,7 @@ fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
             }
             if !ci_sweep {
                 assert_eq!(
-                    held_classification(runtime, &pilot_entry(runtime, &task.id)),
+                    held_classification(&pilot_entry(runtime, &task.id)),
                     Some("warnings")
                 );
             }

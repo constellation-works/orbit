@@ -14,7 +14,7 @@ pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 pub(crate) use orbit_types::identity::is_automation_actor;
 
 /// Latest typed final-recovery outcome in vector order recorded by Orbit for `run_id`.
-pub(super) fn authoritative_final_recovery_outcome<'a>(
+pub(super) fn authoritative_recovery_outcome<'a>(
     history: &'a [TaskHistoryEntry],
     run_id: &str,
 ) -> Option<&'a RecordedFinalRecovery> {

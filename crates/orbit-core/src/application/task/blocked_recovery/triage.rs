@@ -191,7 +191,7 @@ pub fn triage_candidacy(
     }
     // An in-pipeline escalation blocks the task with its own status entry,
     // which may be stamped after the decision it carries; that entry counts.
-    let decision = FinalRecoveryRecord::newest_since(history, comments, blocked_at);
+    let decision = FinalRecoveryRecord::newest_since(history, blocked_at);
     let operator_prerequisite = history[start]
         .note
         .as_deref()

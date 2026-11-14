@@ -115,30 +115,6 @@ fn a_replay_reads_the_typed_decision_not_a_decision_comment() {
     assert_eq!(typed_decisions(&fixture, &task).len(), 1);
 }
 
-fn a_decision_comment_from_before_typed_decisions_still_answers_for_its_run() {
-    let fixture = fixture("[\"sol\"]");
-    let task = fixture.task();
-    // An older applier settled this run and recorded only its comment.
-    system_comment(
-        &fixture,
-        &task,
-        format!("final_recovery run_id={RUN} decision=reject outcome=rejected"),
-    );
-
-    assert_eq!(
-        apply(&fixture, &task, requeue()),
-        FinalRecoveryOutcome::Rejected,
-        "the legacy comment is the run's recorded outcome"
-    );
-    assert_eq!(
-        fixture.status(&task),
-        "in-progress",
-        "an already-applied decision is not applied again"
-    );
-    assert!(typed_decisions(&fixture, &task).is_empty());
-    assert_eq!(fixture.decision_comments(&task), 1);
-}
-
 fn untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision() {
     let fixture = fixture("[\"sol\"]");
     for author in ["codex", "human:operator"] {
@@ -193,7 +169,7 @@ fn shown_final_recovery(fixture: &Fixture, task: &str) -> Value {
         .clone()
 }
 
-fn a_decision_records_its_fault_and_an_older_decision_reads_as_unknown() {
+fn a_decision_records_its_fault_and_shows_it() {
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let mut decision = reject();
@@ -236,24 +212,12 @@ fn a_decision_records_its_fault_and_an_older_decision_reads_as_unknown() {
         "criterion 2 asks for an API removed upstream"
     );
     assert_eq!(shown["fault_judged_by"], "gpt-5.5");
-
-    // A run settled before faults were recorded left only its comment.
-    let older = fixture.task();
-    system_comment(
-        &fixture,
-        &older,
-        format!("final_recovery run_id={RUN} decision=reject outcome=rejected"),
-    );
-    let shown = shown_final_recovery(&fixture, &older);
-    assert_eq!(shown["run_id"], RUN, "{shown}");
-    assert_eq!(shown["fault"], "unknown", "{shown}");
 }
 
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_replay_reads_the_typed_decision_not_a_decision_comment_scenarios,
     a_replay_reads_the_typed_decision_not_a_decision_comment,
-    a_decision_comment_from_before_typed_decisions_still_answers_for_its_run,
     untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision,
-    a_decision_records_its_fault_and_an_older_decision_reads_as_unknown
+    a_decision_records_its_fault_and_shows_it
 );

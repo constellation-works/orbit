@@ -629,13 +629,6 @@ fn assert_verified_no_diff_outside(
     }
     selection
 }
-fn assert_boundary_selection(ws: &Workspace, drain: &str, legacy: &[&Task], forged: &Task) {
-    let selection = ws.select(drain);
-    for task in legacy {
-        assert_held(&selection, task, "warnings");
-    }
-    assert_task_ids(&selection, &[forged]);
-}
 fn assert_tag_holds_at_drain(ws: &Workspace, drain: &str, task: &Task, reason: &str) {
     let selection = ws.select(drain);
     assert_eq!(selection["task_ids"], json!([]), "it costs no pilot work");
@@ -1295,17 +1288,6 @@ fn append_history(
         .update_task_history(&task.id, params)
         .unwrap();
 }
-fn append_pilot_entry(ws: &Workspace, task: &Task, at: &str, note: &str) {
-    let at: DateTime<Utc> = at.parse().unwrap();
-    append_history(
-        ws,
-        task,
-        "task-pilot",
-        at,
-        "task_pilot_applied",
-        note.into(),
-    );
-}
 /// The note-only shape `task_pilot_unresolved` had before its typed decision.
 fn append_unresolved_pilot_entry(ws: &Workspace, task: &Task, pilot_run_id: &str) {
     let note = json!({"pilot_run_id": pilot_run_id}).to_string();
@@ -1317,71 +1299,6 @@ fn append_unresolved_pilot_entry(ws: &Workspace, task: &Task, pilot_run_id: &str
         "task_pilot_unresolved",
         note,
     );
-}
-
-fn a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions() {
-    let first_open = Utc::now();
-    let (ws, drain) = harness();
-    let note = "selectors (operation_id=legacy-pilot) [drain-approval-held:warnings]";
-    let legacy = [
-        "2026-10-01T00:00:00Z".to_string(),
-        "2026-10-12T09:00:00Z".to_string(),
-        (first_open - chrono::Duration::seconds(1)).to_rfc3339(),
-    ]
-    .iter()
-    .enumerate()
-    .map(|(index, at)| {
-        let task = ws.readme_task(&format!("legacy {index}"));
-        append_pilot_entry(&ws, &task, at, note);
-        task
-    })
-    .collect::<Vec<_>>();
-    let forged = ws.readme_task("forged");
-    append_pilot_entry(&ws, &forged, &Utc::now().to_rfc3339(), note);
-    OrbitRuntime::from_roots(&ws.runtime.global_root(), &ws.repo.join(".orbit")).unwrap();
-    assert_boundary_selection(&ws, &drain, &legacy.iter().collect::<Vec<_>>(), &forged);
-}
-
-/// The store's typed-decisions boundary file.
-pub(crate) fn typed_decisions_boundary(global_root: &Path) -> PathBuf {
-    orbit_store::maintenance::task_registry::task_registry_path(global_root)
-        .with_file_name("typed-decisions.since")
-}
-
-/// Leave the boundary file holding `content`; return its modification time.
-pub(crate) fn seed_incomplete_boundary(global_root: &Path, content: &str) -> DateTime<Utc> {
-    let path = typed_decisions_boundary(global_root);
-    std::fs::write(&path, content).unwrap();
-    let modified = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
-    let file = std::fs::File::options().write(true).open(&path).unwrap();
-    file.set_modified(modified).unwrap();
-    modified.into()
-}
-
-/// The boundary file's recorded instant.
-pub(crate) fn recorded_boundary(global_root: &Path) -> DateTime<Utc> {
-    std::fs::read_to_string(typed_decisions_boundary(global_root))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap()
-}
-
-fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
-    let note = "selectors (operation_id=legacy-pilot) [drain-approval-held:warnings]";
-    for content in ["", "2026-10-12T1"] {
-        let (ws, drain) = harness();
-        let global_root = ws.runtime.global_root();
-        let modified = seed_incomplete_boundary(&global_root, content);
-        let legacy = ws.readme_task("legacy");
-        append_pilot_entry(&ws, &legacy, "2026-10-12T09:00:00Z", note);
-        let forged = ws.readme_task("forged");
-        append_pilot_entry(&ws, &forged, &Utc::now().to_rfc3339(), note);
-        assert_boundary_selection(&ws, &drain, &[&legacy], &forged);
-        OrbitRuntime::from_roots(&global_root, &ws.repo.join(".orbit")).unwrap();
-        assert_eq!(recorded_boundary(&global_root), modified, "{content:?}");
-        assert_boundary_selection(&ws, &drain, &[&legacy], &forged);
-    }
 }
 
 fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
@@ -1596,7 +1513,5 @@ crate::scenario_table!(
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count_scenarios,
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count,
     an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed,
-    the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof,
-    a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions,
-    an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it
+    the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof
 );

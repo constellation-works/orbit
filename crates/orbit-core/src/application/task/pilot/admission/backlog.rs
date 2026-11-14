@@ -191,8 +191,7 @@ fn operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String,
             hold.clone().unwrap_or_default(),
             *verdict != PilotAdmissionVerdict::Rescope,
         )),
-        Some(_) => None,
-        None => legacy_decisions::pilot_resolution_note(entry),
+        _ => None,
     }
 }
 
@@ -350,31 +349,13 @@ impl OrbitRuntime {
         // checked below first because skipping a pilot cannot resolve the
         // owner-side condition it recorded.
         let material = validation_material(task);
-        let mut legacy_override = false;
         // Atomic pilot application seals an assessment artifact in a
         // task-pilot-authored comment carrying its replay receipt. Read that
         // durable evidence (or a legacy inline audit), not a history summary
         // or an uncommitted agent result. `pilot_receipts` is the only
-        // actor-and-receipt filter. This loop still visits every comment,
-        // newest first, so a legacy override on a non-pilot comment newer
-        // than the receipt still counts. The newest receipt settles the
-        // read; an undecodable body is an error, not a skip.
-        let mut receipts = super::super::pilot_receipts(comments).peekable();
-        for comment in comments.iter().rev() {
-            // An override written as a comment before typed decisions, after
-            // this receipt. Operator validation additionally requires its
-            // trusted resolution event.
-            legacy_override |=
-                legacy_decisions::pilot_override_comment(comment, &|| self.typed_decisions_since());
-            let is_next_receipt = receipts
-                .peek()
-                .is_some_and(|(receipt_comment, _)| std::ptr::eq(*receipt_comment, comment));
-            if !is_next_receipt {
-                continue;
-            }
-            let Some((_, receipt)) = receipts.next() else {
-                continue;
-            };
+        // actor-and-receipt filter. The newest receipt settles the read; an
+        // undecodable body is an error, not a skip.
+        if let Some((comment, receipt)) = super::super::pilot_receipts(comments).next() {
             let audit = audit(receipt)?;
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
@@ -511,7 +492,7 @@ impl OrbitRuntime {
                 }
                 None => None,
             };
-            if legacy_override || operator_overrode(&history()?, operation_id) {
+            if operator_overrode(&history()?, operation_id) {
                 return Ok(native_os);
             }
             for (field, hold) in [

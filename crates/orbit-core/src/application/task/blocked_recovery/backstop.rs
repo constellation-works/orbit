@@ -497,7 +497,6 @@ impl OrbitRuntime {
         };
         if FinalRecoveryRecord::newest_since(
             &self.get_task_history(&input.task_id)?,
-            &self.get_task_comments(&input.task_id)?,
             episode.blocked_at,
         )
         .is_some()
