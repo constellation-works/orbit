@@ -2082,7 +2082,10 @@ one. From then on:
   unconditional jobs on supported literal hosted runners and its bounded
   single-axis literal matrix names. It also
   recognizes the adapter's finite live-PR-state REST projection and its exact
-  open-state dependent condition. Other needs/conditions, path filters,
+  open-state dependent condition, or the fixed fail-soft read that emits
+  `unknown` on failure with an exact open-or-unknown dependent condition.
+  Fallbacks that infer state from the event payload are unsupported.
+  Other needs/conditions, path filters,
   reusable jobs and dynamic evidence refuse this recovery. A check name or an unrelated successful push is insufficient.
   Every currently required and owner-owed check must actually succeed on the
   new head before the normal conditional merge.

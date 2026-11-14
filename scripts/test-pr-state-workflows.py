@@ -75,6 +75,7 @@ def scope_admits(name, job, mode):
 
 
 DISPATCH_ONLY = "github.event_name == 'workflow_dispatch'"
+FAIL_SOFT_WORKFLOWS = {"ci.yml", "desktop.yml", "website-check.yml"}
 
 
 def event_admits(job, event):
@@ -95,7 +96,7 @@ class PrStateWorkflowTests(unittest.TestCase):
         self.credentials = self.root / "credentials.json"
         self.requests = []
         self.response = {}
-        self.api_failure = False
+        self.api_status = 200
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -103,8 +104,10 @@ class PrStateWorkflowTests(unittest.TestCase):
                 fixture.requests.append({"method": self.command, "path": self.path})
                 # A bodyless gateway failure preserves the no-output failure
                 # case; successful malformed payloads are separate controls.
-                body = b"" if fixture.api_failure else json.dumps(fixture.response).encode()
-                self.send_response(503 if fixture.api_failure else 200)
+                body = b"" if fixture.api_status == 503 else json.dumps(fixture.response).encode()
+                self.send_response(fixture.api_status)
+                if fixture.api_status == 403:
+                    self.send_header("X-RateLimit-Remaining", "0")
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(body)
@@ -154,19 +157,25 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
         legacy = ROOT / "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml"
         self.workflows["legacy-codeql"] = yaml.safe_load(legacy.read_text())
 
-    def run_gate(self, gate, response, *, api_failure=False):
+    def run_gate(self, gate, response, *, api_status=200, event_state="open", event_merged=False):
         self.output.write_text("")
         self.response = response
-        self.api_failure = api_failure
+        self.api_status = api_status
         self.requests.clear()
         self.credentials.write_text("{}")
         step = gate["steps"][0]
         bindings = {"${{ github.token }}": "offline-token",
                     "${{ github.event.pull_request.number }}": "42",
+                    "${{ github.event.pull_request.state }}": event_state,
+                    "${{ github.event.pull_request.merged }}": str(event_merged).lower(),
                     "${{ github.repository }}": "fixture/repository"}
+        event = self.root / "event.json"
+        event.write_text(json.dumps({"pull_request": {
+            "number": 42, "state": event_state, "merged": event_merged, "changed_files": 1}}))
         env = dict(PATH=f"{self.root}:{os.environ['PATH']}", LANG="C",
                    HOME=str(self.root), GH_CONFIG_DIR=str(self.root / "gh-config"),
                    GITHUB_REPOSITORY="fixture/repository", GITHUB_OUTPUT=str(self.output),
+                   GITHUB_EVENT_PATH=str(event),
                    **self.fixture_env)
         env.update({key: bindings.get(value, value) for key, value in step["env"].items()})
         script = step["run"]
@@ -180,6 +189,7 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
                          "each gate must make exactly one read of the bound pull request")
         self.assertEqual(json.loads(self.credentials.read_text()), {"token": "offline-token"})
         outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
+        self.gate_outputs = outputs
         # Follow the actual step-to-job output binding consumed by needs.
         binding = gate["outputs"]["state"]
         match = re.fullmatch(r"\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}", binding)
@@ -229,16 +239,43 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
                     self.assert_admission(document, event, "", False, cancelled=True)
                     print(f"{name}: {event} -> gate skipped, build jobs admitted")
 
-    def test_api_errors_fail_gate_without_admitting_unknown_state(self):
+    def test_api_errors_keep_fail_soft_jobs_admitted_without_stale_state(self):
         for name, document in self.workflows.items():
-            for response, api_failure in ((RESPONSES["open"], True), ({}, False),
-                                          ({"state": "unexpected", "merged": False}, False)):
-                with self.subTest(workflow=name, response=response, api_failure=api_failure):
-                    result, output = self.run_gate(document["jobs"]["pr-state"], response,
-                                                   api_failure=api_failure)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertEqual(output, "")
-                    self.assert_admission(document, "pull_request", output, False)
+            failures = [(RESPONSES["open"], 503), ({"message": "API rate limit exceeded"}, 403),
+                        ({}, 200), ({"state": "unexpected", "merged": False}, 200)]
+            if name in FAIL_SOFT_WORKFLOWS:
+                # gh can project a response body before reporting HTTP failure;
+                # the fallback must discard even a partial open projection.
+                failures.append((dict(RESPONSES["open"], changed_files=1), 502))
+                failures.append((None, 204))
+            for response, status in failures:
+                for event_state, event_merged in (("open", False), ("closed", False), ("closed", True)):
+                    with self.subTest(workflow=name, response=response, status=status,
+                                      event_state=event_state, event_merged=event_merged):
+                        result, output = self.run_gate(document["jobs"]["pr-state"], response,
+                                                       api_status=status, event_state=event_state,
+                                                       event_merged=event_merged)
+                        if name in FAIL_SOFT_WORKFLOWS:
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            self.assertEqual(output, "unknown", "stale event state must not decide admission")
+                            self.assertEqual(self.gate_outputs.get("changed_files"), "")
+                            self.assert_admission(document, "pull_request", output, True)
+                        else:
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertEqual(output, "")
+                            self.assert_admission(document, "pull_request", output, False)
+
+    def test_live_read_reuses_only_numeric_changed_file_counts(self):
+        for name in FAIL_SOFT_WORKFLOWS:
+            for count, expected in ((2, "2"), (0, "0"), (None, ""),
+                                    ("1\nstate=closed", ""), ({"state": "closed"}, "")):
+                with self.subTest(workflow=name, count=count):
+                    result, state = self.run_gate(self.workflows[name]["jobs"]["pr-state"],
+                                                  dict(RESPONSES["open"], changed_files=count))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(state, "open")
+                    self.assertEqual(self.gate_outputs, {"state": "open", "changed_files": expected},
+                                     "the reused count cannot inject a PR-state output binding")
 
 
 @unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
@@ -972,6 +1009,7 @@ class ChangeScopeTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.routes = self.root / "routes.json"
+        self.requests = self.root / "requests.jsonl"
         self.output = self.root / "output"
         gh = self.root / "bin/gh"
         gh.parent.mkdir()
@@ -980,6 +1018,8 @@ class ChangeScopeTests(unittest.TestCase):
         gh.write_text(f"""#!{sys.executable}
 import json, sys
 args = [arg for arg in sys.argv[1:] if arg not in ("api", "--paginate")]
+with open({str(self.requests)!r}, "a") as requests:
+    requests.write(json.dumps(args) + "\\n")
 routes = json.load(open({str(self.routes)!r}))
 if args and args[0] in routes:
     print(json.dumps(routes[args[0]]))
@@ -1006,6 +1046,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
 
     def classify(self, event, routes, *, graph=None, **env):
         self.routes.write_text(json.dumps(routes))
+        self.requests.write_text("")
         self.output.write_text("")
         result = self_test_hang.run(
             [str(ROOT / "scripts/ci-change-scope.sh")], step="change-scope", cwd=self.root,
@@ -1016,6 +1057,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         [line] = self.output.read_text().splitlines()
         self.last_log = result.stdout
+        self.last_requests = [json.loads(line) for line in self.requests.read_text().splitlines()]
         return line.removeprefix("mode=")
 
     def pull_request(self, *paths, count=None, graph=None):
@@ -1142,6 +1184,17 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("crates/orbit-cli/src/main.rs", graph=str(self.root / "missing.json")),
                          "full", "a selection error runs the full suite")
         self.assertIn("::notice title=Test selection::full", self.last_log)
+
+    def test_reused_live_count_avoids_duplicate_read_and_fails_full(self):
+        files = "repos/o/r/pulls/7/files?per_page=100"
+        routes = {"repos/o/r/pulls/7": {"changed_files": 1}, files: [{"filename": "README.md"}]}
+        for count, expected, requests in (("1", "docs", [[files]]), ("2", "full", [[files]]),
+                                          ("", "full", []), ("unknown", "full", []),
+                                          ("3000", "full", [])):
+            with self.subTest(count=count):
+                self.assertEqual(self.classify("pull_request", routes, PR="7", PR_CHANGED_FILES=count), expected)
+                self.assertEqual(self.last_requests, requests,
+                                 "reusing a live read must not spend another PR-object API request")
 
     def test_push_scope(self):
         self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True), "skip")

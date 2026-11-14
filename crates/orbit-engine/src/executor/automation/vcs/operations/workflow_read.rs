@@ -104,6 +104,7 @@ fn supported_step(workflow: &Value, prerequisite: &str, step: &Value) -> Result<
         || shell.is_some_and(|shell| !matches!(shell.as_str(), Some("bash" | "sh")))
         || !(literal_api_read(command)
             || projected_api_read(command)
+            || fail_soft_pr_read(command)
             || legacy_api_read(command, workflow, prerequisite, step))
     {
         return Err(unreadable("failed step is not a source-bound API read"));
@@ -189,6 +190,28 @@ fn projected_api_read(command: &str) -> bool {
 
 const STATE_PROJECTION: &str = "if .merged == true then \"state=merged\"\n  elif .state == \"open\" or .state == \"closed\" then \"state=\" + .state\n  else error(\"Unexpected pull request state\") end";
 
+/// One fixed read, including its error path. Only the live response can emit
+/// open/closed/merged; failure discards stdout (including raw API error bodies)
+/// and emits unknown. Empty successful reads also emit unknown.
+/// The numeric count cannot inject another runner output binding. Never infer
+/// fallback state from an event payload: it may predate a close or reopen.
+fn fail_soft_pr_read(command: &str) -> bool {
+    const READ: &str = r#"if outputs="$(gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+  (if .merged == true then "state=merged"
+    elif .state == "open" or .state == "closed" then "state=" + .state
+    else error("Unexpected pull request state") end),
+  (if (.changed_files | type) == "number"
+    then "changed_files=" + (.changed_files | tostring)
+    else "changed_files=" end)
+')" && [ -n "$outputs" ]; then
+  printf '%s\n' "$outputs" >> "$GITHUB_OUTPUT"
+else
+  printf '%s\n' 'state=unknown' 'changed_files=' >> "$GITHUB_OUTPUT"
+  echo "::warning::Live PR state unavailable; continuing CI without a live state."
+fi"#;
+    command.trim() == READ
+}
+
 /// The historical composed read is a finite template, not a shell language.
 /// Its endpoint uses only runner repository / provider numeric PR bindings;
 /// jq produces one of three fixed scalars, consumed by local output and log.
@@ -223,10 +246,11 @@ pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitErr
             Ok(())
         }
         (Some(Value::String(root)), Some(condition)) => {
-            if condition.as_str() != Some(format!("${{{{ {} }}}}", live_open(root)).as_str()) {
+            let open = live_open(root, live_state(workflow, root)?);
+            if condition.as_str() != Some(format!("${{{{ {open} }}}}").as_str()) {
                 return Err(unreadable("unsupported emission condition"));
             }
-            live_state(workflow, root)
+            Ok(())
         }
         // A job narrowed by the change-scope gate still reports on every PR:
         // the scope job never fails and every mode it can output either runs
@@ -235,28 +259,36 @@ pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitErr
             let [Value::String(root), Value::String(scope)] = needs.as_slice() else {
                 return Err(unreadable("unsupported emission dependencies"));
             };
-            let open = live_open(root);
+            let open = live_open(root, live_state(workflow, root)?);
             let mode = format!("needs.{scope}.outputs.mode");
             let full = format!("${{{{ {open} && {mode} != 'docs' && {mode} != 'skip' }}}}");
             let docs = format!("${{{{ {open} && {mode} == 'docs' }}}}");
             if !matches!(condition.as_str(), Some(c) if c == full || c == docs) {
                 return Err(unreadable("unsupported emission condition"));
             }
-            live_state(workflow, root)?;
-            change_scope(workflow, root, scope)
+            change_scope(workflow, root, scope, &open)
         }
         _ => Err(unreadable("conditional emission is unsupported")),
     }
 }
 
-/// The adapter's live-PR gate: true on every non-PR event and on an open PR.
-fn live_open(root: &str) -> String {
-    format!(
-        "!cancelled() && (github.event_name != 'pull_request' || needs.{root}.outputs.state == 'open')"
-    )
+enum LiveStateRead {
+    Strict,
+    FailSoft,
 }
 
-fn live_state(workflow: &Value, root: &str) -> Result<(), OrbitError> {
+/// Every output an open PR can produce must admit the dependent job. In the
+/// fail-soft form this includes unknown, never a fabricated live open state.
+fn live_open(root: &str, read: LiveStateRead) -> String {
+    let state = format!("needs.{root}.outputs.state");
+    let admitted = match read {
+        LiveStateRead::Strict => format!("{state} == 'open'"),
+        LiveStateRead::FailSoft => format!("({state} == 'open' || {state} == 'unknown')"),
+    };
+    format!("!cancelled() && (github.event_name != 'pull_request' || {admitted})")
+}
+
+fn live_state(workflow: &Value, root: &str) -> Result<LiveStateRead, OrbitError> {
     let state = &workflow["jobs"][root];
     if state.get("needs").is_some()
         || state["if"] != "${{ github.event_name == 'pull_request' }}"
@@ -272,23 +304,36 @@ fn live_state(workflow: &Value, root: &str) -> Result<(), OrbitError> {
     let step_id = step["id"]
         .as_str()
         .ok_or_else(|| unreadable("live-state output identity"))?;
-    if state["outputs"]
-        != serde_json::json!({"state":format!("${{{{ steps.{step_id}.outputs.state }}}}")})
+    let command = step["run"]
+        .as_str()
+        .ok_or_else(|| unreadable("live-state source read"))?;
+    let read = if fail_soft_pr_read(command) {
+        LiveStateRead::FailSoft
+    } else if projected_api_read(command) && command.trim().starts_with("gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '") {
+        LiveStateRead::Strict
+    } else {
+        return Err(unreadable("live-state read does not name this PR"));
+    };
+    let mut outputs =
+        serde_json::json!({"state":format!("${{{{ steps.{step_id}.outputs.state }}}}")});
+    match read {
+        LiveStateRead::Strict => {}
+        LiveStateRead::FailSoft => {
+            outputs["changed_files"] =
+                Value::String(format!("${{{{ steps.{step_id}.outputs.changed_files }}}}"));
+        }
+    }
+    if state["outputs"] != outputs
         || step.get("if").is_some()
         || step.get("continue-on-error").is_some()
     {
         return Err(unreadable("live-state output binding"));
     }
-    let command = step["run"]
-        .as_str()
-        .ok_or_else(|| unreadable("live-state source read"))?;
-    if !projected_api_read(command) || !command.trim().starts_with("gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '") {
-        return Err(unreadable("live-state read does not name this PR"));
-    }
     let name = step["name"]
         .as_str()
         .ok_or_else(|| unreadable("live-state step name"))?;
-    api_step(workflow, root, name)
+    api_step(workflow, root, name)?;
+    Ok(read)
 }
 
 /// The exact `Change scope` job (scripts/ci-change-scope.sh): one checkout and
@@ -298,7 +343,7 @@ fn live_state(workflow: &Value, root: &str) -> Result<(), OrbitError> {
 /// or `affected:<crates>` (which runs every job on fewer tests); whatever the
 /// script prints, a dependent either runs or skips, so the script's contents
 /// never decide emission. Any other key, step, binding or condition refuses.
-fn change_scope(workflow: &Value, root: &str, scope: &str) -> Result<(), OrbitError> {
+fn change_scope(workflow: &Value, root: &str, scope: &str, open: &str) -> Result<(), OrbitError> {
     let job = workflow["jobs"][scope]
         .as_object()
         .ok_or_else(|| unreadable("change-scope job"))?;
@@ -316,8 +361,7 @@ fn change_scope(workflow: &Value, root: &str, scope: &str) -> Result<(), OrbitEr
                 | "steps"
         )
     }) || job.get("needs") != Some(&Value::String(root.into()))
-        || job.get("if").and_then(Value::as_str)
-            != Some(format!("${{{{ {} }}}}", live_open(root)).as_str())
+        || job.get("if").and_then(Value::as_str) != Some(format!("${{{{ {open} }}}}").as_str())
         || job.get("continue-on-error") != Some(&Value::Bool(true))
         || !matches!(
             job.get("runs-on").and_then(Value::as_str),
@@ -343,20 +387,26 @@ fn change_scope(workflow: &Value, root: &str, scope: &str) -> Result<(), OrbitEr
     let step_id = classify["id"]
         .as_str()
         .ok_or_else(|| unreadable("change-scope output identity"))?;
+    let mut env = serde_json::json!({
+        "GH_TOKEN": "${{ github.token }}",
+        "GH_REPO": "${{ github.repository }}",
+        "EVENT": "${{ github.event_name }}",
+        "PR": "${{ github.event.pull_request.number }}",
+        "SHA": "${{ github.sha }}",
+        "BEFORE": "${{ github.event.before }}",
+    });
+    // Older workflow revisions fetch their own count. The reused form must
+    // bind to this same live read, never an event's stale changed_files count.
+    if classify["env"].get("PR_CHANGED_FILES").is_some() {
+        env["PR_CHANGED_FILES"] =
+            Value::String(format!("${{{{ needs.{root}.outputs.changed_files }}}}"));
+    }
     if job["outputs"]
         != serde_json::json!({"mode":format!("${{{{ steps.{step_id}.outputs.mode }}}}")})
         || classify.as_object().map(serde_json::Map::len) != Some(4)
         || !classify["name"].is_string()
         || classify["run"] != "scripts/ci-change-scope.sh"
-        || classify["env"]
-            != serde_json::json!({
-                "GH_TOKEN": "${{ github.token }}",
-                "GH_REPO": "${{ github.repository }}",
-                "EVENT": "${{ github.event_name }}",
-                "PR": "${{ github.event.pull_request.number }}",
-                "SHA": "${{ github.sha }}",
-                "BEFORE": "${{ github.event.before }}",
-            })
+        || classify["env"] != env
     {
         return Err(unreadable("change-scope classification binding"));
     }

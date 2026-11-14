@@ -80,7 +80,8 @@ env:
   MSRV: "1.89"
 
 jobs:
-  # Read live state before allocating build runners; the PR event can be stale.
+  # Best-effort live read: only a live closed/merged state skips build jobs.
+  # Unknown state admits CI; the queued PR event can be stale in either direction.
   pr-state:
     name: Live PR state
     if: ${{ github.event_name == 'pull_request' }}
@@ -90,6 +91,7 @@ jobs:
       pull-requests: read
     outputs:
       state: ${{ steps.state.outputs.state }}
+      changed_files: ${{ steps.state.outputs.changed_files }}
     steps:
       - name: Read live PR state
         id: state
@@ -98,11 +100,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
-            if .merged == true then "state=merged"
-            elif .state == "open" or .state == "closed" then "state=" + .state
-            else error("Unexpected pull request state") end
-          ' >> "$GITHUB_OUTPUT"
+          if outputs="$(gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+            (if .merged == true then "state=merged"
+              elif .state == "open" or .state == "closed" then "state=" + .state
+              else error("Unexpected pull request state") end),
+            (if (.changed_files | type) == "number"
+              then "changed_files=" + (.changed_files | tostring)
+              else "changed_files=" end)
+          ')" && [ -n "$outputs" ]; then
+            printf '%s\n' "$outputs" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' 'state=unknown' 'changed_files=' >> "$GITHUB_OUTPUT"
+            echo "::warning::Live PR state unavailable; continuing CI without a live state."
+          fi
 
   # Narrows the run before allocating build runners (scripts/ci-change-scope.sh).
   # `docs`: every changed path is Markdown outside crates/ and plugin/, so only
@@ -118,7 +128,7 @@ jobs:
   # never a skipped gate.
   scope:
     needs: pr-state
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) }}
     name: Change scope
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -144,6 +154,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
+          # Empty when the live read failed: run in full without re-reading it.
+          PR_CHANGED_FILES: ${{ needs.pr-state.outputs.changed_files }}
           SHA: ${{ github.sha }}
           BEFORE: ${{ github.event.before }}
         run: scripts/ci-change-scope.sh
@@ -153,7 +165,7 @@ jobs:
   # `ci-guardrails.sh --static` needs no Rust build and no network.
   docs:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode == 'docs' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode == 'docs' }}
     name: Docs guards
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -217,7 +229,7 @@ jobs:
   # loudly here instead of silently breaking builds on older toolchains.
   msrv:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: MSRV (cargo check on pinned minimum)
     runs-on: ubuntu-latest
     timeout-minutes: 15 # Observed ~1 minute; allows cold cache and runner variance.
@@ -266,7 +278,7 @@ jobs:
   # budget measures. The type-check does not add a job or a required check.
   ci:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
     timeout-minutes: 45 # Budget is 400 s p90 over pull request runs (docs/design-patterns/test_strategy.md); allows cold builds, slower test hosts and runner queue wait.
@@ -556,7 +568,7 @@ jobs:
   # awaits this job, so a guard failure still fails the required check.
   guardrails:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: CI guardrails
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -707,7 +719,7 @@ jobs:
   # or affected run, with no additional workspace build or archive download.
   guardrails-qa:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: CI QA guardrails
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -739,7 +751,7 @@ jobs:
 
   test-build:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test build
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -991,7 +1003,7 @@ jobs:
   # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
   test-1:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test shard 1/3
     runs-on: ubuntu-latest
     # The wait for the test build counts against this budget.
@@ -1277,7 +1289,7 @@ jobs:
 
   test-2:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test shard 2/3
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1291,7 +1303,7 @@ jobs:
 
   test-3:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test shard 3/3
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1309,7 +1321,7 @@ jobs:
   # so its failure still fails the required Check / Clippy / Test check.
   test-extra:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test extra partition
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1326,7 +1338,7 @@ jobs:
   # awaits this literal job even though the ruleset does not name it directly.
   test-partition-2:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 2
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1345,7 +1357,7 @@ jobs:
   # literal job like the other partition jobs.
   test-partition-6:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 6
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1365,7 +1377,7 @@ jobs:
   # Check awaits these literal jobs too.
   test-partition-7:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 7
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1379,7 +1391,7 @@ jobs:
 
   test-partition-8:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 8
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1393,7 +1405,7 @@ jobs:
 
   test-partition-9:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 9
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1407,7 +1419,7 @@ jobs:
 
   test-partition-10:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 10
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1421,7 +1433,7 @@ jobs:
 
   test-partition-11:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 11
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1435,7 +1447,7 @@ jobs:
 
   test-partition-12:
     needs: [pr-state, scope]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Test partition 12
     runs-on: ubuntu-latest
     timeout-minutes: 45
