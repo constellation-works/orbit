@@ -18,7 +18,6 @@ use crate::contracts::{
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
 use crate::repository::task::TaskV2Store;
-use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
     fn task_decision_snapshots(
@@ -428,7 +427,7 @@ impl TaskStoreBackend for TaskV2Store {
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
-        self.in_boundary(|| resolve::<Task, _>(self, id))
+        self.in_boundary(|| self.get_task(id))
     }
 
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
@@ -540,22 +539,6 @@ impl TaskStoreBackend for TaskV2Store {
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<crate::contracts::TaskDefectFiling>, OrbitError> {
         self.in_boundary(|| self.task_defect_filings(since))
-    }
-}
-
-impl ScopedStore<Task> for TaskV2Store {
-    type Err = OrbitError;
-
-    fn strategy(&self) -> ScopeStrategy {
-        ScopeStrategy::WorkspaceOnly
-    }
-
-    fn get_workspace(&self, key: &str) -> Result<Option<Task>, OrbitError> {
-        self.get_task(key)
-    }
-
-    fn get_global(&self, _key: &str) -> Result<Option<Task>, OrbitError> {
-        Ok(None)
     }
 }
 
