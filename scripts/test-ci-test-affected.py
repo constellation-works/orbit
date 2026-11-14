@@ -450,25 +450,43 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
 
         # orbit-cli alone resolves tokio without orbit-web's dev-dependency feature.
         self.assertEqual(build("orbit-cli", {"orbit-web": ["test-util"]}),
-                         ["orbit-cli orbit-web", "-p orbit-cli -p orbit-web --lib --bins --tests"])
+                         ["orbit-cli orbit-web", "-p orbit-cli -p orbit-web --bins --tests"])
         self.assertEqual(build("orbit-cli", {"orbit-web": ["test-util"], "orbit-cmd": ["io-util"]})[0],
                          "orbit-cli orbit-cmd orbit-web")
-        self.assertEqual(build("orbit-tools"), ["orbit-tools", "-p orbit-tools --lib --bins --tests"],
+        self.assertEqual(build("orbit-tools"), ["orbit-tools", "-p orbit-tools --bins --tests"],
                          "a selection that already resolves the workspace's features builds alone")
         # [ORB-22077] CI colors Cargo's output. A colored repeat marker must not
         # read as a feature gap: it added three needless anchors to hosted builds.
         self.assertEqual(build("orbit-tools", CARGO_TERM_COLOR="always"),
-                         ["orbit-tools", "-p orbit-tools --lib --bins --tests"])
+                         ["orbit-tools", "-p orbit-tools --bins --tests"])
         # A crate the checkout lacks, or a gap no member closes, builds the workspace.
         self.assertEqual(build("orbit-retired")[0], "workspace")
         self.assertEqual(build("orbit-cli", GUARD_TEST_TREE_WORKSPACE_ONLY="signal")[0], "workspace")
+
+    def test_disabled_lib_harness_is_omitted_from_build_and_runtime_selectors(self):
+        # A library with test=false (as in cargo metadata) must not be forced
+        # back by an explicit --lib; --tests retains enabled lib unit tests.
+        metadata = json.loads(self.metadata.read_text())
+        for package in metadata["packages"]:
+            if package["name"] == "orbit-tools":
+                package["targets"] = [dict(name="orbit_tools", kind=["lib"], doctest=False, test=False)]
+        self.metadata.write_text(json.dumps(metadata))
+        result = self.gate("--test-build-packages", "orbit-tools")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[:2],
+                         ["orbit-tools", "-p orbit-tools --bins --tests"])
+        (self.root / "crates/orbit-tools/src/lib.rs").write_text("// changed\n")
+        result = self.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("--lib" in call for call in self.calls()),
+                         "explicit --lib would rebuild the disabled empty lib harness")
 
     def test_full_test_targets_run_under_build_admission(self):
         self.touch_core()
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         package_flags = [argument for name in self.core_dependents for argument in ("-p", name)]
-        runtime = ["nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--lib", "--bins", "--tests"]
+        runtime = ["nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--bins", "--tests"]
         calls = self.calls()
         self.assertEqual(calls[1:], [["nextest", "--version"],
                                     ["build-budget", "--", "cargo", *runtime], runtime])
@@ -533,7 +551,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         result, summary = self.summarized()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), executed_tests=[f"{name} a" for name in self.core_dependents], selection=dict(
-            packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"]), command=None, base=self.base, exit_code=0, notices=[],
+            packages=self.core_dependents, target_flags=["--bins", "--tests"]), command=None, base=self.base, exit_code=0, notices=[],
             compile_ms=None, test_ms=None, package_timings=None))
         # A failing run still reports what it selected and ran.
         result, failed = self.summarized(GUARD_TEST_EXIT="17")

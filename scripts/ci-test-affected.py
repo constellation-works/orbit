@@ -216,13 +216,14 @@ def affected_packages(metadata, paths):
 
 
 def test_target_flags(metadata, names):
-    """Cargo's lib, bin and test target flags for `names`. Cargo rejects --lib
-    for a bin-only selection, even with --bins/--tests."""
-    library_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
-    has_library = any(library_kinds.intersection(target["kind"])
-                      for package in metadata["packages"] if package["name"] in names
-                      for target in package["targets"])
-    return (["--lib"] if has_library else []) + ["--bins", "--tests"] if names else []
+    """Cargo's bin and test target flags for `names`.
+
+    Never `--lib`: an explicit `--lib` overrides a library's
+    `[lib] test = false` and builds its empty harness. `--tests` already
+    selects every target with `test = true`, including library unit tests,
+    and omits libraries that disabled them.
+    """
+    return ["--bins", "--tests"] if names else []
 
 
 def workspace_packages(metadata):
@@ -349,7 +350,7 @@ def scope_command(metadata, arguments, cargo):
             raise ValueError("--test-build-packages needs at least one crate")
         packages, reason = test_build_packages(metadata, requested, cargo)
         if packages is None:
-            print("workspace", "--workspace --lib --bins --tests", sep="\n")
+            print("workspace", "--workspace --bins --tests", sep="\n")
         else:
             print(" ".join(packages), " ".join(
                 [*(argument for name in packages for argument in ("-p", name)),

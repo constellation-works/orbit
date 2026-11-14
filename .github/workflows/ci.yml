@@ -1206,7 +1206,7 @@ jobs:
       # [DANI-10428] This used to be a separate job that compiled the three
       # crates under `cargo test -p` feature resolution — a second build of
       # the same crates. The nextest filterset below selects them out of the
-      # test build's `--workspace --lib --bins --tests` archive, so the gate
+      # test build's `--workspace --bins --tests` archive, so the gate
       # costs no compile. It runs once, in the first shard.
       # [ORB-16349] The shards already ran every non-ignored test in these
       # packages, so the portable selection is not re-run here. The gate
