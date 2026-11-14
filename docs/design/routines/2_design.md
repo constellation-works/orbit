@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-11
+last_updated: 2026-11-14
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -785,8 +785,11 @@ it loads with a warning for one release and selects nothing.
 
 Host identity is the one genuinely host-local datum: the `[machine]` table of the global
 `~/.orbit/config.toml` carries the generated `id` (the machine ID), the operator-chosen
-`name`, and the immutable `task_prefix`. `orbit init` owns identity creation; a legacy
-`host.toml` from before [ORB-12725] is migrated into that table once.
+`name`, and the immutable `task_prefix`. `orbit init` owns identity creation. A legacy
+`host.toml` left as the only identity source is refused, naming both files, with the
+manual repair: copy `machine_id` as `[machine] id`, `host_id` as `machine.name` and
+`task_prefix` as `machine.task_prefix` into `~/.orbit/config.toml` by hand, then delete
+`host.toml`. Beside an existing `[machine]` table, a leftover `host.toml` is ignored.
 `orbit routine init --install-clock` only installs the OS clock unit (§5). A malformed
 `[machine]` table is an error, not a fallback. The stable `id` participates in
 owner-only routine admission: a state trigger compares `owner_machine` with the local
