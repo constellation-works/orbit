@@ -277,9 +277,17 @@ function resolveBackend(argv0) {
 }
 
 function gitText(repo, args) {
+  // A cwd is not a Git authority boundary. Keep reads independent of the
+  // caller's repository, index, object store and injected/global config.
+  const home = path.dirname(requireEnv('ORBIT_FIXTURE_PROVENANCE'));
+  const env = {
+    PATH: process.env.PATH || '/usr/bin:/bin', HOME: home, XDG_CONFIG_HOME: home,
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_ATTR_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0',
+  };
   return execFileSync('git', args, {
     cwd: repo,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    env,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
@@ -388,7 +396,16 @@ function resolveUpstreamPath(upstream, pathAndQuery) {
   ) {
     return null;
   }
-  return { pathname: decoded, target };
+  // WHATWG URL processing removes literal and encoded dot segments. Route
+  // classification and asset/overlay lookup must use that same admitted URL
+  // as dispatch, rather than the pre-normalization decoded request path.
+  const pathname = decodeURIComponent(target.pathname);
+  // An encoded slash can expose a dot segment only after URL processing.
+  // Refuse that ambiguous spelling instead of letting a backend normalize it.
+  if (pathname.split('/').includes('.')) {
+    return { error: 400, message: 'ambiguous encoded path segment' };
+  }
+  return { pathname, target };
 }
 
 function confinedRequestTarget(reqUrl, upstream) {

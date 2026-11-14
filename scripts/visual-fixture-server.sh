@@ -58,6 +58,19 @@ mkdir -p "$root" "$home_dir" "$work"
 export HOME="$home_dir"
 export ORBIT_SKIP_HOST_PREREQUISITES=1
 
+# Orbit's own Git children must not inherit another checkout's authority
+# either. Strip all GIT_* keys, including numbered config injections.
+for git_env_name in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  unset "$git_env_name"
+done
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1
+
+fixture_git() {
+  # Scrub each direct Git child too (STD-03 R20), independent of parent setup.
+  env -i PATH="$PATH" HOME="$home_dir" GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 git "$@"
+}
+
 run_orbit() {
   "$orbit" --root "$root" "$@"
 }
@@ -91,7 +104,7 @@ primary_workspace_name="$(head -n 1 "$workspace_names_file" 2>/dev/null || true)
 
 (
   cd "$work"
-  git init -q .
+  fixture_git init -q .
   if [ -n "$primary_workspace_name" ]; then
     run_orbit workspace init --name "$primary_workspace_name" >/dev/null
   else
@@ -107,7 +120,7 @@ tail -n +2 "$workspace_names_file" | while IFS= read -r extra_workspace_name; do
   mkdir -p "$extra_work"
   (
     cd "$extra_work"
-    git init -q .
+    fixture_git init -q .
     run_orbit workspace init --name "$extra_workspace_name" >/dev/null
   )
 done
