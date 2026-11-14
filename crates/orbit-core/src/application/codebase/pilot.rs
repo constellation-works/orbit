@@ -16,12 +16,12 @@
 //! Task links distinguish fan-out invocations; ambiguous evidence stays unknown.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunQuery};
-use orbit_types::workflow::{JobRun, JobV2Step, JobV2StepBody};
+use orbit_types::workflow::{JobRun, JobV2Step, JobV2StepBody, PipelineState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -59,6 +59,10 @@ struct RunRecord {
     run: PilotRun,
     /// Loaded once per attributed run, shared across its tasks and receipts.
     invocations: RefCell<Option<Vec<InvocationRecord>>>,
+    /// The run's pipeline state, read once per scan. `None` until the first
+    /// attribution touching the run; `Some(None)` when the state is absent
+    /// or unreadable, treated as absent without failing the scan.
+    state: RefCell<Option<Option<PipelineState>>>,
 }
 
 impl RunRecord {
@@ -78,6 +82,17 @@ impl RunRecord {
                 .map(|invocation| invocation.total_tokens)
                 .sum()
         })
+    }
+
+    /// The run's pipeline state, read once per scan and shared across its
+    /// tasks and receipts. A failed read is `None` (absent), never a scan
+    /// failure, matching the previous per-call `ok().flatten()` handling.
+    fn cached_state(&self, runtime: &OrbitRuntime) -> Option<PipelineState> {
+        let mut slot = self.state.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(runtime.read_run_state(&self.run.run_id).ok().flatten());
+        }
+        slot.as_ref().and_then(|state| state.clone())
     }
 
     fn load_invocations(&self, runtime: &OrbitRuntime) -> Vec<InvocationRecord> {
@@ -159,6 +174,8 @@ impl RunRecord {
 pub(in crate::application) struct PilotRuns {
     runs: Vec<RunRecord>,
     steps: Vec<(String, String)>,
+    /// Linked receipts resolve their run without scanning every record.
+    by_run_id: HashMap<String, usize>,
 }
 
 impl PilotRuns {
@@ -210,7 +227,7 @@ impl PilotRuns {
             });
         // Worker ids, rather than activity catalog names, name invocations.
         let steps = pilot_steps(runtime);
-        let runs = runs
+        let runs: Vec<RunRecord> = runs
             .into_iter()
             .map(|run| RunRecord {
                 started_at: run.started_at,
@@ -226,9 +243,19 @@ impl PilotRuns {
                     tokens: None,
                 },
                 invocations: RefCell::new(None),
+                state: RefCell::new(None),
             })
             .collect();
-        Self { runs, steps }
+        let by_run_id = runs
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (record.run.run_id.clone(), index))
+            .collect();
+        Self {
+            runs,
+            steps,
+            by_run_id,
+        }
     }
 
     /// Explicit run ids win. Legacy receipts use a unique active run, or
@@ -242,20 +269,23 @@ impl PilotRuns {
         operation_id: &str,
         now: DateTime<Utc>,
     ) -> Option<PilotRun> {
-        let candidates: Vec<_> = self
-            .runs
-            .iter()
-            .filter(|record| {
-                if let Some(run_id) = run_id {
-                    record.run.run_id == run_id
-                } else {
+        let candidates: Vec<&RunRecord> = if let Some(run_id) = run_id {
+            self.by_run_id
+                .get(run_id)
+                .map(|&index| &self.runs[index])
+                .into_iter()
+                .collect()
+        } else {
+            self.runs
+                .iter()
+                .filter(|record| {
                     record.started_at.is_some_and(|started| started <= at)
                         && record.finished_at.unwrap_or(now) >= at
-                }
-            })
-            .collect();
+                })
+                .collect()
+        };
         let mut found = candidates.iter().filter_map(|record| {
-            let state = runtime.read_run_state(&record.run.run_id).ok().flatten();
+            let state = record.cached_state(runtime);
             let producing: Vec<_> = self
                 .steps
                 .iter()
