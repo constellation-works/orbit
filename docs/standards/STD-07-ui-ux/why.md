@@ -198,7 +198,13 @@ A rule is here only when its correction recurred.
   remaining width. no need to use 2 rows when there is more space" (f09993e5, ORB-24686,
   F2026-11-288). The Tasks status chips sat in the list column, so they wrapped after four
   chips while the space beside them, above the drain panel, stayed empty. R23 covered second
-  columns and tables, not a row of controls.
+  columns and tables, not a row of controls. Version 4 also said a view-wide bar spans the
+  view; the fix built from it (ORB-24686) gave the chips a row of their own at every width
+  and pushed the drain panel's tabs down where the chips already fit their column. The owner
+  corrected it: "only in that range of screen width where the status pills unnecessarily
+  collapse down to 2 rows when there is enough space left stretching to the right, we should
+  allow the status pills to extend over to the next columns" (ORB-24777, F2026-11-294).
+  Version 5 limits the rule to that range.
 
 ## Process
 
