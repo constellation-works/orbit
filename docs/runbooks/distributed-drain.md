@@ -2081,6 +2081,9 @@ one. From then on:
   open-state dependent condition, or the fixed fail-soft read that emits
   `unknown` on failure with an exact open-or-unknown dependent condition.
   Fallbacks that infer state from the event payload are unsupported.
+  A job may also be narrowed by the exact `Change scope` job of `ci.yml`, and
+  a job in that gate's full (non-docs) form may additionally need one to four
+  distinct sibling jobs that are each in the same form with no further needs.
   Other needs/conditions, path filters,
   reusable jobs and dynamic evidence refuse this recovery. A check name or an unrelated successful push is insufficient.
   Every currently required and owner-owed check must actually succeed on the

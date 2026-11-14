@@ -30,8 +30,9 @@ fn git(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, Or
 
 /// Only literal PR synchronize triggers, branch selectors and unconditional
 /// jobs with the existing literal-name/single-axis matrix semantics, plus the
-/// adapter's finite live-PR read condition and its exact change-scope gate, are
-/// known. Other conditions refuse.
+/// adapter's finite live-PR read condition and its exact change-scope gate
+/// (alone, or with up to four sibling jobs behind that same gate also needed),
+/// are known. Other conditions refuse.
 fn emitted(source: &str, branch: &str) -> Result<Vec<String>, OrbitError> {
     let workflow: Value = serde_yaml::from_str(source).map_err(|_| unreadable("workflow YAML"))?;
     let event = workflow
