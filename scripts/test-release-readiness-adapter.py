@@ -291,11 +291,17 @@ class NativeReadinessRegression(unittest.TestCase):
              "assertions": ["b"]},
         ]
         import copy as _copy
+        # scenario_decision mutates the row list it is given. Assert that
+        # copy: the browser row's own failure is the retained-evidence gap,
+        # not any other failure the fixture also carries.
+        producer_results = _copy.deepcopy(results)
         passed, failures = harness["scenario_decision"](
-            _copy.deepcopy(inventory), _copy.deepcopy(results), CANDIDATE)
+            _copy.deepcopy(inventory), producer_results, CANDIDATE)
         self.assertFalse(passed, failures)
-        self.assertTrue(any("retained" in row.get("retained_evidence_error", "") or
-                            row.get("outcome") == "FAIL" for row in results) or failures, failures)
+        browser = next(row for row in producer_results if row["scenario"] == "browser-x")
+        self.assertEqual(browser.get("outcome"), "FAIL", browser)
+        self.assertIn("retained", browser.get("retained_evidence_error", ""), browser)
+        self.assertTrue(any(item.startswith("browser-x:") for item in failures), failures)
 
         # Adapter verdict on the same inventory/report shapes.
         inputs = Path(tempfile.mkdtemp(dir=ROOT / ".orbit/tmp", prefix="readiness-parity-"))
@@ -308,7 +314,7 @@ class NativeReadinessRegression(unittest.TestCase):
             "inventory_sha256": hashlib.sha256(inventory_bytes).hexdigest(),
             "results": _copy.deepcopy(results),
         }
-        # Producer mutates browser rows to FAIL; restore PASS shapes for adapter.
+        # The adapter judges the original PASS rows, which omit retained evidence.
         for row in report["results"]:
             row["outcome"] = "PASS"
         request = {"contract": "release-readiness/v1", "form": "qa-full-sweep",
@@ -329,8 +335,10 @@ class NativeReadinessRegression(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         verdict = json.loads(result.stdout)
         self.assertEqual(verdict["status"], "unavailable", verdict)
-        self.assertIn(verdict["reasons"][0]["code"],
-                      ("retained-evidence-missing", "retired-case-not-executed"), verdict)
+        # browser-x is the first required scenario, so a missing retained
+        # manifest is the verdict. Accepting the retired-case code here would
+        # stay green if the browser check were removed.
+        self.assertEqual(verdict["reasons"][0]["code"], "retained-evidence-missing", verdict)
 
         # Fixing only the browser shape still fails on the retired shape.
         for row in report["results"]:

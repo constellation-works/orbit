@@ -22,6 +22,9 @@ Usage:
     make web-memory-soak
     python3 scripts/web-memory-soak.py --bin target/release/orbit \
         [--work-dir DIR] [--report report.json] [--rounds 20] [--report-only]
+
+`--rounds` must be at least 3 so drift is measured from round 3 to the last round.
+`--server-env` takes KEY=VALUE.
 """
 
 from __future__ import annotations
@@ -739,18 +742,34 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def soak_rounds(value: str) -> int:
+    parsed = positive_int(value)
+    if parsed < 3:
+        raise argparse.ArgumentTypeError(
+            "must be at least 3 so RSS drift is measured from round 3")
+    return parsed
+
+
+def server_env_binding(value: str) -> str:
+    key, separator, _rest = value.partition("=")
+    if separator != "=" or not key:
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got {value!r}")
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin", required=True, type=Path, help="orbit binary to measure")
     parser.add_argument("--work-dir", type=Path, help="fixture directory (reused when it already holds one)")
     parser.add_argument("--report", type=Path, help="write the JSON report here")
-    parser.add_argument("--rounds", type=positive_int, default=20)
+    parser.add_argument("--rounds", type=soak_rounds, default=20)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
     parser.add_argument("--task-list-runs", type=positive_int, default=9)
     parser.add_argument(
         "--server-env",
         action="append",
         default=[],
+        type=server_env_binding,
         metavar="KEY=VALUE",
         help="extra environment for the dashboard process (e.g. MALLOC_ARENA_MAX=2)",
     )

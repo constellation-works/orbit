@@ -63,6 +63,7 @@ python3 - "$repo_root" "$validator" "$base_fixture" "$fixture_root" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -76,12 +77,13 @@ fixture_root = Path(sys.argv[4])
 errors: list[str] = []
 
 
-def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(root: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(validator), str(root)],
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -91,8 +93,8 @@ def clone_fixture(name: str) -> Path:
     return dest
 
 
-def expect_failure(root: Path, needle: str, label: str) -> None:
-    result = run_validator(root)
+def expect_failure(root: Path, needle: str, label: str, env: dict[str, str] | None = None) -> None:
+    result = run_validator(root, env)
     if result.returncode == 0:
         errors.append(f"{label}: expected validator failure")
         return
@@ -104,8 +106,8 @@ def expect_failure(root: Path, needle: str, label: str) -> None:
         errors.append(f"{label}: stderr/stdout missing {needle!r}\n{combined}")
 
 
-def expect_success(root: Path, label: str) -> None:
-    result = run_validator(root)
+def expect_success(root: Path, label: str, env: dict[str, str] | None = None) -> None:
+    result = run_validator(root, env)
     if result.returncode != 0:
         errors.append(f"{label}: expected validator success, got {result.returncode}\n{result.stdout + result.stderr}")
 
@@ -358,6 +360,25 @@ for label, cwd in (
     good = clone_fixture(f"cwd-ok-{label}")
     set_orbit_cwd(good, cwd)
     expect_success(good, f"legitimate cwd {label}")
+
+# HOME=/ is not a user-specific home. A substring match would reject every
+# slash-containing value, including the @orbit-tools/cli pin.
+root_home = dict(os.environ)
+root_home["HOME"] = "/"
+expect_success(base_fixture, "valid package when HOME is /", root_home)
+
+embedded_home = "/srv/orbit-plugin-home"
+embedded = clone_fixture("embedded-home")
+mcp_path = embedded / "plugin" / "mcp.json"
+mcp_payload = json.loads(mcp_path.read_text(encoding="utf-8"))
+pinned = mcp_payload["mcpServers"]["orbit"]["args"]
+mcp_payload["mcpServers"]["orbit"]["args"] = [
+    arg if "@orbit-tools/cli@" not in arg else arg + embedded_home for arg in pinned
+]
+mcp_path.write_text(json.dumps(mcp_payload), encoding="utf-8")
+home_env = dict(os.environ)
+home_env["HOME"] = embedded_home
+expect_failure(embedded, "user-specific absolute home path", "embedded home in launch arg", home_env)
 
 if errors:
     print("test-validate-agent-plugin: failed", file=sys.stderr)

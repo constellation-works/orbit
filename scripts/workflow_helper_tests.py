@@ -29,6 +29,7 @@ def helper_revision_errors(document):
 
     Candidate validators belong to the tested code. Orchestration follows the
     workflow revision; isolated dependency evidence follows the trusted event base.
+    An isolated-source-v1 step names that producer only in ORBIT_DEPENDENCY_PRODUCER.
     """
     errors = []
     for name, job in document["jobs"].items():
@@ -41,14 +42,19 @@ def helper_revision_errors(document):
             if step.get("uses", "").startswith("actions/checkout@"):
                 options = step.get("with", {})
                 checkouts[options.get("path", "").removeprefix("./").rstrip("/")] = options.get("ref", WORKFLOW_REF)
-            for call in HELPER_CALL.findall(step.get("run", "")):
+            env = step.get("env") or {}
+            calls = HELPER_CALL.findall(step.get("run") or "")
+            if env.get("ORBIT_DEPENDENCY_EXECUTION") == "isolated-source-v1":
+                producer = env.get("ORBIT_DEPENDENCY_PRODUCER") or ""
+                calls.extend(HELPER_CALL.findall(producer if isinstance(producer, str) else ""))
+            for call in calls:
                 call = str(Path(step.get("working-directory", "")) / call)
                 if Path(call).name == "ci-guardrails.sh":
                     continue
                 call = call.removeprefix("./")
                 owners = [path for path in checkouts if not path or call.startswith(path + "/")]
                 owner = max(owners, key=len) if owners else None
-                expected_ref = (PRODUCER_REF if step.get("env", {}).get("ORBIT_DEPENDENCY_EXECUTION")
+                expected_ref = (PRODUCER_REF if env.get("ORBIT_DEPENDENCY_EXECUTION")
                                 == "isolated-source-v1" else WORKFLOW_REF)
                 if owner is None or checkouts[owner] != expected_ref:
                     errors.append(f"{name}: {step.get('name', 'run')}: {call} must use a preceding "
@@ -195,6 +201,7 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
         # Mutate parsed workflows, then execute the same ownership guard used
         # above. Each current call must be protected, not just the wait helper.
         checked = 0
+        producer_checked = 0
         for job_name, job in self.document["jobs"].items():
             if not any("pull_request.head.sha" in step.get("with", {}).get("ref", "")
                        for step in job.get("steps", [])):
@@ -226,7 +233,19 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                             steps.append(helper)
                     with self.subTest(job=job_name, mutation=mode):
                         self.assertTrue(helper_revision_errors(candidate), "helper must precede its calls")
+            producer_index = next((i for i, step in enumerate(job["steps"])
+                                    if step.get("with", {}).get("path") == ".orbit/tmp/dependency-producer"), None)
+            if producer_index is not None:
+                candidate = copy.deepcopy(self.document)
+                checkout = candidate["jobs"][job_name]["steps"][producer_index]
+                checkout["with"]["ref"] = "${{ github.event.pull_request.head.sha }}"
+                with self.subTest(job=job_name, mutation="producer-pr-head"):
+                    errors = helper_revision_errors(candidate)
+                    self.assertTrue(any("ci-await-jobs.py" in error for error in errors), errors)
+                producer_checked += 1
         self.assertGreater(checked, 0, "the ownership guard must exercise orchestration calls")
+        self.assertGreater(producer_checked, 0,
+                           "the ownership guard must exercise the dependency producer checkout")
 
     def test_old_pr_head_gets_workflow_revision_helpers_without_changing_candidate_code(self):
         scratch = ROOT / ".orbit/tmp"

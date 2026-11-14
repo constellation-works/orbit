@@ -123,7 +123,10 @@ def reject_user_specific_paths(value: Any, path: str) -> None:
     if isinstance(value, str):
         if "CLAUDE_PROJECT_DIR" in value:
             errors.append(f"{path} must not reference CLAUDE_PROJECT_DIR")
-        if str(Path.home()) in value:
+        # HOME=/ makes Path.home() the filesystem root, which is a substring
+        # of every slash-containing value, including the @orbit-tools/cli pin.
+        home = str(Path.home())
+        if home not in {"", "/"} and home in value:
             errors.append(f"{path} must not embed a user-specific absolute home path")
         if value.startswith("/") or (len(value) >= 3 and value[1] == ":" and value[0].isalpha()):
             errors.append(f"{path} must not use an absolute filesystem path")
