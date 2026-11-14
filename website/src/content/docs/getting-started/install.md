@@ -204,4 +204,6 @@ host to bring every registered workspace's managed defaults up to date (see
 Upgrade every host together for distributed work, and restart long-lived MCP
 servers too. Workspace layout 9 (Orbit 0.44.0) fences older clients from
 workspaces a newer build has upgraded, so upgrade every host before any of them
-opens a shared workspace.
+opens a shared workspace. An older binary also refuses an auto-task definition
+or settings file that sets `granted_tools`, so upgrade every host before
+setting a grant.

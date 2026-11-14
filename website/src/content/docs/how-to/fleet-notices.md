@@ -20,7 +20,7 @@ orbit notice close <notice-id> --reason "Build cache restored"
 orbit notice list --status all
 ```
 
-`kind` and `title` are required. Kinds are `incident`, `maintenance`, and `info`; the title is one line, up to 120 characters by default. The optional body is plain text; use `--body-file` instead of `--body` to read it from a file. Repeat `--evidence TYPE=VALUE` for references of type `task`, `run`, `friction`, `pull_request`, `url`, or `commit`. References are stored and shown, not dereferenced. Maintenance notices may also name affected machine IDs with repeated `--host` flags.
+`kind` and `title` are required. Kinds are `incident`, `maintenance`, and `info`; the title is one line of at most 120 characters. The optional body is plain text of at most 4096 UTF-8 bytes; use `--body-file` instead of `--body` to read it from a file. Repeat `--evidence TYPE=VALUE` for references of type `task`, `run`, `friction`, `pull_request`, `url`, or `commit`. References are stored and shown, not dereferenced. Maintenance notices may also name affected machine IDs with repeated `--host` flags.
 
 The selected workspace is the notice's home, and its owner holds the record. The default `workspace` scope reaches that workspace; `--scope global` reaches workspaces whose readers can reach that owner, not every independent owner. Listing a workspace normally includes its own notices and global notices homed elsewhere on the same owner. A federated list without a workspace merges reachable owners; check the `degraded` result for owners or homes that could not be read. `list` defaults to open notices; `show` includes the full body in any state, and operators also see history.
 
