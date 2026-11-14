@@ -169,6 +169,72 @@ pub(super) fn unsettled(
     store.with_read_connection(|conn| holding_records(conn, workspace))
 }
 
+/// Settled leaf run ids that may still have rebuildable output, in admission
+/// order.
+///
+/// `leaf_run_id IS NOT NULL` is the cheap column test that skips idle polls
+/// and refused requests without parsing their JSON: only a claim that created
+/// a leaf has one. The phase and the reclaim marker live in the record, so
+/// the returned id is `json_extract` of that record and a row already marked
+/// complete is left out. Nothing here deserializes an admission.
+pub(super) fn pending_build_reclaim_leaves(
+    store: &Store,
+    workspace: &str,
+) -> Result<Vec<String>, OrbitError> {
+    store.with_read_connection(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT json_extract(record_json,'$.leaf_run_id') FROM local_pull_admissions \
+                 WHERE workspace_id=?1 AND leaf_run_id IS NOT NULL \
+                 AND json_extract(record_json,'$.phase')='settled' \
+                 AND json_extract(record_json,'$.leaf_run_id') IS NOT NULL \
+                 AND json_extract(record_json,'$.build_output_reclaim_complete') IS NOT 1 \
+                 ORDER BY rowid",
+            )
+            .map_err(sqlite_store_error)?;
+        let ids = stmt
+            .query_map([workspace], |row| row.get::<_, String>(0))
+            .map_err(sqlite_store_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)?;
+        Ok(ids)
+    })
+}
+
+/// Record that `leaf_run_id`'s settled claim has no reclaimable build output
+/// left. A missing or not-yet-settled admission is left unchanged.
+pub(super) fn note_build_output_clear(
+    store: &Store,
+    workspace: &str,
+    leaf_run_id: &str,
+) -> Result<(), OrbitError> {
+    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+        let conn = tx.connection();
+        let Some(mut record) = conn
+            .query_row(
+                "SELECT record_json FROM local_pull_admissions \
+                 WHERE workspace_id=?1 AND leaf_run_id=?2",
+                params![workspace, leaf_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)?
+            .map(decode)
+            .transpose()?
+        else {
+            return Ok(());
+        };
+        if record.phase != LocalPullPhase::Settled
+            || record.leaf_run_id.as_deref() != Some(leaf_run_id)
+            || record.build_output_reclaim_complete
+        {
+            return Ok(());
+        }
+        record.build_output_reclaim_complete = true;
+        write(conn, workspace, &record)
+    })
+}
+
 /// `run_id`'s most recent settled claims against `destination` that failed
 /// in a row.
 ///
@@ -600,6 +666,7 @@ pub(super) fn allocate(
             settlement: None,
             refusal: None,
             settlement_refusal: None,
+            build_output_reclaim_complete: false,
         };
         write(conn, workspace, &record)?;
         prune_terminal_rows(conn, workspace)?;

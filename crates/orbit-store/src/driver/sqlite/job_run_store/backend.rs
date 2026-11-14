@@ -228,6 +228,12 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
         super::pull::unsettled(&self.store, &self.workspace_id)
     }
+    fn settled_leaf_run_ids_pending_build_reclaim(&self) -> Result<Vec<String>, OrbitError> {
+        super::pull::pending_build_reclaim_leaves(&self.store, &self.workspace_id)
+    }
+    fn note_settled_leaf_build_output_clear(&self, leaf_run_id: &str) -> Result<(), OrbitError> {
+        super::pull::note_build_output_clear(&self.store, &self.workspace_id, leaf_run_id)
+    }
     fn drain_leaf_occupancy(&self) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
         super::pull::drain_occupancy(&self.store, &self.workspace_id, None)
     }

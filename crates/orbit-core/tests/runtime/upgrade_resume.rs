@@ -275,6 +275,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         settlement: None,
         refusal: None,
         settlement_refusal: None,
+        build_output_reclaim_complete: false,
     };
     ctx.runtime
         .sqlite_store()
