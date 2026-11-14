@@ -7,8 +7,11 @@
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
-//! `/api/cost` (keyed by the canonical window), and the codebase
-//! analytics scan behind `/api/codebase/analytics` and the agent scorecard
+//! `/api/cost` (keyed by the canonical window), the Analytics Metrics trend
+//! endpoints under `/api/diagnostics/` (`implement_one`, `completions`,
+//! `defects`, `task_tokens`, `turns_to_edit`, `diff_stats` and
+//! `delivery_friction`), and the codebase analytics scan behind
+//! `/api/codebase/analytics` and the agent scorecard
 //! scan behind `/api/agents/*` and the task riskiness model behind the task list
 //! and detail, which cache typed facts rather than a response body. The agent
 //! and codebase analytics scans and the riskiness model are served stale while
@@ -36,7 +39,7 @@ use serde_json::Value;
 /// three poll intervals keep the second and third poll on the entry the first
 /// one computed. A miss scans up to 50k audit rows plus stderr blobs, so a new
 /// failure can stay hidden for up to this long; the `Age` header shows how old
-/// the served payload is.
+/// the served payload is. The Analytics Metrics trend endpoints share this bound.
 pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 
 /// Freshness bound for the codebase analytics scan. A scan rereads the
