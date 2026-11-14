@@ -21,13 +21,14 @@ use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+use super::super::MAX_ACTIVE_BLOCKED_RECOVERIES;
+use super::super::input::BlockedRecoveryTick;
 use crate::OrbitRuntime;
 use crate::application::task::blocked_recovery::ATTRIBUTION_SLACK_MS;
 use crate::application::task::tests::{assert_isolated_child, enter_isolated_child};
 use crate::application::task::{
     BLOCKED_TASK_RECOVERY_JOB, BlockedRecoveryInput, BlockedRecoveryPreparation,
-    BlockedRecoveryTick, EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord,
-    MAX_ACTIVE_BLOCKED_RECOVERIES, TaskAddParams, TaskUpdateParams,
+    EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord, TaskAddParams, TaskUpdateParams,
 };
 
 /// A runtime whose repository has one commit on `main` and whose

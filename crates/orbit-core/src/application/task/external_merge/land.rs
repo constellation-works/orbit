@@ -85,7 +85,7 @@ impl OrbitRuntime {
 
     /// Merge the delivery PR of the `review` task `id` and settle the task. A
     /// refusal, by Orbit or the forge, is a [`OrbitError::PolicyDenied`] starting
-    /// with [`TASK_LANDING_REFUSED`]; any other error leaves the outcome unknown.
+    /// with `TASK_LANDING_REFUSED`; any other error leaves the outcome unknown.
     pub fn land_task_pull_request(
         &self,
         id: &str,

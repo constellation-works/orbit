@@ -85,7 +85,7 @@ impl OrbitRuntime {
 
     /// One backstop tick: settle recovery runs that ended without a decision,
     /// then dispatch recoveries for eligible episodes, at most
-    /// [`MAX_ACTIVE_BLOCKED_RECOVERIES`] live at once.
+    /// `MAX_ACTIVE_BLOCKED_RECOVERIES` live at once.
     pub fn run_blocked_task_recovery_tick(
         &self,
         now: DateTime<Utc>,

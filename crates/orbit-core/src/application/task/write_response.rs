@@ -9,7 +9,7 @@
 //!
 //! The profiles preserve the contracts each surface already had:
 //!
-//! - [`TaskWriteResponsePolicy::FullRecord`] — [`task_record_json`]:
+//! - [`TaskWriteResponsePolicy::FullRecord`] — `task_record_json`:
 //!   sidecars, `review` and `pilot_warnings`. The local CLI and the
 //!   HTTP mutations serve it.
 //! - [`TaskWriteResponsePolicy::DashboardFullRecord`] — the full
@@ -54,7 +54,7 @@ use super::{TaskOsReadout, TaskRow};
 /// Which existing write profile a surface serves. See the module docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskWriteResponsePolicy {
-    /// [`task_record_json`] with sidecars.
+    /// `task_record_json` with sidecars.
     FullRecord,
     /// The full record plus the dashboard extras.
     DashboardFullRecord,
@@ -273,16 +273,6 @@ pub fn task_write_response_from_tool_answer(
         &metadata,
     )?;
     Ok((document, task, metadata))
-}
-
-/// One task reduced to the requested show fields: the bare value
-/// for a single field, otherwise an object keyed by field name.
-pub fn task_fields_response_json(
-    runtime: &OrbitRuntime,
-    task: &Task,
-    fields: &[String],
-) -> Result<Value, OrbitError> {
-    task_fields_response_json_projected(runtime, task, fields, false)
 }
 
 /// One task reduced to the requested show fields. With

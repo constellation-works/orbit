@@ -55,7 +55,7 @@ impl BlockSource {
     }
 }
 
-/// The task's current block, when one of [`BlockSource`] wrote it.
+/// The task's current block, when one of `BlockSource` wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockEpisode {
     /// The blocked task.
@@ -226,7 +226,7 @@ pub enum EpisodeDisposition {
         /// The unattributed write.
         changed_at: DateTime<Utc>,
     },
-    /// Blocked longer than [`MAX_EPISODE_AGE_HOURS`].
+    /// Blocked longer than `MAX_EPISODE_AGE_HOURS`.
     TooOld,
 }
 

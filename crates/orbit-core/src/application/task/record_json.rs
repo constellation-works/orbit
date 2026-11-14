@@ -124,7 +124,7 @@ pub fn task_record_json(
     Ok(object)
 }
 
-/// The show record: [`task_record_json`] plus the operator guidance only a
+/// The show record: `task_record_json` plus the operator guidance only a
 /// single-task readout carries.
 ///
 /// `block` explains the latest block or escalation (reason, time and source).
@@ -199,27 +199,15 @@ fn final_recovery_json(record: &super::FinalRecoveryRecord) -> Value {
     })
 }
 
-/// One `orbit.task.show` / `orbit task show --fields` projection.
-///
-/// A record field answers the value [`task_base_json`] carries for it; a
-/// sidecar is read on demand, with `artifacts` in its bounded metadata form;
-/// the crew enrichments answer `null` where their case does not apply.
-/// `resolved_dependencies` and `relations` need `status_by_id`, which a caller
-/// may leave out when it selects neither.
-pub fn task_show_field_json(
-    runtime: &OrbitRuntime,
-    task: &Task,
-    field: &str,
-    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-) -> Result<Value, OrbitError> {
-    task_show_field_json_with_row(runtime, task, None, field, status_by_id)
-}
-
-/// [`task_show_field_json`] over sidecars the caller already hydrated in
-/// `row`: history, comments and artifacts answer from the row instead of
-/// re-reading the store. `row` must belong to `task`. Fields that carry no
-/// sidecar, and every field when `row` is `None`, behave exactly as
-/// [`task_show_field_json`].
+/// One `orbit.task.show` / `orbit task show --fields` projection over
+/// sidecars the caller already hydrated in `row`: history, comments and
+/// artifacts answer from the row instead of re-reading the store. `row` must
+/// belong to `task`. Fields that carry no sidecar, and every field when `row`
+/// is `None`, read sidecars on demand, with `artifacts` in its bounded
+/// metadata form; the crew enrichments answer `null` where their case does
+/// not apply. `resolved_dependencies` and `relations` need `status_by_id`,
+/// which a caller may leave out when it selects neither. A record field
+/// answers the value [`task_base_json`] carries for it.
 pub(crate) fn task_show_field_json_with_row(
     runtime: &OrbitRuntime,
     task: &Task,

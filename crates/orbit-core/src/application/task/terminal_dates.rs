@@ -153,7 +153,7 @@ impl TerminalEntryMemo {
 
 impl OrbitRuntime {
     /// Terminal tasks dated by their durable status transition; see
-    /// [`TerminalTaskDates`]. `dated` holds transitions at or after `since`
+    /// `TerminalTaskDates`. `dated` holds transitions at or after `since`
     /// (every one for `None`). A task's last write is never older than its
     /// transition, so index rows from `since` onward are a sound superset.
     /// A candidate whose logs are unchanged since an earlier clean read

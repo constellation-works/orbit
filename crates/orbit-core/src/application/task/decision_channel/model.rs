@@ -55,7 +55,7 @@ pub struct DecisionSubmitParams {
     /// `dkim_verification_failed` when that contradicts the forwarded
     /// verdicts; when the channel requires core-side verification, a
     /// submission without one is refused `dkim_verification_required`.
-    /// At most [`MAX_DECISION_RAW_MESSAGE_BYTES`] bytes.
+    /// At most `MAX_DECISION_RAW_MESSAGE_BYTES` bytes.
     pub raw_message: Option<String>,
     /// Who is presenting the submission (see [`DecisionSubmitCaller`]).
     pub caller: DecisionSubmitCaller,

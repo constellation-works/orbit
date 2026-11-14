@@ -74,7 +74,6 @@ mod schedule;
 pub(crate) use schedule::schedule_hold_in;
 mod terminal_dates;
 pub(in crate::application) use terminal_dates::latest_status_entry_at;
-pub use terminal_dates::{DatedTerminalTask, TerminalTaskDates};
 mod resident_port;
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
@@ -105,32 +104,25 @@ pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };
 pub use blocked_recovery::{
-    BLOCKED_TASK_RECHECKED_EVENT, BLOCKED_TASK_RECOVERY_JOB, BLOCKED_TASK_TRIAGE_RESUMED_EVENT,
-    BLOCKED_TASK_TRIAGED_EVENT, BlockEpisode, BlockSource, BlockedNextStep,
-    BlockedRecheckSettlement, BlockedRecoveryInput, BlockedRecoveryTick, BlockedRecoveryView,
-    BlockedTriageView, EpisodeDisposition, FinalRecoveryRecord, MAX_ACTIVE_BLOCKED_RECOVERIES,
-    MAX_EPISODE_AGE_HOURS, RecheckKind, TriageBasis, TriageCandidacy, TriageEpisode, TriageTarget,
-    episode_disposition, triage_candidacy,
+    BLOCKED_TASK_RECOVERY_JOB, BlockEpisode, BlockedRecoveryInput, EpisodeDisposition,
+    FinalRecoveryRecord, RecheckKind,
 };
-pub use contention::{LockContentionHotspot, LockContentionReport};
-pub use context_repair::{
-    CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
+pub(crate) use blocked_recovery::{
+    BLOCKED_TASK_TRIAGED_EVENT, TriageCandidacy, TriageTarget, triage_candidacy,
 };
+pub use contention::LockContentionReport;
 pub(in crate::application) use corpus_port::TaskCorpusPort;
+pub use decision::DecisionListProfile;
 #[cfg(feature = "test-support")]
 pub use decision::answer_checkpoint::with_decision_answer_checkpoint;
 pub(crate) use decision::decision_request_json;
-pub use decision::{DecisionListProfile, DecisionRequestListing};
+pub use decision_channel::dkim::DkimTxtResolver;
 #[cfg(feature = "test-support")]
 pub use decision_channel::dkim::test_support::with_decision_dkim_resolver;
-pub use decision_channel::dkim::{DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver};
-pub use decision_channel::{
-    DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
-    DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
-};
+pub use decision_channel::{DecisionDigest, DecisionSubmitCaller, DecisionSubmitParams};
+pub use decision_raise::AgentDecisionRaise;
 #[cfg(feature = "test-support")]
 pub use decision_raise::raise_checkpoint::with_decision_raise_checkpoint;
-pub use decision_raise::{AgentDecisionRaise, AgentDecisionRaised};
 pub use decision_rules::{
     ConsolidationAnswer, CorpusDecisionDocument, CorpusDecisionRule, CorpusDigest,
     CorpusRuleStatus, ProposedCorpusDocument, citable_decision_rules, consolidate_decision_corpus,
@@ -138,10 +130,9 @@ pub use decision_rules::{
 };
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub(crate) use distributed_port::execution_claim_phase_label;
-pub use escalation_triage_steps::{
-    PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
-};
+pub(crate) use escalation_triage_steps::PILOT_WARNING_TRIAGED_EVENT;
 pub(crate) use escalation_triage_steps::{PilotWarningCandidacy, pilot_warning_candidacy};
+pub use escalation_triage_steps::{PilotWarningDecision, PilotWarningTriageRequest};
 pub(in crate::application) use evolution_port::TaskEvolutionPort;
 pub(in crate::application) use experiment_port::TaskExperimentPort;
 pub(crate) use final_recovery::TERMINAL_REFUSAL_MARK;
@@ -153,14 +144,14 @@ pub(crate) use finding_verification::{
     AnalyzedFinding, InvalidFinding, VerdictWrite, crew_named_by, finding_fingerprint,
     latest_verification,
 };
-pub use finding_verification::{
-    FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingVerdict,
-    FindingVerification, REVIEW_FINDING_TAGS, RejectionReason, VerdictConfidence, VerdictSource,
-    VerifierVerdict, is_review_finding,
+pub(crate) use finding_verification::{
+    FindingEvidence, REVIEW_FINDING_TAGS, VerdictConfidence, is_review_finding,
 };
+pub use finding_verification::{FindingVerdict, VerdictSource};
 use job_port::CrewPools;
 pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort};
-pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
+pub(crate) use lint::TaskLintReport;
+pub use lint::{TaskLintFinding, TaskLintSeverity};
 pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
 pub use listing::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
@@ -171,7 +162,7 @@ pub(in crate::application) use notice_port::TaskNoticePort;
 pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
-pub use paths::ContextCreationAuthorization;
+pub(crate) use paths::ContextCreationAuthorization;
 pub(crate) use pilot::pilot_assessable_status;
 pub use pilot::task_pilot_warnings;
 pub(crate) use pilot::{
@@ -183,18 +174,18 @@ pub(crate) use pilot::{
 pub(crate) use post_deploy::owed_criteria_json;
 pub use post_deploy::{PostDeployOperatorRecord, PostDeployRecordRefusal};
 pub use provider_limit::{
-    CrewProviderLimit, CrewUsagePressure, PressureWindow, ProviderLimitReading,
-    ProviderLimitThreshold, ProviderLimitsView, ProviderUsageStatus, UngatedLaneLimit,
+    CrewUsagePressure, ProviderLimitReading, ProviderLimitThreshold, ProviderUsageStatus,
     UsagePressure, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
 pub(crate) use record_json::task_listing_field_json;
-pub use record_json::{task_record_json, task_show_field_json, task_show_json};
+pub(crate) use record_json::task_record_json;
+pub use record_json::task_show_json;
 pub(crate) use records::TaskRecords;
 pub(in crate::application) use resident_port::TaskResidentPort;
 pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
-pub use selector_match::task_selectors_contain_path;
+pub(crate) use selector_match::task_selectors_contain_path;
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
     AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence,
@@ -204,32 +195,27 @@ pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;
 pub use write_response::{
-    DashboardPageReads, TaskFieldProjection, TaskWriteMetadata, TaskWriteResponsePolicy,
-    active_task_triage_map, job_run_is_locally_navigable, link_pull_requests,
-    mark_readiness_preparing, screened_task_write_response_json, summary_status_transitions,
-    task_detail_with_dashboard_extras, task_fields_response_json,
-    task_fields_response_json_projected, task_write_response_from_tool_answer,
-    task_write_response_json, tasks_in_pilot_preparation, with_dashboard_extras,
+    DashboardPageReads, TaskWriteMetadata, TaskWriteResponsePolicy, active_task_triage_map,
+    job_run_is_locally_navigable, link_pull_requests, mark_readiness_preparing,
+    screened_task_write_response_json, summary_status_transitions,
+    task_detail_with_dashboard_extras, task_write_response_from_tool_answer,
+    task_write_response_json, tasks_in_pilot_preparation,
 };
+pub(crate) use write_response::{TaskFieldProjection, task_fields_response_json_projected};
 pub(crate) use write_response::{
     task_fields_response_json_projected_hydrated, task_reference_status_index,
 };
 
 pub(crate) use external_merge::settled_merge_commit;
-pub use external_merge::{
-    ExternalMergeSettlement, ExternalMergeSettlementProfile, TASK_LANDING_REFUSED,
-    TaskPullRequestLanding,
-};
+pub use external_merge::{ExternalMergeSettlement, ExternalMergeSettlementProfile};
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
-pub use lifecycle::{
-    EXTERNAL_MERGE_SETTLED_EVENT, task_status_transition_allowed,
-    task_status_transition_required_field,
-};
+pub use lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
 pub(crate) use lifecycle::{
     claim_recovery_targets, ensure_claim_recovery_target, ensure_completion_run_stopped,
     ensure_post_deploy_criteria_met, ensure_task_has_execution_plan,
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
+pub(crate) use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 pub(crate) use paths::context_workspace_root;
 pub(crate) use resolves::pull_request_delivery;
 pub(crate) use update::admit_agent_artifact;
