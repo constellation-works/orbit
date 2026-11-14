@@ -371,7 +371,8 @@ fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> Orb
 /// Fields backed by the hydrated task row reuse its history, comment and
 /// artifact sidecars; dependency status fields use the page's shared status
 /// index without a per-row index query. Other projections can still need fresh
-/// runtime-derived data: experiments, OS and placement readouts, and the
+/// runtime-derived data: experiments, OS and placement readouts, crew
+/// enrichment (`resolved_crew`, `crew_model`, `crew_unresolved`), and the
 /// deliberate store read for `open_decisions`, which keeps unreadable decision
 /// evidence unknown and warning-producing. Pilot prerequisite warnings use
 /// the shared index when it contains the prerequisite and fall back to a
