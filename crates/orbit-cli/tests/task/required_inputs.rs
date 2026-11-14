@@ -272,7 +272,8 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
     let fixture = Fixture::new();
 
     // [ORB-24434] The `request_id` descriptions must say the parameter selects
-    // guarded mode and which fields that mode accepts.
+    // guarded mode. [ORB-24608] shortened the wording to one clause instead of
+    // the full field list; the handler refusal still lists the accepted fields.
     let add_detail = fixture.json(&[
         "tool",
         "show",
@@ -282,14 +283,7 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
         "--json",
     ]);
     let add_description = add_detail["description"].as_str().unwrap_or_default();
-    for expected in [
-        "guarded creation",
-        "'title'",
-        "'description'",
-        "'acceptance_criteria'",
-        "'priority'",
-        "'crew'",
-    ] {
+    for expected in ["guarded creation", "fewer fields"] {
         assert!(
             add_description.contains(expected),
             "ORB-24434: add request_id description must mention {expected}: {add_description}"
@@ -304,14 +298,7 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
         "--json",
     ]);
     let update_description = update_detail["description"].as_str().unwrap_or_default();
-    for expected in [
-        "guarded update",
-        "'verdict'",
-        "'complete'",
-        "'comment'",
-        "'status'",
-        "ordinary update",
-    ] {
+    for expected in ["guarded update", "fewer fields"] {
         assert!(
             update_description.contains(expected),
             "ORB-24434: update request_id description must mention {expected}: {update_description}"
