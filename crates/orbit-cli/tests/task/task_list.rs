@@ -514,7 +514,7 @@ fn task_origin_is_recorded_validated_and_filtered() {
     }
     assert!(
         refusal.contains("description"),
-        "refusal must direct the free-text reason to `description`: {refusal}"
+        "refusal must direct the free-text reason to `description` (ORB-24229): {refusal}"
     );
     let unstated_id = unstated["id"].as_str().unwrap();
     let rejected_update = workspace.run_raw(&["task", "update", unstated_id, "--origin", "human"]);
