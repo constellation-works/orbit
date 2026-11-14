@@ -163,3 +163,63 @@ fn hydrated_page_reuses_unchanged_rows_and_rereads_only_the_changed_one() {
         .expect("renamed row");
     assert_eq!(renamed.task.title, "Task 0 renamed");
 }
+
+#[test]
+fn listed_task_row_reuses_unchanged_bundle_and_rereads_the_changed_one() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        let task = store
+            .create_task(create_params(&format!("Task {index}"), TaskStatus::Backlog))
+            .expect("create task");
+        ids.push(task.id.to_string());
+    }
+    let listed_rows = |store: &TaskV2Store| {
+        ids.iter()
+            .map(|id| {
+                store
+                    .get_task_row(id, true)
+                    .expect("listed row")
+                    .expect("listed row present")
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let (first, first_reads) = lightweight_reads(|| listed_rows(&store));
+    assert_eq!(
+        first_reads, 3,
+        "first listed read reads each backlog bundle once"
+    );
+
+    let (second, second_reads) = lightweight_reads(|| listed_rows(&store));
+    assert_eq!(
+        second_reads, 0,
+        "unchanged listed rows must perform 0 lightweight bundle reads"
+    );
+    for (cached, fresh) in second.iter().zip(&first) {
+        assert_eq!(cached.task, fresh.task);
+        assert_eq!(cached.comments, fresh.comments);
+        assert_eq!(cached.history, fresh.history);
+        assert_eq!(cached.artifacts, fresh.artifacts);
+    }
+
+    store
+        .update_task_document(
+            &ids[1],
+            &TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                title: Some("Task 1 renamed".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("update one task");
+
+    let (third, third_reads) = lightweight_reads(|| listed_rows(&store));
+    assert_eq!(third_reads, 1, "only the updated task's bundle is re-read");
+    let renamed = third
+        .iter()
+        .find(|row| row.task.id == ids[1])
+        .expect("renamed row");
+    assert_eq!(renamed.task.title, "Task 1 renamed");
+}

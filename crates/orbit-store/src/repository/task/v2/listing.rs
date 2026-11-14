@@ -455,9 +455,34 @@ impl TaskV2Store {
     ) -> Result<Option<TaskRow>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
-        let bundle = if list_read {
-            self.bundle_store.read_bundle_if_settled(id)?
-        } else {
+        if list_read {
+            // Listed rows serve observational listings (a readiness
+            // snapshot reads one per backlog task on every request), so
+            // they reuse the freshness-stamped row cache a hydrated page
+            // uses: the stamp is taken before the read it labels, and a
+            // bundle that is not settled is never served from the cache.
+            let stamp = match self.bundle_store.settled_bundle_dir(id) {
+                Ok(Some(bundle_dir)) => {
+                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
+                }
+                _ => None,
+            };
+            if let Some(stamp) = &stamp
+                && let Some((_, row)) = self.row_cache.cached_row(id, stamp)
+            {
+                return Ok(Some(row));
+            }
+            let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
+                return Ok(None);
+            };
+            let envelope = bundle.envelope.clone();
+            let row = self.row_from_bundle(bundle)?;
+            if let Some(stamp) = stamp {
+                self.row_cache.remember(id, stamp, envelope, row.clone());
+            }
+            return Ok(Some(row));
+        }
+        let bundle = {
             match self.bundle_store.read_bundle(id) {
                 Ok(bundle) => Some(bundle),
                 Err(OrbitError::NotFound {
