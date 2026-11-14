@@ -139,8 +139,8 @@ orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 8h
 Without `--host`, `--pull` requires the full host-qualified selector copied
 unchanged from federated discovery. Host-local commands such as `workspace`,
 `doctor` and `run show` do not accept this routing flag; use them on the
-execution host. Registration, the doctor's `hosts` row and the one-release
-legacy migration are in [remote-access.md](remote-access.md).
+execution host. Registration, the doctor's `hosts` row and retired
+destinations-file recovery are in [remote-access.md](remote-access.md).
 
 ## Scheduling and claims
 
