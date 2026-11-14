@@ -25,7 +25,11 @@ SCHEMA_VERSION = 2
 TEST_ATTRIBUTE = re.compile(r"#\[(?:(?:r#)?[A-Za-z_][A-Za-z0-9_]*::)*(?:r#)?test\b")
 FUNCTION = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
-    r"(?:(?:const|async|unsafe)\s+|extern\s+\"[^\"]*\"\s+)*"
+    # The header is matched against `rust_code_only` output, where every
+    # string literal (including an `extern \"ABI\"`) is blanked to spaces,
+    # so the quoted ABI can never be present. Accept a bare `extern` (the
+    # masked form) as well as `extern \"ABI\"` (the unmasked form).
+    r"(?:(?:const|async|unsafe)\s+|extern(?:\s+\"[^\"]*\")?\s+)*"
     r"fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b"
 )
 RUST_TOKEN = re.compile(
@@ -84,11 +88,18 @@ def test_function_paths(text, relative_path):
     """
     paths = []
     pending = None
+    pending_has_code = False
     for number, line in enumerate(rust_code_only(text).splitlines(), 1):
         if TEST_ATTRIBUTE.search(line):
             # Duplicate test attributes on one function are accepted by
             # rustc (warning only); they still name a single test.
-            if pending is None:
+            if pending is not None:
+                if pending_has_code:
+                    raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
+                # Otherwise this is another attribute on the same function;
+                # keep the first pending line and fall through to the header
+                # check below (a same-line `#[test] fn` still names the test).
+            else:
                 pending = number
         if pending is not None:
             # Also accept attributes and the function header on the same line.
@@ -102,6 +113,16 @@ def test_function_paths(text, relative_path):
             if function:
                 paths.append(f"{relative_path}::{function.group(1) or ''}{function.group(2)}")
                 pending = None
+                pending_has_code = False
+            elif header.strip():
+                # A non-empty remainder that is not a function header is an
+                # unnameable item (macro call, const/static, `extern crate`,
+                # ...) or a split-header fragment. Remember it so a later
+                # test attribute fails with the first location instead of
+                # silently dropping the first test. Pure attribute, comment
+                # (masked to spaces) and blank lines leave this unset, so
+                # stacked attributes on one function still count once.
+                pending_has_code = True
     if pending is not None:
         raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
     return paths
