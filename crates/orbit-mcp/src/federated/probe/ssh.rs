@@ -240,13 +240,15 @@ impl SshDestinationProbe {
     ///
     /// A parked session must pass its reuse health check (alive, nothing
     /// unread, an exact bounded `ping`) and then runs this call's discovery
-    /// at once, on a freshly stamped probe budget. Any failure before the
-    /// routed `tools/call` is written discards it and opens a fresh session
-    /// instead of failing the call: `ping` and discovery are read-only, so
-    /// nothing was dispatched and starting over cannot duplicate work. The
-    /// earlier pool returned a live-but-broken parked session's failure as
-    /// the call's answer, and a desynchronised or lock-blocked session cost
-    /// the call its whole delivery budget.
+    /// at once, on a freshly stamped probe budget. A failure in either of
+    /// those two phases discards it and opens a fresh session instead of
+    /// failing the call: `ping` and discovery are read-only, so nothing was
+    /// dispatched and starting over cannot duplicate work. A later
+    /// pre-dispatch `tools/list` failure (in `advertised_tools`, after
+    /// discovery already succeeded) is not retried here; it is returned as
+    /// a delivery miss. The earlier pool returned a live-but-broken parked
+    /// session's failure as the call's answer, and a desynchronised or
+    /// lock-blocked session cost the call its whole delivery budget.
     ///
     /// Before a fresh session spawns, sessions parked for the same
     /// destination under any other key are closed: an idle parked runtime
