@@ -287,7 +287,7 @@
   .host-label { display: block; color: var(--fg-dim); font-size: 11px; }
 }
 
-/* Settings › Workflow, Execution, Review, Machine and All keys. Each key is a
+/* Settings › Workflow, Execution, Review, Machine and Other. Each key is a
    row in a panel like Crews and Hosts: the label with its key beneath, then
    the effective value, source chip, difference text and Edit in aligned
    columns. Below the phone breakpoint Edit moves to the top right. */
@@ -305,7 +305,6 @@
   border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev);
   color: var(--fg-mute); font-size: 12px;
 }
-.all-keys-search { flex: 1 1 220px; min-width: 160px; }
 /* Workflow section navigation: sticky inside the scrolling content pane so
    the jump, search and collapse controls stay reachable without leaving the
    pane; every control wraps inside the pane at phone width. Wrapping makes its
@@ -327,13 +326,7 @@
   scroll-margin-top: calc(var(--workflow-nav-h, 0px) + 8px);
 }
 .config-section-body[hidden] { display: none; }
-.all-keys-pager {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px;
-  border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev);
-}
-.all-keys-range { color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
-.topic-controls .config-action:focus-visible, .all-keys-pager .config-action:focus-visible,
-.all-keys-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.topic-controls .config-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .topic-page .config-section > .config-action { margin: 10px 14px 12px; }
 .topic-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; }
 .topic-row {

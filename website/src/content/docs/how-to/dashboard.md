@@ -187,7 +187,7 @@ prove that a particular task or run succeeded.
 | **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
 | **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory and global proposals). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
-| **Settings** | Workflow, Execution, Review, Crews, Machine, Hosts, and All keys. |
+| **Settings** | Workflow, Execution, Review, Crews, Machine, Hosts, and Other. |
 
 The rail foot shows live load, memory, and disk readings for the serving host
 (plus disk I/O stall on Linux hosts) above the refresh line and the UTC/Local
@@ -1918,7 +1918,7 @@ choose a view:
 | **Crews** | The crew table. |
 | **Machine** | Machine identity, auto-concurrency, machine settings, resource throttle, and task ID start. Edits write the global file only. |
 | **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
-| **All keys** | The complete key list with layer and topic filters, search, workspace cleanup, and raw TOML. |
+| **Other** | Keys no other Settings page shows, redundant-value workspace cleanup, and raw TOML. |
 
 The topic rows show the key's label, description, name, value, and source
 layer. Where the key declares accepted values, the row shows choices with
@@ -1977,23 +1977,23 @@ throttle value to edit it. These global values control this host's top-bar
 readings and admission. A warning and workspace markers identify values the
 workspace overrides for its own runtimes.
 
-### All keys
+### Other
 
-**All keys** (`#config/all-keys`) lets you search by key, label, or value.
-Filter by **Layer** (all, built-in, global, or workspace) or **Topic** (all,
-workflow, execution, review, machine, crews, or housekeeping). Changing the
-search or either filter returns to the first page. Results show 25 keys per
-page; use **Previous** and **Next** to move between pages. The range reads
-`Showing a–b of N keys · Page x of y`. When no keys match, it reads
-`No keys match`.
+**Other** (`#config/other`), last in the Settings rail, shows the keys no
+other Settings page shows: the commit, branch, decision channel, retention,
+worktree, experiments, crew memory and seeding keys, and any key added later
+that no topic page claims. Every key appears on exactly one Settings page.
+Older links to `#config/all-keys`, `#config/keys` and
+`#config/workspace-file` open this page, and a link naming a setting with
+`?key=` opens the page that now shows that setting.
 
 #### Tidy the workspace file
 
-When workspace values can be removed without changing the resolved value,
-**All keys** shows **Keys that only repeat the global or built-in value**.
-The group includes only keys whose reported removal fallback equals the
-current value. A key with an unknown fallback stays out of this group, as
-does an intentional override whose removal would change the value.
+When workspace values can be removed without changing the resolved
+value, **Other** shows **Keys that only repeat the global or built-in value**. The group includes only keys whose reported removal
+fallback equals the current value. A key with an unknown fallback stays out
+of this group, as does an intentional override whose removal would change
+the value.
 
 Review those rows, then use **Remove all N workspace values** to remove
 them in turn. The result reports how many were removed and names any
@@ -2004,16 +2004,14 @@ file exists.
 
 #### Check what the global file reaches
 
-Use **Layer: global** to find keys whose resolved source is global. To
-inspect a workspace override, find the key with **Layer: all** and open
-**Edit**: the value chain shows the built-in value, any shadowed values,
-and the effective value with its source layer. When supplied, **if removed**
-shows the fallback. This lets you check whether a global value reaches this
-workspace before changing it.
+To inspect a workspace override, open the key's **Edit** drawer on the page
+that shows it: the value chain shows the built-in value, any shadowed
+values, and the effective value with its source layer. When supplied, **if
+removed** shows the fallback. This lets you check whether a global value
+reaches this workspace before changing it.
 
 At the bottom, **Raw TOML** offers **Show workspace file** and **Show global
 file**. Each loads a read-only view labelled with the file and its scope.
-**Jump to Raw TOML** takes you there from the controls above the key list.
 
 ### Edit a value
 

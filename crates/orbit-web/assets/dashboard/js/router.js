@@ -24,6 +24,7 @@ import { adoptRunFiltersFromAddress, renderRuns } from './runs.js';
 import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
+import { topicOf } from './config-topics.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -224,8 +225,8 @@ const KNOWLEDGE_SUBTABS = ["frictions", "memory"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
 // `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
 // the serving host's registered remote hosts [ORB-14451].
-const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "all-keys"];
-const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
+const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "other"];
+const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
 function parseHashRoute(raw) {
   const trimmed = String(raw || "").replace(/^#/, "");
@@ -837,9 +838,16 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     hash = `#operations/${sub}`;
   } else if (top === "config") {
     if (CONFIG_LEGACY_REDIRECTS[segments[1]]) legacyRoute = true;
-    const sub = CONFIG_LEGACY_REDIRECTS[segments[1]] || (CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab());
+    let sub = CONFIG_LEGACY_REDIRECTS[segments[1]] || (CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab());
+    // A deep link naming a setting (?key=…) lands on the page that shows
+    // that setting now, not on the page the link was written for.
+    const linkedKey = query.get("key");
+    if (linkedKey) {
+      const topic = topicOf(linkedKey);
+      sub = CONFIG_SUBTABS.includes(topic) ? topic : "other";
+    }
     setConfigSubtabImpl(ctx, sub);
-    hash = `#config/${sub}`;
+    hash = `#config/${sub}` + (linkedKey ? `?key=${encodeURIComponent(linkedKey)}` : "");
   } else if (top === "tasks") {
     // The status chips are represented in the hash
     // (mirroring the audit tab) so they survive a reload or the browser's
