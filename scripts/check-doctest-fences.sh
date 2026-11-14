@@ -354,25 +354,28 @@ def doc_lines(text):
 
 
 def consider_fence(path, lineno, content, fence):
-    """Return the next fence marker. `fence` is the open marker, or None."""
+    """Return the next fence run. `fence` is the open run, or None."""
     stripped = content.strip()
-    marker = None
-    if stripped.startswith("```"):
-        marker = "```"
-    elif stripped.startswith("~~~"):
-        marker = "~~~"
-    if marker is None:
+    match = re.match(r"(`{3,}|~{3,})", stripped)
+    if match is None:
+        return fence
+    run = match.group(1)
+    char = run[0]
+    info = stripped[len(run):].strip()
+    if char == "`" and "`" in info:
+        # CommonMark: a backtick opening info string cannot contain a backtick.
         return fence
     if fence is None:
-        info = stripped[len(marker):].strip()
         if is_runnable_open(info):
             relative = path.relative_to(root)
             failures.append(
-                f"{relative}:{lineno}: runnable Rust doc fence {marker}{info!r} "
+                f"{relative}:{lineno}: runnable Rust doc fence {run}{info!r} "
                 "would be skipped (doctest = false); tag it with ignore or a language"
             )
-        return marker
-    if stripped == fence:
+        return run
+    if char != fence[0]:
+        return fence
+    if info == "" and len(run) >= len(fence):
         return None
     return fence
 
