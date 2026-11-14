@@ -567,44 +567,19 @@ projections_test!(
     fixture,
     Fixture::new(),
     {
-        let now = Utc::now();
-        // Multiple month partitions and a future row catch both lower/upper bound mistakes.
-        for (index, age, retries) in [
-            (0, Duration::minutes(10), 1),
-            (1, Duration::hours(2), 2),
-            (2, Duration::days(2), 4),
-            (3, Duration::days(10), 8),
-            (4, Duration::days(40), 16),
-            (5, Duration::minutes(-10), 32),
-        ] {
-            let ts = now - age;
-            let dir = fixture
-                .runtime
-                .data_root()
-                .join("state/diagnostics/metrics")
-                .join(ts.format("%Y-%m").to_string());
-            fs::create_dir_all(&dir).unwrap();
-            fs::write(dir.join(format!("row-{index}.jsonl")), format!("{}\n", json!({
-                "ts":ts.to_rfc3339(),"job_run":"jrun-windows","step":"implement",
-                "actor_identity":"http-metrics-fixture","step_duration_ms":100,"retry_count":retries,
-                "tool_invocations":1,"token_usage":10,
-            }))).unwrap();
-        }
         let server = fixture.server(false);
         let get = |path: &str| get_ok(&server, path);
         let ws = "workspace=ws_http_fixture";
-        for (window, duration, expected) in [
-            ("1h", Some(Duration::hours(1)), 1),
-            ("24h", Some(Duration::hours(24)), 3),
-            ("7d", Some(Duration::days(7)), 7),
-            ("30d", Some(Duration::days(30)), 15),
-            ("all", None, 31),
+        for (window, duration) in [
+            ("1h", Some(Duration::hours(1))),
+            ("24h", Some(Duration::hours(24))),
+            ("7d", Some(Duration::days(7))),
+            ("30d", Some(Duration::days(30))),
+            ("all", None),
         ] {
             let before = Utc::now();
             let result = get(&format!("/api/cost?window={window}&{ws}"));
             let after = Utc::now();
-            let metrics = get(&format!("/api/diagnostics/metrics?since={window}&{ws}"));
-            check_eq!(metrics.as_array().unwrap().iter().map(|row| row["retry_count"].as_u64().unwrap()).sum::<u64>() => expected; "metrics must filter all month partitions before limiting: {window}");
             assert_fields!(result, "window": json!(window));
             if let Some(duration) = duration {
                 let since = parse_ts(&result["window_since"]);
@@ -613,9 +588,6 @@ projections_test!(
                 check!(result["window_since"].is_null(); "all window_since null: {result}");
             }
         }
-        let limited = get("/api/diagnostics/metrics?since=all&limit=1&workspace=ws_http_fixture");
-        check_eq!(limited.as_array().unwrap().len() => 1; "limited metrics len: {limited}");
-        assert_fields!(limited[0], "retry_count": json!(1));
         check!(get("/api/diagnostics/metrics?since=all&limit=0&workspace=ws_http_fixture").as_array().unwrap().is_empty(); "limit 0 returns no metrics");
         check_eq!(status_of(&server, "/api/diagnostics/metrics?since=bogus&workspace=ws_http_fixture") => 400; "bogus since rejected");
         check_eq!(status_of(&server, "/api/diagnostics/metrics?since=24h&month=2026-04&workspace=ws_http_fixture") => 400; "since+month rejected");
@@ -633,7 +605,7 @@ projections_test!(
 );
 
 /// One invocation row, then moved to `at` (and, for `partition`, to another
-/// workspace) the way only the store can. Legacy metrics JSONL stays absent.
+/// workspace) the way only the store can.
 fn seed_row(
     fixture: &Fixture,
     run: &str,
@@ -739,7 +711,6 @@ projections_test!(
     Fixture::new(),
     {
         check_eq!(fixture.runtime.workspace_id().unwrap() => "ws_http_fixture"; "fixture workspace id");
-        check!(!fixture.runtime.data_root().join("state/diagnostics/metrics").exists(); "legacy metrics must be absent so the invocation fallback runs");
         let now = Utc::now();
         let older = now - Duration::hours(2);
         let newer = now - Duration::hours(1);

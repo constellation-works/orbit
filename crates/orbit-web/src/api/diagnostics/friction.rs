@@ -2,11 +2,9 @@
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_cmd::DiagnosticsCommands;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::audit::run_logs::HTTP_PREVIEW_MAX_BYTES;
-use orbit_types::record::FrictionEntry;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, IgnoredAny, Visitor};
 use serde_json::{Value, json};
@@ -23,7 +21,7 @@ use super::audit::{audit_blob_store, v2_audit_payloads};
 use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 use crate::state::{DashboardState, Ws};
 
-/// Newest v2 envelope events of the month the audit fallback scans.
+/// Newest v2 envelope events of the month the audit scan reads.
 const FRICTION_SCAN_EVENTS: usize = 50_000;
 
 fn diagnostics_friction_from_v2_audit(
@@ -348,17 +346,6 @@ fn read_blob_excerpt_best_effort(blob_store: &BlobStore, blob_ref: &str) -> Exce
     excerpt
 }
 
-/// A legacy friction record with its `stderr` bounded like the audit-derived
-/// rows. The record's other fields keep their persisted shape.
-fn friction_entry_to_json(entry: &FrictionEntry) -> Result<Value, orbit_core::OrbitError> {
-    let stderr = message_excerpt(&entry.stderr);
-    let mut row =
-        serde_json::to_value(entry).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
-    row["stderr"] = json!(stderr.text);
-    row["truncated"] = json!(stderr.truncated);
-    Ok(row)
-}
-
 pub(in crate::api) async fn list_diagnostics_friction(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -377,19 +364,8 @@ pub(in crate::api) async fn list_diagnostics_friction(
             (month.clone(), limit),
             DASHBOARD_POLL_MEMO_TTL,
             move || {
-                let mut entries = compute_runtime.read_friction_entries_limited(&month, limit)?;
-                entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
-                entries.truncate(limit);
-                if entries.is_empty() {
-                    diagnostics_friction_from_v2_audit(&compute_runtime, &month, limit)
-                        .map(Value::Array)
-                } else {
-                    entries
-                        .iter()
-                        .map(friction_entry_to_json)
-                        .collect::<Result<Vec<_>, _>>()
-                        .map(Value::Array)
-                }
+                diagnostics_friction_from_v2_audit(&compute_runtime, &month, limit)
+                    .map(Value::Array)
             },
         )
         .await

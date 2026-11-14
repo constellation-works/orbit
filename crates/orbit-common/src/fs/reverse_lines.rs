@@ -46,12 +46,6 @@ impl<R: Read + Seek> ReverseLines<R> {
         Self::with_limits(reader, block_size, usize::MAX)
     }
 
-    /// Reads default-size blocks, skipping lines longer than `max_line_bytes`.
-    /// The limit excludes `\n` but includes a trailing `\r`.
-    pub fn with_max_line_bytes(reader: R, max_line_bytes: usize) -> io::Result<Self> {
-        Self::with_limits(reader, REVERSE_READ_BLOCK, max_line_bytes)
-    }
-
     /// Reads `block_size` blocks (`0` means the default), buffering at most
     /// `max_line_bytes` per line. Oversized lines are skipped through their
     /// preceding newline without retaining more bytes. Memory is bounded by

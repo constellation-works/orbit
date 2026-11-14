@@ -25,7 +25,6 @@ orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
 pub mod browser_kit;
-mod diagnostics;
 mod doctor;
 pub mod hosts;
 pub mod log_format;
@@ -43,7 +42,6 @@ pub mod workspace_removal;
 #[cfg(test)]
 mod tests;
 
-pub use diagnostics::DiagnosticsCommands;
 pub use doctor::{
     DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, RetiredConfigKeyRepair,
     WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json,
