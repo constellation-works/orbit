@@ -8,9 +8,8 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::workflow::JobRunState;
 
-use super::super::admissions_stop::{
-    DrainAdmissionsStopRequest, set_admissions_stop_state_init_hook,
-};
+use super::super::admissions_stop::DrainAdmissionsStopRequest;
+use super::super::state_write::set_run_state_write_hook;
 use super::{
     assert_worker_checkpoint_preserved, running_run_without_state, test_runtime, worker_checkpoint,
 };
@@ -42,7 +41,7 @@ fn admissions_stop_initialization_preserves_worker_checkpoint_and_merges_control
         let run_id = run.run_id.clone();
         let progress = checkpoint.clone();
         let observed = reached.clone();
-        set_admissions_stop_state_init_hook(move || {
+        set_run_state_write_hook(move || {
             assert!(!observed.replace(true), "NoState seam must run once");
             assert!(worker.read_run_state(&run_id).unwrap().is_none());
             if let Some(state) = progress {
@@ -96,7 +95,7 @@ fn admissions_stop_initialization_refuses_concurrent_terminalization() {
             let worker = runtime.clone();
             let run_id = run.run_id.clone();
             let progress = checkpoint.clone();
-            set_admissions_stop_state_init_hook(move || {
+            set_run_state_write_hook(move || {
                 assert!(worker.read_run_state(&run_id).unwrap().is_none());
                 if let Some(state) = progress {
                     assert!(

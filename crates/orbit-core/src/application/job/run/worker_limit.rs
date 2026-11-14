@@ -27,6 +27,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+use super::state_write::terminal_run_error;
 use crate::OrbitRuntime;
 
 const WORKER_LIMIT_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";
@@ -401,12 +402,6 @@ fn job_input_u32(value: &Value) -> Option<u32> {
         Value::String(text) => text.trim().parse::<u32>().ok(),
         _ => None,
     }
-}
-
-fn terminal_run_error(run_id: &str, state: JobRunState) -> OrbitError {
-    OrbitError::JobValidation(format!(
-        "job run '{run_id}' is {state}; a terminal run admits no further work"
-    ))
 }
 
 fn revision_conflict(run_id: &str, expected: Option<u32>, actual: u32) -> OrbitError {

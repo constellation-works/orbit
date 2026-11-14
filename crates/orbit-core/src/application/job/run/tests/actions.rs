@@ -4,7 +4,7 @@ use chrono::Utc;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState, RunStateUpdate};
 use serde_json::json;
 
-use super::super::actions::set_cancellation_state_write_hook;
+use super::super::state_write::set_run_state_write_hook;
 use super::test_runtime;
 use crate::OrbitRuntime;
 use crate::application::tests::run_isolated_test;
@@ -24,7 +24,7 @@ fn detached_child(id: &str) -> ChildDispatch {
 /// The old read/write pair has already read its snapshot here; a transactional
 /// updater has not yet read its locked snapshot. No sleeps or scheduler races.
 fn commit_worker_at_write(runtime: OrbitRuntime, run: JobRun, remaining: usize) {
-    set_cancellation_state_write_hook(move || {
+    set_run_state_write_hook(move || {
         if remaining > 1 {
             commit_worker_at_write(runtime, run, remaining - 1);
             return;

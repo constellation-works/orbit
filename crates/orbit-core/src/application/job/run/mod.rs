@@ -21,6 +21,7 @@
 //! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
 //!   run-failure observation query run views share.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
+//! - `state_write` — the one create-or-update run-state write and terminal-run refusal the run controls share.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
 mod actions;
@@ -45,6 +46,7 @@ mod rescue_candidate;
 mod root_cause;
 #[cfg(feature = "test-support")]
 pub use root_cause::with_run_root_cause_write_hook;
+mod state_write;
 mod step_recovery;
 mod types;
 mod window_extension;
