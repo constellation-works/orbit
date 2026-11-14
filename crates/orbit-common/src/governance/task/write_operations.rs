@@ -326,9 +326,9 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Why the task was filed.",
+                "Category, not free text: operator_request, orchestrator_initiative, automation.",
                 CliArgKind::flag("origin"),
-                "Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
+                "Provenance category, not free text: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
             ),
         ],
         WRITE_PROJECTION_PARAMS,
@@ -657,9 +657,9 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Why the task was filed.",
+                "Category, not free text: operator_request, orchestrator_initiative, automation.",
                 CliArgKind::flag("origin"),
-                "Replacement task origin (operator_request, orchestrator_initiative, automation)",
+                "Replacement provenance category, not free text: operator_request, orchestrator_initiative, automation",
             ),
             path(preserve_empty(both(
                 "context_files",

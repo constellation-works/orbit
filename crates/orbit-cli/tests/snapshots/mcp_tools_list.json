@@ -401,7 +401,7 @@
         },
         "origin": {
           "type": "string",
-          "description": "Why the task was filed."
+          "description": "Category, not free text: operator_request, orchestrator_initiative, automation."
         },
         "fields": {
           "type": "array",
@@ -888,7 +888,7 @@
         },
         "origin": {
           "type": "string",
-          "description": "Why the task was filed."
+          "description": "Category, not free text: operator_request, orchestrator_initiative, automation."
         },
         "context_files": {
           "type": "array",
