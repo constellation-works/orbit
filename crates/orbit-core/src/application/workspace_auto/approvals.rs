@@ -212,7 +212,7 @@ pub(super) fn approval_snapshot(
             .rev()
             .find(|entry| !is_decision_neutral(entry));
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
-            && let Some(classification) = held_classification(runtime, entry)
+            && let Some(classification) = held_classification(entry)
             && !(classification == "changed_since_pilot" && !claimed_tasks.contains(&task.id))
         {
             let findings = if matches!(classification, "warnings" | FOOTPRINT_UNRESOLVED) {
@@ -309,7 +309,7 @@ pub(super) fn approval_snapshot(
         // after that apply must not hide the reuse [ORB-21206]. A drain
         // child's own unapproved apply is not reusable, so it stays held.
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
-            && held_classification(runtime, entry).is_none()
+            && held_classification(entry).is_none()
             && let Some(pilot) = pilots.iter().find(|pilot| {
                 !pilot.is_live()
                     && pilot.task_ids.contains(&task.id)

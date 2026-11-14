@@ -273,7 +273,7 @@ fn record_unresolved_pilot(
         // apply unresolved would hold the next pass before promotion
         // [ORB-21206].
         let unapproved_apply = latest.is_some_and(|entry| {
-            entry.event == "task_pilot_applied" && held_classification(runtime, entry).is_none()
+            entry.event == "task_pilot_applied" && held_classification(entry).is_none()
         });
         if !unapproved_apply || reusable_explicit_promotion(runtime, &task)? {
             return Ok(());

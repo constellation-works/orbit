@@ -132,7 +132,7 @@ pub(crate) fn current_run_requeue_stands(task: &Task, history: &[TaskHistoryEntr
         .iter()
         .rposition(|entry| entry.event == CANDIDATE_DISCARDED_EVENT)
         .map_or(0, |index| index + 1);
-    helpers::authoritative_final_recovery_outcome(&history[after_discard..], run_id)
+    helpers::authoritative_recovery_outcome(&history[after_discard..], run_id)
         == Some(&RecordedFinalRecovery::Requeued)
 }
 

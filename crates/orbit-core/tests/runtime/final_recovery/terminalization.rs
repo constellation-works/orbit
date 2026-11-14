@@ -421,7 +421,7 @@ fn a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails
     }
 }
 
-fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
+fn other_recovery_outcomes_survive_failed_run_terminalization() {
     let fixture = fixture("[\"sol\"]");
     let git = |args: &[&str]| {
         let output = crate::git_test_support::run(&fixture.repo, args).unwrap();
@@ -729,7 +729,7 @@ crate::scenario_table!(
     a_later_resume_target_records_the_downgrade_on_the_task_scenarios,
     a_later_resume_target_records_the_downgrade_on_the_task,
     a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails,
-    other_final_recovery_outcomes_survive_failed_run_terminalization,
+    other_recovery_outcomes_survive_failed_run_terminalization,
     already_done_unapplied_proposal_settles_without_the_failure_handoff,
     failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run
 );

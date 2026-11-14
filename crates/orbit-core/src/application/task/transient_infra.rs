@@ -138,7 +138,7 @@ impl OrbitRuntime {
             return Ok(None);
         };
         if !untouched_since(&history[index + 1..])
-            || helpers::authoritative_final_recovery_outcome(&history, &run_id)
+            || helpers::authoritative_recovery_outcome(&history, &run_id)
                 .map(|outcome| outcome.as_str())
                 != Some("escalated")
         {

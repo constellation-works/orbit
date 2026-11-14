@@ -172,22 +172,17 @@ impl OrbitRuntime {
         Ok(value)
     }
 
-    /// Projection inputs outside the bundle. A different tool registry,
-    /// typed-decision boundary or native platform must not reuse a pilot
+    /// Projection inputs outside the bundle. A different tool registry or
+    /// native platform must not reuse a pilot
     /// request's closed state from another runtime. Bump the version when
     /// changing decision folding semantics across binary versions.
     pub(crate) fn decision_projection_key(&self) -> String {
         let mut tools = self.allowlist_known_tool_names();
         tools.sort();
         orbit_common::security::release::sha256_hex(
-            json!([
-                "decision-projection-v1",
-                std::env::consts::OS,
-                self.typed_decisions_since(),
-                tools
-            ])
-            .to_string()
-            .as_bytes(),
+            json!(["decision-projection-v2", std::env::consts::OS, tools])
+                .to_string()
+                .as_bytes(),
         )
     }
 

@@ -1324,25 +1324,6 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
     assert_req0(&record2["hold"]["requirements"], 4);
 }
 
-/// Append `message` as `by`'s comment at `at`, as a binary that predates
-/// typed decisions recorded it.
-fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, message: &str) {
-    update_task_history(
-        workspace,
-        task,
-        TaskHistoryUpdateParams {
-            actor: by.into(),
-            append_comments: vec![TaskComment {
-                at: at.parse().unwrap(),
-                by: by.into(),
-                message: message.into(),
-                operation_id: None,
-            }],
-            ..Default::default()
-        },
-    );
-}
-
 pub(super) fn append_history(workspace: &Workspace, task: &Task, entry: TaskHistoryEntry) {
     let actor = entry.by.clone();
     update_task_history(
@@ -1354,94 +1335,6 @@ pub(super) fn append_history(workspace: &Workspace, task: &Task, entry: TaskHist
             ..Default::default()
         },
     );
-}
-
-fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions() {
-    for (decision, verdict) in [
-        ("approve-anyway", PilotAdmissionVerdict::ApproveAnyway),
-        ("clear", PilotAdmissionVerdict::Clear),
-    ] {
-        for (field, reason) in [
-            ("duplicate_of", "pilot_duplicate"),
-            ("already_landed", "pilot_already_landed"),
-        ] {
-            // The first open by this binary records the store's boundary.
-            let first_open = chrono::Utc::now();
-            let (workspace, task) = fresh_backlog();
-            let comment = format!("task-pilot-admission: {decision}\nReviewed the finding.");
-            // Overrides an older binary wrote: before typed decisions shipped,
-            // on the day they shipped before this host upgraded, and on a host
-            // that kept running an older binary until just before this store
-            // was first opened by this one.
-            for legacy_at in [
-                "2026-10-01T00:00:00Z".to_string(),
-                "2026-10-12T09:00:00Z".to_string(),
-                (first_open - chrono::Duration::seconds(1)).to_rfc3339(),
-            ] {
-                assess(&workspace, &task, Some(field));
-                // Comment text written since is open to any author; it decides
-                // nothing, and opening the store again does not move the boundary.
-                let now = chrono::Utc::now().to_rfc3339();
-                append_comment(&workspace, &task, "human:fixture", &now, &comment);
-                super::runtime_at(
-                    &workspace.runtime.global_root(),
-                    &workspace.repo.join(".orbit"),
-                );
-                assert_admission(&workspace, &task, Some(reason));
-                append_comment(&workspace, &task, "human:fixture", &legacy_at, &comment);
-                assert_admission(&workspace, &task, None);
-            }
-
-            // A decision made now is the typed one the trusted path records;
-            // an override needs no explanation below its header.
-            assess(&workspace, &task, Some(field));
-            assert_admission(&workspace, &task, Some(reason));
-            human_comment(
-                &workspace,
-                &task,
-                format!("task-pilot-admission: {decision}"),
-            );
-            assert_admission(&workspace, &task, None);
-            assert_eq!(verdicts(&workspace, &task), vec![verdict]);
-        }
-    }
-}
-
-fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
-    let comment = "task-pilot-admission: approve-anyway\nReviewed the finding.";
-    // Empty, as a crash after the older binary created the file left it, and
-    // cut short, as a failed write did.
-    for content in ["", "2026-10-12T1"] {
-        let workspace = Workspace::new();
-        let global_root = workspace.runtime.global_root();
-        let task = backlog_task(&workspace);
-        let modified = crate::drain_approval::seed_incomplete_boundary(&global_root, content);
-        // A reader counts from the incomplete file's modification time; then
-        // a writable open records that instant, never a later one.
-        for reopen in [false, true] {
-            if reopen {
-                super::runtime_at(&global_root, &workspace.repo.join(".orbit"));
-                assert_eq!(
-                    crate::drain_approval::recorded_boundary(&global_root),
-                    modified,
-                    "{content:?}"
-                );
-            }
-            assess(&workspace, &task, Some("duplicate_of"));
-            let now = chrono::Utc::now().to_rfc3339();
-            append_comment(&workspace, &task, "human:fixture", &now, comment);
-            assert_admission(&workspace, &task, Some("pilot_duplicate"));
-            // Written on the rollout day before the upgrade.
-            append_comment(
-                &workspace,
-                &task,
-                "human:fixture",
-                "2026-10-12T09:00:00Z",
-                comment,
-            );
-            assert_admission(&workspace, &task, None);
-        }
-    }
 }
 
 fn decision_requests(workspace: &Workspace, task: &Task) -> Vec<DecisionRequest> {
@@ -2149,12 +2042,6 @@ crate::scenario_table!(
     operator_tool_the_criterion_must_invoke_still_holds,
     unclassified_or_malformed_operator_tool_classification_still_holds,
     recheck_after_subject_to_invoke_criteria_edit_still_holds
-);
-
-crate::scenario_table!(
-    an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions_scenarios,
-    an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions,
-    an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it
 );
 
 crate::scenario_table!(
