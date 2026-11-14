@@ -184,6 +184,15 @@ export function setActiveRunId(v) {
 onWorkspaceChange(retireRunDetailView);
 
 export function getActiveRunDetail() { return activeRunDetail; }
+
+/// Whether the loaded detail is the terminal record of the given run.
+/// A terminal run cannot change, so its detail, events and logs need no
+/// periodic re-read; callers outside the poll tick still fetch directly.
+export function loadedRunDetailIsTerminal(runId) {
+  const run = activeRunDetail?.run;
+  return Boolean(runId) && run?.run_id === runId && TERMINAL_RUN_STATES.has(run.state);
+}
+
 export function setActiveRunDetail(v) { activeRunDetail = v; activeRunDetailError = null; }
 export function setActiveRunDetailError(v) {
   activeRunDetailError = v;
