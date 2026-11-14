@@ -91,60 +91,19 @@ jobs:
       pull-requests: read
     outputs:
       state: ${{ steps.state.outputs.state }}
-      changed_files: ${{ steps.state.outputs.changed_files }}
     steps:
       - name: Read live PR state
         id: state
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          EVENT_STATE: ${{ github.event.pull_request.state }}
-          EVENT_MERGED: ${{ github.event.pull_request.merged }}
-          # Bounded retry backoff base; the workflow test sets this to 0.
-          RETRY_DELAY_SECONDS: "5"
         shell: bash
         run: |
-          # Fail-soft: a rate-limited or otherwise failed live read must
-          # neither fail this gate nor write the error to $GITHUB_OUTPUT.
-          # Retry a bounded number of times, then fall back to the
-          # pull_request event payload, whose state/merged fields carry
-          # the same values downstream jobs consume (open|closed|merged).
-          # The fallback can be stale (the event predates queueing), so a
-          # PR merged while queued may still run; that costs a run, never
-          # a red PR for an infrastructure reason. Only validated
-          # key=value lines are ever appended to $GITHUB_OUTPUT, and an
-          # unusable event payload yields state=unknown, which downstream
-          # jobs already treat as not open.
-          state=""
-          changed_files=""
-          attempt=1
-          while [ "$attempt" -le 3 ] && [ -z "$state" ]; do
-            if response="$(gh api --method GET "repos/{owner}/{repo}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
-              if parsed="$(jq -er 'if .merged == true then "merged" elif .state == "open" or .state == "closed" then .state else error("Unexpected pull request state") end' <<<"$response" 2>/dev/null)" && [ -n "$parsed" ]; then
-                state="$parsed"
-                changed_files="$(jq -r 'if (.changed_files | type) == "number" then (.changed_files | tostring) else "" end' <<<"$response" 2>/dev/null)" || changed_files=""
-              fi
-            fi
-            if [ -z "$state" ] && [ "$attempt" -lt 3 ]; then
-              sleep "$((RETRY_DELAY_SECONDS * attempt))" || true
-            fi
-            attempt=$((attempt + 1))
-          done
-          if [ -z "$state" ]; then
-            if [ "${EVENT_MERGED:-}" = "true" ]; then
-              state="merged"
-            elif [ "${EVENT_STATE:-}" = "open" ] || [ "${EVENT_STATE:-}" = "closed" ]; then
-              state="$EVENT_STATE"
-            else
-              state="unknown"
-            fi
-            echo "::warning title=Live PR state::gh api failed after 3 attempts; falling back to the pull_request event payload (state=$state)"
-          fi
-          printf 'state=%s\n' "$state" >> "$GITHUB_OUTPUT"
-          if [ -n "$changed_files" ]; then
-            printf 'changed_files=%s\n' "$changed_files" >> "$GITHUB_OUTPUT"
-          fi
+          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+            if .merged == true then "state=merged"
+            elif .state == "open" or .state == "closed" then "state=" + .state
+            else error("Unexpected pull request state") end
+          ' >> "$GITHUB_OUTPUT"
 
   # Narrows the run before allocating build runners (scripts/ci-change-scope.sh).
   # `docs`: every changed path is Markdown outside crates/ and plugin/, so only
@@ -186,12 +145,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
-          # Reuse the PR object Live PR state already fetched: its
-          # changed_files count saves one pulls/<n> call per PR run.
-          # Empty when Live PR state fell back to the event payload (or
-          # on push, where pr-state is skipped); the script then fetches
-          # the count itself, as ci-cache-seed.yml's scope job does.
-          PR_CHANGED_FILES: ${{ needs.pr-state.outputs.changed_files }}
           SHA: ${{ github.sha }}
           BEFORE: ${{ github.event.before }}
         run: scripts/ci-change-scope.sh
