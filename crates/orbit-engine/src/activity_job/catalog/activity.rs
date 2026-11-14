@@ -7,7 +7,7 @@ use orbit_types::workflow::validate_activity_tool_allowlist_against_registered_t
 use super::super::asset_loader::{
     ActivityAsset, AssetLoadError, declared_activity_name_in_yaml, load_activity_asset,
 };
-use super::layered::{CatalogAdapter, ExistingNamePolicy, LayeredCatalog, LoadedCatalogAsset};
+use super::layered::{CatalogAdapter, LayeredCatalog, LoadedCatalogAsset};
 use super::{CatalogError, ResolveError};
 
 #[derive(Debug, Default, Clone)]
@@ -22,23 +22,6 @@ pub struct V2ActivityCatalog {
 impl V2ActivityCatalog {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Load every `*.yaml` / `*.yml` file under `dir` (recursively) as a
-    /// schemaVersion 2 activity asset. Duplicate names across files are a
-    /// hard error; merge semantics belong to the caller.
-    pub fn load_dir(&mut self, dir: &Path) -> Result<(), CatalogError> {
-        self.inner
-            .load_dir(
-                dir,
-                &ActivityCatalogAdapter {
-                    skip_retired: false,
-                },
-                ExistingNamePolicy::Reject,
-                |_| true,
-                &BTreeSet::new(),
-            )
-            .map(|_| ())
     }
 
     fn withdrawn_names(&self) -> BTreeSet<String> {
@@ -58,35 +41,13 @@ impl V2ActivityCatalog {
         self.inner.load_dir(
             dir,
             &ActivityCatalogAdapter { skip_retired: true },
-            ExistingNamePolicy::PreferExisting,
             |_| true,
             &withdrawn,
         )
     }
 
-    /// Policy-filtered layered load. Duplicate names within `dir` are checked
-    /// before `include_name` is applied, then admitted names follow the same
-    /// first-wins behavior as [`Self::load_dir_skipping_retired_prefer_existing`].
-    pub fn load_dir_skipping_retired_prefer_existing_where<F>(
-        &mut self,
-        dir: &Path,
-        include_name: F,
-    ) -> Result<Vec<PathBuf>, CatalogError>
-    where
-        F: FnMut(&str) -> bool,
-    {
-        let withdrawn = self.withdrawn_names();
-        self.inner.load_dir(
-            dir,
-            &ActivityCatalogAdapter { skip_retired: true },
-            ExistingNamePolicy::PreferExisting,
-            include_name,
-            &withdrawn,
-        )
-    }
-
     /// Best-effort variant of
-    /// [`Self::load_dir_skipping_retired_prefer_existing_where`]: a file that
+    /// [`Self::load_dir_skipping_retired_prefer_existing`]: a file that
     /// fails to parse (for example a stale copy declaring a removed key) is
     /// withdrawn alone instead of failing the whole catalog. The withdrawn
     /// name — the activity's declared `metadata.name` when it is
@@ -113,7 +74,6 @@ impl V2ActivityCatalog {
         let skipped = self.inner.load_dir_best_effort(
             dir,
             &ActivityCatalogAdapter { skip_retired: true },
-            ExistingNamePolicy::PreferExisting,
             include_name,
             &mut errors,
             &withdrawn,
@@ -145,7 +105,6 @@ impl V2ActivityCatalog {
         self.inner.load_files(
             files,
             &ActivityCatalogAdapter { skip_retired: true },
-            ExistingNamePolicy::PreferExisting,
             &withdrawn,
         )
     }

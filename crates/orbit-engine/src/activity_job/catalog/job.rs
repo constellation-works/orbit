@@ -7,9 +7,7 @@ use super::super::asset_loader::load_job_asset;
 use super::CatalogError;
 #[cfg(doc)]
 use super::V2ActivityCatalog;
-use super::layered::{
-    self, CatalogAdapter, ExistingNamePolicy, LayeredCatalog, LoadedCatalogAsset,
-};
+use super::layered::{self, CatalogAdapter, LayeredCatalog, LoadedCatalogAsset};
 
 /// Typed job adapter over the same layered YAML catalog loader used by
 /// [`V2ActivityCatalog`]. Directory precedence remains a caller policy.
@@ -36,7 +34,6 @@ impl V2JobCatalog {
             .load_dir_best_effort(
                 dir,
                 &JobCatalogAdapter,
-                ExistingNamePolicy::PreferExisting,
                 |_| true,
                 &mut errors,
                 &BTreeSet::new(),
@@ -49,12 +46,7 @@ impl V2JobCatalog {
     /// exists: a plugin contributes files, not a directory.
     pub fn load_files_prefer_existing(&mut self, files: &[PathBuf]) -> Result<(), CatalogError> {
         self.inner
-            .load_files(
-                files,
-                &JobCatalogAdapter,
-                ExistingNamePolicy::PreferExisting,
-                &BTreeSet::new(),
-            )
+            .load_files(files, &JobCatalogAdapter, &BTreeSet::new())
             .map(|_| ())
     }
 

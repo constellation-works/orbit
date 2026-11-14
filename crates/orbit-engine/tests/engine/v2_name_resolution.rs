@@ -483,7 +483,7 @@ fn scenario_a_catalog_loads_new_activities() -> Result<(), Box<dyn std::error::E
     println!("  A) catalog retains supported examples and excludes retired promotion");
     let mut catalog = V2ActivityCatalog::new();
     let dir = repo_root().join("crates/orbit-core/assets/activities");
-    catalog.load_dir(&dir)?;
+    catalog.load_dir_skipping_retired_prefer_existing(&dir)?;
 
     for name in ["agent_assess_diff", "agent_apply_fixes", "revert_on_red"] {
         assert!(
@@ -568,7 +568,7 @@ fn repo_root() -> PathBuf {
 fn load_reference_catalog() -> Result<V2ActivityCatalog, Box<dyn std::error::Error>> {
     let mut catalog = V2ActivityCatalog::new();
     let dir = repo_root().join("crates/orbit-core/assets/activities");
-    catalog.load_dir(&dir)?;
+    catalog.load_dir_skipping_retired_prefer_existing(&dir)?;
     Ok(catalog)
 }
 

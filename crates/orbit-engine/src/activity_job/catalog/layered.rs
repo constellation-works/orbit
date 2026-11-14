@@ -23,7 +23,6 @@ impl<T> LayeredCatalog<T> {
         &mut self,
         dir: &Path,
         adapter: &A,
-        existing_name_policy: ExistingNamePolicy,
         include_name: F,
         withdrawn_names: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>, CatalogError>
@@ -31,21 +30,13 @@ impl<T> LayeredCatalog<T> {
         A: CatalogAdapter<Asset = T>,
         F: FnMut(&str) -> bool,
     {
-        self.load_dir_inner(
-            dir,
-            adapter,
-            existing_name_policy,
-            include_name,
-            None,
-            withdrawn_names,
-        )
+        self.load_dir_inner(dir, adapter, include_name, None, withdrawn_names)
     }
 
     pub(super) fn load_dir_best_effort<A, F>(
         &mut self,
         dir: &Path,
         adapter: &A,
-        existing_name_policy: ExistingNamePolicy,
         include_name: F,
         errors: &mut Vec<CatalogError>,
         withdrawn_names: &BTreeSet<String>,
@@ -54,24 +45,15 @@ impl<T> LayeredCatalog<T> {
         A: CatalogAdapter<Asset = T>,
         F: FnMut(&str) -> bool,
     {
-        self.load_dir_inner(
-            dir,
-            adapter,
-            existing_name_policy,
-            include_name,
-            Some(errors),
-            withdrawn_names,
-        )
+        self.load_dir_inner(dir, adapter, include_name, Some(errors), withdrawn_names)
     }
 
     /// Load an explicit file list as one layer. Duplicate names inside the
-    /// list are rejected; names already in the catalog keep their entry when
-    /// the policy prefers existing.
+    /// list are rejected, and names already in the catalog keep their entry.
     pub(super) fn load_files<A>(
         &mut self,
         files: &[PathBuf],
         adapter: &A,
-        existing_name_policy: ExistingNamePolicy,
         withdrawn_names: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
@@ -96,13 +78,8 @@ impl<T> LayeredCatalog<T> {
             if withdrawn_names.contains(&name) {
                 continue;
             }
-            if let Some(prev) = self.sources.get(&name) {
-                match existing_name_policy {
-                    ExistingNamePolicy::Reject => {
-                        return Err(adapter.duplicate_name(name, prev.clone(), path));
-                    }
-                    ExistingNamePolicy::PreferExisting => continue,
-                }
+            if self.sources.contains_key(&name) {
+                continue;
             }
             self.sources.insert(name.clone(), path);
             self.entries.insert(name, spec);
@@ -114,7 +91,6 @@ impl<T> LayeredCatalog<T> {
         &mut self,
         dir: &Path,
         adapter: &A,
-        existing_name_policy: ExistingNamePolicy,
         mut include_name: F,
         mut parse_errors: Option<&mut Vec<CatalogError>>,
         withdrawn_names: &BTreeSet<String>,
@@ -158,13 +134,8 @@ impl<T> LayeredCatalog<T> {
             if !include_name(&name) {
                 continue;
             }
-            if let Some(prev) = self.sources.get(&name) {
-                match existing_name_policy {
-                    ExistingNamePolicy::Reject => {
-                        return Err(adapter.duplicate_name(name, prev.clone(), path));
-                    }
-                    ExistingNamePolicy::PreferExisting => continue,
-                }
+            if self.sources.contains_key(&name) {
+                continue;
             }
             self.sources.insert(name.clone(), path);
             self.entries.insert(name, spec);
@@ -190,12 +161,6 @@ pub(super) trait CatalogAdapter {
         yaml: &str,
         skipped: &mut Vec<PathBuf>,
     ) -> Result<Option<LoadedCatalogAsset<Self::Asset>>, CatalogError>;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum ExistingNamePolicy {
-    Reject,
-    PreferExisting,
 }
 
 pub(super) fn walk_dir(

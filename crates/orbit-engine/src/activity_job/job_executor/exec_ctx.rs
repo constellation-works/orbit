@@ -99,8 +99,6 @@ impl ExecCtx<'_> {
         }
         TemplateContext {
             input,
-            env: Default::default(),
-            workspace_path: None,
             item: self.item.clone(),
             iteration: self.iteration,
             steps,
