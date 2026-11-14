@@ -9,6 +9,8 @@
 // host that sends none draws those leading points hollow. The views are
 // derived here from the bucket series; chart drawing stays in metrics.js.
 
+import { el, fetchJson, getWorkspaceRevision } from './common.js';
+
 const DAY_SECONDS = 86400;
 
 export const COUNT_VIEWS = [["bucket", "Per bucket"], ["cumulative", "Cumulative"], ["day", "Per day"]];
@@ -93,10 +95,12 @@ function trailingDay(values, lead, perDay) {
   return { sums, incomplete };
 }
 
-/// A 1–2–5 axis covering `[min, max]` and zero, in about four steps.
-function axisScale(min, max) {
+/// A 1–2–5 axis covering `[min, max]` and zero, in about four steps. `floor`
+/// is the smallest top the axis may have (1 by default, so an empty chart
+/// still draws a scale).
+export function axisScale(min, max, floor = 1) {
   const low = Math.min(0, min);
-  const high = Math.max(1, max);
+  const high = Math.max(floor, max);
   const raw = (high - low) * 1.08 / 4;
   const magnitude = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw);
@@ -185,4 +189,107 @@ export function runningModel({ mode, kind, windowKey, seconds, starts, series, f
       })).reverse(),
     },
   };
+}
+
+/// The request and stale-response fence one trend shares between its own
+/// filter refetch and the full-panel refresh. `params(windowKey)` builds the
+/// endpoint's `URLSearchParams` from the trend's current filters and
+/// `accepts(payload)` says whether a reply has the shape the trend draws. A
+/// failed read, or a host whose Orbit predates the endpoint, answers
+/// `{ unavailable }` so the other trends still render. Every result carries a
+/// fence (generation, workspace/host visit revision, window and complete
+/// query) captured at request time; whichever request starts later retires
+/// the other, and `isCurrent` gates unavailable and error replies the same way.
+export function trendSource({ path, params, accepts, missingText, notYetText }) {
+  let sequence = 0;
+  const query = (windowKey) => `${path}?${params(windowKey)}`;
+  const fetchTrend = (windowKey) => {
+    const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: query(windowKey) };
+    const requested = fence.query;
+    return fetchJson(requested).then(
+      (payload) => (accepts(payload)
+        ? { ...payload, query: requested, trendFence: fence }
+        : { query: requested, unavailable: missingText, trendFence: fence }),
+      (error) => ({ query: requested, unavailable: error.status === 404 ? notYetText : error.message, trendFence: fence }),
+    );
+  };
+  /// True only when `payload` is the newest request and its visit, window and
+  /// complete query still match current state.
+  const isCurrent = (payload, windowKey) => {
+    const fence = payload && payload.trendFence;
+    if (!fence) return false;
+    return fence.generation === sequence
+      && fence.revision === getWorkspaceRevision()
+      && fence.windowKey === windowKey
+      && fence.query === query(windowKey);
+  };
+  /// Refetch after a filter change; `apply` runs only for a current request.
+  const refetch = (windowKey, apply) => {
+    fetchTrend(windowKey).then((payload) => {
+      if (isCurrent(payload, windowKey)) apply(payload);
+    });
+  };
+  return { query, fetch: fetchTrend, isCurrent, refetch };
+}
+
+export const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
+/// The complexity filter's choices, for the endpoints that take one.
+export const COMPLEXITIES = [["", "All complexities"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"], ["unassessed", "Unassessed"]];
+export const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
+const MAX_TAGS = 8;
+
+export function tasks(n) {
+  return `${n} ${n === 1 ? "task" : "tasks"}`;
+}
+
+/// The series key and label of one complexity (and tag cohort) series.
+export function seriesKey(series) {
+  return series.cohort === "all" ? series.complexity : `${series.complexity}-${series.cohort}`;
+}
+
+export function seriesLabel(series) {
+  const name = COMPLEXITY_LABELS[series.complexity] || series.complexity;
+  if (series.cohort === "with") return `${name} · with tag`;
+  if (series.cohort === "without") return `${name} · without`;
+  return name;
+}
+
+/// "1.24M", "860k", "412": a count or byte total in compact units.
+export function fmtCompactTotal(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const n = Number(value);
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return String(Math.round(n));
+}
+
+export function option(value, text, selected) {
+  const node = el("option", { text });
+  node.value = value;
+  node.selected = selected;
+  return node;
+}
+
+/// The "Compare a tag" picker with a removable chip per chosen tag, up to
+/// eight. `tags` are the chosen tags, `offered` the payload's
+/// `available_tags` and `apply({ tags })` stores a new choice.
+export function tagPicker({ tags, offered, apply }) {
+  const atTagLimit = tags.length >= MAX_TAGS;
+  const available = atTagLimit ? [] : (offered || []).filter((entry) => !tags.includes(entry.tag));
+  const picker = el("select", { class: "mx-select", "aria-label": "Compare a tag" }, [
+    option("", atTagLimit ? `Maximum of ${MAX_TAGS} tags selected` : tags.length ? "Add a tag…" : "Compare a tag…", true),
+    ...available.map((entry) => option(entry.tag, `${entry.tag} (${entry.tasks})`, false)),
+  ]);
+  picker.addEventListener("change", () => {
+    if (picker.value && tags.length < MAX_TAGS && available.some((entry) => entry.tag === picker.value)) {
+      apply({ tags: [...tags, picker.value].sort() });
+    }
+  });
+  const chips = tags.map((tag) => {
+    const chip = el("button", { class: "mx-chip", type: "button", title: `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
+    chip.addEventListener("click", () => apply({ tags: tags.filter((other) => other !== tag) }));
+    return chip;
+  });
+  return el("div", { class: "mx-tags", role: "group", "aria-label": "Tag cohorts" }, [picker, ...chips]);
 }
