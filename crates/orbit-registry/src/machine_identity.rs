@@ -15,30 +15,21 @@
 //! with an actionable message — there is no silent fallback to the OS hostname
 //! and no regeneration. A `machine.task_prefix` that contradicts the ids the
 //! local task store has already minted fails closed there, at the allocator.
-//!
-//! One release of compatibility: a pre-ORB-12725 `~/.orbit/host.toml` is
-//! folded into `[machine]` on first load and the file is removed.
 
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_common::fs::open_read_only_no_follow;
 use orbit_config::{ConfigScope, ConfigStore, load_machine_settings};
-use orbit_types::identity::{
-    LEGACY_TASK_PREFIX, MACHINE_ID_PREFIX, validate_machine_id, validate_machine_name,
-    validate_new_task_prefix,
-};
-use serde::Deserialize;
+use orbit_types::identity::{MACHINE_ID_PREFIX, validate_machine_name, validate_new_task_prefix};
 
 /// The global `config.toml` this machine's `[machine]` table lives in.
 pub const CONFIG_TOML_FILE: &str = "config.toml";
-/// Pre-ORB-12725 identity file, read once and removed by [`migrate_host_toml`].
-pub const LEGACY_HOST_TOML_FILE: &str = "host.toml";
+/// Pre-ORB-12725 identity file, kept only to name it in the refusal when it
+/// is the sole identity source.
+const LEGACY_HOST_TOML_FILE: &str = "host.toml";
 
 /// This machine's identity, as admitted from the global `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,8 +75,6 @@ impl MachineIdentityState {
 pub enum MachineIdentityOutcome {
     /// A fresh identity was created from operator input.
     Created(MachineIdentity),
-    /// A pre-ORB-12725 `host.toml` was folded into `[machine]`.
-    Migrated(MachineIdentity),
     /// A complete identity already existed; nothing was written.
     Unchanged(MachineIdentity),
 }
@@ -95,7 +84,6 @@ impl MachineIdentityOutcome {
     pub fn identity(&self) -> &MachineIdentity {
         match self {
             MachineIdentityOutcome::Created(identity)
-            | MachineIdentityOutcome::Migrated(identity)
             | MachineIdentityOutcome::Unchanged(identity) => identity,
         }
     }
@@ -114,21 +102,29 @@ fn config_path(global_root: &Path) -> PathBuf {
     global_root.join(CONFIG_TOML_FILE)
 }
 
-fn host_toml_path(global_root: &Path) -> PathBuf {
-    global_root.join(LEGACY_HOST_TOML_FILE)
+/// Whether a legacy `host.toml` exists under `global_root`, probed with a
+/// no-follow metadata call only; its contents are never parsed.
+fn legacy_host_toml_exists(global_root: &Path) -> Result<bool, OrbitError> {
+    let path = global_root.join(LEGACY_HOST_TOML_FILE);
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to inspect legacy host identity '{}': {error}",
+            path.display()
+        ))),
+    }
 }
 
 /// Classify this machine's identity without changing it.
 ///
-/// Folds a legacy `host.toml` into `[machine]` first (see
-/// [`migrate_host_toml`]), then reads the admitted global config snapshot. A
+/// Reads the admitted global config snapshot's `[machine]` table only. A
 /// partial or invalid table propagates as the loader's own actionable error.
-///
-/// When the migration cannot persist — a read-only root, a sandboxed reader —
-/// the legacy identity is still returned from memory. Resolving who this
-/// machine is is a read; it must not depend on being able to write.
+/// When `[machine]` is absent and a legacy `host.toml` exists, this refuses
+/// naming both files with the manual repair, rather than letting a later
+/// `orbit init` mint a new identity and orphan ids already minted under the
+/// legacy one. When `[machine]` is present, a leftover `host.toml` is ignored.
 pub fn inspect_machine_identity(global_root: &Path) -> Result<MachineIdentityState, OrbitError> {
-    let legacy = migrate_host_toml(global_root)?;
     // Admission already refuses a partial table, so all three arrive together.
     match load_machine_settings(global_root)?.complete() {
         Some((id, name, task_prefix)) => Ok(MachineIdentityState::Present(MachineIdentity {
@@ -136,10 +132,25 @@ pub fn inspect_machine_identity(global_root: &Path) -> Result<MachineIdentitySta
             name,
             task_prefix,
         })),
-        None => Ok(match legacy {
-            Some(identity) => MachineIdentityState::Present(identity),
-            None => MachineIdentityState::Absent,
-        }),
+        None => {
+            if legacy_host_toml_exists(global_root)? {
+                let host_path = global_root.join(LEGACY_HOST_TOML_FILE);
+                let config = config_path(global_root);
+                return Err(OrbitError::InvalidInput(format!(
+                    "'{}' holds this machine's identity but '{}' has no [machine] table; \
+                     Orbit no longer migrates host.toml automatically. Copy machine_id as \
+                     [machine] id, host_id as machine.name, and task_prefix as \
+                     machine.task_prefix from '{}' into the [machine] table in '{}' by hand, \
+                     then delete '{}'",
+                    host_path.display(),
+                    config.display(),
+                    host_path.display(),
+                    config.display(),
+                    host_path.display(),
+                )));
+            }
+            Ok(MachineIdentityState::Absent)
+        }
     }
 }
 
@@ -161,8 +172,7 @@ pub fn load_machine_identity(global_root: &Path) -> Result<MachineIdentity, Orbi
 /// invoked **only** when the identity is absent, so callers can defer
 /// prompting until a fresh create is actually required.
 ///
-/// Idempotent: a present identity is returned `Unchanged` with no write, and a
-/// migrated `host.toml` is reported as `Migrated`.
+/// Idempotent: a present identity is returned `Unchanged` with no write.
 ///
 /// Concurrent callers on the same root are serialised with an exclusive lock on
 /// the global `config.toml`. Classification runs after the lock is held, so a
@@ -173,13 +183,8 @@ pub fn ensure_machine_identity(
     new: impl FnOnce() -> Result<NewMachineIdentity, OrbitError>,
 ) -> Result<MachineIdentityOutcome, OrbitError> {
     with_exclusive_file_lock(&config_path(global_root), "machine identity", move || {
-        let migrated = migrate_host_toml(global_root)?.is_some();
         if let MachineIdentityState::Present(identity) = inspect_machine_identity(global_root)? {
-            return Ok(if migrated {
-                MachineIdentityOutcome::Migrated(identity)
-            } else {
-                MachineIdentityOutcome::Unchanged(identity)
-            });
+            return Ok(MachineIdentityOutcome::Unchanged(identity));
         }
         let NewMachineIdentity { name, task_prefix } = new()?;
         let name = name.trim().to_string();
@@ -219,255 +224,6 @@ fn write_machine_identity(
     })
 }
 
-/// Fold a pre-ORB-12725 `~/.orbit/host.toml` into `[machine]`, then remove it.
-///
-/// Returns whether a migration was performed. Absent `host.toml` is the
-/// steady state and costs one metadata call. A `host.toml` that disagrees with
-/// an existing `[machine]` table is refused naming both files: the two are
-/// different answers to "who is this machine", and picking one silently would
-/// either orphan the ids minted under the other or rewrite an identity the
-/// operator never asked to change.
-pub fn migrate_host_toml(global_root: &Path) -> Result<Option<MachineIdentity>, OrbitError> {
-    let Some(legacy) = read_host_toml(global_root)? else {
-        return Ok(None);
-    };
-    let config_path = config_path(global_root);
-    let host_path = host_toml_path(global_root);
-
-    if let Some((id, name, task_prefix)) = load_machine_settings(global_root)?.complete() {
-        let current = MachineIdentity {
-            id,
-            name,
-            task_prefix,
-        };
-        if current == legacy {
-            remove_host_toml(global_root);
-            return Ok(None);
-        }
-        return Err(OrbitError::InvalidInput(format!(
-            "'{}' and '{}' name different machines: host.toml says id={}, name=\"{}\", \
-             task_prefix={}; config.toml says id={}, name=\"{}\", task_prefix={}. \
-             Reconcile them by hand — delete the stale file — before running Orbit again",
-            host_path.display(),
-            config_path.display(),
-            legacy.id,
-            legacy.name,
-            legacy.task_prefix,
-            current.id,
-            current.name,
-            current.task_prefix,
-        )));
-    }
-
-    // The write is the optimization, not the answer: a read-only or sandboxed
-    // root still resolves the legacy identity from memory and tries again on a
-    // later writable open.
-    match write_machine_identity(global_root, &legacy) {
-        Ok(()) => {
-            remove_host_toml(global_root);
-            tracing::info!(
-                machine_id = %legacy.id,
-                machine_name = %legacy.name,
-                config = %config_path.display(),
-                "migrated host.toml into the [machine] table and removed it"
-            );
-        }
-        Err(error) => tracing::warn!(
-            %error,
-            config = %config_path.display(),
-            "could not fold host.toml into the [machine] table; \
-             using the legacy identity for this process"
-        ),
-    }
-    Ok(Some(legacy))
-}
-
-/// Best-effort removal of the migrated file. A root Orbit can read but not
-/// write keeps its `host.toml`; the next writable open retires it.
-fn remove_host_toml(global_root: &Path) {
-    let path = match validated_host_toml_path(global_root) {
-        Ok(Some(path)) => path,
-        Ok(None) => return,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                root = %global_root.display(),
-                "could not validate host.toml path for removal"
-            );
-            return;
-        }
-    };
-    if let Err(error) = std::fs::remove_file(&path)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(
-            %error,
-            path = %path.display(),
-            "could not remove the migrated host.toml"
-        );
-    }
-}
-
-/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
-/// on the receiver. Call this after reconstructing `host.toml` so later
-/// filesystem sinks only see a prefix-checked value.
-fn host_toml_path_is_contained(path: &Path, parent: &Path) -> bool {
-    path.starts_with(parent)
-}
-
-/// Reconstruct the legacy identity file under a validated existing global root
-/// before any remove sink.
-fn validated_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
-    let Some(canonical_root) = validated_existing_global_root(global_root)? else {
-        return Ok(None);
-    };
-    let candidate = canonical_root.join(LEGACY_HOST_TOML_FILE);
-    if !host_toml_path_is_contained(&candidate, &canonical_root) {
-        return Err(OrbitError::InvalidInput(format!(
-            "legacy host identity path escapes its parent: {}",
-            candidate.display()
-        )));
-    }
-    Ok(Some(candidate))
-}
-
-#[derive(Debug, Deserialize)]
-struct RawHostToml {
-    machine_id: Option<String>,
-    /// The legacy file's own key for what is now `machine.name`.
-    #[serde(rename = "host_id")]
-    machine_name: Option<String>,
-    task_prefix: Option<String>,
-}
-
-/// Read and validate a legacy `host.toml`, if one exists.
-///
-/// Every shipped on-disk shape is accepted: the oldest host-id-only file has
-/// no `machine_id` and receives one here, and a v1 file has no `task_prefix`
-/// and keeps the historical `ORB` namespace, exactly as the pre-ORB-12725
-/// in-place migration did.
-fn read_host_toml(global_root: &Path) -> Result<Option<MachineIdentity>, OrbitError> {
-    let Some((path, mut file)) = open_existing_host_toml(global_root)? else {
-        return Ok(None);
-    };
-    let mut raw_text = String::new();
-    file.read_to_string(&mut raw_text)
-        .map_err(|error| OrbitError::Io(format!("failed to read '{}': {error}", path.display())))?;
-    let parsed: RawHostToml = toml::from_str(&raw_text).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid legacy host identity '{}': {error}",
-            path.display()
-        ))
-    })?;
-
-    let name = non_blank(&parsed.machine_name).ok_or_else(|| {
-        OrbitError::InvalidInput(format!(
-            "legacy host identity '{}' is incomplete: missing or blank host_id; \
-             delete it and run `orbit init`",
-            path.display()
-        ))
-    })?;
-    validate_machine_name(&name).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "legacy host identity '{}' has invalid host_id: {error}",
-            path.display()
-        ))
-    })?;
-    let id = match non_blank(&parsed.machine_id) {
-        Some(machine_id) => {
-            validate_machine_id(&machine_id).map_err(|error| {
-                OrbitError::InvalidInput(format!(
-                    "legacy host identity '{}' has invalid machine_id: {error}",
-                    path.display()
-                ))
-            })?;
-            machine_id
-        }
-        None => generate_machine_id(),
-    };
-    let task_prefix = match non_blank(&parsed.task_prefix) {
-        Some(task_prefix) => task_prefix,
-        None => LEGACY_TASK_PREFIX.to_string(),
-    };
-    Ok(Some(MachineIdentity {
-        id,
-        name,
-        task_prefix,
-    }))
-}
-
-/// Resolve an existing global root to the directory selected by the caller.
-///
-/// Runtime overrides and configured aliases are supported: an existing
-/// symlinked root resolves to its canonical target. Returning the validated
-/// directory before deriving the fixed filename keeps path validation ahead of
-/// every metadata and open sink for `host.toml`.
-fn validated_existing_global_root(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
-    match global_root.canonicalize() {
-        Ok(path) => Ok(Some(path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(OrbitError::Io(format!(
-            "failed to canonicalize machine identity directory '{}': {error}",
-            global_root.display()
-        ))),
-    }
-}
-
-/// Open the fixed legacy identity file beneath the validated root without
-/// following a swapped final symlink.
-///
-/// Unix uses `O_NOFOLLOW | O_NONBLOCK`; Windows opens the reparse point itself.
-/// The descriptor is checked for a regular file before any bytes are read.
-/// Platforms without either primitive still perform both pathname and
-/// descriptor type checks, but cannot close a final-component check/open race.
-fn open_existing_host_toml(global_root: &Path) -> Result<Option<(PathBuf, File)>, OrbitError> {
-    let Some(canonical_root) = validated_existing_global_root(global_root)? else {
-        return Ok(None);
-    };
-    let path = canonical_root.join(LEGACY_HOST_TOML_FILE);
-
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            Err(OrbitError::InvalidInput(format!(
-                "legacy host identity path must be a regular {LEGACY_HOST_TOML_FILE} file inside \
-                 '{}': {}",
-                global_root.display(),
-                path.display()
-            )))
-        }
-        Ok(_) => {
-            let file = open_read_only_no_follow(&path).map_err(|error| {
-                OrbitError::Io(format!("failed to open '{}': {error}", path.display()))
-            })?;
-            let metadata = file.metadata().map_err(|error| {
-                OrbitError::Io(format!("failed to inspect '{}': {error}", path.display()))
-            })?;
-            if !metadata.is_file() {
-                return Err(OrbitError::InvalidInput(format!(
-                    "legacy host identity path must open as a regular {LEGACY_HOST_TOML_FILE} \
-                     file inside '{}': {}",
-                    global_root.display(),
-                    path.display()
-                )));
-            }
-            Ok(Some((path, file)))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(OrbitError::Io(format!(
-            "failed to inspect legacy host identity '{}': {error}",
-            path.display()
-        ))),
-    }
-}
-
-fn non_blank(value: &Option<String>) -> Option<String> {
-    value
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 /// Best-effort OS hostname, used as the interactive default machine name at
 /// init. `None` when the hostname is unavailable or empty.
 pub fn os_hostname() -> Option<String> {
@@ -480,7 +236,7 @@ pub fn os_hostname() -> Option<String> {
 static MACHINE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Generate an opaque, stable `hm_<hex>` machine id. Called exactly once per
-/// machine (at create / migrate); the persisted value is never regenerated.
+/// machine (at create); the persisted value is never regenerated.
 fn generate_machine_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

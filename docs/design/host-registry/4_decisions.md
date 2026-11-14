@@ -163,12 +163,12 @@ name is already gone [ORB-12236], and the identity has been `machine_id`
 - `orbit host` is deleted. `orbit host show` is `orbit config show` (or
   `orbit config get machine.id`); `orbit host rename` is
   `orbit config set --global machine.name`.
-- **Migration, one release.** On load, a `host.toml` beside the global config
-  is folded into `[machine]` and removed, preserving the recorded `machine_id`
-  and namespace. A `host.toml` that disagrees with an existing `[machine]`
-  table is refused naming both paths rather than picking a winner: they are two
-  different answers to "who is this machine", and either choice orphans the ids
-  minted under the other.
+- **Migration, one release (retired).** For one release, a `host.toml` beside
+  the global config was folded into `[machine]` and removed. That migration is
+  now retired: a `host.toml` left as the only identity source is refused naming
+  both files, with the manual repair (copy `machine_id`, `host_id` as
+  `machine.name`, and `task_prefix` into `[machine]`, then delete `host.toml`),
+  and a `host.toml` beside an existing `[machine]` table is ignored.
 
 Two spellings of *host* survive on purpose, because they are not Orbit's
 vocabulary to change: the `hosts` / `host_aliases` tables inside shipped SQLite

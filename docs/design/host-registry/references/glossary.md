@@ -18,7 +18,7 @@ related_artifacts: [ORB-14448, ORB-14449]
 
 | Term | Current meaning |
 |---|---|
-| Machine identity | The [machine] table in ~/.orbit/config.toml: id, name and task_prefix. A valid legacy ~/.orbit/host.toml is folded into it and retired. |
+| Machine identity | The [machine] table in ~/.orbit/config.toml: id, name and task_prefix. A legacy ~/.orbit/host.toml left as the only identity source is refused with the manual repair; beside an existing [machine] table it is ignored. |
 | machine_id | Generated, stable hm_-namespaced logical machine identifier; not an IP address, SSH target, path or credential. A forwarded label using it is audit metadata. |
 | machine.name | Changeable human display name for the local machine, set through global config |
 | machine.task_prefix | Immutable machine-local namespace projected into task allocation |

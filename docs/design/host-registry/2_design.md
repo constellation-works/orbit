@@ -23,18 +23,18 @@ The live implementation has five layers.
 | Layer | Owns | Must not own |
 |---|---|---|
 | orbit-types | Workspace identity DTOs, machine/workspace identifier validation, lifecycle enums and schema constants | Files, runtime construction, transport |
-| orbit-registry | Machine identity lifecycle and legacy host.toml migration; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation and atomic writes | CLI orchestration, MCP framing, Core execution |
+| orbit-registry | Machine identity lifecycle; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation and atomic writes | CLI orchestration, MCP framing, Core execution |
 | orbit-config | Global machine settings schema and config.toml I/O | Workspace catalog persistence and runtime composition |
 | orbit-cmd | Registry-aware selection and Core runtime construction; the `orbit host` operations, which join the host file to the federated identity probe | Registry schemas or persistence |
 | CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
 
-MachineIdentity and the one-release host.toml migration live in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
+MachineIdentity lives in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
-Registry loads that need migration re-read `workspaces.json` while holding
+Registry loads that need canonicalization re-read `workspaces.json` while holding
 `with_registry_lock` before persisting it. This preserves registrations written
-after the initial read. Loads that need no migration remain lock-free; callers that
+after the initial read. Loads that need no canonicalization remain lock-free; callers that
 already hold the re-entrant registry lock can keep it across their complete
-read-modify-write operation. Read-only loaders never persist migration.
+read-modify-write operation. Read-only loaders never persist canonicalization.
 
 ## 2. Machine identity
 
@@ -52,11 +52,11 @@ The current file is:
 - machine.task_prefix is chosen once for task allocation. Fresh values are two to five uppercase ASCII letters and cannot use reserved artifact namespaces. Existing migrated installations may retain ORB.
 - The [machine] table has no machine mode. Topology is not a persisted identity decision.
 
-orbit init is the creation and migration surface. A fresh non-interactive initialization requires both machine name and task prefix. Repeated initialization without `--force` returns the existing identity without rewriting it.
+orbit init is the creation surface. A fresh non-interactive initialization requires both machine name and task prefix. Repeated initialization without `--force` returns the existing identity without rewriting it.
 
-The legacy ~/.orbit/host.toml file is folded into the [machine] table in ~/.orbit/config.toml, then removed when the write succeeds. Its host_id becomes machine.name; a missing machine_id is generated, and a missing task_prefix becomes the legacy ORB namespace. If host.toml disagrees with an existing [machine] table, loading fails and asks the operator to reconcile the files rather than choosing one.
+A legacy ~/.orbit/host.toml left as the only identity source is refused naming both files, telling the operator to copy `machine_id` as `[machine] id`, `host_id` as `machine.name` and `task_prefix` as `machine.task_prefix` into ~/.orbit/config.toml by hand and delete `host.toml`. When an existing [machine] table is present, a leftover host.toml is ignored.
 
-Strict consumers call load_machine_identity. An absent identity, or a malformed or incomplete [machine] table, is an error rather than a hostname fallback. inspect_machine_identity exposes an absent identity for bootstrap callers and attempts the legacy host.toml migration. MCP identity presentation is intentionally more tolerant: an absent local identity may be represented for audit as host/local, but that fallback is not persisted. A valid legacy identity is used from memory if the migration cannot write.
+Strict consumers call load_machine_identity. An absent identity, or a malformed or incomplete [machine] table, is an error rather than a hostname fallback. inspect_machine_identity exposes an absent identity for bootstrap callers, except that a sole legacy host.toml is refused as above rather than migrated. MCP identity presentation is intentionally more tolerant: an absent local identity may be represented for audit as host/local, but that fallback is not persisted.
 
 ### Display-name changes
 
@@ -101,11 +101,11 @@ An identity-bearing machine must use explicit ownership data:
 
 Installations without host identity retain a narrow standalone compatibility path: a missing checkout role may canonicalize to owner. Once host identity exists, missing or contradictory roles fail closed, and so does a replica whose logical owner is missing; an owner checkout with no logical owner has it canonicalized to the local `machine_id`.
 
-### Parsing, migration and writes
+### Parsing and writes
 
 - A missing workspaces.json loads as an empty schema-v1 registry.
 - Malformed JSON, unknown fields, invalid role tokens, duplicate identities, broken checkout references, contradictions and unsupported future schemas fail without rewriting the file.
-- An unversioned legacy catalog can be split into logical workspaces and local checkouts and written back atomically when its role is unambiguous. Identity-bearing legacy data with no explicit checkout role is rejected rather than guessed. A legacy owner_host_ids key is accepted and dropped during the current compatibility release.
+- An unversioned (pre-path-free) catalog is refused by name and left unchanged; rebuild it by re-running `orbit workspace init` in each checkout. A legacy owner_host_ids key is accepted and dropped during the current compatibility release.
 - Successful saves validate a clone, serialize canonical JSON, and use atomic replacement. Rejected mutations leave the prior file intact.
 - Canonicalization sorts and deduplicates path overrides.
 
@@ -174,11 +174,11 @@ Older databases may retain tables and migration records from the removed fleet-r
 | Condition | Result |
 |---|---|
 | [machine] absent on strict path | Actionable initialization error |
-| legacy host.toml is valid and config has no identity | Fold into [machine] and remove the legacy file when writable |
-| legacy host.toml disagrees with [machine] | Error asking for manual reconciliation |
+| legacy host.toml present and config has no identity | Error naming both files with the manual repair; file left unchanged |
+| legacy host.toml present beside [machine] | Ignored; [machine] wins |
 | [machine] malformed or incomplete | Error; no hostname fallback |
 | workspaces.json absent | Empty registry |
-| workspaces.json malformed, contradictory or future | Error; original bytes retained |
+| workspaces.json malformed, contradictory, future or pre-path-free (no schema_version) | Error; original bytes retained |
 | selector unknown, ambiguous, inactive or checkoutless | Runtime construction refused |
 | task prefix conflicts after allocation | Runtime construction refused |
 | hosts.toml malformed, unknown key, future schema or duplicate name/id/prefix | Every consumer refuses; original bytes retained |
