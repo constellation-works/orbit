@@ -8,21 +8,24 @@
 
 use std::collections::HashMap;
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::OrbitRuntime;
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// Complexities `done` reports on its own; the rest add up to `other`.
 const DONE_SERIES: [&str; 3] = ["low", "medium", "hard"];
 
 pub(in crate::api) async fn diagnostics_completions(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
@@ -30,13 +33,17 @@ pub(in crate::api) async fn diagnostics_completions(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("completion trend", move || {
-        completion_trend(&runtime, &range)
-    })
-    .await
+    let key = ("completions".to_string(), range.key.clone());
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            completion_trend(&compute_runtime, &range)
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 
