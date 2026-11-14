@@ -509,22 +509,16 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   selects is in exactly one partition, every partition selects at least one
   test (except for an [affected-crates archive](#pr-test-selection)), and no
   partition selects a test outside the full list. A failure fails
-  `Test build`, and so the Check job's wait, while the shards already run.
+  `Test build`, and so every test job's first step and the Check job's wait.
   Doctests are disabled workspace-wide (`[lib] doctest = false`), so the
   build job runs no doctest step; `scripts/check-doctest-fences.sh` (in the
   guard pool) fails a runnable fence instead. Cargo unit timings from the
   folded compile (`--timings`) are uploaded as `test-build-timings`,
   including when a later step fails. This separates compilation critical
-  paths from filter listing and archive time. The shards continue to await the final upload and the listing of every
-  archive part, so neither this check nor the partition proof delays their
-  start.
-- `Test shard k/N` jobs, one per shard, start beside the build and set up
-  their runner. Each waits through
-  [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
-  last `Upload nextest archive part N/N` step rather than the whole job, and
-  passes `--artifact` for every `nextest-archive-k` part. The wait returns
-  only once that step has succeeded and the artifacts API lists every part
-  unexpired and non-empty. The job then downloads every part at once (one
+  paths from filter listing and archive time. Each test job needs the whole
+  `Test build` job, so it starts only once that job has finished, including
+  its post-upload partition proof.
+- `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including its post-upload partition proof. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
   stream per artifact; a single stream ran at 3–10 MB/s on some runners),
   in at most three download attempts. The first two attempts continue on
   error; the third fails the job, so nextest does not run without the
@@ -536,9 +530,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
   run the same steps on nine more test runners, selecting partitions 5, 2 and
   6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
-  They prepare during compilation and start after the final upload.
-  Partition 2 no longer waits for the build runner's coverage proof
-  and tool setup. None of them is a `Test shard k/N` job, so
+  They start after the whole build job has finished, including the post-upload partition proof. None of them is a `Test shard k/N` job, so
   `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
   awaits them like shards. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
@@ -548,10 +540,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   default local profile keeps its ordinary order. See the
   [timing notes](design-patterns/test_strategy.md#quality-and-the-400-second-budget)
   before interpreting a local replay as hosted budget evidence.
-  A build that fails before the upload fails the wait at once. A `Test build`
-  job that is absent from a complete jobs listing also fails the wait at once
-  (`ci-await: Test build is absent from the run`) instead of waiting out the
-  timeout.
+  A build that did not succeed fails each test job in that first step at once instead of running nextest.
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
   the destination, and corrupt input, a missing part, missing zstd or encoder
@@ -618,59 +607,44 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   400-second budget measures, and its
   conclusion is the gate's result. The wait prints one
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
-  job. A shard's wait prints `ci-await: Test build step 'Upload nextest
-  archive part N/N' succeeded started=...`, then
-  `ci-await: all 1 awaited jobs succeeded or passed step '...' with archive parts ...`
-  once every part is listed.
+  job. The Check job still awaits the build, every test job and both
+  guardrails jobs.
   `--timeout-seconds` (default 2400) is one absolute budget for the whole
-  wait, for the Check job and each shard's upload wait alike: every `gh api`
+  Check wait: every `gh api`
   listing runs under the remaining budget, the poll sleep is clipped to it, and a
   listing still running at expiry is killed and reaped. A blocked listing
   therefore ends the wait at the timeout plus at most 5 s of cleanup, with a
   `timed out` diagnostic naming the unavailable listing or the jobs still
   pending. A listing that arrives after expiry is never accepted as success,
-  even when every awaited job succeeded. Failed, skipped or cancelled jobs and
-  steps still fail the wait at once. A named job missing from a complete
+  even when every awaited job succeeded. Failed, skipped or cancelled jobs
+  still fail the wait at once. A named job missing from a complete
   listing fails at once with `ci-await: <job> is absent from the run` (several
   names use `are`) instead of waiting out the timeout. An incomplete listing
   or an API error is not absence: it is retried within the remaining budget.
-  After the awaited step or job has succeeded, a wait that passed `--artifact`
-  stays pending until each named artifact is listed, unexpired and non-empty,
-  or the same timeout expires naming the missing parts. Transient API errors
-  are retried within the remaining budget.
+  Transient API errors are retried within the remaining budget.
   For a single-page job-listing response with an ETag, the job wait issues
   authenticated conditional requests every three seconds. An unchanged
   `304 Not Modified` reuses the last complete listing and consumes no primary
   GitHub API quota
   ([GitHub conditional requests](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)).
-  This shortens the two detection delays between upload, shard execution and
-  the final Check result. A changed response still checks every named job and
-  step. Missing ETags, API errors, fewer than 100 remaining primary requests,
+  This shortens the detection delay between the test jobs and
+  the final Check result. A changed response still checks every named job.
+  Missing ETags, API errors, fewer than 100 remaining primary requests,
   or a paginated job listing use the fallback interval, `--poll-seconds`
-  (default 15 seconds). The artifact listing has no ETag fast path: every
-  artifact request is an unconditional GET that consumes primary quota, so
-  while a part is missing, when the artifact listing is paginated (one request
-  per page per cycle), on API errors, or with fewer than 100 remaining primary
-  requests it uses the same fallback interval. A first-page ETag never stands
+  (default 15 seconds). A first-page ETag never stands
   in for later pages: those runs use the full paginated listing. Server
   `X-Poll-Interval`, `Retry-After` and, once the primary quota is exhausted,
-  `X-RateLimit-Reset` minimums raise both intervals (job and artifact). A 403
+  `X-RateLimit-Reset` minimums raise the job interval. A 403
   or 429 without `Retry-After` also sets a 60-second minimum on single-page and
-  paginated listings alike, jobs and artifacts, so its interval is at least 60
-  seconds. The artifact listing applies the same minimums to every page it
-  reads, including a page that failed or was throttled, so a throttled artifact
-  request is not repeated before its `Retry-After` has passed. The absolute
-  deadline applies to both intervals. Each wait prints
+  paginated job listings alike, so its interval is at least 60
+  seconds. The absolute
+  deadline applies to the job interval. The wait prints
   `ci-await-api: listings=... not_modified=... paginated=...` for the hosted
-  phase and quota readout. The listing count includes artifact-listing calls
-  made after the awaited jobs are ready. Across four waits, a three-second cadence makes at
+  phase and quota readout. A three-second cadence makes at
   most 80 job-listing calls per minute before API latency, below the secondary
   [REST limit of 900 points per minute](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits) for these GET requests; other repository
   traffic shares the limits, and changed responses still consume primary
-  quota. Artifact polls add unconditional primary-quota cost on top: while parts
-  are missing each wait issues one artifact GET per page per cycle at the
-  fallback interval (eight calls per 15 s across eight waits, sixteen per cycle when
-  paginated to two pages). Check those counters and response fallback behavior on candidate
+  quota. Check those counters and response fallback behavior on candidate
   hosted jobs instead of assuming every poll is free.
 
 Locally, `make ci` keeps the single-process full mode: the folded build, then
@@ -730,8 +704,8 @@ These are wall seconds at Bash's one-second resolution with
 the original command exit status. They let bounded hosted excerpts retain build/check costs
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
-The Rust build caches in `ci.yml` are the `Swatinem/rust-cache` dependency
-archives, one each for `Test build`, the Check job and the MSRV job. They hold
+The Rust build caches are the `Swatinem/rust-cache` dependency
+archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV entry saved by `msrv.yml` push runs (same key). They hold
 dependency artifacts only; every run compiles the workspace members from its
 checkout. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
 pull request restores the base branch's entries and never writes one: only a
@@ -766,7 +740,7 @@ Cargo metadata cannot see a test reading another crate's files. The ones that ma
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in nearly every selection, and its dev-dependencies name the features only other crates' tests enable (`tokio`'s `test-util`, `rusqlite`'s `hooks`, the `test-support` of `orbit-exec` and `orbit-mcp`), so it normally needs no anchor: an anchor compiles its unit-test harness, which no target flag excludes. A new gap adds an anchor at that compile cost, and the build's reason line names it. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The archive holds the build set's tests, but every partition (the shards and the nine additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation, the repository guards and the MSRV check stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait.
+The archive holds the build set's tests, but every partition (the shards and the nine additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation and the repository guards stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait. The MSRV check is no longer part of pull-request runs; it runs push-only in `.github/workflows/msrv.yml`.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 
@@ -1196,7 +1170,7 @@ Letting `cargo` or a rustup proxy auto-install into a workspace `RUSTUP_HOME` us
 
 ## Toolchain (MSRV)
 
-- **MSRV:** `rust-version` in `[workspace.package]` of the root `Cargo.toml`, checked with `cargo check --workspace --locked` by the `msrv` job in `.github/workflows/ci.yml` and by `make ci-fast`. Keep the Makefile's `MSRV` and the workflow's `MSRV` variable equal to it.
+- **MSRV:** `rust-version` in `[workspace.package]` of the root `Cargo.toml`, checked with `cargo check --workspace --locked` by the `msrv` job in `.github/workflows/msrv.yml` (push to `agent-main` only; it no longer runs on pull requests) and by `make ci-fast`. Keep the `MSRV` variables in `msrv.yml` and the Makefile equal to it.
 - **Pinned toolchain:** [`rust-toolchain.toml`](../rust-toolchain.toml); every non-MSRV CI step that installs Rust repeats its version.
 
 Bump the pinned toolchain in one PR: the toolchain file and those CI steps together, plus fixes for new compiler or Clippy diagnostics, with `make ci-fast` and `make ci-lint` passing on the new version. Leave the `msrv` job on the declared minimum. If a change needs a newer compiler or a dependency raises the MSRV, update `rust-version` and both `MSRV` variables in that same PR.
