@@ -9,6 +9,8 @@ mod leases;
 pub(crate) mod notices;
 mod reservations;
 mod rows;
+#[cfg(test)]
+mod tests;
 mod workspace_claim;
 
 pub(super) use rows::reserve_files_in_tx;

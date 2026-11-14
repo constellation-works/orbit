@@ -185,3 +185,28 @@ pub(super) fn apply_task_reservation_lease_queue(conn: &Connection) -> Result<()
     add_column_if_missing(conn, "task_reservations", "queued_at", "TEXT")?;
     add_column_if_missing(conn, "task_reservations", "queue_kind", "TEXT")
 }
+
+/// Partial indexes over unreleased reservation rows.
+///
+/// Active lock, lease and claim reads filter `released_at IS NULL` and then
+/// either `expires_at > now` or `expires_at <= now`. The unfiltered expires
+/// indexes include every released row, so the expiry sweep range-scans the
+/// history this table never deletes. These indexes hold only unreleased rows.
+/// Index-only and additive: an older binary keeps reading and writing the
+/// table, and SQLite maintains the indexes for it.
+pub(super) fn apply_task_reservation_unreleased_expires_indexes(
+    conn: &Connection,
+) -> Result<(), OrbitError> {
+    if !super::introspect::table_exists(conn, "task_reservations")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_id_expires_unreleased
+         ON task_reservations(workspace_id, expires_at)
+         WHERE released_at IS NULL;
+         CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_expires_unreleased
+         ON task_reservations(workspace_orbit_dir, expires_at)
+         WHERE released_at IS NULL;",
+    )
+    .map_err(sqlite_store_error)
+}
