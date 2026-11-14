@@ -3119,6 +3119,90 @@ class ScriptFailClosedTests(unittest.TestCase):
                     self.assertFalse(marker.exists(), "derived a path before rejecting HOME")
 
 
+class DoctestFenceGuardTests(unittest.TestCase):
+    """Script boundary for runnable fences in line and block doc comments."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="doctest-fences-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        guard = self.root / "scripts" / "check-doctest-fences.sh"
+        guard.parent.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-doctest-fences.sh", guard)
+        self.guard = guard
+        self.source = self.root / "crates" / "probe" / "src" / "lib.rs"
+        self.source.parent.mkdir(parents=True)
+
+    def run_guard(self, source):
+        self.source.write_text(source)
+        return subprocess.run(["/bin/bash", str(self.guard)], text=True, capture_output=True)
+
+    def assert_fence_at(self, source, line):
+        result = self.run_guard(source)
+        diagnostic = f"crates/probe/src/lib.rs:{line}:"
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.count(diagnostic), 1, result.stderr)
+        self.assertIn("runnable Rust doc fence", result.stderr)
+        self.assertEqual(result.stdout, "")
+        return result
+
+    def assert_clean(self, source):
+        result = self.run_guard(source + "pub fn value() {}\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "check-doctest-fences: no runnable Rust doc fences\n")
+        self.assertEqual(result.stderr, "")
+
+    def test_block_doc_runnable_rust_fences_report_path_and_line(self):
+        # The observed false negative: a block doc rustdoc runs and the guard missed.
+        cases = {
+            "outer": "/**\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn value() {}\n",
+            "inner": "/*!\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn value() {}\n",
+            "starred-outer": "/**\n * ```rust\n * assert_eq!(1, 2);\n * ```\n */\npub fn value() {}\n",
+            "starred-inner": "/*!\n * ```rust\n * assert_eq!(1, 2);\n * ```\n */\npub fn value() {}\n",
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assert_fence_at(source, 2)
+
+    def test_block_doc_fence_content_is_not_a_second_fence(self):
+        source = "/**\n```rust\nlet marker = \"```\";\n```\n*/\npub fn value() {}\n"
+        result = self.assert_fence_at(source, 2)
+        self.assertNotIn("crates/probe/src/lib.rs:3:", result.stderr)
+
+    def test_line_doc_runnable_rust_fences_still_fail(self):
+        outer = "/// ```rust\n/// assert_eq!(1, 2);\n/// ```\npub fn value() {}\n"
+        inner = "//! ```rust\n//! assert_eq!(1, 2);\n//! ```\npub fn value() {}\n"
+        with self.subTest(name="outer"):
+            self.assert_fence_at(outer, 1)
+        with self.subTest(name="inner"):
+            self.assert_fence_at(inner, 1)
+
+    def test_ignored_and_non_rust_fences_pass(self):
+        cases = {
+            "line-ignore": "/// ```rust,ignore\n/// assert_eq!(1, 2);\n/// ```\n",
+            "line-text": "/// ```text\n/// not rust\n/// ```\n",
+            "inner-line-json": "//! ```json\n//! {}\n//! ```\n",
+            "block-ignore": "/**\n```rust,ignore\nassert_eq!(1, 2);\n```\n*/\n",
+            "block-text": "/*!\n```yaml\nkey: true\n```\n*/\n",
+            "ignore-closed-in-block": "/// ```rust,ignore\n/**\nstill ignored\n```\n*/\n",
+            "banner-not-doc": "/***\n```rust\nassert_eq!(1, 2);\n```\n*/\n",
+            "raw-string": (
+                'const SAMPLE: &str = r#"\n'
+                "/**\n"
+                "```rust\n"
+                "assert_eq!(1, 2);\n"
+                "```\n"
+                "*/\n"
+                '"#;\n'
+            ),
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assert_clean(source)
+
+
 class PythonPreflightTests(unittest.TestCase):
     """Drive scripts/require-python.sh and the make gates with a stub python3."""
 
