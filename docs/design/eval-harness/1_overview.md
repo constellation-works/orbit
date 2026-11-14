@@ -5,7 +5,7 @@ last_updated: 2026-11-14
 last_validated: 2026-11-14
 status: Draft
 stage: designing
-next: "Daniel answers the open questions in 2_design.md §14; no implementation task is filed yet"
+next: "Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box"
 feature: eval-harness
 doc_role: overview
 type: design

@@ -471,6 +471,8 @@ Not filed. Each line is one implementation task: outcome, then what it depends o
 
 ## 14. Open questions for Daniel
 
+**Decided (Daniel, 2026-11-14): the recommendation on every question, Q1 to Q8.** Two answers still need a value from him before the task that uses them: Q2 holds only if `dk-server-1` has idle capacity between pull windows, and Q7 needs the spend cap for the pilot. The questions and options stay below as the record of what was chosen.
+
 **Q1. Where does replay run?**
 - (a) A separate evaluation workspace over a second clone (§2).
 - (b) The live `orbit` workspace, candidates at `low` priority, with a core lock exemption and analytics exclusions.
