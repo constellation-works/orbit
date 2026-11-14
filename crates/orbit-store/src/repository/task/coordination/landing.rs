@@ -254,10 +254,9 @@ impl TaskCommitBoundary {
     }
 
     pub fn landing_attempt(&self, handoff_id: &str) -> Result<Option<LandingAttempt>, OrbitError> {
-        Ok(self
-            .landing_attempts()?
-            .into_iter()
-            .find(|attempt| attempt.handoff_id == handoff_id))
+        self.attempt_row(handoff_id)?
+            .map(|r| decode(&r.payload_json))
+            .transpose()
     }
 
     fn attempt_row(&self, handoff_id: &str) -> Result<Option<TaskCoordinationRow>, OrbitError> {
