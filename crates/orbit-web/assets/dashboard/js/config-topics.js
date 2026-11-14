@@ -13,9 +13,16 @@ let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null; // {text, failed}: the last bulk removal's outcome
+let landedOtherHash = null; // the key link already landed during this visit
+
+window.addEventListener('hashchange', (event) => {
+  if (landedOtherHash && new URL(event.oldURL).hash === landedOtherHash && new URL(event.newURL).hash !== landedOtherHash) {
+    landedOtherHash = null;
+  }
+});
 const NOTICE_MS = 10000;
 
-export function resetTopics() { drawer = null; bulkRemoval = null; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); rawScope = null; rawText = null; notice = null; landedOtherHash = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -677,10 +684,14 @@ export function renderOther(body, payload, context) {
   raw.appendChild(rb); nodes.push(raw);
   finish(body, payload, context, nodes);
   // A deep link (?key=…) that lands here names a row on this short page:
-  // bring it into view; the router already sent other keys to their page.
+  // bring it into view once per visit, preserving operator scrolling during
+  // raw-file reads, reloads and drawer rerenders. Other keys route elsewhere.
   const linked = new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key');
-  if (linked && rows.some((r) => r.key === linked)) {
+  if (linked && window.location.hash !== landedOtherHash && rows.some((r) => r.key === linked)) {
     const target = document.getElementById(`key-${linked.replace(/[^a-z0-9]+/gi, '-')}`);
-    if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ block: 'start' });
+      landedOtherHash = window.location.hash;
+    }
   }
 }
