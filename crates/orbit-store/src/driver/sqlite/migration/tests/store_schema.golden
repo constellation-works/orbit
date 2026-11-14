@@ -555,10 +555,3 @@ v89 task_reservation_unreleased_expires
 + ["index","idx_task_reservations_workspace_expires_unreleased","task_reservations","CREATE INDEX idx_task_reservations_workspace_expires_unreleased\n         ON task_reservations(workspace_orbit_dir, expires_at)\n         WHERE released_at IS NULL"]
 + ["index","idx_task_reservations_workspace_id_expires_unreleased","task_reservations","CREATE INDEX idx_task_reservations_workspace_id_expires_unreleased\n         ON task_reservations(workspace_id, expires_at)\n         WHERE released_at IS NULL"]
 
-v90 task_coordination_claim_indexes
-+ ["index","idx_task_coordination_claims_by_task","task_coordination_rows","CREATE INDEX idx_task_coordination_claims_by_task\n         ON task_coordination_rows(workspace_id, json_extract(payload_json,'$.task_id'))\n         WHERE kind = 'distributed-execution-claim-v1'"]
-+ ["index","idx_task_coordination_claims_protecting","task_coordination_rows","CREATE INDEX idx_task_coordination_claims_protecting\n         ON task_coordination_rows(workspace_id)\n         WHERE kind = 'distributed-execution-claim-v1'\n           AND json_extract(payload_json,'$.phase') IN ('claimed','running','handed_off','repair_pending')"]
-+ ["index","idx_task_coordination_lifecycle_by_bound_run","task_coordination_rows","CREATE INDEX idx_task_coordination_lifecycle_by_bound_run\n         ON task_coordination_rows(workspace_id, json_extract(payload_json,'$.bound_run.run_id'))\n         WHERE kind = 'distributed-claim-lifecycle-v1'"]
-+ ["index","idx_task_coordination_lifecycle_by_run","task_coordination_rows","CREATE INDEX idx_task_coordination_lifecycle_by_run\n         ON task_coordination_rows(workspace_id, json_extract(payload_json,'$.claim.run_context.run_id'))\n         WHERE kind = 'distributed-claim-lifecycle-v1'"]
-+ ["index","idx_task_coordination_lifecycle_by_task","task_coordination_rows","CREATE INDEX idx_task_coordination_lifecycle_by_task\n         ON task_coordination_rows(workspace_id, json_extract(payload_json,'$.claim.task_id'))\n         WHERE kind = 'distributed-claim-lifecycle-v1'"]
-

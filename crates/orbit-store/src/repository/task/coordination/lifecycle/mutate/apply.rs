@@ -212,7 +212,7 @@ impl TaskCommitBoundary {
                     }
                     // One host-qualified leaf cannot belong to two attempts, even after settlement.
                     if self
-                        .lifecycle_rows_for_bound_run(&run.run_id)?
+                        .coordination_rows_mentioning(STATE, &run.run_id)?
                         .iter()
                         .any(|r| {
                             decode_state(&r.payload_json)

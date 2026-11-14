@@ -542,10 +542,6 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0089".to_string(),
                 "task_reservation_unreleased_expires".to_string()
             ),
-            (
-                "migration.v0090".to_string(),
-                "task_coordination_claim_indexes".to_string()
-            ),
         ]
     );
 }

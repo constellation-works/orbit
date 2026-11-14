@@ -8,56 +8,6 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use crate::Store;
 use crate::contracts::{ExecutorCensusEntry, TaskCoordinationRow};
 
-/// v90 `idx_task_coordination_claims_by_task`. The kind is a literal so the
-/// partial index applies, and `json_extract` is spelled exactly as the
-/// migration writes it. The planner prefers the primary key for this
-/// predicate, so the statement names the index.
-pub(crate) const CLAIM_ROWS_FOR_TASK_SQL: &str = "SELECT kind, row_id, payload_json
-     FROM task_coordination_rows INDEXED BY idx_task_coordination_claims_by_task
-     WHERE kind = 'distributed-execution-claim-v1'
-       AND workspace_id = ?1
-       AND json_extract(payload_json,'$.task_id') = ?2
-     ORDER BY row_id ASC";
-
-/// v90 `idx_task_coordination_claims_protecting`. The planner prefers the
-/// primary key for this predicate, so the statement names the index.
-/// The phase list is `ExecutionClaimPhase::protects_footprint`.
-const CLAIM_ROWS_PROTECTING_SQL: &str = "SELECT kind, row_id, payload_json
-     FROM task_coordination_rows INDEXED BY idx_task_coordination_claims_protecting
-     WHERE kind = 'distributed-execution-claim-v1'
-       AND workspace_id = ?1
-       AND json_extract(payload_json,'$.phase') IN ('claimed','running','handed_off','repair_pending')
-     ORDER BY row_id ASC";
-
-/// v90 `idx_task_coordination_lifecycle_by_task`. The planner prefers the
-/// primary key when `kind` is a literal, so the statement names the index.
-const LIFECYCLE_ROWS_FOR_CLAIM_TASK_SQL: &str = "SELECT kind, row_id, payload_json
-     FROM task_coordination_rows INDEXED BY idx_task_coordination_lifecycle_by_task
-     WHERE kind = 'distributed-claim-lifecycle-v1'
-       AND workspace_id = ?1
-       AND json_extract(payload_json,'$.claim.task_id') = ?2
-     ORDER BY row_id ASC";
-
-/// v90 `idx_task_coordination_lifecycle_by_run`. The planner prefers the
-/// primary key when `kind` is a literal, so the statement names the index.
-const LIFECYCLE_ROWS_FOR_CLAIM_RUN_SQL: &str = "SELECT kind, row_id, payload_json
-     FROM task_coordination_rows INDEXED BY idx_task_coordination_lifecycle_by_run
-     WHERE kind = 'distributed-claim-lifecycle-v1'
-       AND workspace_id = ?1
-       AND json_extract(payload_json,'$.claim.run_context.run_id') = ?2
-     ORDER BY row_id ASC";
-
-/// v90 `idx_task_coordination_lifecycle_by_bound_run`. The bind check compares
-/// `bound_run`, the leaf run, which is not `claim.run_context.run_id`.
-/// The planner prefers the primary key when `kind` is a literal, so the
-/// statement names the index.
-const LIFECYCLE_ROWS_FOR_BOUND_RUN_SQL: &str = "SELECT kind, row_id, payload_json
-     FROM task_coordination_rows INDEXED BY idx_task_coordination_lifecycle_by_bound_run
-     WHERE kind = 'distributed-claim-lifecycle-v1'
-       AND workspace_id = ?1
-       AND json_extract(payload_json,'$.bound_run.run_id') = ?2
-     ORDER BY row_id ASC";
-
 impl Store {
     /// Pure-SQL coordination facts (idle receipts) need no bundle replay.
     /// An idle admission receipt carries its requester's census row, which
@@ -310,66 +260,36 @@ impl Store {
         })
     }
 
-    /// Claim rows whose payload `task_id` equals `task_id`, in `row_id` order.
-    /// Callers re-check the task id and phase after decode: a payload can
-    /// mention the task in another field, and a settled claim shares the id.
-    pub(crate) fn execution_claim_rows_for_task(
+    /// Coordination rows of one kind whose payload contains `needle`, a
+    /// prefilter for a caller that decodes each and keeps exact matches.
+    /// Encode `needle` as the payload encodes the value it stands for, so no
+    /// matching row is left out.
+    pub(crate) fn task_coordination_rows_containing(
         &self,
         workspace_id: &str,
-        task_id: &str,
-    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
-        self.coordination_rows_by_sql(CLAIM_ROWS_FOR_TASK_SQL, workspace_id, task_id)
-    }
-
-    /// Claim rows whose phase protects a footprint, in `row_id` order.
-    /// Callers re-check `protects_footprint` after decode. Census callers
-    /// then keep only `Claimed` and `Running`.
-    pub(crate) fn execution_claim_rows_protecting_footprint(
-        &self,
-        workspace_id: &str,
+        kind: &str,
+        needle: &str,
     ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
         self.with_read_connection(|conn| {
-            read_coordination_rows(conn, CLAIM_ROWS_PROTECTING_SQL, params![workspace_id])
-        })
-    }
-
-    /// Lifecycle rows whose `claim.task_id` equals `task_id`, in `row_id` order.
-    pub(crate) fn lifecycle_rows_for_claim_task(
-        &self,
-        workspace_id: &str,
-        task_id: &str,
-    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
-        self.coordination_rows_by_sql(LIFECYCLE_ROWS_FOR_CLAIM_TASK_SQL, workspace_id, task_id)
-    }
-
-    /// Lifecycle rows whose `claim.run_context.run_id` equals `run_id`, in
-    /// `row_id` order.
-    pub(crate) fn lifecycle_rows_for_claim_run(
-        &self,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
-        self.coordination_rows_by_sql(LIFECYCLE_ROWS_FOR_CLAIM_RUN_SQL, workspace_id, run_id)
-    }
-
-    /// Lifecycle rows whose `bound_run.run_id` equals `run_id`, in `row_id`
-    /// order. This is the leaf run a bind must not reuse, not the admission run.
-    pub(crate) fn lifecycle_rows_for_bound_run(
-        &self,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
-        self.coordination_rows_by_sql(LIFECYCLE_ROWS_FOR_BOUND_RUN_SQL, workspace_id, run_id)
-    }
-
-    fn coordination_rows_by_sql(
-        &self,
-        sql: &str,
-        workspace_id: &str,
-        value: &str,
-    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
-        self.with_read_connection(|conn| {
-            read_coordination_rows(conn, sql, params![workspace_id, value])
+            let mut stmt = conn
+                .prepare(
+                    "SELECT kind, row_id, payload_json
+                     FROM task_coordination_rows
+                     WHERE workspace_id = ?1 AND kind = ?2 AND instr(payload_json, ?3) > 0
+                     ORDER BY row_id ASC",
+                )
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map(params![workspace_id, kind, needle], |row| {
+                    Ok(TaskCoordinationRow {
+                        kind: row.get(0)?,
+                        row_id: row.get(1)?,
+                        payload_json: row.get(2)?,
+                    })
+                })
+                .map_err(sqlite_store_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -398,23 +318,4 @@ impl Store {
             .map_err(sqlite_store_error)
         })
     }
-}
-
-fn read_coordination_rows(
-    conn: &rusqlite::Connection,
-    sql: &str,
-    params: impl rusqlite::Params,
-) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
-    let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
-    let rows = stmt
-        .query_map(params, |row| {
-            Ok(TaskCoordinationRow {
-                kind: row.get(0)?,
-                row_id: row.get(1)?,
-                payload_json: row.get(2)?,
-            })
-        })
-        .map_err(sqlite_store_error)?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(sqlite_store_error)
 }

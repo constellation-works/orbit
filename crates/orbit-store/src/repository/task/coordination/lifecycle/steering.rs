@@ -6,7 +6,7 @@ use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::workflow::SteeringWatermark;
 
 use super::super::TaskCommitBoundary;
-use super::decode_state;
+use super::{STATE, decode_state};
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
@@ -52,7 +52,7 @@ impl TaskCommitBoundary {
         except: Option<&str>,
     ) -> Result<Option<SteeringWatermark>, OrbitError> {
         let mut latest: Option<(chrono::DateTime<chrono::FixedOffset>, SteeringWatermark)> = None;
-        for row in self.lifecycle_rows_for_claim_task(task_id)? {
+        for row in self.coordination_rows_mentioning(STATE, task_id)? {
             let state = decode_state(&row.payload_json)?;
             if state.claim.task_id != task_id || except == Some(state.claim.claim_id.as_str()) {
                 continue;

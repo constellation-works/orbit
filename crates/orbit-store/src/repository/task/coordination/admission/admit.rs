@@ -231,7 +231,7 @@ impl TaskCommitBoundary {
                 .map(Some);
         }
         let in_flight = self.in_flight_locked(snapshot, repo_root)?;
-        let claims = self.footprint_protecting_claims()?;
+        let claims = self.execution_claims()?;
         let drain_released =
             self.drain_releases(&identity.location().machine_id, &request.run_context.run_id)?;
         let reservations = self.store.inspect_active_task_reservations(

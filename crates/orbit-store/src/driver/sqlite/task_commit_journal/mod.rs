@@ -14,8 +14,6 @@
 use crate::contracts::TaskReservationReserveResult;
 
 pub(crate) use census::upsert_executor_census_in;
-#[cfg(test)]
-pub(crate) use coordination::CLAIM_ROWS_FOR_TASK_SQL;
 
 mod census;
 mod commit;
