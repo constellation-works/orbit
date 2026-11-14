@@ -371,8 +371,10 @@ jobs:
       # docs/design-patterns/test_strategy.md) and
       # its conclusion is the gate's result. A failed or skipped test job
       # fails it at once, and a partition-guard failure after the archive
-      # upload fails the test build. A named job absent from the run fails
-      # it at once instead of waiting out the timeout.
+      # upload fails the test build. A named job omitted from the run
+      # stays pending while any other listed job (apart from this one)
+      # is unfinished, and fails it only after --absent-grace-seconds
+      # (default 120 s) once every other job has completed.
       # Dependency evidence executes from one complete trusted base tree,
       # including any repository helpers the producer imports.
       - name: Await the test build and nextest shards
