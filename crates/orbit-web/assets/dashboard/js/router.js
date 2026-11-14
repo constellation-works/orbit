@@ -823,7 +823,6 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     revealActiveRailSelection();
   }
   const hashChanged = window.location.hash !== hash;
-  const shouldUpdateHash = opts.updateHash !== false;
   // A bookmarked legacy hash is rewritten in place so the address bar and any
   // copied link name the current route, without a second hashchange — and so
   // Back does not land on the legacy hash and redirect forward again.
@@ -833,13 +832,19 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // replaced (a malformed id).
   const taskLink = top === "tasks" && (query.has("open") || segments.length > 1);
   const runLink = top === "run-detail" && query.has("run_id");
-  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute || taskLink || runLink) && typeof window.history?.replaceState === "function";
+  // The router reacting to an address (hashchange, popstate, first load) only
+  // normalizes it: the entry is rewritten in place, so Back never lands on a
+  // spelling the router would push forward from again. Only a navigation the
+  // operator made adds an entry.
+  const rewriteInPlace = hashChanged && (opts.fromAddress || legacyRoute || opts.repairRoute || taskLink || runLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
     window.history.replaceState(null, "", hash);
-  } else if (hashChanged && shouldUpdateHash) {
+    // The rewrite fires no event, so the address it wrote is routed already.
+    routedHref = window.location.href;
+  } else if (hashChanged) {
     window.location.hash = hash;
   }
-  if (opts.refresh !== false && (!hashChanged || !shouldUpdateHash || rewriteInPlace)) ctx.refreshDashboard();
+  if (opts.refresh !== false && (!hashChanged || rewriteInPlace)) ctx.refreshDashboard();
 }
 
 function navigateToRunImpl(ctx, runId, workspaceId = null) {
@@ -1040,13 +1045,13 @@ function initTabsImpl(ctx) {
   const routeFromLocation = () => {
     if (window.location.href === routedHref) return;
     routedHref = window.location.href;
-    setActiveTabImpl(ctx, window.location.hash);
+    setActiveTabImpl(ctx, window.location.hash, { fromAddress: true });
   };
   window.addEventListener("hashchange", routeFromLocation);
   window.addEventListener("popstate", routeFromLocation);
   setActiveTabImpl(ctx, window.location.hash || "tasks", {
     refresh: false,
-    updateHash: false,
+    fromAddress: true,
   });
   initBackgroundNotifications();
   startDashboardPolling(() => ctx.refreshDashboard({ poll: true }));
