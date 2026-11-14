@@ -426,6 +426,33 @@ function setConfigSubtabImpl(ctx, name) {
   }
 }
 
+// Reveal an entry by scrolling only the rail's own scroll containers, never
+// the document: on Automation's document-height layout a native
+// scrollIntoView would also scroll the window to the rail entry.
+function scrollElementIntoRailView(element) {
+  if (!element) return;
+  for (let container = element.parentElement; container && container !== document.body; container = container.parentElement) {
+    const isRailContainer = container.classList?.contains("rail")
+      || container.classList?.contains("tabs")
+      || container.classList?.contains("rail-subtabs");
+    if (isRailContainer) {
+      const rect = element.getBoundingClientRect();
+      const box = container.getBoundingClientRect();
+      const style = getComputedStyle(container);
+      const padTop = parseFloat(style.scrollPaddingTop) || 0;
+      const padBottom = parseFloat(style.scrollPaddingBottom) || 0;
+      const padLeft = parseFloat(style.scrollPaddingLeft) || 0;
+      const padRight = parseFloat(style.scrollPaddingRight) || 0;
+      if (rect.top < box.top + padTop) container.scrollTop -= box.top + padTop - rect.top;
+      else if (rect.bottom > box.bottom - padBottom) container.scrollTop += rect.bottom - (box.bottom - padBottom);
+      const nextRect = element.getBoundingClientRect();
+      if (nextRect.left < box.left + padLeft) container.scrollLeft -= box.left + padLeft - nextRect.left;
+      else if (nextRect.right > box.right - padRight) container.scrollLeft += nextRect.right - (box.right - padRight);
+    }
+    if (container.classList?.contains("rail")) break;
+  }
+}
+
 function revealActiveRailSelection() {
   const tab = document.querySelector(".rail .tab.active");
   if (!tab) return;
@@ -436,11 +463,11 @@ function revealActiveRailSelection() {
   const foot = rail.querySelector(".rail-foot");
   rail.style.setProperty("--rail-foot-height", `${foot?.offsetHeight || 0}px`);
   const subtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
-  subtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  scrollElementIntoRailView(subtab);
   // On desktop the selected leaf takes precedence: revealing its parent can
   // scroll it back behind the foot. Phones keep both nested strips in view.
   if (!subtab || window.matchMedia("(max-width: 760px)").matches) {
-    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    scrollElementIntoRailView(tab);
   }
   for (const strip of document.querySelectorAll(".rail-subtabs:not(.dimmed)")) snapRailSubtabStrip(strip);
   syncRailScrollCues();
@@ -489,7 +516,7 @@ function snapRailSubtabStrip(strip, focusedSubtab = null) {
     const view = railStripVisibleSpan(strip);
     const rect = focusedSubtab.getBoundingClientRect();
     if (rect.left < view.left - 0.5 || rect.right > view.right + 0.5) {
-      focusedSubtab.scrollIntoView({ block: "nearest", inline: "nearest" });
+      scrollElementIntoRailView(focusedSubtab);
     }
   }
 }
@@ -863,7 +890,7 @@ function initTabsImpl(ctx) {
     revealActiveRailSelection();
     const focused = document.activeElement;
     if (focused?.matches(".rail .tab, .rail-subtabs .subtab")) {
-      focused.scrollIntoView({ block: "nearest", inline: "nearest" });
+      scrollElementIntoRailView(focused);
     }
   });
   for (const entry of document.querySelectorAll(".rail, .rail-foot, .rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
@@ -885,7 +912,7 @@ function initTabsImpl(ctx) {
   });
   $("tabs")?.addEventListener("focusin", (event) => {
     if (event.target.matches('.tab, .subtab')) {
-      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      scrollElementIntoRailView(event.target);
       // ORB-20479: keyboard scrolling can rest a sub-view strip mid-label;
       // snap the edge back to an item start and refresh the overflow fades.
       // ORB-20524: a pointer press focuses before its click lands; snapping

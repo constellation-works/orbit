@@ -7,7 +7,24 @@
   align-items: start;
 }
 .operations-auto-tasks-layout, .operations-scripts-layout, .operations-residents-layout { grid-template-columns: minmax(0, 1fr); }
-body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
+body.operations-active { height: auto; min-height: 100vh; overflow: visible; }
+/* Automation keeps its document-height layout, so the page scrolls; the rail
+   sticks at viewport height and scrolls internally instead of growing with
+   the document and scrolling out of sight. The body's overflow stays visible
+   above: an overflow scroll box on an ancestor would confine the sticky rail
+   to that box instead of the viewport. */
+body.operations-active .rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+@media (max-width: 760px) {
+  body.operations-active .rail { height: auto; max-height: none; }
+}
 .operations-layout .panel { min-width: 0; }
 .tab-pane[data-tab="operations"] .subtabs { border-bottom: 1px solid var(--border); }
 .operation-feedback {
