@@ -528,6 +528,8 @@ pub fn trim_full_show_agent_invocation_answer(value: &mut Value) {
 pub fn run_execution_progress_to_json(progress: &RunExecutionProgress) -> Value {
     json!({
         "state": progress.state,
+        "complete": progress.complete,
+        "steps_complete": progress.steps_complete,
         "active_step": progress.active_step.as_ref().map(|step| json!({
             "step_id": step.step_id,
             "step_index": step.step_index,

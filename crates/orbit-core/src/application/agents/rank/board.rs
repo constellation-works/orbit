@@ -9,9 +9,10 @@ use std::collections::BTreeMap;
 use super::measures::{
     MEASURE_COUNT, MEASURES, Totals, composite, observe, review_supported, totals, weighted_terms,
 };
-use super::sample::{BOOTSTRAP_SEED, DRAWS, Record, Rng, by_tier, draw, percentile};
+use super::sample::{BOOTSTRAP_SEED, DRAWS, Record, by_tier, draw};
 use crate::application::agents::roles::LedgerRow;
 use crate::application::agents::{CREW_UNKNOWN, MODEL_UNKNOWN};
+use crate::application::statistics::{SplitMix64, percentile};
 
 /// Units of the other models' evidence a score is blended with.
 pub(super) const SHRINKAGE_K: f64 = 30.0;
@@ -241,7 +242,7 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
         .iter()
         .map(|row| review_supported(&row.totals()))
         .collect();
-    let mut rng = Rng::seeded(BOOTSTRAP_SEED);
+    let mut rng = SplitMix64::seeded(BOOTSTRAP_SEED);
     let mut draws: Vec<Vec<f64>> = vec![Vec::with_capacity(DRAWS); eligible_rows.len()];
     for _ in 0..DRAWS {
         let mut drawn = z.clone();

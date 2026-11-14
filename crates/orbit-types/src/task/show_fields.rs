@@ -194,8 +194,11 @@ pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
 /// record reports. Storage appends (`push_external_ref_if_missing`), so the
 /// last recorded pull request is the current one; a requeued task that opened
 /// a fresh pull request would otherwise keep reporting the closed earlier one
-/// first. Non-PR refs keep their recorded order after the PRs, newest first
-/// among themselves only by their recorded positions reversed with the PRs.
+/// first. Non-PR refs follow the pull requests in their recorded order.
+///
+/// Every surface that serves a task record reads this order through
+/// [`task_show_record_field_json`], so list rows, projections and compact write
+/// responses agree with show.
 pub fn ordered_external_refs_for_show(
     refs: &[crate::task::ExternalRef],
 ) -> Vec<crate::task::ExternalRef> {
@@ -211,11 +214,6 @@ pub fn ordered_external_refs_for_show(
         .cloned()
         .collect();
     prs.into_iter().chain(others).collect()
-}
-
-/// `external_refs` as the show projection serves them: [`ordered_external_refs_for_show`].
-pub fn show_external_refs_json(task: &Task) -> Value {
-    json!(ordered_external_refs_for_show(&task.external_refs))
 }
 
 /// JSON for a Task-local (non-sidecar) projection field.
@@ -251,7 +249,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "priority" => Some(json!(task.priority.to_string())),
         "complexity" => Some(json!(task.complexity.map(|value| value.to_string()))),
         "pr_status" => Some(json!(task.pr_status)),
-        "external_refs" => Some(json!(task.external_refs)),
+        "external_refs" => Some(json!(ordered_external_refs_for_show(&task.external_refs))),
         "source_task_id" => Some(json!(task.source_task_id())),
         "job_run_id" => Some(json!(task.job_run_id)),
         "job_run_machine" => Some(json!(task.job_run_machine)),

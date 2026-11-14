@@ -67,6 +67,8 @@
 //! - `crew::task_types` — the ordered `workflow.task_types` list and the one
 //!   task-type classification type-pool routing and the scorecard share.
 //! - `crew::pools` — weighted pool grammar and admission.
+//! - `regression_layers` — the ordered `workflow.regression_layers` path
+//!   classifier codebase regression analytics read a fix's layer through.
 //! - `provider_limit` — provider/account admission policy, with threshold and draw
 //!   policy in `policy`, budget declarations in `budget`, and shared targets in `target`.
 //! - `operation` — typed review preferences (`[review]` and
@@ -107,6 +109,7 @@ mod plugins;
 mod provider_limit;
 mod raw;
 mod registry;
+mod regression_layers;
 mod resolved;
 mod review_skip_tags;
 mod roots;
@@ -176,6 +179,7 @@ pub use registry::{
     WorkerContainmentSettings, admit_config_key, admit_settable_config_key, config_key_options,
     describe as describe_config_key, immutable_key_note, is_global_only_key,
 };
+pub use regression_layers::RegressionLayerDefinition;
 pub use resolved::{
     CodexExecutionPolicy, CompatibilityConfigKey, CompatibilityConfigKeyDisposition,
     ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING,

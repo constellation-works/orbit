@@ -826,6 +826,86 @@ fn delete_outside_proposed_or_rejected_carries_the_force_overridable_code() {
     );
 }
 
+/// A full show reads the bundle once, a missing id does not list the
+/// workspace, and a title-only update stays within two canonical bundle reads.
+fn show_and_title_update_bound_bundle_reads() {
+    use serde_json::json;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Read once".into(),
+            description: "No pilot receipt.".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let canonical = orbit_core::test_support::canonical_bundle_reads();
+    let listing = orbit_core::test_support::listing_bundle_reads();
+    let shown = runtime
+        .execute_tool_command("orbit.task.show", json!({"id": task.id}), None, None)
+        .expect("show");
+    assert_eq!(shown["id"], task.id);
+    assert_eq!(shown["title"], "Read once");
+    assert_eq!(
+        orbit_core::test_support::canonical_bundle_reads() - canonical,
+        1,
+        "a full show without a pilot receipt reads the bundle once"
+    );
+    assert_eq!(
+        orbit_core::test_support::listing_bundle_reads() - listing,
+        0,
+        "a full show does not take the listing path"
+    );
+
+    let canonical = orbit_core::test_support::canonical_bundle_reads();
+    let listing = orbit_core::test_support::listing_bundle_reads();
+    let missing = runtime
+        .execute_tool_command("orbit.task.show", json!({"id": "ORB-99999"}), None, None)
+        .expect_err("missing id");
+    assert!(
+        matches!(missing, OrbitError::NotFound { .. }),
+        "missing show stays not-found, got {missing}"
+    );
+    assert_eq!(
+        orbit_core::test_support::listing_bundle_reads() - listing,
+        0,
+        "a missing show must not list the workspace"
+    );
+    let missing_reads = orbit_core::test_support::canonical_bundle_reads() - canonical;
+    assert!(
+        missing_reads <= 1,
+        "a missing show reads at most one bundle, read {missing_reads}"
+    );
+
+    let canonical = orbit_core::test_support::canonical_bundle_reads();
+    let updated = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({"id": task.id, "title": "Renamed once"}),
+            None,
+            None,
+        )
+        .expect("title update");
+    assert_eq!(updated["title"], "Renamed once");
+    let update_reads = orbit_core::test_support::canonical_bundle_reads() - canonical;
+    assert!(
+        update_reads <= 2,
+        "a field-only update reads at most two bundles, read {update_reads}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().title,
+        "Renamed once",
+        "the bounded update still persists the title"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     claim_refused_start_leaves_document_status_history_and_artifacts_unchanged_scenarios,
@@ -841,4 +921,8 @@ crate::scenario_table!(
     muse_identity_is_accepted_and_mismatches_refused,
     tag_changes_record_previous_and_new_tags_in_history,
     delete_outside_proposed_or_rejected_carries_the_force_overridable_code
+);
+crate::scenario_table!(
+    show_and_title_update_bound_bundle_reads_scenarios,
+    show_and_title_update_bound_bundle_reads
 );

@@ -546,6 +546,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0090".to_string(),
                 "task_coordination_claim_indexes".to_string()
             ),
+            (
+                "migration.v0091".to_string(),
+                "agent_task_facts".to_string()
+            ),
         ]
     );
 }

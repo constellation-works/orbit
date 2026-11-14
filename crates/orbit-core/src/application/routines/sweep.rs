@@ -275,12 +275,17 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // the leaf's worker and its drain are gone. Delivery starts nothing, so
     // a pending host shutdown does not hold it.
     if !options.dry_run {
-        for (workspace, runtime) in discovered.entries.iter().chain(&discovered.replicas) {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            deliver_recorded_pull_settlements(workspace, runtime);
-        }
+        each_workspace_in_tick(
+            discovered.entries.iter().chain(&discovered.replicas),
+            deadline,
+            &mut skipped_workspaces,
+            None,
+            None,
+            |workspace, runtime| {
+                deliver_recorded_pull_settlements(workspace, runtime);
+                Ok(())
+            },
+        );
     }
 
     // Lifetime maintenance starts no work and must also run during an
@@ -300,28 +305,24 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // and skips that workspace without failing routines or auto-tasks.
     let mut external_merge_settlements: Vec<ExternalMergeSweepReport> = Vec::new();
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.settle_externally_merged_tasks() {
-                Ok(settled) => {
-                    external_merge_settlements.extend(settled.into_iter().map(|settlement| {
-                        ExternalMergeSweepReport {
-                            task_id: settlement.task_id,
-                            source: workspace.name.clone(),
-                            pr_number: settlement.pr_number,
-                        }
-                    }));
-                }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.external_merge_settlement_failed"
-                ),
-            }
-        }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.external_merge_settlement_failed"),
+            None,
+            |workspace, runtime| {
+                let settled = runtime.settle_externally_merged_tasks()?;
+                external_merge_settlements.extend(settled.into_iter().map(|settlement| {
+                    ExternalMergeSweepReport {
+                        task_id: settlement.task_id,
+                        source: workspace.name.clone(),
+                        pr_number: settlement.pr_number,
+                    }
+                }));
+                Ok(())
+            },
+        );
     }
 
     // Fleet notices linked to a done task in another workspace this host
@@ -330,21 +331,19 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // work, so it also runs before the host-shutdown hold. Owner entries
     // only.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            if runtime.coordination_write_owner().is_none()
-                && let Err(error) = runtime.run_notice_closure_tick()
-            {
-                tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.notice_closure_failed"
-                );
-            }
-        }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.notice_closure_failed"),
+            None,
+            |_, runtime| {
+                if runtime.coordination_write_owner().is_none() {
+                    runtime.run_notice_closure_tick()?;
+                }
+                Ok(())
+            },
+        );
     }
 
     // Resident mandates whose deadline has passed end here, on the owner,
@@ -352,26 +351,25 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // like notice closure it runs before the host-shutdown hold. Owner
     // entries only; the expiry itself also refuses a replica runtime.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.expire_resident_mandates_past_deadline(now_utc) {
-                Ok(expired) if !expired.is_empty() => tracing::info!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    expired = ?expired,
-                    "sweep.resident_deadline_expired"
-                ),
-                Ok(_) => {}
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.resident_deadline_expiry_failed"
-                ),
-            }
-        }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.resident_deadline_expiry_failed"),
+            None,
+            |workspace, runtime| {
+                let expired = runtime.expire_resident_mandates_past_deadline(now_utc)?;
+                if !expired.is_empty() {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        expired = ?expired,
+                        "sweep.resident_deadline_expired"
+                    );
+                }
+                Ok(())
+            },
+        );
     }
 
     // [ORB-12968] A host shutdown inside the hold horizon would kill anything
@@ -423,7 +421,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // deadline and shutdown admission above; replicas never dispatch landings.
     if !options.dry_run {
         for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+            if Instant::now() >= deadline {
+                skipped_workspaces.insert(workspace.name.clone());
                 continue;
             }
             if let Err(error) = runtime.dispatch_landing_requests_at(now_utc) {
@@ -478,212 +477,216 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // its own. The phase is bounded by this pass's discovered workspaces and
     // each scheduler's finite definition collection. A workspace-level error
     // becomes one row and never prevents the remaining workspaces from running.
-    let mut auto_task_reports = Vec::new();
-    for (workspace, runtime) in &discovered.entries {
-        if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-            auto_task_reports.push(AutoTaskSweepReport {
-                name: "auto-tasks".into(),
-                source: workspace.name.clone(),
-                action: "skipped",
-                reason: Some("tick_deadline".into()),
-                slot: None,
-                task_id: None,
-            });
-            continue;
-        }
-        match run_auto_task_scheduler_with_cache(
-            runtime,
-            now_utc,
-            SchedulerOptions {
-                dry_run: options.dry_run,
-            },
-            &dispatch.source_cache,
-        ) {
-            Ok(outcome) => {
-                auto_task_reports.extend(outcome.reports.into_iter().map(|report| {
-                    AutoTaskSweepReport {
-                        name: report.name,
-                        source: workspace.name.clone(),
-                        action: if report.action == "fired" {
-                            "minted"
-                        } else {
-                            report.action
-                        },
-                        reason: report.reason,
-                        slot: report.slot,
-                        task_id: report.task_id,
-                    }
-                }));
-                auto_task_reports.extend(outcome.errors.into_iter().map(|error| {
-                    AutoTaskSweepReport {
-                        name: error
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.file_stem())
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("auto-task")
-                            .to_string(),
-                        source: workspace.name.clone(),
-                        action: "error",
-                        reason: Some(error.message),
-                        slot: None,
-                        task_id: None,
-                    }
-                }));
+    let auto_task_reports = RefCell::new(Vec::new());
+    let mut on_auto_task_deadline = |workspace: &Workspace| {
+        auto_task_reports.borrow_mut().push(AutoTaskSweepReport {
+            name: "auto-tasks".into(),
+            source: workspace.name.clone(),
+            action: "skipped",
+            reason: Some("tick_deadline".into()),
+            slot: None,
+            task_id: None,
+        });
+    };
+    each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        &mut skipped_workspaces,
+        None,
+        Some(&mut on_auto_task_deadline),
+        |workspace, runtime| {
+            match run_auto_task_scheduler_with_cache(
+                runtime,
+                now_utc,
+                SchedulerOptions {
+                    dry_run: options.dry_run,
+                },
+                &dispatch.source_cache,
+            ) {
+                Ok(outcome) => {
+                    let mut reports = auto_task_reports.borrow_mut();
+                    reports.extend(
+                        outcome
+                            .reports
+                            .into_iter()
+                            .map(|report| AutoTaskSweepReport {
+                                name: report.name,
+                                source: workspace.name.clone(),
+                                action: if report.action == "fired" {
+                                    "minted"
+                                } else {
+                                    report.action
+                                },
+                                reason: report.reason,
+                                slot: report.slot,
+                                task_id: report.task_id,
+                            }),
+                    );
+                    reports.extend(outcome.errors.into_iter().map(|error| {
+                        AutoTaskSweepReport {
+                            name: error
+                                .path
+                                .as_ref()
+                                .and_then(|path| path.file_stem())
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("auto-task")
+                                .to_string(),
+                            source: workspace.name.clone(),
+                            action: "error",
+                            reason: Some(error.message),
+                            slot: None,
+                            task_id: None,
+                        }
+                    }));
+                }
+                Err(error) => auto_task_reports.borrow_mut().push(AutoTaskSweepReport {
+                    name: "auto-tasks".to_string(),
+                    source: workspace.name.clone(),
+                    action: "error",
+                    reason: Some(error.to_string()),
+                    slot: None,
+                    task_id: None,
+                }),
             }
-            Err(error) => auto_task_reports.push(AutoTaskSweepReport {
-                name: "auto-tasks".to_string(),
-                source: workspace.name.clone(),
-                action: "error",
-                reason: Some(error.to_string()),
-                slot: None,
-                task_id: None,
-            }),
-        }
-    }
+            Ok(())
+        },
+    );
+    let auto_task_reports = auto_task_reports.into_inner();
     // [ORB-14273] After the executable generation settles, the clock resumes each
     // run the current upgrade interrupted at most once, and audits every run it
     // skips (an earlier upgrade's, an elapsed or stopped drain, a superseded one).
     if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.auto_resume_upgrade_interrupted_runs(now_utc) {
-                Ok(resumed) => {
-                    if !resumed.is_empty() {
-                        tracing::info!(
-                            target: "orbit.core.sweep",
-                            workspace = %workspace.name,
-                            resumed = resumed.len(),
-                            "sweep.upgrade_interrupted_runs_resumed"
-                        );
-                    }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.upgrade_interrupted_runs_resume_failed"),
+            None,
+            |workspace, runtime| {
+                let resumed = runtime.auto_resume_upgrade_interrupted_runs(now_utc)?;
+                if !resumed.is_empty() {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        resumed = resumed.len(),
+                        "sweep.upgrade_interrupted_runs_resumed"
+                    );
                 }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.upgrade_interrupted_runs_resume_failed"
-                ),
-            }
-        }
+                Ok(())
+            },
+        );
     }
 
     // [ORB-14617] A delivery run held because the forge refused its push is
     // resumed from its checkpoints each tick, within its retry window; past
     // the window its tasks are blocked for a human.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.auto_resume_forge_held_runs(now_utc) {
-                Ok(tick) => {
-                    if !tick.resumed.is_empty() || !tick.expired.is_empty() {
-                        tracing::info!(
-                            target: "orbit.core.sweep",
-                            workspace = %workspace.name,
-                            resumed = tick.resumed.len(),
-                            expired = tick.expired.len(),
-                            "sweep.forge_held_runs"
-                        );
-                    }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.forge_held_runs_failed"),
+            None,
+            |workspace, runtime| {
+                let tick = runtime.auto_resume_forge_held_runs(now_utc)?;
+                if !tick.resumed.is_empty() || !tick.expired.is_empty() {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        resumed = tick.resumed.len(),
+                        expired = tick.expired.len(),
+                        "sweep.forge_held_runs"
+                    );
                 }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.forge_held_runs_failed"
-                ),
-            }
-        }
+                Ok(())
+            },
+        );
     }
 
     // [ORB-20158] A job run parked on an auto-task step is revisited when
     // due: the same logical run continues, it is never submitted again.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.wake_parked_job_runs(now_utc) {
-                Ok(woken) => {
-                    if !woken.is_empty() {
-                        tracing::info!(
-                            target: "orbit.core.sweep",
-                            workspace = %workspace.name,
-                            woken = woken.len(),
-                            "sweep.parked_runs_woken"
-                        );
-                    }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.parked_runs_wake_failed"),
+            None,
+            |workspace, runtime| {
+                let woken = runtime.wake_parked_job_runs(now_utc)?;
+                if !woken.is_empty() {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        woken = woken.len(),
+                        "sweep.parked_runs_woken"
+                    );
                 }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.parked_runs_wake_failed"
-                ),
-            }
-        }
+                Ok(())
+            },
+        );
     }
 
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
     // `workflow.purpose_crews.final_recovery` pool.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            // The tick rechecks every blocked task first (a merged PR, green
-            // required checks, a cleared infrastructure block) and settles
-            // those without an agent.
-            match runtime.run_blocked_task_recovery_tick(now_utc) {
-                Ok(tick) => {
-                    if !tick.dispatched.is_empty()
-                        || !tick.settled.is_empty()
-                        || !tick.rechecked.is_empty()
-                    {
-                        tracing::info!(
-                            target: "orbit.core.sweep",
-                            workspace = %workspace.name,
-                            dispatched = tick.dispatched.len(),
-                            settled = tick.settled.len(),
-                            rechecked = tick.rechecked.len(),
-                            "sweep.blocked_task_recovery"
-                        );
-                    }
+        {
+            // Recovery must be followed by evidence fulfilment per workspace;
+            // both steps recheck the same tick deadline independently.
+            let mut workspace_is_allowed = |workspace: &Workspace| {
+                tick_allows_workspace(deadline, workspace, &mut skipped_workspaces)
+            };
+            for (workspace, runtime) in &discovered.entries {
+                if !workspace_is_allowed(workspace) {
+                    continue;
                 }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.blocked_task_recovery_failed"
-                ),
-            }
-            // A held review whose only missing evidence is a Linux CodeQL
-            // run gets that run here, on a Linux owner; one at a time.
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.run_review_evidence_fulfilment_tick(now_utc) {
-                Ok(tick) => {
-                    if !tick.dispatched.is_empty() {
-                        tracing::info!(
-                            target: "orbit.core.sweep",
-                            workspace = %workspace.name,
-                            dispatched = tick.dispatched.len(),
-                            "sweep.review_evidence_fulfilment"
-                        );
+                match runtime.run_blocked_task_recovery_tick(now_utc) {
+                    Ok(tick) => {
+                        if !tick.dispatched.is_empty()
+                            || !tick.settled.is_empty()
+                            || !tick.rechecked.is_empty()
+                        {
+                            tracing::info!(
+                                target: "orbit.core.sweep",
+                                workspace = %workspace.name,
+                                dispatched = tick.dispatched.len(),
+                                settled = tick.settled.len(),
+                                rechecked = tick.rechecked.len(),
+                                "sweep.blocked_task_recovery"
+                            );
+                        }
                     }
+                    Err(error) => tracing::warn!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        error = %error,
+                        "sweep.blocked_task_recovery_failed"
+                    ),
                 }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.review_evidence_fulfilment_failed"
-                ),
+                // A held review whose only missing evidence is a Linux CodeQL
+                // run gets that run here, on a Linux owner; one at a time.
+                if !workspace_is_allowed(workspace) {
+                    continue;
+                }
+                match runtime.run_review_evidence_fulfilment_tick(now_utc) {
+                    Ok(tick) => {
+                        if !tick.dispatched.is_empty() {
+                            tracing::info!(
+                                target: "orbit.core.sweep",
+                                workspace = %workspace.name,
+                                dispatched = tick.dispatched.len(),
+                                "sweep.review_evidence_fulfilment"
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        error = %error,
+                        "sweep.review_evidence_fulfilment_failed"
+                    ),
+                }
             }
         }
     }
@@ -692,19 +695,14 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // reads. A recent hourly slot avoids history reads and simulation; all
     // failures stay local to this workspace and never fail the tick.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            if let Err(error) = runtime.record_scheduled_backlog_forecast(now_utc) {
-                tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    %error,
-                    "sweep.backlog_forecast_failed"
-                );
-            }
-        }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.backlog_forecast_failed"),
+            None,
+            |_, runtime| runtime.record_scheduled_backlog_forecast(now_utc),
+        );
     }
 
     // [ORB-14739, ORB-14823] Standing baseline-red holds are re-checked
@@ -713,39 +711,35 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // run per workspace, so the required command never runs under the sweep
     // lock. Admission reads the recorded verdict.
     if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            match runtime.run_baseline_hold_tick(deadline) {
-                Ok(refresh) => {
-                    if !refresh.lifted.is_empty()
-                        || !refresh.held.is_empty()
-                        || refresh.dispatched.is_some()
-                        || !refresh.repairs_filed.is_empty()
-                        || !refresh.repairs_linked.is_empty()
-                    {
-                        tracing::info!(
-                            target: "orbit.core.sweep",
-                            workspace = %workspace.name,
-                            lifted = refresh.lifted.len(),
-                            held = refresh.held.len(),
-                            unchecked = refresh.unchecked.len(),
-                            dispatched = refresh.dispatched.as_deref().unwrap_or_default(),
-                            repairs_filed = refresh.repairs_filed.len(),
-                            repairs_linked = refresh.repairs_linked.len(),
-                            "sweep.baseline_holds"
-                        );
-                    }
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.baseline_holds_failed"),
+            None,
+            |workspace, runtime| {
+                let refresh = runtime.run_baseline_hold_tick(deadline)?;
+                if !refresh.lifted.is_empty()
+                    || !refresh.held.is_empty()
+                    || refresh.dispatched.is_some()
+                    || !refresh.repairs_filed.is_empty()
+                    || !refresh.repairs_linked.is_empty()
+                {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        lifted = refresh.lifted.len(),
+                        held = refresh.held.len(),
+                        unchecked = refresh.unchecked.len(),
+                        dispatched = refresh.dispatched.as_deref().unwrap_or_default(),
+                        repairs_filed = refresh.repairs_filed.len(),
+                        repairs_linked = refresh.repairs_linked.len(),
+                        "sweep.baseline_holds"
+                    );
                 }
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    error = %error,
-                    "sweep.baseline_holds_failed"
-                ),
-            }
-        }
+                Ok(())
+            },
+        );
     }
 
     let deadline_exceeded = Instant::now() >= deadline;
@@ -819,6 +813,38 @@ fn tick_allows_workspace(
     }
     skipped.insert(workspace.name.clone());
     false
+}
+
+/// Run one sweep phase for each workspace while enforcing its deadline and
+/// standardizing failures into the phase's existing warning event.
+fn each_workspace_in_tick<'a, T>(
+    workspaces: impl Iterator<Item = &'a (Workspace, OrbitRuntime)>,
+    deadline: Instant,
+    skipped: &mut BTreeSet<String>,
+    failed_event: Option<&'static str>,
+    mut on_deadline: Option<&mut dyn FnMut(&Workspace)>,
+    mut phase: impl FnMut(&Workspace, &OrbitRuntime) -> Result<T, OrbitError>,
+) {
+    for (workspace, runtime) in workspaces {
+        if !tick_allows_workspace(deadline, workspace, skipped) {
+            if let Some(on_deadline) = &mut on_deadline {
+                on_deadline(workspace);
+            }
+            continue;
+        }
+
+        if let Err(error) = phase(workspace, runtime)
+            && let Some(event) = failed_event
+        {
+            tracing::warn!(
+                target: "orbit.core.sweep",
+                workspace = %workspace.name,
+                error = %error,
+                "{}",
+                event
+            );
+        }
+    }
 }
 
 /// Deliver one checkout's recorded pull settlements, logging what is still
