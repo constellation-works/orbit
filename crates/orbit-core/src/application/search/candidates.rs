@@ -107,6 +107,7 @@ impl OrbitRuntime {
             },
             limit,
             Some(&|task, _| accepts(task)),
+            orbit_store::contracts::TaskListHydration::Full,
         )?;
         Ok(page.items.into_iter().map(|row| row.task).collect())
     }

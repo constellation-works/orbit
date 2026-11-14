@@ -345,6 +345,7 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
             &input,
             super::tool::task_list_result_profile(args.full, &args.fields),
         );
+        list_policy.apply_compact_hint(&mut input);
         return deliver_notice_aggregate(
             global_root,
             &args.name.clone(),
@@ -579,6 +580,7 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     &input,
                     super::tool::task_list_result_profile(args.full, &args.fields),
                 );
+                list_policy.apply_compact_hint(&mut input);
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,

@@ -16,7 +16,8 @@ use crate::runtime::task::locks::{
 };
 
 pub use orbit_store::contracts::{
-    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage, TaskRow,
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
+    TaskPage, TaskRow,
 };
 
 /// A store-wide scan can omit a corrupt bundle, but must disclose why. Other
@@ -47,6 +48,11 @@ pub struct TaskListQuery {
     pub runs_on: Option<HostOs>,
     pub path: Option<String>,
     pub limit: usize,
+    /// How the store materializes page rows. [`TaskListHydration::EnvelopeOnly`]
+    /// is only for callers whose output keeps envelope-derived fields alone;
+    /// the `pilot_warnings` filter keeps the hydrating path (see
+    /// `query_task_store`).
+    pub hydration: TaskListHydration,
 }
 
 impl Default for TaskListQuery {
@@ -58,6 +64,7 @@ impl Default for TaskListQuery {
             runs_on: None,
             path: None,
             limit: crate::DEFAULT_TASK_LIST_LIMIT,
+            hydration: TaskListHydration::Full,
         }
     }
 }
@@ -191,11 +198,19 @@ fn query_task_store(
                 crate::application::task::task_selectors_contain_path(&task.context_files, path)
             })
     };
+    // The pilot-warnings filter reads audit sidecars and bundle-backed
+    // comments, so it keeps the hydrating path even for compact callers.
+    let hydration = if query.pilot_warnings {
+        TaskListHydration::Full
+    } else {
+        query.hydration
+    };
     store.query_task_rows(
         &query.filter,
         query.limit,
         (query.pilot_warnings || query.ready || query.path.is_some() || query.runs_on.is_some())
             .then_some(&residual),
+        hydration,
     )
 }
 
@@ -232,6 +247,7 @@ impl OrbitRuntime {
             runs_on: query.runs_on,
             path: query.path.clone(),
             limit: query.limit,
+            hydration: query.hydration,
         })
     }
 

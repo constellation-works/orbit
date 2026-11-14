@@ -55,12 +55,18 @@ impl McpHost for ClaimedOwnerBridge {
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         let cwd = std::env::current_dir()?;
+        // The owner's handler reads the same compact hint the local MCP
+        // transport stamps; it carries no leading underscore, so the
+        // broker's internal-field refusal does not trip on it.
+        let mut forwarded_input = input.clone();
+        TaskListResultPolicy::for_call(name, &input, TaskListResultProfile::Default)
+            .apply_compact_hint(&mut forwarded_input);
         if let Some(route) = bridge_claimed_owner_call(
             &self.global_root,
             session_context.worker_invocation.as_ref(),
             Some(&self.process_machine_id),
             name,
-            &input,
+            &forwarded_input,
             &cwd,
             &cwd,
             ToolEntryPoint::Mcp,
