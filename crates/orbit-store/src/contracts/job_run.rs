@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, KnowledgeRunMetrics, PipelineState, RunStateUpdate,
+    JobRun, JobRunStartOutcome, JobRunState, PipelineState, RunStateUpdate,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -415,11 +415,6 @@ pub trait JobRunStoreBackend: Send + Sync {
         &self,
         run_id: &str,
         params: &JobRunStepParams,
-    ) -> Result<bool, OrbitError>;
-    fn record_job_run_knowledge_metrics(
-        &self,
-        run_id: &str,
-        metrics: KnowledgeRunMetrics,
     ) -> Result<bool, OrbitError>;
     fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError>;
     /// Finalize a run and report the decision made with the state write in one
