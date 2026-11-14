@@ -1341,8 +1341,9 @@ fn idle_pass_reads_only_stopped_leaf_tasks_and_sees_new_candidates() {
         );
         assert_eq!(
             selections.load(Ordering::Relaxed),
-            2,
-            "idle adoption probes only stopped-leaf bindings, not unrelated closed history"
+            0,
+            "idle adoption requests metadata only for stopped-leaf tasks now in \
+             review/blocked/backlog, not unrelated closed history"
         );
     }
     // A second runtime publishes the status change: no process-local cache may

@@ -38,18 +38,22 @@ impl Store {
             // run columns. Retain exactly the listing surface's predicates.
             let (filter, params) = job_run_filter_sql(workspace_id, query);
             (
-                format!("SELECT input_json FROM job_runs WHERE {filter}"),
+                format!("SELECT run_id FROM job_runs WHERE {filter}"),
                 params,
             )
         };
+        // `job_run_tasks` (v59) materializes exactly the text `task_ids` /
+        // `task_id` bindings this projection returns, trigger-maintained on
+        // every write and backfilled, so read it joined to the selected
+        // runs instead of walking every selected run's `input_json`. The
+        // selected runs still decide membership (same predicates, same
+        // limit/order surface); a malformed binding in one run simply has
+        // no row there and cannot refuse the others.
         let sql = format!(
-            "WITH inputs AS (SELECT input_json FROM ({selected})) \
-             SELECT binding.value FROM inputs, json_each(\
-                 CASE WHEN json_type(input_json, '$.task_ids') = 'array' \
-                 THEN json_extract(input_json, '$.task_ids') ELSE '[]' END) AS binding \
-             WHERE binding.type = 'text' \
-             UNION SELECT json_extract(input_json, '$.task_id') FROM inputs \
-             WHERE json_type(input_json, '$.task_id') = 'text'"
+            "WITH selected_runs AS ({selected}) \
+             SELECT job_run_tasks.task_id FROM job_run_tasks \
+             JOIN selected_runs ON selected_runs.run_id = job_run_tasks.run_id \
+             WHERE job_run_tasks.workspace_id = ?1"
         );
         let conn = self.read()?;
         let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
