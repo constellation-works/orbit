@@ -488,7 +488,8 @@ fn task_origin_is_recorded_validated_and_filtered() {
         "a sweep finding is filed by automation"
     );
 
-    // The tool surface refuses an unknown value and names the allowed set.
+    // The tool surface refuses an unknown value, names the allowed set, and
+    // directs the rationale to `description` (ORB-24229).
     let refused = workspace.run_raw(&[
         "tool",
         "run",
@@ -511,6 +512,10 @@ fn task_origin_is_recorded_validated_and_filtered() {
             "refusal must list `{allowed}`: {refusal}"
         );
     }
+    assert!(
+        refusal.contains("description"),
+        "refusal must direct the free-text reason to `description`: {refusal}"
+    );
     let unstated_id = unstated["id"].as_str().unwrap();
     let rejected_update = workspace.run_raw(&["task", "update", unstated_id, "--origin", "human"]);
     assert!(!rejected_update.status.success());

@@ -227,7 +227,7 @@ pub(super) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitE
 }
 
 /// An optional `origin` from the closed enum; an unknown value is refused
-/// with the allowed list.
+/// with the allowed list and directed to `description` (ORB-24229).
 pub(super) fn parse_optional_task_origin(
     input: &Value,
     field: &str,
@@ -237,7 +237,7 @@ pub(super) fn parse_optional_task_origin(
             TaskOrigin::from_str(&raw).map_err(|_| {
                 OrbitError::invalid_input_with_suggestions(
                     format!(
-                        "`{field}` must be one of: {}; got `{raw}`",
+                        "`{field}` must be one of: {}; got `{raw}`. Put the reason in `description`, not `{field}`",
                         TaskOrigin::valid_names().join(", ")
                     ),
                     TaskOrigin::valid_names()
