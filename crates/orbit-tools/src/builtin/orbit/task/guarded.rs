@@ -32,6 +32,76 @@ const UPDATE_ENVELOPE_KEYS: &[&str] = &[
     "model",
 ];
 
+const CREATE_FIELDS: &[&str] = &[
+    "title",
+    "description",
+    "acceptance_criteria",
+    "priority",
+    "crew",
+];
+const EDIT_FIELDS: &[&str] = &[
+    "status",
+    "title",
+    "description",
+    "acceptance_criteria",
+    "priority",
+    "crew",
+];
+const REVIEW_FIELDS: &[&str] = &["verdict", "complete"];
+const COMMENT_FIELDS: &[&str] = &["comment"];
+
+/// A guarded write's mode: the operation kind it sends, the fields it accepts
+/// beyond its envelope, and the mode name its refusal states.
+struct GuardedMode {
+    kind: &'static str,
+    allowed: &'static [&'static str],
+    mode: &'static str,
+}
+
+fn guarded_mode(input: &Value, create: bool) -> GuardedMode {
+    if create {
+        GuardedMode {
+            kind: "create",
+            allowed: CREATE_FIELDS,
+            mode: "creation",
+        }
+    } else if input.get("verdict").is_some() {
+        GuardedMode {
+            kind: "review",
+            allowed: REVIEW_FIELDS,
+            mode: "review",
+        }
+    } else if input.get("comment").is_some() {
+        GuardedMode {
+            kind: "comment",
+            allowed: COMMENT_FIELDS,
+            mode: "comment",
+        }
+    } else {
+        GuardedMode {
+            kind: "edit",
+            allowed: EDIT_FIELDS,
+            mode: "edit",
+        }
+    }
+}
+
+/// The fields the registry shape-checks for a guarded write: its envelope and
+/// the fields its mode accepts. Any other field is left to [`write`]'s
+/// refusal, which names the selector and the accepted set (ORB-24434).
+pub(crate) fn shape_checked_fields(create: bool, input: &Value) -> Vec<&'static str> {
+    let envelope = if create {
+        CREATE_ENVELOPE_KEYS
+    } else {
+        UPDATE_ENVELOPE_KEYS
+    };
+    envelope
+        .iter()
+        .chain(guarded_mode(input, create).allowed)
+        .copied()
+        .collect()
+}
+
 fn guarded_selectors_present(input: &Value) -> Vec<&str> {
     GUARDED_SELECTOR_KEYS
         .iter()
@@ -129,22 +199,25 @@ fn reject_guarded_unknown_fields(
     Ok(())
 }
 pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
+    let GuardedMode {
+        kind,
+        allowed,
+        mode,
+    } = guarded_mode(&input, create);
+    let envelope = if create {
+        CREATE_ENVELOPE_KEYS
+    } else {
+        UPDATE_ENVELOPE_KEYS
+    };
+    let keys = envelope.iter().chain(allowed).copied().collect::<Vec<_>>();
+    // Refused before the envelope's required fields: the refusal names the
+    // selector and the accepted fields, so it holds whatever else is missing.
+    reject_guarded_unknown_fields(&input, &keys, create, mode, allowed)?;
     let workspace = required_string(&input, &["workspace"], "workspace")?;
     let request_id = required_string(&input, &["request_id"], "request_id")?;
     let mut operation = serde_json::Map::new();
-    let (allowed, mode): (&[&str], &str) = if create {
-        operation.insert("kind".into(), json!("create"));
-        (
-            &[
-                "title",
-                "description",
-                "acceptance_criteria",
-                "priority",
-                "crew",
-            ],
-            "creation",
-        )
-    } else {
+    operation.insert("kind".into(), json!(kind));
+    if !create {
         operation.insert("id".into(), json!(required_string(&input, &["id"], "id")?));
         operation.insert(
             "expected_revision".into(),
@@ -154,38 +227,12 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
                 "expected_revision"
             )?),
         );
-        if input.get("verdict").is_some() {
-            operation.insert("kind".into(), json!("review"));
-            (&["verdict", "complete"], "review")
-        } else if input.get("comment").is_some() {
-            operation.insert("kind".into(), json!("comment"));
-            (&["comment"], "comment")
-        } else {
-            operation.insert("kind".into(), json!("edit"));
-            (
-                &[
-                    "status",
-                    "title",
-                    "description",
-                    "acceptance_criteria",
-                    "priority",
-                    "crew",
-                ],
-                "edit",
-            )
-        }
-    };
-    let mut keys = vec!["workspace", "request_id", "model"];
-    if !create {
-        keys.extend(["id", "expected_revision"]);
     }
-    keys.extend(allowed);
-    reject_guarded_unknown_fields(&input, &keys, create, mode, allowed)?;
     let values = allowed
         .iter()
         .filter_map(|key| input.get(*key).map(|value| ((*key).into(), value.clone())))
         .collect::<serde_json::Map<String, Value>>();
-    if operation["kind"] == "edit" {
+    if kind == "edit" {
         operation.insert("fields".into(), Value::Object(values));
     } else {
         operation.extend(values);

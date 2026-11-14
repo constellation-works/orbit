@@ -7,8 +7,9 @@ use orbit_types::tool::{
     ToolSchema, is_tool_family_operation, mcp_advertised_tool_name, tool_family,
     tool_family_of_operation, validate_mcp_tool_definitions,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use crate::builtin::orbit::task::guarded;
 use crate::family::{
     FamilyMember, FamilyTool, check_family_action_fields, family_members, is_family,
     is_preloaded_artifact_payload, operation_is_not_a_tool, resolve_family_input,
@@ -341,13 +342,15 @@ impl ToolRegistry {
         {
             let aliases = declared_aliases(name);
             let retired_fields = declared_retired_fields(name);
+            let guarded_fields = is_guarded_task_write(name, &input)
+                .then(|| guarded::shape_checked_fields(name == "orbit.task.add", &input));
             validate_task_arguments(
                 &input,
                 &tool.tool.schema(),
                 cli_fields(name, ctx),
                 &aliases,
                 &retired_fields,
-                is_guarded_task_write(name, &input),
+                guarded_fields.as_deref(),
             )?;
         }
         // A family action's required fields are checked after the
@@ -596,9 +599,9 @@ fn spec_aliases<V>(
     );
 }
 
-/// A guarded task write owns its input contract, so the registry must not
-/// refuse its unknown fields first: the handler names the selector that chose
-/// the mode (ORB-24434).
+/// A guarded task write refuses its unknown fields in the handler, which names
+/// the selector that chose the mode (ORB-24434), so the registry must not
+/// refuse those fields first. The fields the mode accepts are still shape-checked.
 fn is_guarded_task_write(name: &str, input: &Value) -> bool {
     if name != "orbit.task.add" && name != "orbit.task.update" {
         return false;
@@ -625,14 +628,16 @@ fn declared_retired_fields(name: &str) -> Vec<&'static str> {
 
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
-/// guarded modes remain the handler's responsibility.
+/// guarded modes remain the handler's responsibility. A guarded write passes
+/// the fields its mode accepts as `guarded_fields`: only those are shape-checked,
+/// and its other fields are left to the handler's selector refusal (ORB-24434).
 fn validate_task_arguments(
     input: &Value,
     schema: &ToolSchema,
     cli_fields: &[&str],
     aliases: &[(&str, &str)],
     retired_fields: &[&str],
-    guarded: bool,
+    guarded_fields: Option<&[&str]>,
 ) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::{
         TOOL_INPUT_IDENTITY_KEYS, reject_unknown_tool_fields,
@@ -653,12 +658,13 @@ fn validate_task_arguments(
         .chain(retired_fields.iter().copied())
         .chain(TOOL_INPUT_IDENTITY_KEYS.iter().copied())
         .collect::<Vec<_>>();
-    // The guarded handler names the selector and accepted fields in its
-    // refusal; known parameter shapes must still be checked here.
-    if !guarded {
+    if guarded_fields.is_none() {
         reject_unknown_tool_fields(input, &allowed)?;
     }
     for parameter in &schema.parameters {
+        if guarded_fields.is_some_and(|fields| !fields.contains(&parameter.name.as_str())) {
+            continue;
+        }
         // A call that sets both spellings is refused by the handler; check
         // the canonical one here.
         let Some(value) = object.get(&parameter.name).or_else(|| {
@@ -671,7 +677,8 @@ fn validate_task_arguments(
         };
         // Existing optional parsers treat null as absence, and accept numeric
         // strings and string booleans. Check their normalized shape without
-        // changing the value passed to the handler.
+        // changing the value passed to the handler. A guarded value reaches the
+        // host unchanged, so it is checked exactly as sent.
         if value.is_null() && !parameter.required {
             continue;
         }
@@ -680,7 +687,9 @@ fn validate_task_arguments(
         if parameter.name == "relations" && value.is_object() {
             normalized = Value::Array(vec![value.clone()]);
         }
-        if let Some(raw) = value.as_str() {
+        if guarded_fields.is_none()
+            && let Some(raw) = value.as_str()
+        {
             match parameter.param_type.as_str() {
                 "boolean" | "bool" => match raw.trim().to_ascii_lowercase().as_str() {
                     "true" => normalized = Value::Bool(true),
@@ -701,7 +710,10 @@ fn validate_task_arguments(
                 _ => {}
             }
         }
-        let shape = Value::Object(tool_parameter_schema(&parameter.param_type));
+        let shape = match guarded_fields {
+            Some(_) => guarded_wire_shape(&parameter.param_type),
+            None => Value::Object(tool_parameter_schema(&parameter.param_type)),
+        };
         let validator = jsonschema::JSONSchema::compile(&shape).map_err(|error| {
             OrbitError::Execution(format!("invalid task parameter schema: {error}"))
         })?;
@@ -713,6 +725,17 @@ fn validate_task_arguments(
         }
     }
     Ok(())
+}
+
+/// The shape a guarded field must have on the wire. The host receives guarded
+/// values unchanged, and the ordinary `object` shape also admits a list of
+/// objects, which the host refuses: a guarded verdict is one object.
+fn guarded_wire_shape(param_type: &str) -> Value {
+    use orbit_common::protocol::tool_schema::tool_parameter_schema;
+    match param_type {
+        "object" => json!({"type": "object"}),
+        _ => Value::Object(tool_parameter_schema(param_type)),
+    }
 }
 
 /// Whether a definition's tool addresses exactly one id with an optional
