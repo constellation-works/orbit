@@ -228,7 +228,7 @@ fn find_git_main_worktree_root_from_gitfile(start: &Path) -> Option<PathBuf> {
 ///
 /// Its `commondir` must resolve to the enclosing `.git` directory. Submodule
 /// gitfiles point into `modules/` and do not imply a shared main checkout.
-fn resolve_main_repo_from_worktree_gitfile(git_file: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve_main_repo_from_worktree_gitfile(git_file: &Path) -> Option<PathBuf> {
     let content = std::fs::read_to_string(git_file).ok()?;
     let raw_path = content.strip_prefix("gitdir:")?.trim();
     if raw_path.is_empty() {

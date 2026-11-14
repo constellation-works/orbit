@@ -597,7 +597,9 @@
         "tests/host_signal.rs::the_hold_includes_the_horizon_and_a_later_instant_admits",
         "tests/run_input.rs::managed_workspace_selector_requires_the_full_trust_boundary",
         "tests/scripts.rs::script_grant_round_trips_and_verifies_only_with_its_witness",
-        "tests/tool_exec.rs::corrupted_drain_identities_are_detected_in_nested_replies"
+        "tests/tool_exec.rs::corrupted_drain_identities_are_detected_in_nested_replies",
+        "tests/tool_exec.rs::linked_worktree_checkout_resolves_without_spawning_git",
+        "tests/tool_exec.rs::source_inspection_checkout_second_call_spawns_no_git"
       ]
     },
     "orbit-search": {
