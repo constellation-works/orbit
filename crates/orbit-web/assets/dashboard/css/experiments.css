@@ -20,7 +20,7 @@
 .ex-badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .ex-badge {
   display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
-  border: 1px solid #2e343c; border-radius: 999px; background: var(--bg-sunk);
+  border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-sunk);
   color: var(--fg-dim); font: 12px var(--font-mono); white-space: nowrap;
 }
 .ex-status-running { color: var(--state-running); border-color: rgba(92, 200, 240, 0.4); }
@@ -30,7 +30,7 @@
 .ex-mode-live { color: var(--fg); }
 .ex-verdict { color: var(--fg); font-weight: 600; }
 .ex-verdict-winner { color: var(--state-success); border-color: rgba(99, 210, 151, 0.4); }
-.ex-verdict-withheld, .ex-verdict-inconclusive { color: #f2c46d; border-color: rgba(242, 196, 109, 0.4); }
+.ex-verdict-withheld, .ex-verdict-inconclusive { color: var(--warn-fg); border-color: rgba(242, 196, 109, 0.4); }
 .ex-verdict-collecting { color: var(--fg-dim); }
 
 /* List. */
@@ -49,7 +49,7 @@
   display: grid; grid-template-columns: minmax(90px, 160px) 1fr auto; align-items: center; gap: 10px;
   font: 13px var(--font-sans);
 }
-.ex-arm-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: #c9d0d9; overflow-wrap: anywhere; }
+.ex-arm-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
 .ex-progress { position: relative; height: 8px; border-radius: 4px; background: var(--bg-sunk); box-shadow: inset 0 0 0 1px var(--hair); overflow: hidden; }
 .ex-progress-fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--mx-c); }
 /* In a table the name keeps its line; the table scrolls instead. */
@@ -80,12 +80,12 @@
 }
 .ex-health-link:hover { color: var(--accent-hover); text-decoration: underline; }
 .ex-health-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ex-health-warn { color: #f2c46d; font-weight: 600; }
+.ex-health-warn { color: var(--warn-fg); font-weight: 600; }
 .ex-outcome-text { margin: 0; color: var(--fg); }
 .ex-outcome-label { display: inline-block; font: 600 22px var(--font-sans); overflow-wrap: anywhere; }
 .ex-outcome-label::first-letter { text-transform: uppercase; }
 .ex-outcome-winner .ex-outcome-label { color: var(--state-success); }
-.ex-outcome-withheld .ex-outcome-label, .ex-outcome-inconclusive .ex-outcome-label { color: #f2c46d; }
+.ex-outcome-withheld .ex-outcome-label, .ex-outcome-inconclusive .ex-outcome-label { color: var(--warn-fg); }
 .ex-outcome-abandoned .ex-outcome-label { color: var(--fg-mute); }
 
 /* Tabs: the same underline strip as Analytics › Forecast. */
@@ -106,10 +106,10 @@
 .ex-healthy { padding-left: 12px; border-color: var(--hair); background: none; color: var(--fg-dim); }
 .ex-warning-icon {
   display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 50%;
-  background: #f2c46d; color: var(--bg); font: 700 11px var(--font-sans);
+  background: var(--warn-fg); color: var(--bg); font: 700 11px var(--font-sans);
 }
-.ex-warning-kind { color: #f2c46d; font-weight: 600; }
-.ex-warn-text { color: #f2c46d; }
+.ex-warning-kind { color: var(--warn-fg); font-weight: 600; }
+.ex-warn-text { color: var(--warn-fg); }
 
 /* Arm cards: read-outs, not toggles. */
 .ex-arms { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
@@ -124,11 +124,11 @@
 .ex-rail { display: flex; justify-content: space-between; gap: 8px; color: var(--fg-dim); }
 .ex-rail-status { font-family: var(--font-mono); }
 .ex-rail-breached .ex-rail-status { color: var(--state-failed); }
-.ex-rail-straddles .ex-rail-status { color: #f2c46d; }
+.ex-rail-straddles .ex-rail-status { color: var(--warn-fg); }
 .ex-rail-ok .ex-rail-status { color: var(--state-success); }
 .ex-arm-verdict {
   margin-left: auto; padding: 0 8px; min-height: 22px; display: inline-flex; align-items: center;
-  border-radius: 999px; border: 1px solid #2e343c; color: var(--fg-dim); font: 12px var(--font-mono);
+  border-radius: 999px; border: 1px solid var(--border-strong); color: var(--fg-dim); font: 12px var(--font-mono);
 }
 .ex-arm-verdict-winner, .ex-arm-verdict-winner-concluded { color: var(--state-success); border-color: rgba(99, 210, 151, 0.4); font-weight: 600; }
 
@@ -146,7 +146,7 @@
 .ex-forest-axis { min-height: 0; margin-bottom: -6px; }
 .ex-forest-axis-plot { display: flex; justify-content: space-between; color: var(--fg-mute); font: 11px var(--font-sans); }
 .ex-forest-axis-better { color: var(--state-success); }
-.ex-forest-arm { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: #c9d0d9; overflow-wrap: anywhere; }
+.ex-forest-arm { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
 .ex-forest-plot { position: relative; height: 20px; border-radius: 4px; background: var(--bg-sunk); }
 .ex-forest-zero { position: absolute; top: 2px; bottom: 2px; width: 1px; background: var(--fg-mute); }
 .ex-forest-ci {
@@ -170,7 +170,7 @@
 .ex-note { margin: 0; color: var(--fg-mute); font: 12px var(--font-sans); }
 
 /* Cumulative series. */
-.ex-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: #c9d0d9; font: 12px var(--font-sans); }
+.ex-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--fg-soft); font: 12px var(--font-sans); }
 .ex-legend-item { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow-wrap: anywhere; }
 .ex-cum { display: flex; gap: 10px; min-width: 0; }
 .ex-cum-y { position: relative; flex: 0 0 48px; height: 200px; }
@@ -271,7 +271,7 @@ textarea.ex-conclude-control { resize: vertical; min-height: 72px; }
 .ex-readout-error .mx-empty-detail { overflow-wrap: anywhere; }
 .ex-readout-notice {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0;
-  color: #f2c46d; font-size: 13px; overflow-wrap: anywhere;
+  color: var(--warn-fg); font-size: 13px; overflow-wrap: anywhere;
 }
 .ex-readout-retry {
   min-height: 36px; padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius);
@@ -292,7 +292,7 @@ textarea.ex-conclude-control { resize: vertical; min-height: 72px; }
 .exf-field { display: grid; gap: 4px; min-width: 0; }
 .exf-label { color: var(--fg-dim); font: 12px var(--font-sans); }
 .exf-hint { margin: 0; color: var(--fg-mute); font: 12px var(--font-sans); overflow-wrap: anywhere; }
-.exf-note { margin: 0; color: #f2c46d; font: 12.5px var(--font-sans); overflow-wrap: anywhere; }
+.exf-note { margin: 0; color: var(--warn-fg); font: 12.5px var(--font-sans); overflow-wrap: anywhere; }
 .exf-locked { color: var(--fg-mute); }
 .exf-control {
   width: 100%; min-width: 0; box-sizing: border-box; min-height: 34px; padding: 6px 8px;
