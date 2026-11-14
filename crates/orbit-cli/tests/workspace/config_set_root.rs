@@ -105,7 +105,7 @@ fn unknown_config_keys_offer_bounded_recovery_without_writes() {
         fs::read(fixture.global_config()).unwrap(),
         fs::read(&workspace).unwrap(),
     );
-    for key in ["workflow.base_branc", "not_a_config_key", "semantic.model"] {
+    for key in ["workflow.base_branc", "not_a_config_key"] {
         for verb in ["get", "set"] {
             for json in [true, false] {
                 let mut args = vec!["--root", &root, "config", verb, key];
@@ -128,21 +128,10 @@ fn unknown_config_keys_offer_bounded_recovery_without_writes() {
                     } else {
                         assert!(error.get("did_you_mean").is_none(), "{error}");
                     }
-                } else if key != "semantic.model" {
+                } else {
                     assert!(stderr.contains("orbit config keys"), "{stderr}");
                     if key == "workflow.base_branc" {
                         assert!(stderr.contains("workflow.base_branch"), "{stderr}");
-                    }
-                }
-                if key == "semantic.model" {
-                    let migration = orbit_config::admit_config_key(key).unwrap_err().to_string();
-                    if json {
-                        let error: serde_json::Value =
-                            serde_json::from_slice(&output.stderr).unwrap();
-                        assert_eq!(error["error"], migration);
-                    } else {
-                        assert!(stderr.contains(&migration), "{stderr}");
-                        assert!(!stderr.contains("orbit config keys"), "{stderr}");
                     }
                 }
                 assert_eq!(

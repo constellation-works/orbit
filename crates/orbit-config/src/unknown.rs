@@ -41,12 +41,9 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
         )
         .chain([
             "task.artifact_store",
-            "knowledge.task_id_pattern",
             "runtime.backend",
             "agent",
             "watch",
-            "docs",
-            "duel",
             "routines",
             "plugins",
             "plugin_enablement",

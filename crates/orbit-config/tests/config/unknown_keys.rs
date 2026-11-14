@@ -82,8 +82,6 @@ reviewers = 2
 [operation]
 future = true
 review_minutes = 7
-[semantic]
-anything = true
 "#;
     fs::write(&path, body).expect("config");
     ResolvedConfig::load(&ConfigRoots::new(directory.path(), directory.path()))

@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-10-19
+last_validated: 2026-11-14
 ---
 
 # Check Orbit Health
@@ -160,9 +160,11 @@ the lock file so queued openers and new openers share the same inode; do not del
 `retired-config-keys` warns while the global or workspace `config.toml` still
 sets a registry key that load accepts only so an older file keeps working.
 Each warning names the key and the file. Examples are `workflow.system_crew`
-(deprecated, ignored) and `scoring.enabled` (removed, ignored). Diagnosis does
-not write either file. Retired sections that are not registry keys, such as
-`[duel]`, `[routines]` and `[docs]`, are not part of this check.
+(deprecated, ignored) and `plugin.legacy_callback_identity` (removed, ignored).
+Diagnosis does not write either file. `[routines]` is still accepted with its
+own warning and is not part of this check. A section whose recognition window
+has closed, such as `[duel]`, `[docs]` or `[scoring]`, is an unknown table:
+this check names it, and the repair removes it with the other unknown paths.
 
 ```sh
 orbit doctor --fix-retired-config-keys

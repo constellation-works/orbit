@@ -65,11 +65,6 @@ pub(super) fn warned_deprecated(logs: &str, key: &str) -> bool {
         .any(|line| line.contains(key) && line.contains("config key is deprecated"))
 }
 
-fn warned_removed(logs: &str, key: &str) -> bool {
-    logs.lines()
-        .any(|line| line.contains(key) && line.contains("removed and ignored"))
-}
-
 #[test]
 fn review_table_sets_timing_and_minutes_with_their_layer() {
     let (config, logs) = load_workspace("[review]\ntiming = \"before_pr\"\nminutes = 45\n");
@@ -147,15 +142,13 @@ fn review_table_wins_over_its_legacy_spelling_in_the_same_file() {
 
 /// The ws_orbit config on the box when the enum was retired (on-call
 /// 2026-10-04): it must keep loading, keep its 120 minutes, and name every
-/// legacy key in a warning.
+/// legacy key that still translates in a warning.
 #[test]
 fn box_ws_orbit_review_config_migrates_with_warnings() {
     let (config, logs) = load_workspace(
         r#"[operation]
 review_crew = "grok"
 review_policy = "none"
-review_reviewer_starts = 3
-review_repair_cycles = 3
 review_minutes = 120
 "#,
     );
@@ -176,31 +169,6 @@ review_minutes = 120
     ] {
         assert!(warned_deprecated(&logs, key), "{key} warned: {logs}");
     }
-    for key in [
-        "operation.review_reviewer_starts",
-        "operation.review_repair_cycles",
-    ] {
-        assert!(
-            warned_removed(&logs, key),
-            "{key} ignored with a warning: {logs}"
-        );
-    }
-}
-
-/// A config written before the scoreboard was retired keeps loading until the
-/// key's sunset: `[scoring]` is warned and ignored, and edits are refused.
-#[test]
-fn retired_scoring_table_loads_with_a_warning_and_refuses_edits() {
-    let (_config, logs) = load_workspace("[scoring]\nenabled = false\n");
-    assert!(
-        warned_removed(&logs, "scoring.enabled"),
-        "scoring.enabled ignored with a warning: {logs}"
-    );
-    let error = admit_settable_config_key("scoring.enabled").expect_err("retired key refused");
-    assert!(
-        error.to_string().contains("scoreboard was retired"),
-        "the refusal says why: {error}"
-    );
 }
 
 /// `workflow.regression_risk.record_sites` was retired once sites became
@@ -245,8 +213,6 @@ fn retired_review_keys_are_not_settable() {
     for key in [
         "operation.review_policy",
         "operation.review_minutes",
-        "operation.review_reviewer_starts",
-        "operation.review_repair_cycles",
         "operation.review_crew",
         "review.before_pr",
         "review.before_landing",
