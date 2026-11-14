@@ -102,7 +102,10 @@ def optional_https(payload: dict[str, Any], key: str, label: str) -> None:
     value = payload.get(key)
     if value is None:
         return
-    parsed = urlparse(value) if isinstance(value, str) else None
+    try:
+        parsed = urlparse(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
     if parsed is None or parsed.scheme != "https" or not parsed.netloc:
         errors.append(f"{label}.{key} must be an absolute https:// URL")
 

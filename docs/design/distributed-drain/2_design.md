@@ -1216,7 +1216,7 @@ that window cannot authorize repair. A passing rerun clears the failure; the sam
 failing again while the same-check base run passes makes the failure `candidate`. When the rerun's
 own evidence (plan authentication or a log it reads) stays unreadable for `max_base_ci_cycles`
 consecutive polls, a same-check base pass sends a flaky failure to repair (or requeue once spent).
-Candidate failures keep their candidate repair/requeue route, and inherited failures keep their
+Candidate failures keep their backlog requeue route, and inherited failures keep their
 base update/wait route. Other failure classes whose rerun evidence stays unreadable stop in review
 naming the read failure. A provider throttle keeps its paced hold. Without both
 results, `handoff_land` holds the candidate in review as
@@ -1227,7 +1227,7 @@ ancestry. Reruns share the eligible-set planner with owner-local `auto_fix=true`
 workflow-wide `--failed` action, it authenticates the **complete** latest-attempt job and step
 listing, not only required failed checks. Every failed job must be an independently eligible
 transient/flaky root or a dependency-only waiter whose versioned evidence reaches those roots.
-An independent candidate failure vetoes the shared action and keeps its ordinary repair route.
+An independent candidate failure vetoes the shared action and returns the task to the backlog for repair.
 Dependency-only records hold only when no other job failed: any other failed sibling, including
 a candidate whose log cites no changed file, takes its own class's route. Owner-local completion
 records each planner hold on the task and bounds it (15 minutes per head, or the last poll),
@@ -1316,11 +1316,9 @@ attribute that repeat to the candidate. Other signatures or runs inherit neither
 another retry. `auto_fix=false` remains non-mutating and retains its manual-repeat hold. Existing
 cycle/deadline bounds, reviewed-head checks and merge/review policy remain gating. Existing heads
 without the producer cannot be retroactively authorized by this contract.
-`candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
+A `candidate` failure stops for a requeue with the failed job, its signature and a log
 excerpt. An `inherited` failure that still fails after an update onto a passing base tip
-the head contains is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic
-repair is already spent (a repair claim, or a task that already returned to the backlog for a landing
-repair), a `candidate` failure stops for a requeue instead of leaving the task in `review` [ORB-16890]:
+keeps the existing repairable stop [ORB-16322]. For a candidate-classified failure,
 the stop revokes the handoff's authority, settles the claim `revoked` with a kept candidate that
 carries the stop's reason (`landing_stop`), returns the task to `backlog` and records
 `landing_repair_requeued`. The landing run is held as `delivery_landing_repair_requeue`
@@ -1778,7 +1776,7 @@ this table retains its requirements without claiming the entire matrix was execu
 | Handoff commits, response lost | Exactly one handoff and review transition |
 | Review-only handoff reaches the landing consumer | No merge without recorded authorization |
 | PR head/base changes or conflicts | Stop with evidence; fresh validated repair required. A base conflict or stale base gets one automatic repair claim that re-hands off; a second blocks with both attempts' evidence ([ORB-14261]) |
-| PR fails a required check the candidate caused after its automatic repair | Claim revoked, candidate kept with the stop, task back to `backlog` for a repairing run; the third such stop since the last block blocks the task with every counted stop's evidence ([ORB-16890]) |
+| PR fails a required check classified as caused by the candidate | Claim revoked, candidate kept with the stop, task back to `backlog` for a repairing run; the third such stop since the last block blocks the task with every counted stop's evidence ([ORB-16890]) |
 | Merge succeeds, owner crashes before completion | Reconcile pinned PR and merge evidence before done or retry |
 | Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |

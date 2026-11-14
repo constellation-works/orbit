@@ -34,6 +34,7 @@ pub use experiment::*;
 pub use friction::*;
 pub use incident::*;
 pub use invocation::*;
+pub(crate) use job_run::JOB_RUN_TASK_INPUT_KEYS;
 pub use job_run::*;
 pub use landed_diff_stats::*;
 pub use lease_notice::*;

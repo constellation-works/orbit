@@ -75,6 +75,14 @@ pub trait TaskStoreBackend: Send + Sync {
         Err(OrbitError::Store("landing attempts unavailable".into()))
     }
 
+    /// The owner's landing attempt for a handoff. Read-only inspection.
+    fn landing_attempt(
+        &self,
+        _handoff_id: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        Err(OrbitError::Store("landing attempts unavailable".into()))
+    }
+
     /// Durable operator retry receipt, if this backend supports owner landing.
     fn landing_retry_receipt(
         &self,

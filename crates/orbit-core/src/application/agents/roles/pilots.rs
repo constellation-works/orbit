@@ -33,10 +33,11 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
-    self, Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
+    Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
+use crate::application::statistics;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "assessed tasks",
@@ -659,7 +660,7 @@ fn row_input<'a>(
         })
     };
     let mut durations: Vec<f64> = runs.values().filter_map(|seconds| *seconds).collect();
-    let median = score::median(&mut durations);
+    let median = statistics::median(&mut durations);
     let selectors: usize = assessed
         .iter()
         .map(|(graded, _)| graded.pilot.declared)

@@ -3,32 +3,28 @@ use std::cell::{Cell, RefCell};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{
-    AdmissionRequest, AdmissionRunContext, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, PullDestination,
+    AdmissionRequest, AdmissionRunContext, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
 };
 use serde_json::{Value, json};
 
 use super::super::drain::{
-    BreakerGate, DEFAULT_BREAKER_COOLDOWN_SECONDS, PullDrain, PullTransportPort, RefusedDelivery,
-    admits_request, breaker_gate, settle_breaker,
+    BreakerGate, PullDrain, PullTransportPort, RefusedDelivery, admits_request, breaker_gate,
+    settle_breaker,
 };
 use super::cancel::cancelling_pass;
 use super::crews::crew_window;
-use super::input::{bool_input, single_pass_input, u64_input};
+use super::input::RefillInput;
 use super::owner::{ProbeVerdict, captured_before_pr, probe};
 use super::record::{
-    PullPass, breaker_refusal, protocol_skew_failure, record_admission_fit, record_breaker,
-    refused_settlements,
+    PullPass, protocol_skew_failure, record_admission_fit, record_breaker, refused_settlements,
 };
+use super::refusal::{RefusalInputs, no_runnable_crew_refusal, pass_refusal};
 use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::distributed::{
     OwnerAnswer, PullCrewWindow, PullWorkFit, owner_binary_version,
 };
 use crate::application::job::pull_window_closed;
-
-const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
-const DEFAULT_POLL_SLEEP_SECONDS: u64 = 30;
-const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
 
 pub(crate) fn pull_refill(
     runtime: &OrbitRuntime,
@@ -41,34 +37,16 @@ pub(crate) fn pull_refill(
         action: action.to_string(),
         message,
     };
-    let run_id = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| failed("the executing drain run id was not supplied".into()))?
-        .to_string();
-    let destination: PullDestination = input
-        .get("destination")
-        .cloned()
-        .ok_or_else(|| failed("`destination` is required".into()))
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|error| failed(format!("`destination`: {error}")))
-        })?;
-    let forwarded_expired = bool_input(input, "window_expired");
-    let single_pass = single_pass_input(input);
-    let ceiling = u64_input(input, "max_active_leaf_runs", DEFAULT_MAX_ACTIVE_LEAF_RUNS);
-    let poll = u64_input(input, "poll_sleep_seconds", DEFAULT_POLL_SLEEP_SECONDS);
-    let idle = u64_input(input, "idle_sleep_seconds", DEFAULT_IDLE_SLEEP_SECONDS);
-    let cooldown = u64_input(
-        input,
-        "breaker_cooldown_seconds",
-        DEFAULT_BREAKER_COOLDOWN_SECONDS,
-    );
-    let cooldown = i64::try_from(cooldown)
-        .ok()
-        .and_then(chrono::Duration::try_seconds)
-        .unwrap_or(chrono::Duration::MAX);
+    let RefillInput {
+        run_id,
+        destination,
+        forwarded_expired,
+        single_pass,
+        ceiling,
+        poll,
+        idle,
+        cooldown,
+    } = RefillInput::parse(action, input)?;
     // One clock reading for the whole pass: the breaker it checks before each
     // request is the one it records.
     let now = chrono::Utc::now();
@@ -550,109 +528,25 @@ pub(crate) fn pull_refill(
             "pull drain pass did not complete; retrying next iteration",
         );
     }
-    let host_suppressed = crews
-        .as_ref()
-        .and_then(|window| window.host_suppressed.as_deref());
-    let owner_busy_backoff = crews
-        .as_ref()
-        .and_then(|window| window.owner_busy_backoff.as_ref());
-    let by_busy_owner = crews
-        .as_ref()
-        .is_some_and(|window| window.host_suppressed_by_busy_owner);
-    let no_runnable_crew = if let Some(reason) = host_suppressed.filter(|_| by_busy_owner) {
-        format!(
-            "host_suppressed: this drain claims no more work on this host for its window \
-             because {reason}. This host is not at fault: find what holds the owner's store \
-             (the owner's `orbit.jsonl` names each advisory lock holder in its `still waiting \
-             for advisory file lock` and `advisory file lock held past its threshold` \
-             warnings, and its store errors name SQLite contention, such as `database is \
-             locked` or `remained locked during`), then start a new drain"
-        )
-    } else if let Some(reason) = host_suppressed {
-        format!(
-            "host_suppressed: this drain claims no more work on this host for its window \
-             because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"
-        )
-    } else if let Some(backoff) = owner_busy_backoff {
-        format!(
-            "owner_busy_backoff: a claimed leaf was released because the owner's store stayed \
-             locked ({}); this drain requests no claim until {}, when requests resume by \
-             themselves. This is busy-owner episode {} in this window; episode {} suppresses \
-             this host for the window instead; see `crews.owner_busy_backoff`",
-            backoff.reason,
-            backoff.until.to_rfc3339(),
-            backoff.episodes,
-            crate::application::distributed::OWNER_BUSY_EPISODE_LIMIT,
-        )
-    } else if crews.as_ref().is_some_and(PullCrewWindow::held_until_lift) {
-        // [ORB-14697, ORB-14902, ORB-15791] A usage limit and a capacity
-        // backoff lift by themselves, so this drain admits again once one does.
-        "no_runnable_crew: no crew this drain may run is free on this host right now, and each \
-         is held by a provider usage limit or a capacity backoff; see `crews.excluded`: each \
-         exclusion with an `until` lifts then and this drain admits again"
-            .to_string()
-    } else if crews
-        .as_ref()
-        .is_some_and(|window| window.allowed.is_some())
-    {
-        "no_runnable_crew: no crew this drain's --allow-crew permits can run on this host for \
-         this window; see `crews.allowed` and `crews.excluded`, then start a new drain with \
-         crews that run here"
-            .to_string()
-    } else {
-        "no_runnable_crew: every configured crew is excluded on this host for this window; see \
-         `crews.excluded`, fix the providers, and start a new drain"
-            .to_string()
-    };
+    let no_runnable_crew = no_runnable_crew_refusal(crews.as_ref());
     let delivery_refused = refused.len() - holding_refused.len();
-    let refusal = refusal
-        .or_else(|| {
-            (!holding_refused.is_empty()).then(|| {
-                format!(
-                    "settlement_refused: the owner refused {} recorded settlement(s) while \
-                     holding their claims, so no new claim is requested; `orbit run show \
-                     {run_id}` names the reason and the remedy",
-                    holding_refused.len()
-                )
-            })
-        })
-        .or_else(|| {
-            (delivery_refused > 0 && admitted == 0).then(|| {
-                format!(
-                    "delivery_settlement_refused: the owner refused {delivery_refused} \
-                     delivery-evidence settlement(s) while holding their claims; those \
-                     settlements back off and close once the owner ends their claims, \
-                     and other work is still admitted; `orbit run show {run_id}` names \
-                     the reason and the remedy"
-                )
-            })
-        })
-        .or_else(|| breaker_refusal(breaker.as_ref(), gate, probe_waits_on, now))
-        .or_else(|| {
-            // Pressure already has `resource_throttle`. A shutdown hold would
-            // otherwise look like an idle owner (`queued=0`, no refusal).
-            resource.throttle.is_none().then(|| {
-                host_shutdown_hold
-                    .as_ref()
-                    .map(crate::runtime::host_signal::ScheduledShutdown::hold_reason)
-            })?
-        })
-        .or_else(|| runs_nothing.then_some(no_runnable_crew))
-        .or_else(|| {
-            no_headroom.then(|| {
-                if capacity_held {
-                    return "forecast_no_headroom: a carried pull admission cannot reacquire \
-                            this host's forecast capacity; it remains unsent or unlaunched \
-                            until the requested work fits"
-                        .to_string();
-                }
-                "forecast_no_headroom: this host's load forecast has room for no work the owner \
-                 could grant under `machine.auto_concurrency` enforce; see the drain's \
-                 `pull_admission_fit`, which names the minute and resource each kind of work \
-                 would exceed. The drain requests again once its forecast has room"
-                    .to_string()
-            })
-        });
+    let refusal = pass_refusal(&RefusalInputs {
+        prior: refusal.as_deref(),
+        run_id: &run_id,
+        holding_refused: holding_refused.len(),
+        delivery_refused,
+        admitted,
+        breaker: breaker.as_ref(),
+        gate,
+        probe_waits_on,
+        now,
+        throttled: resource.throttle.is_some(),
+        host_shutdown_hold: host_shutdown_hold.as_ref(),
+        runs_nothing,
+        crew_refusal: &no_runnable_crew,
+        no_headroom,
+        capacity_held,
+    });
     let owner_answer = match idle_receipt.as_deref() {
         Some(receipt) => OwnerAnswer::Idle(receipt),
         None if admitted > 0 => OwnerAnswer::Claimed,

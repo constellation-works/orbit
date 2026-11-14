@@ -2060,7 +2060,7 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                     );
                 } else {
                     outcome.expect_err(case);
-                    let step = if case == "repeat_spent" {
+                    let step = if matches!(case, "repeat" | "repeat_spent") {
                         HandoffLandingStep::StopForRequeue
                     } else {
                         HandoffLandingStep::Stop {
@@ -2080,7 +2080,7 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                         } else if case == "shared_budget" {
                             &["CI retry was reserved", "observing without resending"]
                         } else {
-                            &["classified `candidate`", "automatic repair"]
+                            &["classified `candidate`", "returns the task to the backlog"]
                         },
                     );
                 }
@@ -2166,11 +2166,7 @@ fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
                 assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
                 if case == "valid_pr_rerun" {
                     outcome.expect_err(case);
-                    assert_steps(
-                        &forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: true }],
-                        case,
-                    );
+                    assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
                     assert_reason(&forge, case, &["classified `candidate`"]);
                     assert_not_sent(&forge, &["ci.rerun_failed"], case);
                 } else {
@@ -2237,11 +2233,7 @@ fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
                         "{error}"
                     );
                     assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-                    assert_steps(
-                        &forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: true }],
-                        case,
-                    );
+                    assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
                 } else {
                     assert_eq!(outcome.expect(case)["phase"], "landed");
                     assert_sent_len(&forge, "ci.rerun_failed", 1, case);
@@ -2549,7 +2541,7 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
         if repair_spent && tip_passes {
             // The spent repair requeues. The run is held and the refusal keeps
             // the candidate for the backlog return.
-            assert_spent_requeue_held(&error, &forge, &candidate, label);
+            assert_candidate_requeue_held(&error, &forge, &candidate, label);
         } else if tip_passes {
             // A green tip whose repair is still available is repaired, so it
             // ends the run failed. A red tip keeps its review stop below.
@@ -2597,11 +2589,10 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
     }
 }
 
-/// [ORB-15956] A check the candidate itself fails stops the landing for the
-/// one automatic repair, whose evidence carries the failed step's signature
-/// and log excerpt. The repair's own landing failing again stops, classified,
-/// for a backlog requeue instead of asking for a second repair [ORB-16890].
-/// That spent stop goes through check recovery's requeue and `refuse_pr`
+/// A check the candidate itself fails returns the candidate to the backlog
+/// with the failed step's signature and log excerpt, whether or not an
+/// automatic repair has already been spent.
+/// The stop goes through check recovery's requeue and `refuse_pr`
 /// with [`HandoffLandingStep::StopForRequeue`], and the landing run is held
 /// as `delivery_landing_repair_requeue` rather than failed [ORB-23953].
 /// A base whose job query succeeds with no jobs ran nothing to fail, which is
@@ -2610,11 +2601,11 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
 /// there records it as the head's own (`code`), upgraded from `unknown` with
 /// an audited reclassification.
 #[test]
-fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
+fn a_candidate_caused_check_failure_requeues_the_candidate() {
     for (repair_spent, base_ran, step) in [
-        (false, true, HandoffLandingStep::Stop { repairable: true }),
+        (false, true, HandoffLandingStep::StopForRequeue),
         (true, true, HandoffLandingStep::StopForRequeue),
-        (false, false, HandoffLandingStep::Stop { repairable: true }),
+        (false, false, HandoffLandingStep::StopForRequeue),
     ] {
         let (_sandbox, forge, candidate, base) = forge_fixture(false, repair_spent);
         forge.job(&candidate, failed(1, 11, CANDIDATE_ERROR));
@@ -2624,14 +2615,7 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
         }
 
         let error = land_now(&forge).expect_err("the candidate's failure stops the landing");
-        if repair_spent {
-            assert_spent_requeue_held(&error, &forge, &candidate, "candidate-caused");
-        } else {
-            assert!(
-                !matches!(&error, OrbitError::DeliveryRefused { .. }),
-                "candidate-caused: a candidate failure with repair remaining ends the run failed, never held: {error}"
-            );
-        }
+        assert_candidate_requeue_held(&error, &forge, &candidate, "candidate-caused");
 
         assert_steps(&forge.steps(), &[step], "candidate-caused");
         assert_reason(
@@ -2802,11 +2786,12 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
             case,
             "changed" | "fresh_green" | "github_changed" | "stale" | "github_stale"
         );
-        assert_steps(
-            &forge.steps(),
-            &[HandoffLandingStep::Stop { repairable }],
-            case,
-        );
+        let step = if repairable {
+            HandoffLandingStep::StopForRequeue
+        } else {
+            HandoffLandingStep::Stop { repairable: false }
+        };
+        assert_steps(&forge.steps(), &[step], case);
         assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
         assert_sent_len(
             &forge,
@@ -2976,11 +2961,7 @@ fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
         assert_sent_len(&forge, "ci.rerun_failed", usize::from(tip_passes), case);
         if tip_passes {
             assert_not_sent(&forge, &["pr.update_branch"], case);
-            assert_steps(
-                &forge.steps(),
-                &[HandoffLandingStep::Stop { repairable: true }],
-                case,
-            );
+            assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
             assert_reason(&forge, case, &["classified `candidate`"]);
             assert_eq!(
                 forge
@@ -3136,13 +3117,18 @@ fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
     );
 }
 
-/// A spent repair's `StopForRequeue` holds the landing. The recorded refusal
+/// A candidate check's `StopForRequeue` holds the landing. The recorded refusal
 /// is what the owner applies as a backlog return, and it keeps the accepted
 /// candidate. Finalization persists `held` for this code, which is neither
 /// `failed` nor `interrupted`.
-fn assert_spent_requeue_held(error: &OrbitError, forge: &FakeForge, candidate: &str, case: &str) {
+fn assert_candidate_requeue_held(
+    error: &OrbitError,
+    forge: &FakeForge,
+    candidate: &str,
+    case: &str,
+) {
     let OrbitError::DeliveryRefused { refusal, message } = error else {
-        panic!("{case}: a spent repair holds the landing instead of failing the run: {error}");
+        panic!("{case}: a candidate requeue holds the landing instead of failing the run: {error}");
     };
     assert_eq!(
         *refusal,
@@ -3585,8 +3571,7 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         land_now(&forge).expect_err("a failed required aggregate stops the landing");
 
         let step = match case {
-            "candidate" => HandoffLandingStep::Stop { repairable: true },
-            "spent" => HandoffLandingStep::StopForRequeue,
+            "candidate" | "spent" => HandoffLandingStep::StopForRequeue,
             _ => HandoffLandingStep::Stop { repairable: false },
         };
         assert_steps(&forge.steps(), &[step], case);
@@ -3632,7 +3617,7 @@ fn required_aggregate_after_recovery(updated: bool) {
     assert_sent_len(&forge, "ci.check_annotations", 1, "recovery");
     assert_steps(
         &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: true }],
+        &[HandoffLandingStep::StopForRequeue],
         "recovery",
     );
     assert_reason(
