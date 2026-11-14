@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
@@ -189,21 +189,19 @@ fn authenticated_dependency_ids<H: RuntimeHost + ?Sized>(
     if roots.is_empty() {
         return None;
     }
+    let request = super::super::rerun::RerunPlanRequest {
+        workspace,
+        pr: pr.to_string(),
+        head,
+        head_branch: &context.candidate.source_branch,
+        base_branch: &context.candidate.base_branch,
+        accepted_base: base,
+        run_id,
+        roots: &roots,
+        deadline_ms,
+    };
     let answer = host
-        .run_private_vcs_operation(
-            operations::CI_RERUN_PLAN,
-            json!({
-                "workspace_path": workspace,
-                "pr": pr.to_string(),
-                "head_sha": head,
-                "head_branch": context.candidate.source_branch,
-                "base_branch": context.candidate.base_branch,
-                "accepted_base": base,
-                "run_id": run_id,
-                "roots": roots,
-                "deadline_ms": deadline_ms,
-            }),
-        )
+        .run_private_vcs_operation(operations::CI_RERUN_PLAN, request.to_input())
         .ok()?;
     let dependencies = answer["plan"]["authentication"]["dependencies"].as_array()?;
     let record = dependencies

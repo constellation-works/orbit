@@ -1,6 +1,5 @@
 //! The unchanged-head classification rerun and the no-edit repair rerun.
 
-use super::super::super::super::operations;
 use super::super::super::super::pr::PullRequestStatus;
 use super::super::{
     jobs::{answers, commit_jobs, failed_step, job_label, unsuccessful},
@@ -8,11 +7,13 @@ use super::super::{
 };
 use super::conclusion::conclusion_root;
 use super::send::send_reserved_rerun;
-use super::{CiRerunStep, SHARED_RETRY_BUDGET_SPENT};
+use super::{
+    CiRerunStep, PlanMismatch, RerunPlanRequest, SHARED_RETRY_BUDGET_SPENT, authenticated_plan,
+    is_no_authenticated_plan_error,
+};
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRoot};
-use serde_json::json;
 use std::{collections::BTreeSet, path::Path};
 
 /// [model ranking §5.1] Rerun a failed set once on its unchanged head when no
@@ -62,22 +63,22 @@ pub(in crate::executor::automation::vcs::landing::checks) fn request_classificat
             signature: job.signature.clone(),
         })
         .collect::<Vec<_>>();
-    let request = json!({"workspace_path":workspace,"pr":pr.to_string(),"head_sha":head,"head_branch":branch,"base_branch":base_branch,"accepted_base":base,"run_id":run_id,"roots":roots,"deadline_ms":deadline_ms});
-    let response = host.run_private_vcs_operation(operations::CI_RERUN_PLAN, request)?;
-    let plan: CiRerunPlan = serde_json::from_value(response["plan"].clone()).map_err(|_| {
-        OrbitError::Execution("CI retry adapter returned no authenticated plan".into())
-    })?;
-    if plan.schema_version != 1
-        || plan.head_sha != head
-        || plan.pr_number != pr.to_string()
-        || plan.head_branch != branch
-        || plan.base_branch != base_branch
-        || plan.accepted_base != base
-        || plan.run_id != run_id
-        || plan.roots != roots
-    {
-        return Ok(None);
-    }
+    let request = RerunPlanRequest {
+        workspace,
+        pr: pr.to_string(),
+        head,
+        head_branch: branch,
+        base_branch,
+        accepted_base: base,
+        run_id,
+        roots: &roots,
+        deadline_ms,
+    };
+    let plan = match authenticated_plan(host, &request) {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(PlanMismatch)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
     match host.admit_ci_rerun(
         tasks,
         handoff,
@@ -179,10 +180,28 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
     if roots.is_empty() {
         return Ok(CiRerunStep::NotEligible);
     }
-    let request = json!({"workspace_path":workspace,"pr":pr.to_string(),"head_sha":head,"head_branch":branch,"base_branch":base_branch,"accepted_base":base,"run_id":run_id,"roots":roots,"deadline_ms":deadline_ms});
-    let response = match host.run_private_vcs_operation(operations::CI_RERUN_PLAN, request) {
-        Ok(response) => response,
+    let request = RerunPlanRequest {
+        workspace,
+        pr: pr.to_string(),
+        head,
+        head_branch: branch,
+        base_branch,
+        accepted_base: base,
+        run_id,
+        roots: &roots,
+        deadline_ms,
+    };
+    let plan = match authenticated_plan(host, &request) {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(PlanMismatch)) => {
+            return Ok(CiRerunStep::Wait(
+                "CI retry plan differs from the exact classified request".into(),
+            ));
+        }
         Err(error) => {
+            if is_no_authenticated_plan_error(&error) {
+                return Err(error);
+            }
             if error
                 .private_vcs_failure()
                 .is_some_and(|failure| failure.read_throttle.is_some())
@@ -194,22 +213,6 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
             )));
         }
     };
-    let plan: CiRerunPlan = serde_json::from_value(response["plan"].clone()).map_err(|_| {
-        OrbitError::Execution("CI retry adapter returned no authenticated plan".into())
-    })?;
-    if plan.schema_version != 1
-        || plan.head_sha != head
-        || plan.pr_number != pr.to_string()
-        || plan.head_branch != branch
-        || plan.base_branch != base_branch
-        || plan.accepted_base != base
-        || plan.run_id != run_id
-        || plan.roots != roots
-    {
-        return Ok(CiRerunStep::Wait(
-            "CI retry plan differs from the exact classified request".into(),
-        ));
-    }
     match host.admit_ci_rerun(
         tasks,
         None,

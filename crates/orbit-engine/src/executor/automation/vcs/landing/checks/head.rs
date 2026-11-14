@@ -4,7 +4,7 @@ use std::path::Path;
 
 use orbit_common::{OrbitError, ProviderReadThrottle};
 use orbit_types::workflow::CiRerunRoot;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
@@ -358,11 +358,23 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
             .ok()?
             .checked_add(15_000)
     })?;
-    let answer = host.run_private_vcs_operation(
-        super::super::super::operations::CI_RERUN_PLAN,
-        json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":branch,
-            "base_branch":base,"accepted_base":accepted,"run_id":run,"roots":roots,"deadline_ms":deadline}),
-    ).ok()?;
+    let request = super::rerun::RerunPlanRequest {
+        workspace,
+        pr: pr.to_string(),
+        head,
+        head_branch: branch,
+        base_branch: base,
+        accepted_base: accepted,
+        run_id: run,
+        roots: &roots,
+        deadline_ms: deadline,
+    };
+    let answer = host
+        .run_private_vcs_operation(
+            super::super::super::operations::CI_RERUN_PLAN,
+            request.to_input(),
+        )
+        .ok()?;
     let plan = &answer["plan"];
     let records = plan["authentication"]["dependencies"].as_array()?;
     let record = records
