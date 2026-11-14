@@ -42,12 +42,15 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 #[cfg(target_os = "linux")]
 use std::path::Path;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Once;
 
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_config::{MemoryLimit, WorkerContainmentSettings};
+
+use crate::application::job::run::{
+    SCOPE_UNIT_PREFIX, SCOPE_UNIT_SUFFIX, WorkerScopeCgroup, event_count, stat_value,
+};
 
 /// Error code on the diagnostic step of a run that failed after its worker
 /// scope hit a memory or task limit.
@@ -55,12 +58,7 @@ pub(crate) const WORKER_RESOURCE_LIMIT_ERROR_CODE: &str = "worker_resource_limit
 /// Diagnostic code for a strict launch refused before any worker process ran.
 pub(crate) const WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE: &str = "worker_containment_unavailable";
 
-/// Unit-name prefix of every worker scope. Breach detection only trusts
-/// counters from a cgroup carrying it, so a worker that fell back to its
-/// parent's service cgroup never blames sibling work on its own run.
-const SCOPE_UNIT_PREFIX: &str = "orbit-worker-";
 const SCRIPT_SCOPE_UNIT_PREFIX: &str = "orbit-script-";
-const SCOPE_UNIT_SUFFIX: &str = ".scope";
 const SYSTEMD_RUN: &str = "systemd-run";
 /// The kernel OOM preference every worker launches with, well above the
 /// user manager's 100 and the default 0 of the drain or service that launched
@@ -531,13 +529,6 @@ fn probe_user_scope(env: &[(OsString, OsString)]) -> Result<(), String> {
     ))
 }
 
-/// The cgroup of one worker scope, located from a process inside it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkerScopeCgroup {
-    unit: String,
-    directory: PathBuf,
-}
-
 /// A worker scope's recorded limit hits. Only built when at least one counter
 /// is non-zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -549,6 +540,9 @@ pub(crate) struct ScopeLimitBreach {
     tasks_max: Option<String>,
 }
 
+/// Where the pipeline locates a worker's scope from a process inside it. The
+/// scope's recorded-state reads (`from_recorded`, `counters`, `unit_result`)
+/// are owned by the run record, which reconciliation reads them through.
 impl WorkerScopeCgroup {
     /// The worker scope `pid` runs in, if it runs in one.
     pub(crate) fn of_process(pid: u32) -> Option<Self> {
@@ -580,16 +574,16 @@ impl WorkerScopeCgroup {
         if !(unit.starts_with(SCOPE_UNIT_PREFIX) && unit.ends_with(SCOPE_UNIT_SUFFIX)) {
             return None;
         }
-        Some(Self {
-            unit: unit.to_string(),
-            directory: cgroup_root.join(path.trim_start_matches('/')),
-        })
+        Some(Self::located(
+            unit.to_string(),
+            cgroup_root.join(path.trim_start_matches('/')),
+        ))
     }
 
     /// The scope's limit hits so far, or `None` when it hit none (or its
     /// cgroup is already gone).
     pub(crate) fn limit_breach(&self) -> Option<ScopeLimitBreach> {
-        let read = |name: &str| std::fs::read_to_string(self.directory.join(name)).ok();
+        let read = |name: &str| std::fs::read_to_string(self.directory().join(name)).ok();
         let oom_kills = read("memory.events").map_or(0, |events| event_count(&events, "oom_kill"));
         let tasks_refused = read("pids.events").map_or(0, |events| event_count(&events, "max"));
         if oom_kills == 0 && tasks_refused == 0 {
@@ -597,108 +591,12 @@ impl WorkerScopeCgroup {
         }
         let limit = |name: &str| read(name).map(|value| value.trim().to_string());
         Some(ScopeLimitBreach {
-            unit: self.unit.clone(),
+            unit: self.unit().to_string(),
             oom_kills,
             tasks_refused,
             memory_max: limit("memory.max"),
             tasks_max: limit("pids.max"),
         })
-    }
-
-    /// Rebuild the scope a supervisor recorded for a worker it launched
-    /// [ORB-17179]. Only a worker-scope unit whose cgroup directory sits under
-    /// the cgroup v2 root and ends in that unit is accepted, so a recorded
-    /// value can never point the counter reads anywhere else.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn from_recorded(unit: &str, directory: &str) -> Option<Self> {
-        let directory = PathBuf::from(directory);
-        let contained = directory.starts_with("/sys/fs/cgroup")
-            && directory.components().all(|component| {
-                matches!(
-                    component,
-                    std::path::Component::RootDir | std::path::Component::Normal(_)
-                )
-            });
-        (contained
-            && unit.starts_with(SCOPE_UNIT_PREFIX)
-            && unit.ends_with(SCOPE_UNIT_SUFFIX)
-            && directory.file_name().is_some_and(|name| name == unit))
-        .then(|| Self {
-            unit: unit.to_string(),
-            directory,
-        })
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn from_recorded(_unit: &str, _directory: &str) -> Option<Self> {
-        None
-    }
-
-    /// The scope's systemd unit name.
-    pub(crate) fn unit(&self) -> &str {
-        &self.unit
-    }
-
-    /// The scope's cgroup directory.
-    pub(crate) fn directory(&self) -> &std::path::Path {
-        &self.directory
-    }
-
-    /// The scope's OOM-kill and refused-fork counters, zero or not. `None`
-    /// when neither counter file can be read, as once systemd has removed
-    /// the scope's cgroup.
-    pub(crate) fn counters(&self) -> Option<ScopeCounters> {
-        let read = |name: &str| std::fs::read_to_string(self.directory.join(name)).ok();
-        let oom_kills = read("memory.events").map(|events| event_count(&events, "oom_kill"));
-        let tasks_refused = read("pids.events").map(|events| event_count(&events, "max"));
-        (oom_kills.is_some() || tasks_refused.is_some()).then_some(ScopeCounters {
-            oom_kills,
-            tasks_refused,
-        })
-    }
-
-    /// The unit's state and result while the systemd user manager still
-    /// holds it, as `state=<ActiveState>, result=<Result>`. `None` once the
-    /// manager has collected the unit, or when it cannot be asked.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn unit_result(&self) -> Option<String> {
-        use orbit_common::process::bounded::run_bounded_capped_typed;
-        use std::time::Duration;
-
-        let mut command = Command::new("systemctl");
-        command.args([
-            "--user",
-            "show",
-            &self.unit,
-            "--property=LoadState",
-            "--property=ActiveState",
-            "--property=Result",
-        ]);
-        let output = run_bounded_capped_typed(&mut command, Duration::from_secs(5), 4096).ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let property = |key: &str| {
-            stdout
-                .lines()
-                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        };
-        if property("LoadState") != Some("loaded") {
-            return None;
-        }
-        Some(format!(
-            "state={}, result={}",
-            property("ActiveState").unwrap_or("unknown"),
-            property("Result").unwrap_or("unknown"),
-        ))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn unit_result(&self) -> Option<String> {
-        None
     }
 
     /// The scope's cumulative CPU time and current non-reclaimable memory, or
@@ -710,7 +608,7 @@ impl WorkerScopeCgroup {
     /// `file` includes tmpfs and shared memory, which cannot be dropped, so
     /// `shmem` is added back.
     pub(crate) fn usage(&self) -> Option<ScopeUsage> {
-        let read = |name: &str| std::fs::read_to_string(self.directory.join(name)).ok();
+        let read = |name: &str| std::fs::read_to_string(self.directory().join(name)).ok();
         let cpu_usage_usec = stat_value(&read("cpu.stat")?, "usage_usec")?;
         let current: u64 = read("memory.current")?.trim().parse().ok()?;
         let memory_stat = read("memory.stat")?;
@@ -723,16 +621,6 @@ impl WorkerScopeCgroup {
     }
 }
 
-/// A worker scope's limit counters as read, each `None` when its file was
-/// unreadable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ScopeCounters {
-    /// `memory.events` `oom_kill`: processes the kernel OOM-killed in the scope.
-    pub(crate) oom_kills: Option<u64>,
-    /// `pids.events` `max`: forks refused at the scope's task limit.
-    pub(crate) tasks_refused: Option<u64>,
-}
-
 /// One reading of a worker scope's resource counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScopeUsage {
@@ -740,15 +628,6 @@ pub(crate) struct ScopeUsage {
     pub(crate) cpu_usage_usec: u64,
     /// `memory.current - file + shmem`, in bytes.
     pub(crate) memory_bytes: u64,
-}
-
-/// The value of `key` in a cgroup flat-keyed file (`<key> <value>` lines).
-fn stat_value(content: &str, key: &str) -> Option<u64> {
-    content
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .find(|(name, _)| *name == key)
-        .and_then(|(_, value)| value.trim().parse().ok())
 }
 
 impl ScopeLimitBreach {
@@ -776,9 +655,4 @@ impl ScopeLimitBreach {
             hits.join("; "),
         )
     }
-}
-
-/// The value of `key` in a cgroup `*.events` file (`<key> <count>` lines).
-pub(crate) fn event_count(events: &str, key: &str) -> u64 {
-    stat_value(events, key).unwrap_or(0)
 }

@@ -17,6 +17,10 @@
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `rescue_candidate` — keeping a stopped run's candidate under a rescue ref.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
+//! - `audit_record` — the job-run audit trail's store writers (`record_pipeline_audit`, diagnostic steps).
+//! - `worker_exit` — the persisted worker-exit record and the readers reconciliation uses.
+//! - `worker_scope` — the read side of a worker's containment scope (recorded scope, counters, unit result).
+//! - `definition` — where a run's pinned job definition lives and how it is read back.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
 //! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
 //!   run-failure observation query run views share.
@@ -26,11 +30,13 @@
 
 mod actions;
 mod admissions_stop;
+mod audit_record;
 mod build_budget;
 mod child_timeout;
 mod completion_audit;
 mod conflict;
 mod deferral;
+mod definition;
 mod delivery;
 mod display_steps;
 mod drain_cancel;
@@ -50,7 +56,9 @@ mod state_write;
 mod step_recovery;
 mod types;
 mod window_extension;
+mod worker_exit;
 mod worker_limit;
+mod worker_scope;
 
 /// A claimed worker conclusively exited without a recorded cancellation.
 /// The reconciler cannot reap its exit signal once the process is gone; it
@@ -66,7 +74,12 @@ pub use admissions_stop::{
     DrainAdmissionsStopChange, DrainAdmissionsStopOutcome, DrainAdmissionsStopRequest,
     DrainAdmissionsStopResult, RemainingDrainChild,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use audit_record::watchdog_diagnostic_step;
+pub(crate) use audit_record::{PipelineAuditRow, diagnostic_step, pipeline_audit};
 pub(crate) use child_timeout::{kept_candidate, kept_clause};
+pub(in crate::application::job) use definition::pipeline_worker_file_name;
+pub(crate) use definition::run_definition_snapshot_path;
 pub(crate) use delivery::CodebaseDeliveryScan;
 pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_display_steps};
 pub use failure_streak::{JOB_FAILURE_STREAK_WARN, JobFailureStreak};
@@ -94,7 +107,15 @@ pub use window_extension::{
     DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
 };
 pub(crate) use window_extension::{drain_deadline, pull_window_closed};
+pub(in crate::application::job) use worker_exit::NO_EXIT_OBSERVED;
+pub(crate) use worker_exit::{
+    ScopeEvidence, SignalSender, WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WorkerExit,
+};
 pub use worker_limit::{
     DrainWorkerLimitChange, DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome,
     DrainWorkerLimitRequest,
+};
+pub(crate) use worker_scope::WorkerScopeCgroup;
+pub(in crate::application::job) use worker_scope::{
+    SCOPE_UNIT_PREFIX, SCOPE_UNIT_SUFFIX, event_count, stat_value,
 };

@@ -1167,6 +1167,44 @@ class RelativeImportTests(unittest.TestCase):
                                   "use super::super::{distributed::Probe, pull_drain::Other};",
                                   rejected=False)
 
+    def test_job_run_cannot_reach_pipeline(self):
+        # [ORB-24781] `job/run` sits below `job/pipeline`. One batch per
+        # detector, because the guard's `||` chain stops at the first hit.
+        self.check_rows([
+            ("job/run/reconcile.rs", "use crate::application::job::pipeline::Probe;\n"),
+            ("job/run/audit.rs", "fn probe() {\n    crate::application::job::pipeline::probe();\n}\n"),
+            ("job/run/definition.rs", "use crate::application::job::{pipeline::Probe, run::Other};\n"),
+            ("job/run/delivery/observation.rs",
+             "use crate::application::job::{\n    run::Other,\n    pipeline::{Probe},\n};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("job/run/reconcile.rs", "use super::super::pipeline::Probe;\n"),
+            ("job/run/mod.rs", "use super::pipeline::Probe;\n"),
+            ("job/run/delivery/observation.rs", "use super::super::super::pipeline::Probe;\n"),
+            ("job/run/conflict.rs", "use super::super::{pipeline::Probe};\n"),
+            ("job/run/window_extension.rs", "use super::super::{run::Other, pipeline::{Probe}};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("job/run/reconcile.rs", "fn drive(&self) {\n    self.pipeline_only_probe();\n}\n"),
+            ("job/run/conflict.rs", "fn drive() {\n    OrbitRuntime::pipeline_only_probe(self);\n}\n"),
+        ], rejected=True, shared={
+            "job/pipeline/admission.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn pipeline_only_probe(&self) {}\n}\n"})
+
+    def test_job_run_owned_names_and_pipeline_imports_from_run_accepted(self):
+        self.check_rows([
+            ("job/pipeline/worker/exit.rs",
+             "use crate::application::job::run::{Probe, WorkerExit};\nuse super::super::super::run::Other;\n"),
+            ("job/run/tests/reconcile.rs", "use crate::application::job::pipeline::Probe;\n"),
+            ("job/run/reconcile.rs", "use super::worker_exit::Probe;\nuse super::owner::Other;\n"),
+            ("job/run/conflict.rs",
+             "fn drive(&self) {\n    self.pipeline_private_probe();\n    self.run_owned_probe();\n}\n"),
+        ], rejected=False, shared={
+            "job/pipeline/admission.rs":
+                "impl OrbitRuntime {\n    pub(super) fn pipeline_private_probe(&self) {}\n}\n",
+            "job/run/audit_record.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn run_owned_probe(&self) {}\n}\n"})
+
     def check_config(self, files, rejected):
         src = self.root / "crates/orbit-config/src"
         paths = [src / relative for relative in files]

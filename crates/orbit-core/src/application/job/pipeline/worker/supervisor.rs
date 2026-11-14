@@ -21,16 +21,16 @@ use chrono::DateTime;
 use orbit_store::contracts::{AuditEventStoreBackend, JobRunStoreBackend};
 
 use super::command::WorkerCommandConfig;
-use super::exit::{
-    WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WorkerExit, note_exit_after_reconciliation,
-};
-use super::record::{self, PipelineAuditRow};
-use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
+use super::exit::note_exit_after_reconciliation;
+use super::scope::WORKER_RESOURCE_LIMIT_ERROR_CODE;
 use super::*;
 use crate::application::job::pipeline::wait::announce_worker_exit;
 use orbit_types::workflow::OPERATOR_STOPPED_ERROR_CODE;
 
-use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
+use crate::application::job::run::{
+    PipelineAuditRow, WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WORKER_TERMINATED_ERROR_CODE,
+    WorkerExit, WorkerScopeCgroup, diagnostic_step, pipeline_audit,
+};
 use crate::runtime::event_bus::EventLog;
 
 #[cfg(unix)]
@@ -807,7 +807,7 @@ impl PipelineWorkerSupervisor {
         message: &str,
         state: JobRunState,
     ) -> Result<(), OrbitError> {
-        record::diagnostic_step(
+        diagnostic_step(
             self.runs.as_ref(),
             run,
             started_at,
@@ -850,7 +850,7 @@ impl PipelineWorkerSupervisor {
         arguments: Value,
         error_message: Option<String>,
     ) -> Result<(), OrbitError> {
-        record::pipeline_audit(
+        pipeline_audit(
             self.audit_events.as_ref(),
             self.workspace(),
             PipelineAuditRow {

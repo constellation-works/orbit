@@ -1,4 +1,5 @@
 use super::*;
+use crate::application::job::run::pipeline_worker_file_name;
 
 const PIPELINE_WORKER_LOG_TAIL_BYTES: u64 = 16 * 1024;
 
@@ -7,29 +8,6 @@ pub(crate) fn pipeline_worker_log_path(
     run_id: &str,
 ) -> Result<PathBuf, OrbitError> {
     Ok(logs_dir.join(pipeline_worker_file_name(run_id, ".worker.log")?))
-}
-
-/// Turn a persisted run ID into a filename only after rejecting path syntax.
-///
-/// Run IDs normally come from the store, but worker entry points also accept
-/// an ID from a process argument. Keeping this check at the shared filename
-/// boundary prevents either source from steering pipeline artifacts outside
-/// their owning directory.
-pub(super) fn pipeline_worker_file_name(run_id: &str, suffix: &str) -> Result<String, OrbitError> {
-    let safe = !run_id.is_empty()
-        && run_id != "."
-        && run_id != ".."
-        && !run_id.contains(['/', '\\'])
-        && run_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
-    if !safe {
-        return Err(OrbitError::InvalidInput(format!(
-            "job run id must be a safe filename stem: {run_id}"
-        )));
-    }
-
-    Ok(format!("{run_id}{suffix}"))
 }
 
 /// Resolve the worker-log directory before using it for any file operation.

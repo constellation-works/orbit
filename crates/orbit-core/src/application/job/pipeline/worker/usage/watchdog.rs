@@ -90,7 +90,7 @@ impl OrbitRuntime {
                             tracing::error!(%error, "could not persist watchdog resource evidence");
                         }
                         let started_at = run.started_at.unwrap_or(run.scheduled_at);
-                        if let Err(error) = crate::application::job::pipeline::worker::record::watchdog_diagnostic_step(
+                        if let Err(error) = crate::application::job::run::watchdog_diagnostic_step(
                             runtime.stores().jobs(),
                             &run,
                             started_at,

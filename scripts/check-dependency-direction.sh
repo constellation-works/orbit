@@ -624,7 +624,7 @@ def visibility(toks, i, parts):
             if inner[:1] == ["in"] and inner[1:2] == ["crate"]:
                 return inner[2:]
     return None
-lower_path = [app.name, *([module] if module else [])]
+lower_path = [app.name, *(module.split("/") if module else [])]
 names = set()
 for top in upper:
     # A module is a directory or, like `tag_instructions`, a single file.
@@ -1183,6 +1183,25 @@ for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_re
     fail=1
   fi
 done
+
+# [ORB-24781] `job/run` (the run record's lifecycle: queries, cancellation,
+# reconciliation and drain controls) sits below `job/pipeline` (submission,
+# admission and worker execution). Run owns the job-run audit writer, the
+# worker-exit evidence and its scope reads, and the run-definition reads, so a
+# production file under `job/run/` must not name `job::pipeline` by path, by
+# grouped tree or by a `super::` chain, and must not call an inherent
+# `OrbitRuntime` method that an `impl OrbitRuntime` block under `job/pipeline/`
+# defines with a visibility that reaches it. The names are derived from those
+# blocks. The pipeline reads run through `job::run`, never the reverse.
+job_run_src="$app_src/job/run"
+if dependency_matches -n '\bjob::pipeline\b' "$job_run_src" -g '*.rs' -g '!**/tests/**' -g '!**/tests.rs' ||
+  dependency_matches -n -U '\bjob::\{[^}]*\bpipeline\b' \
+    "$job_run_src" -g '*.rs' -g '!**/tests/**' -g '!**/tests.rs' ||
+  ! super_chains_into "$app_src/job" run pipeline ||
+  ! inherent_calls_into "$app_src" job/run job/pipeline '' ''; then
+  echo "orbit-core job/run must not name job::pipeline or call its inherent OrbitRuntime methods; run sits below the pipeline and owns the audit writer, worker-exit evidence and definition reads [ORB-24781]"
+  fail=1
+fi
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

@@ -7,11 +7,11 @@
 //! through the `test-support` override. The old Cargo path heuristic was
 //! removed because filename layout does not prove which entry point ran.
 
-use super::log::pipeline_worker_file_name;
 #[cfg(test)]
 use super::scope::contain_worker_command_with_availability;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
+use crate::application::job::run::pipeline_worker_file_name;
 use orbit_common::security::child_env::{
     MCP_MANAGED_BINDING_ENV_VARS, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
 };
@@ -114,14 +114,6 @@ pub(crate) fn pipeline_worker_profile_file(
     Ok(Some(
         logs_dir.join(pipeline_worker_file_name(run_id, ".%p.profraw")?),
     ))
-}
-
-/// Where a submitted run's pinned job definition lives.
-pub(crate) fn run_definition_snapshot_path(
-    job_runs_dir: &Path,
-    run_id: &str,
-) -> Result<PathBuf, OrbitError> {
-    Ok(job_runs_dir.join(pipeline_worker_file_name(run_id, ".job.yaml")?))
 }
 
 /// The durable input one workspace drain carries for its whole window.

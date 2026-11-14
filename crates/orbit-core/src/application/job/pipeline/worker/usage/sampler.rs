@@ -44,9 +44,10 @@ use orbit_store::contracts::{HostResourceMinute, ResourceUsageStoreBackend, RunR
 use orbit_types::workflow::JobRun;
 
 use super::super::delivery_class::DeliveryResourceClass;
-use super::super::scope::{ScopeUsage, WorkerScopeCgroup};
+use super::super::scope::ScopeUsage;
 use super::tree::TreeSampler;
 use crate::OrbitRuntime;
+use crate::application::job::run::WorkerScopeCgroup;
 use crate::runtime::host_resource::{
     HostUsageReading, RESOURCE_SAMPLE_INTERVAL as SAMPLE_INTERVAL, read_host_usage,
 };

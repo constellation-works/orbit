@@ -24,7 +24,7 @@ use super::super::types::JobRunCancelOutcome;
 use super::drain_cancel::in_progress_task;
 use super::{insert_pending_run, test_runtime};
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::WORKER_EXIT_AUDIT;
+use crate::application::job::run::WORKER_EXIT_AUDIT;
 use crate::application::tests::run_isolated_test;
 
 /// A process alone in its own group, as a pipeline worker runs.

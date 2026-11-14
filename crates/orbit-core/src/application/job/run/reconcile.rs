@@ -9,9 +9,6 @@ use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
-use crate::application::job::pipeline::{
-    self, reconciled_worker_exit_clause, recorded_host_manager_stop,
-};
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -22,6 +19,9 @@ use super::owner::{
     PendingStaleReason, owner_identity_error_code, pending_run_stale_reason,
     running_run_owner_is_stale, running_run_owner_stale_reason, stale_job_run_message,
     stale_pending_run_message,
+};
+use super::worker_exit::{
+    reconciled_worker_exit_clause, recorded_host_manager_stop, recorded_worker_exit,
 };
 
 /// Call-scoped reuse of healthy owner classifications.
@@ -464,7 +464,7 @@ impl OrbitRuntime {
     fn orphaned_worker_exit_at(&self, run: &JobRun) -> Option<DateTime<Utc>> {
         let now = Utc::now();
         let floor = run.started_at.unwrap_or(run.scheduled_at);
-        pipeline::recorded_worker_exit(self.stores().audit_events(), &run.run_id, run.pid?)
+        recorded_worker_exit(self.stores().audit_events(), &run.run_id, run.pid?)
             .unwrap_or_else(|error| {
                 tracing::debug!(
                     target: "orbit.core.job_run",

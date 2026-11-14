@@ -4,7 +4,6 @@
 //!   lands.
 //! - `supervisor` — the parent-side [`PipelineWorkerSupervisor`] that spawns a
 //!   worker, watches its startup, and settles a run whose worker died.
-//! - `record` — the store writes both sides share.
 //! - `exit` — the durable record of how a worker process ended, which the
 //!   supervisor writes and stale-run reconciliation reads.
 //!
@@ -34,7 +33,6 @@ mod delivery_class;
 mod execute;
 pub(super) mod exit;
 pub(super) mod log;
-mod record;
 pub(super) mod scope;
 mod start;
 pub(super) mod supervisor;

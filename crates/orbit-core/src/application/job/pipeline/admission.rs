@@ -1,7 +1,6 @@
 use super::*;
 
 use crate::application::job::{JobAutoConcurrencyPort, ReviewAdmissionHook, crew_pools, delivery};
-use orbit_common::fs::io::open_read_only_no_follow;
 
 use crate::application::job::catalog::check_auto_task_job;
 
@@ -589,61 +588,6 @@ impl OrbitRuntime {
                 path.display()
             ))
         })
-    }
-    /// The YAML pinned beside `run_id`, when this run has one.
-    ///
-    /// Direct-path submission writes the snapshot so a later worker — and a
-    /// later resume — executes that definition. A missing file means the run
-    /// is catalog-backed. A symlink, non-regular file, or present file that
-    /// cannot be read or parsed is an error: resume must not silently
-    /// substitute a catalog asset of the same name.
-    pub(crate) fn read_run_definition_snapshot(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<(JobV2, String)>, OrbitError> {
-        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, run_id)?;
-        // The shared filename validator confines the leaf to job_runs_dir.
-        // Resolve its parent and open it without following the final component;
-        // all checks and the read then use that same descriptor.
-        let mut file = match open_read_only_no_follow(&snapshot) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "open job run definition snapshot '{}': {error}",
-                    snapshot.display()
-                )));
-            }
-        };
-        let metadata = file.metadata().map_err(|error| {
-            OrbitError::InvalidInput(format!("inspect {}: {error}", snapshot.display()))
-        })?;
-        if !metadata.is_file() {
-            return Err(OrbitError::InvalidInput(format!(
-                "job run definition snapshot must be a regular file: {}",
-                snapshot.display()
-            )));
-        }
-        let mut yaml = String::new();
-        file.read_to_string(&mut yaml).map_err(|error| {
-            OrbitError::InvalidInput(format!("read {}: {error}", snapshot.display()))
-        })?;
-        let asset = load_job_asset(&yaml).map_err(|error| {
-            OrbitError::InvalidInput(format!("load {}: {error}", snapshot.display()))
-        })?;
-        Ok(Some((asset.spec, yaml)))
-    }
-    /// The definition a persisted run must execute: its own snapshot when the
-    /// submission pinned one, otherwise the catalog asset named by the run.
-    pub(crate) fn resolve_run_definition(
-        &self,
-        run: &JobRun,
-    ) -> Result<(PathBuf, JobV2), OrbitError> {
-        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, &run.run_id)?;
-        if let Some((spec, _)) = self.read_run_definition_snapshot(&run.run_id)? {
-            return Ok((snapshot, spec));
-        }
-        self.load_v2_job_asset_by_name(&run.job_id)
     }
     /// [ORB-10965] Record a duplicate Start that was dropped without a second
     /// execution.
