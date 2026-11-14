@@ -43,7 +43,10 @@ pub use publication::{
 pub use record::{
     FINAL_RECOVERY_DECIDED_EVENT, JobStepInvocation, PILOT_ADMISSION_DECIDED_EVENT, TaskDecision,
 };
-pub use recovery::{PilotAdmissionVerdict, RecordedFinalRecovery};
+pub use recovery::{
+    PilotAdmissionOperatorRecord, PilotAdmissionRecordRefusal, PilotAdmissionVerdict,
+    RecordedFinalRecovery,
+};
 pub use request::{
     DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_MODEL_CONFIRMED_EVENT,
     DECISION_REOPENED_EVENT, DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT,

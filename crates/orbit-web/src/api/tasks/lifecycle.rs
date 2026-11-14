@@ -51,7 +51,9 @@ pub(in crate::api) async fn reject_task_action(
     .await
 }
 
-fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str) -> Response {
+/// Map a trusted human-write error onto the operator routes' refusal contract.
+/// A missing task is 404 `task_not_found`; invalid input is 409 with `code`.
+pub(super) fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str) -> Response {
     match error {
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Task,

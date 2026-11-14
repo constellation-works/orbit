@@ -10,14 +10,15 @@ use orbit_common::security::release::sha256_hex;
 use orbit_store::contracts::{TaskListFilter, TaskRow};
 use orbit_types::task::{
     ArtifactManifestFileV2, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
-    PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
-    TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus, decision_requests_from_history,
+    PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionOperatorRecord, PilotAdmissionVerdict, Task,
+    TaskArtifact, TaskComment, TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus,
+    decision_requests_from_history,
 };
 use orbit_types::tool::McpCapability;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::super::positive_validation_tools;
+use super::super::super::{TaskUpdateParams, positive_validation_tools};
 
 use super::super::super::helpers::is_automation_actor;
 use super::super::super::legacy_decisions;
@@ -772,12 +773,33 @@ impl OrbitRuntime {
 
     /// Whether the task currently carries a pilot-admission hold that an
     /// evidenced operator `clear` or `approve-anyway` decision can resolve.
-    /// The dashboard's typed operator route checks this before writing, so a
-    /// task with no matching hold is refused without a comment.
+    /// [`Self::record_pilot_admission_as_human`] checks this before writing,
+    /// so a task with no matching hold is refused without a comment.
     pub fn has_resolvable_pilot_admission_hold(&self, task_id: &str) -> Result<bool, OrbitError> {
         Ok(self
             .pilot_admission_hold(task_id)?
             .is_some_and(|hold| hold.is_resolvable()))
+    }
+
+    /// Record an operator's pilot-admission decision as a trusted human write
+    /// under `actor_label`. A task with no resolvable hold is refused and
+    /// nothing is written. The comment is the record's canonical rendering.
+    pub fn record_pilot_admission_as_human(
+        &self,
+        task_id: &str,
+        record: &PilotAdmissionOperatorRecord,
+        actor_label: String,
+    ) -> Result<Task, OrbitError> {
+        if !self.has_resolvable_pilot_admission_hold(task_id)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "task {task_id} has no pilot admission hold to record a decision for"
+            )));
+        }
+        let params = TaskUpdateParams {
+            comment: Some(record.comment()),
+            ..TaskUpdateParams::default()
+        };
+        self.update_task_as_human(task_id, params, actor_label)
     }
 
     /// Only the trusted human update path calls this. Agent-authored comment
