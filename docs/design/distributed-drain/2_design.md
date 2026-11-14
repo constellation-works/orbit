@@ -718,7 +718,7 @@ recovery. TTL is not settlement.
 **Settlement ownership** ([ORB-13663]). The admission record is the outbox, and no single process
 owns delivery:
 
-- *Recording.* Run finalization (`finalize_job_run_with_cleanup_after_prior_read`), in whichever
+- *Recording.* Run finalization (`RuntimeKernel::finalize_job_run_with_reservation_cleanup_and_diagnostic`), in whichever
   process terminalizes a claimed leaf — its worker, a cancel, orphan reconciliation — records the
   settlement a terminal leaf implies: a `Launching` or `Launched` leaf ran and failed; a `Bound`
   leaf never launched, so its claim is released (below). Success already recorded its handoff. A
