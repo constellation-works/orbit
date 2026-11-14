@@ -181,14 +181,14 @@ You can also manage remote entries in
 Run `orbit host list`, `orbit host show <host>`, and `orbit doctor` on the
 calling machine. `list` and `show` are reports: an unreachable row does not
 by itself make them exit with failure. Doctor's **hosts** row is the health
-check. It fails for an invalid or conflicting host file, an identity
-mismatch, or version/protocol skew on a replica's owner; it warns for
-unreachable hosts, other skew, missing owner routes, and legacy-only files.
+check. It fails for an invalid host file, a retired destinations file, an
+identity mismatch, or version/protocol skew on a replica's owner; it warns
+for unreachable hosts, other skew, and missing owner routes.
 
 | Code | What to do |
 |---|---|
 | `unknown_host` | Use an exact name or machine ID from `orbit host list`, or register the target with `orbit host add`. |
-| `unknown_task_prefix` | Register the machine that minted the task, or select a workspace explicitly to read a mirror. Legacy rows have no prefix until migrated. |
+| `unknown_task_prefix` | Register the machine that minted the task, or select a workspace explicitly to read a mirror. |
 | `task_prefix_remote` | Use federated MCP or connect to the host named by the error. This MCP server does not relay. |
 | `unreachable_destination` / `owner_unreachable` | Check the SSH target, non-interactive login, and remote `orbit` on `PATH`. Restore the route; prefix routing has no mirror fallback. |
 | `host_too_old` | Upgrade the remote to a build that reports its task prefix. |
@@ -199,4 +199,4 @@ unreachable hosts, other skew, missing owner routes, and legacy-only files.
 | `host_identity_mismatch` | Verify that SSH still reaches the intended installation. If it was replaced, remove and add the route again after addressing its dependents. |
 | `host_in_use` | Inspect `orbit host show <host>` and re-home the listed replica checkouts or stop their pull drains before removal. |
 | `stale_route` / `unknown_selector` | The host does not list that workspace, or its name matches more than one. Check its live list and use the exact workspace ID. |
-| `legacy_host_unreachable` / `host_file_conflict` | Follow the [legacy migration procedure](../../reference/config/#legacy-migration). |
+| `host_file_conflict` | Follow the [retired destinations file recovery](../../reference/config/#legacy-migration). |

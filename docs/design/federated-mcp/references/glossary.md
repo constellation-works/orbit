@@ -18,7 +18,7 @@ Vocabulary for the federated MCP mux. Standard industry terms (proxy, mux, TTL) 
 
 | Term | Meaning |
 |------|---------|
-| **Ambiguous destination** | Duplicate `machine_id` among registered hosts (or legacy destination rows). Raised at **config load** as `ambiguous_destination`, not per call. A token that is not uniquely host-qualified (bare `ws_*`) is `unknown_selector`, not this class. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
+| **Ambiguous destination** | Duplicate `machine_id` among registered hosts. Raised at **config load** as `ambiguous_destination`, not per call. A token that is not uniquely host-qualified (bare `ws_*`) is `unknown_selector`, not this class. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Callers file** | Retired. `~/.orbit/mcp-callers.toml` declared a destination-side ceiling; removed in [ORB-12564] because an SSH login to a destination is ownership of it, so the ceiling lived in a file the caller could rewrite. A leftover file is ignored with one warning. [4_decisions.md](../4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) |
 | **Capabilities** | Classes a destination holds for a workspace, at least `control_plane` and `execute`. Determined by the destination's local catalog role. List advertisement is a hint that may lag; Destination Core refusal is the correctness boundary. A workspace with absent `owner_machine_id` cannot advertise `control_plane`. [2_design.md §3](../2_design.md) |
 | **Checkout health** | Repo-root presence at the destination (`active` / `invalid` / `unknown` when the host cannot be probed). Not SSH reachability. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |

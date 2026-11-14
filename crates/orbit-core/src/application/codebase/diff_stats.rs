@@ -44,7 +44,7 @@ use crate::application::task::TaskCodebasePort;
 /// Done tasks one backfill diffs and records at most.
 pub const DIFF_STATS_BACKFILL_DEFAULT_LIMIT: usize = 500;
 /// The most rows one backfill may be asked to record.
-pub const DIFF_STATS_BACKFILL_MAX_LIMIT: usize = 5_000;
+pub(crate) const DIFF_STATS_BACKFILL_MAX_LIMIT: usize = 5_000;
 
 /// What one backfill pass did.
 #[derive(Debug, Clone, Default, Serialize)]

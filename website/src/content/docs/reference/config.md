@@ -320,35 +320,13 @@ one-way and stores no SSH credentials.
 
 ### Legacy migration
 
-`~/.orbit/mcp-destinations.toml` is the legacy destination file. Its reader
-remains for one release. Use `orbit host` to migrate it; do not add new rows
-to the legacy file.
+`~/.orbit/mcp-destinations.toml` is no longer read. Its presence, alone or
+beside `hosts.toml`, fails every host-registry load with `host_file_conflict`;
+`orbit doctor` reports an error. Move it aside, run `orbit host add <ssh-target>`
+for each `ssh` row to register the hosts in `hosts.toml`, then delete the moved
+file. Automatic migration is no longer available.
 
-- **Only the legacy file exists:** federated MCP, pull drains, and replica
-  worktree cleanup still read it. `orbit host list` marks rows **legacy**.
-  They have no stored task prefix, so they cannot supply prefix routes.
-- **First add, rename, or remove:** Orbit probes every retained legacy host,
-  writes `hosts.toml`, applies the operation, and deletes the legacy file.
-  `orbit host add <existing-ssh-target>` migrates an already-listed host
-  successfully, preserving its SSH target and chosen migration name;
-  `--name` applies only to a new host. Migrated names use the remote's
-  `machine.name`, falling back to its SSH target when the name is taken.
-- **A retained host does not answer:** `legacy_host_unreachable` refuses the
-  mutation and neither file changes. Restore SSH access or remove the
-  decommissioned row with `orbit host remove <ssh-target-or-machine-id>`.
-  The removed legacy host is never contacted; all remaining hosts must
-  answer. `--force` only overrides replica and pull-drain dependents.
-- **Both files exist:** every consumer, including `orbit host`, refuses
-  with `host_file_conflict`. The diagnostic compares them by machine ID
-  and lists missing routes with their `orbit host add` commands. Preserve
-  a backup, retire the legacy file, then run those commands to register
-  any missing hosts. Orbit does not choose one file for you.
-
-`orbit doctor` warns while only the legacy file exists and gives an
-`orbit host add` command using an existing SSH target. The next release
-drops the legacy reader and retains the both-files conflict check for one
-additional release. The older singular `host.toml` identity file is
-unrelated to this migration.
+The older singular `host.toml` identity file is unrelated to this retirement.
 
 ## Crews
 
@@ -901,7 +879,7 @@ sets them:
 | `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
 | `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
 | `completion.hold` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[completion.hold]]` rules that keep a `--complete` run's task in `review` instead of `done`. Each rule sets at least one of `paths` (globs matched against the files the pull request changes; a leading `!` excludes), `complexity_at_least` (`low`, `medium`, `hard` or `xhard`), `types` (`feature`, `bug`, `refactor`, `chore`) and `tags`, plus an optional `name`. A rule holds when any field matches, and the first matching rule is recorded on the task (`orbit task show` prints it as `Completion Hold:`). A held run leaves the pull request open and unmerged. A rule never grants completion, and a run without `--complete` is unchanged. An unknown key, a bad glob or an unknown complexity or type fails config load. Approve a held task with `orbit task update <id> --approve` once its pull request is merged. |
-| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command-audit rows, this workspace's run-audit rows, and run-audit rows whose workspace id is no longer registered become reclaimable, along with audit blobs no remaining row names. Another registered workspace keeps its own window. Health > Events, Incidents, Denials, `orbit audit` and diagnostics friction lose older raw history, with no rollups. Durable lock-denial facts preserve Lock contention. Nothing is deleted until you run `orbit gc audit --apply` or enable the `store-gc` routine. |
+| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command-audit rows, this workspace's run-audit rows, and run-audit rows whose workspace id is no longer registered become reclaimable, along with audit blobs no remaining row names. Another registered workspace keeps its own window. Health > Events, Incidents, Denials, `orbit audit` and diagnostics friction lose older raw history, with no rollups. Durable lock-denial facts preserve Lock contention. Nothing is deleted until you run `orbit gc audit --confirm` or enable the `store-gc` routine. |
 | `retention.runs_days` | integer · **Default:** `60`<br>Days after a run finishes before `orbit gc runs` may drop its pipeline state (30–36500). Run rows, steps, summaries and commit outcomes stay, preserving succeeded implement_one durations. Unregistered workspace ids are included. Consider 30 days on a large store; smaller values, including command overrides, are refused because Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares need 30 days of run state. Older raw checkpoints are lost. Resource minutes and admission forecasts older than 30 days are pruned separately, except rows kept at any age by count: each workspace, work class and complexity's newest 200 deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward. Auto-concurrency profiles and forecast accuracy keep working on those rows; older raw samples outside them are lost. |
 | `worktree.reclaim` | **Advanced.** array&lt;string&gt; · **Default:** `["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]`<br>Rebuildable paths in kept terminal run worktrees. Relative globs use `*` within a component and whole-component `**` across components. An explicit list replaces earlier layers; `[]` disables reclamation. Absolute, parent and root-matching patterns fail config load. Only ignored or untracked paths without tracked content are deleted, after registration, confinement, symlink and worker checks. Inspect with `orbit gc worktrees --reclaim`, apply with `--confirm`. |
 | `worktree.reclaim_below_free_mib` | **Advanced.** integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this threshold, oldest terminal worktrees first. Active runs and live or undecidable workers stay protected. |

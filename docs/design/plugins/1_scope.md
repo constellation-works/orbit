@@ -1299,8 +1299,6 @@ projection; backend calls receive their admitted environment values unchanged.
 `orbit plugin scaffold <ns>` — in `<ns>/.orbit-plugin/`: a Python `exec` backend, one
 `read_only` tool with schemas, one `kv` panel over it, one disabled auto-task, one skill stub,
 and three passing goldens.
-`orbit tool scaffold` still writes the v1 sidecar pair and prints a deprecation naming its
-replacement.
 
 ## 6. What opens up in the codebase
 

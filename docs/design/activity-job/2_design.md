@@ -1215,15 +1215,19 @@ in `task_pr_pipeline`:
   invocation's trace is persisted. A correction repeats a whole invocation, and only
   its prompt asks it to change nothing but the reply, so asset load
   (`validate_response_correction_activity`) admits the policy only with
-  `require_response_envelope`, `fsProfile: reviewer` and no grant of a built-in
-  Orbit mutation tool from its admission table, in either allowlist or deny-list
-  mode. This includes task/artifact/triage writes, decisions, drain claims,
-  leases (including the show/list operations that reconcile lease state), fleet
-  notices, evolutions, resident control/grants/checkpoints/relays, experiments,
-  automation/dispatch and visual capture. Both shipped correction activities deny
-  these tools. Keep the admission table and those disallow lists in sync with
-  registered built-in Orbit writes; file and process access remains separately
-  confined by the filesystem profile. Admission never permits
+  `require_response_envelope`, `fsProfile: reviewer` and no allowlist grant of a
+  built-in Orbit mutation tool from its admission table (`MUTATING_TOOLS`). This
+  includes task/artifact/triage writes, decisions, drain claims, leases (including
+  the show/list operations that reconcile lease state), fleet notices, evolutions,
+  resident control/grants/checkpoints/relays, experiments, automation/dispatch and
+  visual capture. A disallow-list activity is admitted whatever its list names:
+  dispatch (`drop_mutating_tools_for_response_correction`) denies every table entry
+  on top of the list, so a mutating tool a release adds later cannot make an
+  existing workspace copy invalid [ORB-24639]. Registry completeness is guarded by
+  a test that every registered mutating tool is in the table. The shipped
+  correction activity, `task_pilot`, also names every table entry in its disallow
+  list. File and process access remains separately confined by the filesystem
+  profile. Admission never permits
   `incomplete_continuation` or `trustedHostExecution` with correction. A
   task's `required_tools` cannot add a mutating tool either: asset load sees
   only the activity's own list, so at run time the grant path

@@ -2422,14 +2422,13 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
 /// `caller_before_pr` would be admitted.
 fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
     owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.drain.probe",
             json!({
                 "caller_version": orbit_core::application::distributed::owner_binary_version(),
                 "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                 "caller_before_pr": caller_before_pr,
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     caller_machine_id: Some(FOLLOWER.to_string()),
@@ -2462,9 +2461,9 @@ fn owner_with(root: &Path, config: &str, after_landing: bool) -> OrbitRuntime {
 
 /// [ORB-13992] [ORB-13908] Review never refuses a PR-route pull from an
 /// executor of this binary. After-landing review — the `delivery-code-review`
-/// auto-task, or the deprecated policy value that stands in for it — runs on
-/// the owner after landing; the owner's `review.before_pr` is captured on the
-/// claim for the leaf's gate; and the executor's own switch decides nothing.
+/// auto-task — runs on the owner after landing; the owner's
+/// `review.before_pr` is captured on the claim for the leaf's gate; and the
+/// executor's own switch decides nothing.
 fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
 
@@ -2475,13 +2474,6 @@ fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
     assert_eq!(probe["admits"], true, "{probe}");
     assert_eq!(probe["ship"]["before_pr"], false);
     assert!(probe["ship"].get("review").is_none(), "{probe}");
-
-    let legacy_after_landing = owner_with(
-        &root.path().join("legacy-after-landing"),
-        "[operation]\nreview_policy = \"after-landing\"\n",
-        false,
-    );
-    assert_eq!(probe_owner(&legacy_after_landing, false)["admits"], true);
 
     let follower_before_pr = probe_owner(&after_landing, true);
     assert_eq!(follower_before_pr["admits"], true, "{follower_before_pr}");

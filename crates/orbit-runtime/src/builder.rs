@@ -121,34 +121,6 @@ pub(crate) fn build_context_from_roots(
                 .map(|config| config.workspace_id.clone())
         })
         .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
-    let import_report = if write_free || configured.is_none() {
-        orbit_store::workflow::legacy_state::ImportReport::skipped()
-    } else {
-        match orbit_store::workflow::legacy_state::import_legacy_v2_state(
-            &store,
-            &paths.orbit_dir,
-            &workspace_id,
-        ) {
-            Ok(report) => report,
-            Err(error) if error.is_readonly_or_access_failure() => {
-                tracing::warn!(
-                    target: "orbit.core.bootstrap",
-                    root = %paths.orbit_dir.display(),
-                    error = %error,
-                    "skipped incidental legacy-state import persistence"
-                );
-                orbit_store::workflow::legacy_state::ImportReport::skipped()
-            }
-            Err(error) => return Err(error),
-        }
-    };
-    if import_report.skipped_records() {
-        tracing::warn!(
-            workspace_id = %workspace_id,
-            audit_events_skipped = import_report.audit_events_skipped,
-            "skipped malformed legacy state records during SQLite import",
-        );
-    }
     let lexical_index = if write_free {
         LexicalIndex::open_read_only(&persistence.semantic_db)?
     } else {

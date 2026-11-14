@@ -1,7 +1,7 @@
 //! Query ranking and token semantics through the public SQLite index API.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use orbit_search::{LexicalIndex, bm25_or_page, bm25_page, bm25_top_k};
+use orbit_search::{LexicalIndex, TaskSidecarSearchText, bm25_or_page, bm25_page, bm25_top_k};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
 fn task(id: &str, title: &str) -> Task {
@@ -103,6 +103,43 @@ fn any_term_pages_rank_coverage_then_bm25_with_fts_token_counts() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn substring_supplement_preserves_unicode_and_raw_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = LexicalIndex::open(&dir.path().join("search.db")).unwrap();
+    let store = index.store().unwrap();
+    store.index_task(&task("unicode", "CAFÉNOIR")).unwrap();
+    let mut raw = task("raw", "unrelated");
+    raw.description = "prefixalpha\tbetasuffix".into();
+    store.index_task(&raw).unwrap();
+
+    for phase in ["indexed", "reindexed"] {
+        if phase == "reindexed" {
+            store
+                .reindex_tasks(&[task("unicode", "CAFÉNOIR"), raw.clone()])
+                .unwrap();
+        }
+        assert!(
+            store.substring_task_ids("ÉN").unwrap().contains("unicode"),
+            "{phase}: short Unicode needle must match with Unicode case folding"
+        );
+        assert!(
+            store
+                .substring_task_ids("alpha\tbeta")
+                .unwrap()
+                .contains("raw"),
+            "{phase}: raw tab substring must match the raw field text"
+        );
+        assert!(
+            !store
+                .substring_task_ids("alpha beta")
+                .unwrap()
+                .contains("raw"),
+            "{phase}: a space must not be conflated with a raw tab"
+        );
+    }
 }
 
 #[test]
@@ -231,5 +268,52 @@ fn first_open_migrates_legacy_vectors_and_preserves_search() {
             .expect("stats")
             .tasks,
         1
+    );
+}
+
+/// Chunk equality does not imply coverage equality: a task with no comments
+/// or artifacts indexes identical chunks task-only and with empty sidecars,
+/// so each write must still record its own coverage. A task-only write drops
+/// sidecar coverage, so a later comment is not answered from the index alone,
+/// and an empty-sidecar write claims coverage again without a chunk change.
+#[test]
+fn coverage_transitions_follow_each_write_when_chunks_are_unchanged() {
+    let dir = tempfile::tempdir().expect("fixture directory");
+    let index = LexicalIndex::open(&dir.path().join("search.db")).expect("open");
+    let store = index.store().expect("store");
+    let record = task("task-a", "cobalt routing observatory");
+    let no_sidecars = TaskSidecarSearchText::default();
+
+    store
+        .index_task_with_sidecar_text(&record, &no_sidecars)
+        .expect("sidecar-covered index");
+    assert!(
+        store
+            .sidecar_indexed_task_ids()
+            .expect("coverage")
+            .contains("task-a"),
+        "a sidecar write covers the task"
+    );
+
+    store
+        .index_task(&record)
+        .expect("task-only rewrite with unchanged chunks");
+    assert!(
+        !store
+            .sidecar_indexed_task_ids()
+            .expect("coverage")
+            .contains("task-a"),
+        "a task-only write over unchanged chunks must drop sidecar coverage"
+    );
+
+    store
+        .index_task_with_sidecar_text(&record, &no_sidecars)
+        .expect("empty-sidecar rewrite with unchanged chunks");
+    assert!(
+        store
+            .sidecar_indexed_task_ids()
+            .expect("coverage")
+            .contains("task-a"),
+        "an empty-sidecar write must claim coverage without a chunk change"
     );
 }

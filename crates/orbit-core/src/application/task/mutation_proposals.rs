@@ -17,7 +17,6 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{self, GrantedToolEffect, ToolGrantability};
 use orbit_common::security::release::sha256_hex;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::task::{
     ArtifactWriter, MUTATION_PROPOSAL_SCHEMA_VERSION, MutationProposal, MutationProposalDraft,
     MutationReceipt, MutationReceiptState, ReviewedMutationProposal, Task, TaskArtifact,
@@ -371,7 +370,6 @@ impl OrbitRuntime {
         let outcome = self.run_tool_with_enforcement(
             &proposal.tool,
             proposal.input.clone(),
-            Role::Admin,
             agent_tool_context(),
             CapabilityEnforcement::McpSessionOnly,
         );

@@ -1125,11 +1125,10 @@ fn publication_history_refuses_unreadable_reservations_without_note_fallback() {
 fn repair_run_footprint_edits_refuse_and_host_widening_publishes() {
     let p = Publication::with_worker(|f, run, checkout| {
         let as_run = |input: Value| {
-            RuntimeHost::run_tool_with_context_and_role(
+            RuntimeHost::run_tool_with_context(
                 &f.runtime,
                 "orbit.task.update",
                 input,
-                orbit_types::policy::Role::Agent,
                 orbit_tools::ToolContext {
                     reservation_owner: Some(orbit_tools::ReservationOwnerContext {
                         owner_run_id: run.to_string(),

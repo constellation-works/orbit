@@ -5,8 +5,8 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Apply the store retention `orbit gc audit --apply` and `orbit gc runs
-    --apply` perform, under `retention.audit_days` and `retention.runs_days`:
+    Apply the store retention `orbit gc audit --confirm` and `orbit gc runs
+    --confirm` perform, under `retention.audit_days` and `retention.runs_days`:
     delete command and run audit rows older than the audit window, sweep the
     audit blobs no remaining row or pending write names, and drop the pipeline
     state of terminal runs older than the run window. Deletes run in batches

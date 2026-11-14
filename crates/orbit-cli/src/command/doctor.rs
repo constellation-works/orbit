@@ -36,14 +36,20 @@ pub struct DoctorCommand {
     pub problems: bool,
 
     /// Print one check with its complete message and remediation (exact CHECK name)
-    #[arg(long, value_name = "NAME", conflicts_with_all = [
-        "problems", "fix_stale_locks", "fix_stale_task_locks",
-        "fix_state_directory_permissions", "remove_graph", "fix_stale_artifacts",
-        "fix_retired_activity_backends", "fix_orphan_task_stores",
-        "fix_automation_pins", "fix_retired_config_keys", "fix_missing_pr_refs", "confirm"
-    ])]
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["problems", "doctor_repairs", "confirm"])]
     pub check: Option<String>,
 
+    #[command(flatten)]
+    pub repairs: DoctorRepairFlags,
+
+    /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
+    #[arg(long)]
+    pub confirm: bool,
+}
+
+#[derive(Args, Default, PartialEq, Eq)]
+#[group(id = "doctor_repairs", multiple = true)]
+pub struct DoctorRepairFlags {
     /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
     pub fix_stale_locks: bool,
@@ -83,10 +89,12 @@ pub struct DoctorCommand {
     /// Restore missing review-task pull request references from the owner's accepted follower handoffs, preserving claim and landing state.
     #[arg(long)]
     pub fix_missing_pr_refs: bool,
+}
 
-    /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
-    #[arg(long)]
-    pub confirm: bool,
+impl DoctorRepairFlags {
+    fn any_requested(&self) -> bool {
+        self != &Self::default()
+    }
 }
 
 #[derive(Subcommand)]
@@ -131,17 +139,7 @@ impl DoctorCommand {
         root_override: Option<&std::path::Path>,
         bootstrap: &OrbitError,
     ) -> Option<CommandOut> {
-        let repairs = self.fix_stale_locks
-            || self.fix_stale_task_locks
-            || self.fix_state_directory_permissions
-            || self.remove_graph
-            || self.fix_stale_artifacts
-            || self.fix_retired_activity_backends
-            || self.fix_orphan_task_stores
-            || self.fix_automation_pins
-            || self.fix_retired_config_keys
-            || self.fix_missing_pr_refs;
-        if self.command.is_some() || repairs {
+        if self.command.is_some() || self.repairs.any_requested() {
             return None;
         }
         let cwd = std::env::current_dir().ok()?;
@@ -182,7 +180,7 @@ impl Execute for DoctorCommand {
             }
             None => {}
         }
-        if self.fix_orphan_task_stores && !self.confirm {
+        if self.repairs.fix_orphan_task_stores && !self.confirm {
             return Err(orbit_core::OrbitError::InvalidInput(
                 "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
                     .to_string(),
@@ -198,90 +196,91 @@ impl Execute for DoctorCommand {
             ),
             remediation: None,
         }];
-        if self.fix_missing_pr_refs {
+        if self.repairs.fix_missing_pr_refs {
             let started = std::time::Instant::now();
             let repaired = runtime.repair_missing_handoff_pr_refs()?;
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-missing-pr-refs".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: format!(
+            push_repair_result(
+                &mut results,
+                "fix-missing-pr-refs",
+                started,
+                WorkspaceDoctorStatus::Ok,
+                format!(
                     "Restored pull request references on {} review tasks.",
                     repaired.len()
                 ),
-                remediation: None,
-            });
+            );
         }
-        if self.fix_state_directory_permissions {
+        if self.repairs.fix_state_directory_permissions {
             let started = std::time::Instant::now();
             let repaired = runtime.repair_state_directory_permissions()?;
             let message = format!(
                 "Restricted {repaired} writable Orbit state director{} to owner-only access.",
                 if repaired == 1 { "y" } else { "ies" }
             );
-            eprintln!("{message}");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-state-directory-permissions".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
+            push_repair_result(
+                &mut results,
+                "fix-state-directory-permissions",
+                started,
+                WorkspaceDoctorStatus::Ok,
                 message,
-                remediation: None,
-            });
+            );
         }
-        if self.fix_stale_locks {
+        if self.repairs.fix_stale_locks {
             let started = std::time::Instant::now();
             let cleared = runtime.remove_stale_lock_files()?;
-            eprintln!("Cleared {cleared} stale lock holder record(s).");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-stale-locks".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: format!("Cleared {cleared} stale lock holder record(s)."),
-                remediation: None,
-            });
+            push_repair_result(
+                &mut results,
+                "fix-stale-locks",
+                started,
+                WorkspaceDoctorStatus::Ok,
+                format!("Cleared {cleared} stale lock holder record(s)."),
+            );
         }
-        if self.fix_stale_task_locks {
+        if self.repairs.fix_stale_task_locks {
             let started = std::time::Instant::now();
             let released = runtime.clear_stale_task_reservations()?;
-            eprintln!("Released {released} stale task reservation(s).");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-stale-task-locks".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: format!("Released {released} stale task reservation(s)."),
-                remediation: None,
-            });
+            push_repair_result(
+                &mut results,
+                "fix-stale-task-locks",
+                started,
+                WorkspaceDoctorStatus::Ok,
+                format!("Released {released} stale task reservation(s)."),
+            );
         }
-        if self.remove_graph {
+        if self.repairs.remove_graph {
             let started = std::time::Instant::now();
             let removed = runtime.remove_retired_graph_state()?;
-            eprintln!("Removed {removed} retired graph location(s).");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "remove-graph".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: format!("Removed {removed} retired graph location(s)."),
-                remediation: None,
-            });
+            push_repair_result(
+                &mut results,
+                "remove-graph",
+                started,
+                WorkspaceDoctorStatus::Ok,
+                format!("Removed {removed} retired graph location(s)."),
+            );
         }
-        if self.fix_stale_artifacts {
+        if self.repairs.fix_stale_artifacts {
             let started = std::time::Instant::now();
             let removed = runtime.remove_stale_definition_artifacts()?;
-            eprintln!("Retired {removed} deprecated definition artifact(s).");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-stale-artifacts".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: format!("Retired {removed} deprecated definition artifact(s)."),
-                remediation: None,
-            });
+            push_repair_result(
+                &mut results,
+                "fix-stale-artifacts",
+                started,
+                WorkspaceDoctorStatus::Ok,
+                format!("Retired {removed} deprecated definition artifact(s)."),
+            );
         }
-        if self.fix_retired_activity_backends {
+        if self.repairs.fix_retired_activity_backends {
             let started = std::time::Instant::now();
             let report = runtime.repair_retired_activity_backends()?;
-            eprintln!(
-                "Removed retired spec.backend from {} activity file(s).",
-                report.repaired.len()
+            push_repair_result(
+                &mut results,
+                "fix-retired-activity-backends",
+                started,
+                WorkspaceDoctorStatus::Ok,
+                format!(
+                    "Removed retired spec.backend from {} activity file(s).",
+                    report.repaired.len()
+                ),
             );
             for skipped in &report.skipped {
                 eprintln!(
@@ -290,40 +289,29 @@ impl Execute for DoctorCommand {
                     skipped.reason
                 );
             }
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-retired-activity-backends".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: format!(
-                    "Removed retired spec.backend from {} activity file(s).",
-                    report.repaired.len()
-                ),
-                remediation: None,
-            });
         }
-        if self.fix_orphan_task_stores {
+        if self.repairs.fix_orphan_task_stores {
             let started = std::time::Instant::now();
             let removed = runtime.remove_orphan_task_stores()?;
             let message = orphan_task_store_removal_message(&removed);
-            eprintln!("{message}");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-orphan-task-stores".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
+            push_repair_result(
+                &mut results,
+                "fix-orphan-task-stores",
+                started,
+                WorkspaceDoctorStatus::Ok,
                 message,
-                remediation: None,
-            });
+            );
         }
-        if self.fix_automation_pins {
+        if self.repairs.fix_automation_pins {
             let started = std::time::Instant::now();
             let cleanup =
                 orbit_core::application::automation::release_unreferenced_attempt_pins(runtime)?;
             let message = automation_pin_cleanup_message(&cleanup);
-            eprintln!("{message}");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-automation-pins".to_string(),
-                status: if cleanup.kept.is_empty()
+            push_repair_result(
+                &mut results,
+                "fix-automation-pins",
+                started,
+                if cleanup.kept.is_empty()
                     && (cleanup.refused.is_none() || cleanup.retained_unproven == 0)
                 {
                     WorkspaceDoctorStatus::Ok
@@ -331,25 +319,40 @@ impl Execute for DoctorCommand {
                     WorkspaceDoctorStatus::Warning
                 },
                 message,
-                remediation: None,
-            });
+            );
         }
-        if self.fix_retired_config_keys {
+        if self.repairs.fix_retired_config_keys {
             let started = std::time::Instant::now();
             let repair = runtime.remove_retired_config_keys()?;
             let message = retired_config_key_repair_message(&repair);
-            eprintln!("{message}");
-            results.push(WorkspaceDoctorResult {
-                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                check_name: "fix-retired-config-keys".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
+            push_repair_result(
+                &mut results,
+                "fix-retired-config-keys",
+                started,
+                WorkspaceDoctorStatus::Ok,
                 message,
-                remediation: None,
-            });
+            );
         }
         results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
         report_output(results, self.problems, self.check.as_deref())
     }
+}
+
+fn push_repair_result(
+    results: &mut Vec<WorkspaceDoctorResult>,
+    check_name: &'static str,
+    started: std::time::Instant,
+    status: WorkspaceDoctorStatus,
+    message: String,
+) {
+    eprintln!("{message}");
+    results.push(WorkspaceDoctorResult {
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        check_name: check_name.to_string(),
+        status,
+        message,
+        remediation: None,
+    });
 }
 
 /// Render the checks as `orbit doctor` reports them: a table sorted by

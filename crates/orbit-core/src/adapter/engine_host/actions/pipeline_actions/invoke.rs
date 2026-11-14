@@ -6,7 +6,6 @@ use crate::application::job::{
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::task::PipelineChildAdmissionMeta;
 use orbit_types::workflow::{CHILD_TIMEOUT_ERROR_CODE, ChildDispatchPhase};
 use serde_json::Value;
@@ -54,22 +53,8 @@ pub(in super::super) fn invoke_and_wait(
         runtime,
         action,
         input,
-        |args| {
-            runtime.run_tool_with_context_and_role(
-                "orbit.pipeline.invoke",
-                args,
-                Role::Admin,
-                invoke_context,
-            )
-        },
-        |args| {
-            runtime.run_tool_with_context_and_role(
-                "orbit.pipeline.wait",
-                args,
-                Role::Admin,
-                wait_context,
-            )
-        },
+        |args| runtime.run_tool_with_context("orbit.pipeline.invoke", args, invoke_context),
+        |args| runtime.run_tool_with_context("orbit.pipeline.wait", args, wait_context),
     )
 }
 
@@ -467,10 +452,9 @@ pub(in super::super) fn invoke_detached(
         false,
     )?;
     let invoke_output = runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.pipeline.invoke",
             invoke_args(&job_name, input),
-            Role::Admin,
             invoke_context,
         )
         .map_err(|err| {

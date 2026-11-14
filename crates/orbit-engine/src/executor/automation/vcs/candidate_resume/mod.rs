@@ -118,20 +118,6 @@ pub(in crate::executor::automation) use lookup::candidate_resume;
 use orbit_store::contracts::InterruptedReview;
 use serde_json::Value;
 
-/// `pr_failure_handoff` decisions that leave a candidate on a branch.
-const PRESERVING_DECISIONS: &[&str] = &[
-    "blocked_failure_pr",
-    "blocked_conflict_pr",
-    "blocked_review_gate",
-    "awaiting_review_evidence",
-    "incomplete_review_timeout",
-    "blocked_validation_environment",
-    "held_baseline_red",
-    "held_provider_failure",
-    "held_upgrade_pending",
-    "held_child_timeout",
-    "held_owner_signoff",
-];
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.
 const REVIEW_VERDICT_STEP: &str = "review_gate_settle";

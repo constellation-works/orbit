@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus, normalize_task_tags,
 };
@@ -504,9 +503,6 @@ pub(in super::super) fn apply_task(
                         .as_ref()
                         .map(|(fingerprint, _)| fingerprint.clone());
                     task.applied_material = Some(written);
-                    runtime.record_event(OrbitEvent::TaskUpdated {
-                        id: task.task_id.clone(),
-                    })?;
                     outcome = Some(ApplyTaskOutcome::Applied(fingerprint));
                 }
                 AtomicTaskMutationOutcome::AlreadyApplied => {

@@ -304,7 +304,7 @@ impl RuntimeKernel {
         };
         // [ORB-15202] A run held on a red base or an awaited decision couples
         // out exactly as the failure it records, as does a local provider
-        // capacity or usage-limit hold. Any other hold names its own
+        // capacity, usage-limit or unavailability hold. Any other hold names its own
         // resumption and leaves its tasks alone.
         // [ORB-23967] A run held on owner sign-off is not a failed run: its
         // task is blocked under the held note, which the backstop does not own.

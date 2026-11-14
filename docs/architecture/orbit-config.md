@@ -12,7 +12,7 @@ Owner of `config.toml`: key registry, global-over-workspace layering, provenance
 
 ## Main modules and types
 
-`registry` (`ConfigSnapshot`), `layering`, `store` (`ConfigStore` in `crates/orbit-config/src/store/persistence.rs`), `crew`, `operation`, `provider_limit`, `config_document`, `config_io`, `crew_defaults`. See ``crates/orbit-config/src/lib.rs``.
+`registry` (`ConfigSnapshot`), `layering`, `store` (`ConfigStore` in `crates/orbit-config/src/store/persistence.rs`), `crew`, `operation`, `provider_limit`, `config_document`, `config_io`, `config_toml`, `crew_defaults`. See ``crates/orbit-config/src/lib.rs``.
 
 ## Dependencies
 

@@ -362,13 +362,12 @@ fn a_review_pool_owner_captures_one_reviewer_crew_per_claim() {
 /// The owner's probe as `machine`'s trusted SSH session asks it.
 fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
     owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.drain.probe",
             json!({
                 "caller_version": orbit_core::application::distributed::owner_binary_version(),
                 "caller_schema": orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     caller_machine_id: Some(machine.to_string()),

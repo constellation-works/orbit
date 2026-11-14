@@ -2,7 +2,6 @@
 
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -67,17 +66,16 @@ impl OrbitRuntime {
     }
 
     pub fn run_tool(&self, name: &str, input: Value) -> Result<Value, OrbitError> {
-        self.run_tool_with_role(name, input, Role::Admin)
+        self.run_tool_with_context(name, input, ToolContext::default())
     }
 
     /// Run a registered tool for a human-operated in-process adapter.
     /// The trusted label lives in `ToolContext`, never in agent-controlled
     /// input, so the ordinary public tool path remains family-validated.
     pub fn run_tool_as_human(&self, name: &str, input: Value) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role(
+        self.run_tool_with_context(
             name,
             input,
-            Role::Admin,
             ToolContext {
                 trusted_actor_label: Some("human".to_string()),
                 ..Default::default()
@@ -97,10 +95,9 @@ impl OrbitRuntime {
         input: Value,
         session: orbit_types::tool::ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role(
+        self.run_tool_with_context(
             name,
             input,
-            Role::Admin,
             ToolContext {
                 session_context: session,
                 ..Default::default()
@@ -108,36 +105,24 @@ impl OrbitRuntime {
         )
     }
 
-    pub(crate) fn run_tool_with_role(
+    pub(crate) fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
-    ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role(name, input, role, ToolContext::default())
-    }
-
-    pub(crate) fn run_tool_with_context_and_role(
-        &self,
-        name: &str,
-        input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role_and_capability(
+        self.run_tool_with_context_and_capability(
             name,
             input,
-            role,
             tool_context,
             CapabilityEnforcement::Enforce,
         )
     }
 
-    pub(crate) fn run_tool_with_context_and_role_and_capability(
+    pub(crate) fn run_tool_with_context_and_capability(
         &self,
         name: &str,
         input: Value,
-        _role: Role,
         mut tool_context: ToolContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
@@ -194,30 +179,22 @@ impl ToolInvocationPort for OrbitRuntime {
         )
     }
 
-    fn run_tool_in_role(
+    fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role(name, input, role, tool_context)
+        self.run_tool_with_context(name, input, tool_context)
     }
 
     fn run_tool_with_enforcement(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
         enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role_and_capability(
-            name,
-            input,
-            role,
-            tool_context,
-            enforcement,
-        )
+        self.run_tool_with_context_and_capability(name, input, tool_context, enforcement)
     }
 }

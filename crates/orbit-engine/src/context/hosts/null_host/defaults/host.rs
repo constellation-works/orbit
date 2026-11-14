@@ -4,7 +4,6 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
-use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
@@ -713,17 +712,14 @@ pub trait NullRuntimeHost: Send + Sync {
     fn resolved_crew_model(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
-    fn run_tool_with_context_and_role(
+    fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
-        let _ = (name, input, role, tool_context);
-        Err(unsupported_runtime_capability(
-            "run_tool_with_context_and_role",
-        ))
+        let _ = (name, input, tool_context);
+        Err(unsupported_runtime_capability("run_tool_with_context"))
     }
     fn run_private_vcs_operation(
         &self,

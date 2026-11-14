@@ -731,7 +731,7 @@ pub struct JobRun {
         skip_serializing_if = "Option::is_none"
     )]
     pub crew_model: Option<String>,
-    /// Step execution results; populated in-memory from step files, not stored in jrun.yaml.
+    /// Step execution results; populated in-memory from step files and never serialized.
     #[serde(skip)]
     pub steps: Vec<JobRunStep>,
 }

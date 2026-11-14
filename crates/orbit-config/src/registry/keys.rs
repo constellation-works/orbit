@@ -134,9 +134,9 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ),
     (
         "operation.review_policy",
-        "translated: before-pr sets review.timing = \"before_pr\"; after-landing enables the \
-     delivery-code-review auto-task until its own enabled flag is set (`orbit auto-task \
-     toggle delivery-code-review on|off`); none turns neither on. Set review.timing \
+        "translated: before-pr sets review.timing = \"before_pr\"; after-landing and none turn \
+     neither on (after-landing review is the delivery-code-review auto-task's own enabled \
+     flag: `orbit auto-task toggle delivery-code-review on|off`). Set review.timing \
      and the auto-task flag instead",
     ),
     // [ORB-16775] Consolidated key families. Each loads through its
