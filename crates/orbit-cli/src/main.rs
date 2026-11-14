@@ -41,8 +41,22 @@ mod usage_error;
 mod tests;
 
 fn main() {
+    // Before logging, generation pinning, or any store open. Test binaries
+    // never enter `main`, so they keep unknown provenance.
+    orbit_common::process::build::register_orbit_build(compiled_orbit_build());
     entry::run::run();
     // Statics are never dropped, so returning from `main` would not flush the
     // JSONL feed either.
     orbit_common::observability::logging::shutdown_jsonl_writer();
+}
+
+fn compiled_orbit_build() -> orbit_types::workflow::OrbitBuild {
+    orbit_types::workflow::OrbitBuild {
+        version: env!("CARGO_PKG_VERSION").into(),
+        source_commit: match env!("ORBIT_BUILD_SOURCE_COMMIT") {
+            "" => None,
+            commit => Some(commit.into()),
+        },
+        dirty: env!("ORBIT_BUILD_DIRTY") != "false",
+    }
 }
