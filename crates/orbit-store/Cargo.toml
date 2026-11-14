@@ -11,6 +11,9 @@ stability = "stable"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 # A scoped task-commit lock deadline for downstream tests only. Enable it only
 # from `[dev-dependencies]`, never in a shipped build.

@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 # Test-only hooks for `orbit-core` and its downstream crates' tests. Enable it
 # only from `[dev-dependencies]` or `orbit-core`'s own `test-support` feature.

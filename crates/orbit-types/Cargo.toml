@@ -11,6 +11,10 @@ stability = "stable"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+test = false
+
 [features]
 clap = ["dep:clap"]
 

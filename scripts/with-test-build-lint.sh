@@ -9,7 +9,7 @@
 # clippy still denies them.
 #
 # Cargo fingerprints RUSTC_WORKSPACE_WRAPPER and the CLIPPY_ARGS value that
-# clippy-driver tracks. A later nextest run, doctest build or nextest listing
+# clippy-driver tracks. A later nextest run or nextest listing
 # reuses those artifacts only under this exact environment; without it Cargo
 # recompiles every workspace member. Run each of them through this script.
 #

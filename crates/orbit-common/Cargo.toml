@@ -11,6 +11,9 @@ stability = "stable"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 test-support = []
 # Shared SQLite connection defaults (utility::sqlite). Optional so that

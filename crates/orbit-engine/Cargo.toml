@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 # Scoped deadline clocks and the null `RuntimeHost` base for test fixtures only.
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
