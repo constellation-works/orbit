@@ -647,8 +647,17 @@ spec:
         operation's advertised placement. Inspect it for every plan in this rule.
         Declare its file only when the table must change: a placement change, or
         a governed tool operation added, removed or renamed.
-      No other golden, snapshot or tool-list file is implied by this rule; a
-      companion beyond these needs its own source evidence.
+      - The claimed-worker routing match in `worker_tools.rs`
+        (`src/adapter/tool_host/worker_tools.rs` in the `orbit-core` crate;
+        declare it as the workspace-relative `file:` selector for that path),
+        routed by the exhaustive `worker_route` match (`worker_tools.rs:51-150`;
+        the file header notes a new tool family or verb must be placed there
+        before the crate compiles). Declare its `file:` selector when the plan
+        adds, removes or renames a builtin orbit.* tool or verb. A placement or
+        id-route change alone, and a body-only tool edit that keeps the name,
+        verbs and id route, adds none of this companion.
+      No other golden, snapshot, tool-list or routing file is implied by this
+      rule; a companion beyond these needs its own source evidence.
     - Registration wiring: for a new or renamed action or a changed
       cross-module interface, inspect the existing sites it needs to resolve
       and run: the typed action catalog or registry, any embedding or asset
