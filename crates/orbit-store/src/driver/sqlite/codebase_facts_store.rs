@@ -15,17 +15,24 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::{CodebaseFactsStoreBackend, CodebaseTaskFactsRow};
+use crate::contracts::{
+    AgentFactsStoreBackend, AgentTaskFactsRow, CodebaseFactsStoreBackend, CodebaseTaskFactsRow,
+};
 
 const TABLE: &str = "codebase_task_facts";
+const AGENT_TABLE: &str = "agent_task_facts";
 
-fn table_exists(conn: &Connection) -> Result<bool, OrbitError> {
+fn table_exists_named(conn: &Connection, table: &str) -> Result<bool, OrbitError> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
-        [TABLE],
+        [table],
         |row| row.get(0),
     )
     .map_err(sqlite_store_error)
+}
+
+fn table_exists(conn: &Connection) -> Result<bool, OrbitError> {
+    table_exists_named(conn, TABLE)
 }
 
 impl CodebaseFactsStoreBackend for Store {
@@ -102,6 +109,88 @@ impl CodebaseFactsStoreBackend for Store {
             }
             let mut delete = conn
                 .prepare("DELETE FROM codebase_task_facts WHERE workspace_id = ?1 AND task_id = ?2")
+                .map_err(sqlite_store_error)?;
+            for task_id in removed {
+                delete
+                    .execute(params![workspace_id, task_id])
+                    .map_err(sqlite_store_error)?;
+            }
+            Ok(())
+        })
+    }
+}
+
+impl AgentFactsStoreBackend for Store {
+    fn agent_task_facts(&self, workspace_id: &str) -> Result<Vec<AgentTaskFactsRow>, OrbitError> {
+        let conn = self.read()?;
+        if !table_exists_named(&conn, AGENT_TABLE)? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT task_id, format_version, source, facts_json FROM agent_task_facts
+                 WHERE workspace_id = ?1",
+            )
+            .map_err(sqlite_store_error)?;
+        stmt.query_map([workspace_id], |row| {
+            Ok(AgentTaskFactsRow {
+                task_id: row.get(0)?,
+                format_version: row.get(1)?,
+                source: row.get(2)?,
+                facts_json: row.get(3)?,
+            })
+        })
+        .map_err(sqlite_store_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
+    }
+
+    fn write_agent_task_facts(
+        &self,
+        workspace_id: &str,
+        rows: &[AgentTaskFactsRow],
+        removed: &[String],
+    ) -> Result<(), OrbitError> {
+        if rows.is_empty() && removed.is_empty() {
+            return Ok(());
+        }
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS agent_task_facts (
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    format_version INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    facts_json TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, task_id)
+                ) WITHOUT ROWID;",
+            )
+            .map_err(sqlite_store_error)?;
+            let mut upsert = conn
+                .prepare(
+                    "INSERT INTO agent_task_facts
+                         (workspace_id, task_id, format_version, source, facts_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (workspace_id, task_id) DO UPDATE SET
+                         format_version = excluded.format_version,
+                         source = excluded.source,
+                         facts_json = excluded.facts_json",
+                )
+                .map_err(sqlite_store_error)?;
+            for row in rows {
+                upsert
+                    .execute(params![
+                        workspace_id,
+                        row.task_id,
+                        row.format_version,
+                        row.source,
+                        row.facts_json
+                    ])
+                    .map_err(sqlite_store_error)?;
+            }
+            let mut delete = conn
+                .prepare("DELETE FROM agent_task_facts WHERE workspace_id = ?1 AND task_id = ?2")
                 .map_err(sqlite_store_error)?;
             for task_id in removed {
                 delete

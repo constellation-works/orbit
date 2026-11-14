@@ -61,7 +61,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 
 ## Local Rust CodeQL
 
-Hosted CodeQL (`.github/workflows/codeql.yml`) analyses every `agent-main` push and runs weekly, not on PRs; its alerts become repair tasks. Run it locally only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Then follow the [local CodeQL runbook](docs/runbooks/codeql-local.md):
+Hosted CodeQL (`.github/workflows/codeql.yml`) analyses `main` pushes and runs daily on `agent-main`, not on PRs; its alerts become repair tasks. Run it locally only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Then follow the [local CodeQL runbook](docs/runbooks/codeql-local.md):
 
 - Extraction checks are required evidence; results from incomplete extraction can't confirm a repair.
 - Run once per delivery against the final candidate, in the foreground with a timeout of at least 45 minutes, and read that run's `results.sarif`. An interrupted run starts over.

@@ -603,6 +603,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.regression_layers": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.required_validation_commands": {
       "scope": "built-in",
       "state": "default",

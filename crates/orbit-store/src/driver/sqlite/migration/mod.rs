@@ -56,7 +56,7 @@ use audit_events::{
 use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
 use condition_triggers::apply_condition_triggers;
-use crew_performance::apply_crew_performance_snapshot;
+use crew_performance::{apply_agent_task_facts, apply_crew_performance_snapshot};
 use executor_census::apply_executor_census;
 use experiments::{
     apply_experiment_admissions, apply_experiment_delete, apply_experiments,
