@@ -114,11 +114,7 @@ impl GuardedModes for WorkflowVerb {
 /// A managed run finishes its own leaf mandate; follow-up dispatch is its
 /// operator's.
 fn ensure_not_managed(ctx: &ToolContext) -> Result<(), OrbitError> {
-    if ctx
-        .orbit_host
-        .as_ref()
-        .is_some_and(|host| host.task_scope().run_id.is_some())
-    {
+    if ctx.is_managed_run() {
         return Err(OrbitError::CapabilityDenied(
             "managed runs cannot dispatch or resume workflow runs; finish the current leaf mandate and let its operator submit follow-up work"
                 .to_string(),

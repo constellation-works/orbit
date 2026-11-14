@@ -40,10 +40,9 @@ impl Tool for OrbitPipelineInvokeTool {
             },
         ];
         parameters.extend([
-            super::super::task::guarded::param("workspace", "string", "Explicit workspace required for default-input catalog submission"),
-            super::super::task::guarded::param("default_input", "boolean", "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay."),
+            crate::tool::tool_param("workspace", "Explicit workspace required for default-input catalog submission", "string", false),
+            crate::tool::tool_param("default_input", "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.", "boolean", false),
         ]);
-        parameters.extend(super::super::identity_params());
 
         ToolSchema {
             name: "orbit.pipeline.invoke".to_string(),
@@ -68,11 +67,7 @@ impl Tool for OrbitPipelineInvokeTool {
                 OrbitError::InvalidInput("default_input must be a boolean".into())
             })?;
             if enabled {
-                if ctx
-                    .orbit_host
-                    .as_ref()
-                    .is_some_and(|host| host.task_scope().run_id.is_some())
-                {
+                if ctx.is_managed_run() {
                     return Err(OrbitError::CapabilityDenied(
                         "managed runs cannot submit catalog jobs".into(),
                     ));
@@ -103,12 +98,7 @@ impl Tool for OrbitPipelineInvokeTool {
                 );
             }
         }
-        if ctx
-            .orbit_host
-            .as_ref()
-            .is_some_and(|host| host.task_scope().run_id.is_some())
-            && !has_pipeline_child_admission(ctx)
-        {
+        if ctx.is_managed_run() && !has_pipeline_child_admission(ctx) {
             return Err(OrbitError::CapabilityDenied(
                 "managed runs may invoke only a host-authorized child pipeline admission".into(),
             ));

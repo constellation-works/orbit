@@ -294,9 +294,7 @@ fn managed_run_refusal(
     ctx: &ToolContext,
     refusal: &'static str,
 ) -> Option<Result<Value, OrbitError>> {
-    ctx.orbit_host
-        .as_ref()
-        .is_some_and(|host| host.task_scope().run_id.is_some())
+    ctx.is_managed_run()
         .then(|| Err(OrbitError::CapabilityDenied(refusal.into())))
 }
 

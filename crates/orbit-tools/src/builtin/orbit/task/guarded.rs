@@ -4,19 +4,10 @@ use orbit_common::{
     OrbitError,
     protocol::tool_input::{reject_unknown_tool_fields, required_string},
 };
-use orbit_types::tool::ToolParam;
 use serde_json::{Value, json};
 
-pub(crate) fn param(name: &str, ty: &str, description: &str) -> ToolParam {
-    ToolParam {
-        name: name.into(),
-        param_type: ty.into(),
-        description: description.into(),
-        required: false,
-    }
-}
 pub(crate) fn is_guarded(input: &Value) -> bool {
-    ["request_id", "expected_revision", "verdict", "complete"]
+    GUARDED_SELECTOR_KEYS
         .iter()
         .any(|key| input.get(*key).is_some())
 }
@@ -90,7 +81,8 @@ pub(crate) fn shape_checked_fields(tool: &str, input: &Value) -> Option<Vec<&'st
     )
 }
 
-const GUARDED_SELECTOR_KEYS: &[&str] = &["request_id", "expected_revision", "verdict", "complete"];
+pub(crate) const GUARDED_SELECTOR_KEYS: &[&str] =
+    &["request_id", "expected_revision", "verdict", "complete"];
 
 const CREATE_ENVELOPE_KEYS: &[&str] = &["workspace", "request_id", "model"];
 const UPDATE_ENVELOPE_KEYS: &[&str] = &[
@@ -184,8 +176,10 @@ fn reject_guarded_unknown_fields(
         let remedy = if create {
             "drop 'request_id' for an ordinary create".to_string()
         } else {
-            "drop 'request_id', 'expected_revision', 'verdict', 'complete' for an ordinary update"
-                .to_string()
+            format!(
+                "drop {} for an ordinary update",
+                quote_list(GUARDED_SELECTOR_KEYS)
+            )
         };
         let message = format!(
             "{unknown_part}; {selectors} {verb} {noun}, which accepts only {accepted_list} (plus {envelope}); {remedy}"

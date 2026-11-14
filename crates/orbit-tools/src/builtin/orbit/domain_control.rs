@@ -4,24 +4,12 @@ use orbit_common::{
     OrbitError,
     protocol::tool_input::{reject_unknown_tool_fields, required_string},
 };
-use orbit_types::tool::{ToolParam, ToolSchema};
+use orbit_types::tool::ToolSchema;
 use serde_json::{Value, json};
 
 pub struct RoutineControlTool;
-fn parameter(name: &str, ty: &str, required: bool, description: &str) -> ToolParam {
-    ToolParam {
-        name: name.into(),
-        param_type: ty.into(),
-        required,
-        description: description.into(),
-    }
-}
 pub(super) fn ensure_operator_leaf(ctx: &ToolContext) -> Result<(), OrbitError> {
-    if ctx
-        .orbit_host
-        .as_ref()
-        .is_some_and(|host| host.task_scope().run_id.is_some())
-    {
+    if ctx.is_managed_run() {
         return Err(OrbitError::CapabilityDenied(
             "managed runs cannot control automation or submit catalog jobs".into(),
         ));
@@ -34,16 +22,16 @@ impl Tool for RoutineControlTool {
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema { name: "orbit.routine.control".into(), description: "List workspace routine status, toggle one definition using its observed enabled state and target, or replace its trigger using its observed trigger and target. Requires trusted operator authority and explicit workspace. Never replay a change after a lost reply; observe authoritative state first.".into(), builtin: true, parameters: vec![
-            parameter("workspace", "string", true, "Exact workspace selector from discovery"),
-            parameter("action", "string", true, "list, toggle or set_trigger"),
-            parameter("name", "string", false, "Required for toggle and set_trigger: exact routine name"),
-            parameter("expected_enabled", "boolean", false, "Required for toggle: observed enabled state"),
-            parameter("enabled", "boolean", false, "Required for toggle: desired enabled state"),
-            parameter("target", "string", false, "Required for toggle and set_trigger: observed routine target"),
-            parameter("expected_trigger", "object", false, "Required for set_trigger: observed trigger object, as listed"),
-            parameter("trigger", "object", false, "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state`, `deliveries_landed` or `condition` (checked and explained but never fired in this release; routine must stay disabled)"),
-            parameter("offset", "integer", false, "List offset; default 0"),
-            parameter("limit", "integer", false, "List size 1 through 50; default 25"),
+            crate::tool::tool_param("workspace", "Exact workspace selector from discovery", "string", true),
+            crate::tool::tool_param("action", "list, toggle or set_trigger", "string", true),
+            crate::tool::tool_param("name", "Required for toggle and set_trigger: exact routine name", "string", false),
+            crate::tool::tool_param("expected_enabled", "Required for toggle: observed enabled state", "boolean", false),
+            crate::tool::tool_param("enabled", "Required for toggle: desired enabled state", "boolean", false),
+            crate::tool::tool_param("target", "Required for toggle and set_trigger: observed routine target", "string", false),
+            crate::tool::tool_param("expected_trigger", "Required for set_trigger: observed trigger object, as listed", "object", false),
+            crate::tool::tool_param("trigger", "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state`, `deliveries_landed` or `condition` (checked and explained but never fired in this release; routine must stay disabled)", "object", false),
+            crate::tool::tool_param("offset", "List offset; default 0", "integer", false),
+            crate::tool::tool_param("limit", "List size 1 through 50; default 25", "integer", false),
         ] }
     }
     fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {

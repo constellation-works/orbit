@@ -70,12 +70,9 @@ fn builtin_mcp_rules_with_route(name: &str, id_route: McpIdRoute) -> McpToolRule
         ]),
         // `view` belongs to run list and show only.
         "orbit.task.list" | "orbit.run" => McpWorkspaceEcho::WhenAny(present(&["view"])),
-        "orbit.task.add" | "orbit.task.update" => McpWorkspaceEcho::WhenAny(present(&[
-            "request_id",
-            "expected_revision",
-            "verdict",
-            "complete",
-        ])),
+        "orbit.task.add" | "orbit.task.update" => McpWorkspaceEcho::WhenAny(present(
+            crate::builtin::orbit::task::guarded::GUARDED_SELECTOR_KEYS,
+        )),
         // Each condition's field belongs to one action: `view` to list,
         // `expected_enabled` to update, `acknowledge_unconditional` to mint.
         "orbit.auto_task" => McpWorkspaceEcho::WhenAny(present(&[

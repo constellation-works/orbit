@@ -171,6 +171,14 @@ pub struct ToolContext {
     pub orbit_host: Option<Arc<dyn OrbitToolHost>>,
 }
 
+impl ToolContext {
+    pub(crate) fn is_managed_run(&self) -> bool {
+        self.orbit_host
+            .as_ref()
+            .is_some_and(|host| host.task_scope().run_id.is_some())
+    }
+}
+
 impl std::fmt::Debug for ToolContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolContext")

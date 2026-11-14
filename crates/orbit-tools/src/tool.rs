@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use orbit_common::OrbitError;
-use orbit_types::tool::{McpIdRouteDeclaration, ToolSchema};
+use orbit_types::tool::{McpIdRouteDeclaration, ToolParam, ToolSchema};
 
 use super::context::ToolContext;
 
@@ -41,6 +41,20 @@ pub trait Tool: Send + Sync {
         ToolExecutionKind::Mutating
     }
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError>;
+}
+
+pub(crate) fn tool_param(
+    name: &str,
+    description: &str,
+    param_type: &str,
+    required: bool,
+) -> ToolParam {
+    ToolParam {
+        name: name.to_string(),
+        description: description.to_string(),
+        param_type: param_type.to_string(),
+        required,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
