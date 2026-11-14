@@ -357,13 +357,27 @@ fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
             "the task is not blocked"
         );
 
-        // Before not-before the task is admitted, drawn onto the pool's
-        // other crew rather than the one that failed.
+        // Before not-before the task is admitted, drawn onto another crew
+        // rather than the one that failed. Capacity is the model's, so the
+        // pool's other crew takes it; an authentication failure is the
+        // account's, so that crew (same login) is out too and the draw
+        // falls to the other provider's default.
         assert!(fx.admitted(&task, &[]), "another crew may take it");
-        assert!(fx.admitted(&task, &["luna"]));
-        let excluded = fx.exclusion(&task, &["sol"]);
-        assert_eq!(excluded["reason"], "crew_not_allowed");
-        assert_eq!(excluded["crew"], "luna", "the held draw: {excluded}");
+        if class == ProviderFailureClass::Capacity {
+            assert!(fx.admitted(&task, &["luna"]));
+            let excluded = fx.exclusion(&task, &["sol"]);
+            assert_eq!(excluded["reason"], "crew_not_allowed");
+            assert_eq!(excluded["crew"], "luna", "the held draw: {excluded}");
+        } else {
+            assert!(
+                !fx.admitted(&task, &["luna"]),
+                "the same expired login is not dispatched again: {hold:?}"
+            );
+            assert!(fx.admitted(&task, &["opus"]));
+            let excluded = fx.exclusion(&task, &["sol"]);
+            assert_eq!(excluded["reason"], "crew_not_allowed");
+            assert_eq!(excluded["crew"], "opus", "the held draw: {excluded}");
+        }
 
         // That crew fails too: both stay excluded, for longer, and the draw
         // falls back to the workspace default.
@@ -419,8 +433,10 @@ model = "sol-model"
 /// `opus@medium` that hits a usage limit, a refusal, a capacity failure or an
 /// unusable login keeps `opus@medium` and `opus` out of the next draw. Limits
 /// and refusals still select every crew of the failing account or provider,
-/// while capacity and unavailability on the run's own account exclude only
-/// the run crew's family, so `sonnet` stays drawable.
+/// while capacity on the run's own account excludes only the run crew's
+/// family, so `sonnet` stays drawable. An unusable login's hold also names
+/// only that family, but its host outage covers the whole account, so
+/// `sonnet` is not drawn either.
 fn a_hold_after_an_effort_reference_run_excludes_the_crews_whole_family() {
     for (class, detail, sonnet_drawable) in [
         (
@@ -441,7 +457,7 @@ fn a_hold_after_an_effort_reference_run_excludes_the_crews_whole_family() {
         (
             ProviderFailureClass::Unavailable,
             "claude provider authentication failure (HTTP 401): token expired",
-            true,
+            false,
         ),
     ] {
         let fx = fixture(EFFORT_POOL);
@@ -599,10 +615,10 @@ fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
 
 /// [ORB-16379] The 2026-10-17 incident: this host's login expired, and each
 /// queued task of the crew failed on it in turn before it was held. One
-/// unavailable failure now records the crew's outage on this host, so the
-/// drain's next admission draws every task, not only the held one, onto
-/// another pool crew, even once the held task has left the backlog. When the
-/// pool has no other crew left, the task waits out the backoff.
+/// unavailable failure now records the account's outage on this host, so the
+/// drain's next admission draws no task, not only the held one, onto any
+/// crew sharing that login, even once the held task has left the backlog.
+/// When no crew on another account is left, the task waits out the backoff.
 fn an_unavailable_login_keeps_this_host_off_the_crew_for_every_task() {
     let fx = fixture_on(CODEX_ONLY, Some("hm_this_host"));
     let held = fx.task("sol");
@@ -623,11 +639,16 @@ fn an_unavailable_login_keeps_this_host_off_the_crew_for_every_task() {
         "the hold names the host whose login failed: {hold:?}"
     );
 
-    // The queued task, which never ran, is drawn onto the pool's other crew.
-    assert_eq!(fx.exclusion(&queued, &["sol"])["crew"], "luna");
-    assert!(fx.admitted(&queued, &["luna"]));
+    // The queued task, which never ran, is not drawn onto the pool's other
+    // crew either: it shares the expired login, so the task waits.
+    assert!(!fx.admitted(&queued, &["luna"]));
+    assert_eq!(
+        fx.exclusion(&queued, &[])["reason"],
+        "provider_backoff",
+        "the outage holds every task off the account"
+    );
 
-    // The held task leaves the backlog; a later task still avoids the crew.
+    // The held task leaves the backlog; a later task still avoids the account.
     fx.runtime
         .apply_task_automation_update(
             &held,
@@ -638,11 +659,11 @@ fn an_unavailable_login_keeps_this_host_off_the_crew_for_every_task() {
         )
         .unwrap();
     let later = fx.task("sol");
-    assert_eq!(
-        fx.exclusion(&later, &["sol"])["crew"],
-        "luna",
+    assert!(
+        !fx.admitted(&later, &[]),
         "the outage outlives the held task's status"
     );
+    assert_eq!(fx.exclusion(&later, &[])["reason"], "provider_backoff");
 
     // The pool's other crew fails the same way: nothing is left to draw.
     let second = fx.admit(&queued, "luna");
