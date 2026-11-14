@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use orbit_types::task::UNSET_BUCKET;
 
 use crate::application::admission::backlog_exclusion::BacklogTaskExclusion;
+use crate::application::statistics::SplitMix64;
 use serde_json::{Value, json};
 
 use super::outcomes::{AwayWait, Episode, EpisodeOutcome, Follow, MAX_ATTEMPTS, ReturnCurve};
@@ -394,28 +395,6 @@ fn round_share(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
 }
 
-/// splitmix64: small, seedable and good enough for resampling.
-pub(super) struct Rng(pub(super) u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    pub(super) fn index(&mut self, len: usize) -> usize {
-        (self.next() % len as u64) as usize
-    }
-
-    /// Uniform in (0, 1].
-    pub(super) fn unit(&mut self) -> f64 {
-        ((self.next() >> 11) as f64 + 1.0) / (1u64 << 53) as f64
-    }
-}
-
 /// One task's draw for one simulated drain, or a sum of draws. A missing
 /// value (no history, or no priced or costed delivery to draw from) makes
 /// every sum it joins missing, so a total never silently undercounts.
@@ -518,7 +497,7 @@ impl Script {
 /// sampled return (blocked) or nothing (abandoned). A delivering attempt
 /// takes `delivery`. Without episodes the first attempt delivers.
 pub(super) fn draw_forecast_attempts(
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
     item: &Item,
     resolved: &Resolved,
     episodes: &[Episode],
@@ -555,7 +534,7 @@ pub(super) fn draw_forecast_attempts(
             });
             return;
         };
-        let redraw = |rng: &mut Rng, pool: &[usize], metric: fn(&Episode) -> Option<f64>| {
+        let redraw = |rng: &mut SplitMix64, pool: &[usize], metric: fn(&Episode) -> Option<f64>| {
             (!pool.is_empty())
                 .then(|| metric(&episodes[pool[rng.index(pool.len())]]))
                 .flatten()
@@ -601,7 +580,7 @@ pub(super) fn draw_forecast_attempts(
 }
 
 pub(super) fn draw_forecast_delivery(
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
     resolved: &Resolved,
     history: &[Delivery],
 ) -> Draw {

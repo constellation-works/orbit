@@ -316,7 +316,9 @@ Regression attribution and filters apply to `regressions`, its path detail,
 and the crew and complexity rates. A link's `nature` and `escape` come from
 its recorded classification; a missing classification is `absent`, distinct
 from an explicit `unclassified`. `layer` describes where the fix landed,
-using landed paths or, when unavailable, its declared footprint. `detected_by`
+using landed paths or, when unavailable, its declared footprint, classified by
+the workspace's `workflow.regression_layers` (`ci_tests` and `docs_skills`
+unless configured); a path no row matches is `other`. `detected_by`
 comes from the regression task's tags or its filer. Filters `nature`,
 `escape`, `layer`, and `detected_by` combine: every selected dimension must
 match. `absent` selects links without a recorded classification.
