@@ -108,8 +108,7 @@ fn refused_settlements_leave_review_ledgers_unchanged() {
                         orbit_types::task::TaskStatus::Backlog,
                         "operator",
                         "operator revoked attempt",
-                        "operator-recover",
-                        "operator-recover",
+                        ("operator-recover", "operator-recover"),
                     )
                     .unwrap();
             }

@@ -602,8 +602,7 @@ impl Delivery {
                 TaskStatus::Blocked,
                 "operator",
                 "landing stopped on a conflict; merged by hand",
-                "operator-recover",
-                "recover",
+                ("operator-recover", "recover"),
             )
             .expect("recover");
         back_to_review(&self.owner, &self.task, None);
@@ -2204,8 +2203,7 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
             TaskStatus::Blocked,
             "operator",
             "the follower went away",
-            "operator-recover",
-            "recover",
+            ("operator-recover", "recover"),
         )
         .expect("recover");
 

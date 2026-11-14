@@ -209,6 +209,8 @@ fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
     if cfg!(target_os = "macos")
         && (root.starts_with("/private/tmp") || root.starts_with("/private/var/folders"))
     {
+        // Printed so the deferred native case shows in the test log as a skip;
+        // a silent return would read as a pass of the sibling-denial boundary.
         #[allow(clippy::print_stdout)]
         {
             println!(

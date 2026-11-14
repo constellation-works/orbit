@@ -401,8 +401,7 @@ pub(super) async fn recover_claim_action(
                 status,
                 OPERATOR_ACTOR,
                 &reason,
-                "dashboard-recover",
-                &request_id,
+                ("dashboard-recover", &request_id),
             )
         },
     )

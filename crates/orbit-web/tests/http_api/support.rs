@@ -323,9 +323,11 @@ impl Fixture {
         spawn_server_from(
             self.temp.path(),
             &worktree,
-            operator,
-            false,
-            false,
+            ServerFeatures {
+                operator,
+                resources: false,
+                replay_worker: false,
+            },
             &self.path("process.log"),
             None,
             &[
@@ -513,27 +515,38 @@ pub(super) fn spawn_server(
     spawn_server_from(
         root,
         root,
-        operator,
-        resources,
-        replay_worker,
+        ServerFeatures {
+            operator,
+            resources,
+            replay_worker,
+        },
         log_path,
         task_query_log,
         env,
     )
 }
 
-/// [`spawn_server`] with the server process's working directory at `cwd`.
-#[allow(clippy::too_many_arguments)]
-fn spawn_server_from(
-    root: &Path,
-    cwd: &Path,
+/// The fixture features one server child enables.
+struct ServerFeatures {
     operator: bool,
     resources: bool,
     replay_worker: bool,
+}
+
+/// [`spawn_server`] with the server process's working directory at `cwd`.
+fn spawn_server_from(
+    root: &Path,
+    cwd: &Path,
+    features: ServerFeatures,
     log_path: &Path,
     task_query_log: Option<&Path>,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Server {
+    let ServerFeatures {
+        operator,
+        resources,
+        replay_worker,
+    } = features;
     orbit_common::test_env::assert_child_test_exists("server_child");
     let log = tempfile::NamedTempFile::new_in(root).unwrap();
     let mut command = fixture_command(root);

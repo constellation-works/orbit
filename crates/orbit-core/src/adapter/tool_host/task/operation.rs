@@ -197,8 +197,7 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 status,
                 &actor,
                 &reason,
-                "operator-recover",
-                &request_key,
+                ("operator-recover", &request_key),
             )?;
             // The response names the claim, not its task; resolve the task for
             // the redaction audit from the claim console's task id if present.

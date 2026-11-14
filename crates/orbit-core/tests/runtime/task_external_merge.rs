@@ -369,8 +369,7 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
             TaskStatus::Blocked,
             "operator",
             "Follower stopped; its refused handoff's PR was rescued by hand",
-            "operator-recover",
-            "recover-rescued",
+            ("operator-recover", "recover-rescued"),
         )
         .unwrap();
     fx.merge(4940, &task, BOT, LANDING);
