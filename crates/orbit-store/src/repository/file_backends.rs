@@ -334,6 +334,12 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
         self.in_boundary(|| self.get_task_row(id, list_read))
     }
+    fn get_task_row_uncached(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::get_task_row_uncached(self, id))
+    }
     fn task_envelopes_for_ids(
         &self,
         ids: &BTreeSet<String>,

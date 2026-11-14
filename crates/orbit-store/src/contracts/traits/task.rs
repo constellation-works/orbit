@@ -378,6 +378,16 @@ pub trait TaskStoreBackend: Send + Sync {
         id: &str,
         list_read: bool,
     ) -> Result<Option<crate::contracts::TaskRow>, OrbitError>;
+    /// Lightweight row read that bypasses the listed-row cache.
+    /// Decision scans have their own cross-process proof cache and assert
+    /// exact bundle-read counts; they must neither hit nor populate the
+    /// in-process row cache that readiness and listing pages share.
+    fn get_task_row_uncached(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
+        self.get_task_row(id, true)
+    }
     /// Envelopes of the listed `ids`, one keyed read per id: no index
     /// validation and no body documents. An id with no settled bundle is absent.
     fn task_envelopes_for_ids(
