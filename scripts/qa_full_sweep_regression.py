@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import signal
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,10 @@ if _mode == "local-cleanup-unverified":
     qa.run = _run_with_unverified_cleanup
 if _mode == "local-supervisor-lost":
     qa._PROCESS_SUPERVISOR = "import os, sys; os.close(int(sys.argv[1]))"
+if _mode == "local-scan-denied":
+    # Every process-table listing is refused, in the supervisor and here.
+    qa._PROCESS_SUPERVISOR = PROC_DENIAL + qa._PROCESS_SUPERVISOR
+    exec(PROC_DENIAL)
 qa.platform.system = lambda: "Darwin"
 qa.inspect_browser_capability = lambda *_: ({"command": ["probe"], "exit_code": 0,
                                             "stdout": "fixture browser", "stderr": ""}, "fixture browser")
@@ -406,6 +411,8 @@ def self_test():
     candidate_build_report_self_test(harness, scratch)
     native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
+    process_observation_denial_self_test(harness, scratch)
+    dashboard_builtin_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
     source_identity_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
@@ -418,7 +425,7 @@ def self_test():
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
             (repo / directory).mkdir(parents=True, exist_ok=True)
         driver = repo / "driver.py"
-        driver.write_text(DRIVER)
+        driver.write_text("PROC_DENIAL = " + repr(PROC_DENIAL) + "\n" + DRIVER)
         cargo = repo / "bin/cargo"
         cargo.write_text(f"#!{sys.executable}\n" + CARGO)
         cargo.chmod(0o755)
@@ -493,6 +500,21 @@ def self_test():
         def row(report, name):
             return next(result for result in report["results"] if result["scenario"] == name)
 
+        def native_claimed(report):
+            """The certificate validated, yet earned no credit here.
+
+            The sweep cannot authenticate where a certificate came from, so a
+            valid import is a NOT_RUN claim bound to the certificate's digest,
+            and the one remaining finding is that claim. Only the readiness
+            adapter credits it, from owner artifact authority."""
+            claim = [result for result in report["results"] if result["scenario"] == "macos-platform"]
+            return (len(claim) == 1 and claim[0].get("evidence_type") == "native-certificate-claim"
+                    and claim[0]["outcome"] == "NOT_RUN" and claim[0]["assertions"] == []
+                    and claim[0]["certificate_assertions"] == native["assertions"]
+                    and len(claim[0]["native_certificate_sha256"]) == 64
+                    and report["decision"] == "INCOMPLETE"
+                    and report["findings"] == ["macos-platform: missing, failed, or unrun evidence"])
+
         report = sweep([native], "complete")
         assert row(report, "macos-platform")["outcome"] == "NOT_RUN" and not row(report, "macos-platform")["assertions"], report
         report = sweep([rust], "complete")
@@ -528,6 +550,18 @@ def self_test():
         assert result["open_descendants"] is None and result["detached_workers"] is None, result
         assert report["scratch_cleanup"]["retained"] is True, report
         assert Path(report["scratch_cleanup"]["root"]).is_dir(), report
+        if os.path.isdir("/proc"):
+            # A refused process table proves no clean root: the command row
+            # fails closed and main() keeps the scratch root.
+            report = sweep([local], "local-scan-denied")
+            result = row(report, "local-command")
+            assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", report
+            assert result["exit_code"] == 0 and result["cleanup_verified"] is False, result
+            assert "observation incomplete" in result["stderr"], result
+            cleanup = report["scratch_cleanup"]
+            assert cleanup["retained"] is True and cleanup["observation_complete"] is False, report
+            assert "observation incomplete" in cleanup["warning"], report
+            assert Path(cleanup["root"]).is_dir(), report
         report = sweep([local], "local-cleanup-unverified")
         result = row(report, "local-command")
         assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", report
@@ -597,7 +631,11 @@ def self_test():
         report = sweep([website], "website-preparation-skip", ["--website-build"])
         assert row(report, "website-build")["outcome"] == "NOT_RUN" and report["decision"] == "INCOMPLETE", report
         report = sweep([native], "hosted-complete")
-        assert report["decision"] == "PASS" and row(report, "macos-platform")["assertions"] == native["assertions"], report
+        # A well-formed certificate with invented producer fields and copied
+        # source hashes earns no import credit; it stays a digest-bound claim.
+        assert native_claimed(report), report
+        hosted_bytes = (repo / ".orbit/tmp/hosted.json").read_bytes()
+        assert row(report, "macos-platform")["native_certificate_sha256"] == hashlib.sha256(hosted_bytes).hexdigest(), report
         for mode in ["hosted-skip", "hosted-listing"]:
             report = sweep([native], mode)
             assert report["decision"] == "INCOMPLETE", report
@@ -702,7 +740,7 @@ def self_test():
                 recorded["stderr"] = execution["stderr"]
             (repo / "transcript.json").write_text(json.dumps(recorded))
             report = sweep([native], f"native-{mode}")
-            assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
+            assert native_claimed(report) == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
             if mode == "unverified-cleanup":
                 assert "cleanup was not verified" in row(report, "platform-evidence-import")["stderr"], (mode, report)
                 assert recorded["exit_code"] == 0 and recorded["stdout"], recorded
@@ -732,7 +770,7 @@ def self_test():
                 execution["stdout"] = execution["stdout"].replace("qa-child-output-begin: " + owner, "qa-child-output-begin: " + owner + "\nSKIP: sandbox-exec cannot apply a profile: real child refusal")
             (repo / "transcript.json").write_text(json.dumps(execution))
             report = sweep([native], "native-forwarded-" + mode)
-            assert (report["decision"] == "PASS") == (mode == "complete"), (mode, report)
+            assert native_claimed(report) == (mode == "complete"), (mode, report)
             if mode == "complete":
                 retained = row(report, "macos-platform")["native_evidence"]["execution"][0]
                 assert retained["test_counts"] == {"passed": 1, "failed": 0, "ignored": 0, "suites": 1}, retained
@@ -801,7 +839,7 @@ def self_test():
                         recorded[key] = execution[key]
                 (repo / "transcript.json").write_text(json.dumps(recorded))
                 report = sweep([rust, native], "native-libtest")
-                assert (report["decision"] == "PASS") == (mode == "complete"), (threads, mode, report)
+                assert native_claimed(report) == (mode == "complete"), (threads, mode, report)
                 if mode == "complete":
                     assert recorded_child.returncode == 0, recorded_child.stderr
                     retained = row(report, "macos-platform")["native_evidence"]["execution"][0]
@@ -875,16 +913,29 @@ def self_test():
         # Native schema-v2 rows retain the schema-v1 provenance validation.
         native_report = sweep([native, provenance], "hosted-complete")
         replay = reimport(native_report, [native])
-        assert replay["decision"] == "PASS" and row(replay, "macos-platform")["imported_from"], replay
-        for mode in ["wrong-command", "missing-provenance"]:
+        assert native_claimed(replay) and row(replay, "macos-platform")["imported_from"], replay
+        # The claim keeps the original certificate digest, not the report's.
+        assert (row(replay, "macos-platform")["native_certificate_sha256"]
+                == row(native_report, "macos-platform")["native_certificate_sha256"]), replay
+        for mode in ["wrong-command", "missing-provenance", "missing-digest", "promoted-pass"]:
             altered = copy.deepcopy(native_report)
             result = row(altered, "macos-platform")
             if mode == "wrong-command":
                 result["command"] = ["./wrong-command"]
-            else:
+            elif mode == "missing-provenance":
                 result["native_evidence"]["producer"]["run_id"] = ""
+            elif mode == "missing-digest":
+                result.pop("native_certificate_sha256")
+            else:
+                # A report row cannot promote its claim to a PASS.
+                result.update(outcome="PASS", assertions=native["assertions"])
             replay = reimport(altered, [native])
             assert replay["decision"] == "INCOMPLETE", (mode, replay)
+            if mode == "promoted-pass":
+                assert native_claimed(replay), (mode, replay)
+            else:
+                assert not native_claimed(replay), (mode, replay)
+                assert row(replay, "platform-evidence-import")["outcome"] == "FAIL", (mode, replay)
         for mode in ["overwrite", "missing"]:
             report = sweep(browsers, mode, browser_args)
             assert report["decision"] == "INCOMPLETE" and row(report, "first")["retained_evidence_error"], report
@@ -1654,7 +1705,8 @@ def injected_run(*args, **kwargs):
                                "import os, sys; os.close(int(sys.argv[1]))"):
             return real_run(*args, **kwargs)
     if mode in ("unreadable-result", "unfinished-result", "incomplete-result", "invalid-workers"):
-        payload = {"exit_code": 0, "detached_workers": [], "open_descendants": 0, "subreaper": False}
+        payload = {"exit_code": 0, "detached_workers": [], "open_descendants": 0, "subreaper": False,
+                   "observation_complete": True, "observation_errors": []}
         if mode == "incomplete-result":
             payload.pop("open_descendants")
         if mode == "invalid-workers":
@@ -1678,7 +1730,8 @@ def injected_run(*args, **kwargs):
                    "os.read(int(sys.argv[2]), 1); ")
         if mode == "delayed-result":
             program += ("os.write(int(sys.argv[1]), "
-                        "json.dumps(dict(exit_code=0, detached_workers=[], open_descendants=0, subreaper=False)).encode() + bytes([10])); ")
+                        "json.dumps(dict(exit_code=0, detached_workers=[], open_descendants=0, subreaper=False, "
+                        "observation_complete=True, observation_errors=[])).encode() + bytes([10])); ")
         program += "os.close(int(sys.argv[1]))"
         real_select = qa.select.select
         calls = 0
@@ -1767,3 +1820,252 @@ qa.main()
                 assert recorded["cleanup_verified"] is False, recorded
                 assert recorded["open_descendants"] is None and recorded["detached_workers"] is None, recorded
                 assert "supervisor cleanup record" in recorded["stderr"], recorded
+
+
+# Refuse Linux /proc reads at the OS-call layer, in the supervisor and in the
+# recorder alike. `denied-scan` refuses the table listing itself;
+# `lost-visibility` lets a process under the root be read once, then refuses
+# every later read of it, as a worker that becomes unreadable mid-settlement.
+PROC_DENIAL = r"""
+import builtins as _builtins, os as _os, re as _re
+# A supervisor under the sweep's isolated environment has neither variable.
+_deny_root = _os.environ.get("QA_DENY_ROOT", "/nonexistent-qa-deny-root")
+_deny_mode = _os.environ.get("QA_DENY_MODE", "denied-scan")
+_deny_seen = set()
+_deny_open, _deny_listdir, _deny_readlink = _builtins.open, _os.listdir, _os.readlink
+
+def _deny_pid(path):
+    found = _re.fullmatch(r"/proc/(\d+)/\w+", str(path))
+    return int(found.group(1)) if found else None
+
+def _deny_check(path):
+    if _deny_mode == "denied-scan" and str(path).rstrip("/") == "/proc":
+        raise PermissionError(13, "fixture /proc refusal", str(path))
+    if _deny_mode == "lost-visibility" and _deny_pid(path) in _deny_seen:
+        raise PermissionError(13, "fixture /proc refusal", str(path))
+
+def _denied_listdir(path="."):
+    _deny_check(path)
+    return _deny_listdir(path)
+
+def _denied_open(file, *args, **kwargs):
+    _deny_check(file)
+    return _deny_open(file, *args, **kwargs)
+
+def _denied_readlink(path, *args, **kwargs):
+    _deny_check(path)
+    target = _deny_readlink(path, *args, **kwargs)
+    pid = _deny_pid(path)
+    if pid is not None and str(path).endswith("/cwd") and (
+            target == _deny_root or target.startswith(_deny_root + "/")):
+        _deny_seen.add(pid)
+    return target
+
+_builtins.open = _denied_open
+_os.listdir = _denied_listdir
+_os.readlink = _denied_readlink
+"""
+
+DENIAL_DRIVER = """
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("qa", sys.argv[1])
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+# Keep the bounded waits short; the refusal, not a deadline, is under test.
+qa._PROCESS_SUPERVISOR = (PROC_DENIAL + qa._PROCESS_SUPERVISOR
+                          .replace("REAP_TERM_SECONDS = 10\\n", "REAP_TERM_SECONDS = 0.5\\n")
+                          .replace("REAP_KILL_GRACE_SECONDS = 5\\n", "REAP_KILL_GRACE_SECONDS = 0.5\\n"))
+real_settle = qa.settle_detached_workers_under
+qa.settle_detached_workers_under = lambda root, deadline_s=10, kill_grace_s=5: real_settle(root, 0.5, 0.5)
+exec(PROC_DENIAL)
+sys.argv = [sys.argv[1], *sys.argv[2:]]
+qa.main()
+"""
+
+# A command that leaves one detached worker in the owned scratch root. The
+# worker records any SIGTERM and bounds its own lifetime, so a failed check
+# cannot leave it behind for long.
+DENIAL_WORKER = """
+import os, signal, sys, time
+root, ready = sys.argv[1:3]
+if os.fork() == 0:
+    os.setsid()
+    os.chdir(root)
+    # Release the command's output pipes, as a detached worker does.
+    null = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(null, fd)
+    def terminated(_signum, _frame):
+        with open(ready + ".terminated", "w") as stream:
+            stream.write("1")
+        os._exit(0)
+    signal.signal(signal.SIGTERM, terminated)
+    with open(ready + ".tmp", "w") as stream:
+        stream.write(str(os.getpid()))
+    os.rename(ready + ".tmp", ready)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+    os._exit(0)
+deadline = time.monotonic() + 5
+while not os.path.exists(ready):
+    if time.monotonic() >= deadline:
+        os._exit(2)
+    time.sleep(0.01)
+print("worker started")
+"""
+
+
+def process_observation_denial_self_test(harness, scratch):
+    """A refused process read leaves cleanup unverified and signals nothing.
+
+    Drives the public native recorder. Linux only: the refusal is injected at
+    /proc, which macOS does not have."""
+    if not os.path.isdir("/proc"):
+        print("process observation denial regression: NOT_RUN (no /proc on this host)", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="qa-proc-denial-", dir=scratch) as tmp:
+        repo = Path(tmp).resolve()
+        driver = repo / "denial-driver.py"
+        driver.write_text("PROC_DENIAL = " + repr(PROC_DENIAL) + "\n" + DENIAL_DRIVER)
+        for mode in ("denied-scan", "lost-visibility"):
+            print(f"process observation denial regression: {mode}", flush=True)
+            root = repo / f"{mode}-tmp"
+            root.mkdir()
+            ready = repo / f"{mode}.ready"
+            records = repo / f"{mode}-records"
+            command = [sys.executable, "-c", DENIAL_WORKER, str(root), str(ready), "cargo", "test"]
+            env = {**os.environ, "TMPDIR": str(root), "QA_DENY_ROOT": str(root), "QA_DENY_MODE": mode}
+            pid = None
+            try:
+                child = subprocess.run(
+                    [sys.executable, str(driver), str(harness), "--repo-root", str(repo),
+                     "--native-execution-dir", str(records), "--record-native-command", *command],
+                    cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+                pid = int(ready.read_text())
+                recorded = json.loads(next(records.glob("*.json")).read_text())
+                # The command itself succeeded; its cleanup cannot be proven.
+                assert recorded["exit_code"] == 0 and "worker started" in recorded["stdout"], (mode, recorded)
+                assert child.returncode == 1, (mode, child.returncode, recorded)
+                assert recorded["cleanup_verified"] is False and recorded["outcome"] == "FAIL", (mode, recorded)
+                assert "observation incomplete" in recorded["stderr"], (mode, recorded)
+                # No unproven identity was signalled: the worker is still
+                # running and never saw SIGTERM.
+                assert not Path(str(ready) + ".terminated").exists(), (mode, recorded)
+                stat = Path(f"/proc/{pid}/stat").read_text()
+                assert stat.rsplit(")", 1)[1].split()[0] != "Z", (mode, stat)
+                assert os.readlink(f"/proc/{pid}/cwd") == str(root), mode
+            finally:
+                if pid is None and ready.exists():
+                    pid = int(ready.read_text())
+                if pid is not None:
+                    # Our own fixture worker, identified by its cwd under the
+                    # private root it was started in.
+                    try:
+                        if os.readlink(f"/proc/{pid}/cwd") == str(root):
+                            os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        try:
+                            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                        except OSError:
+                            break
+                        if state == "Z":
+                            break
+                        time.sleep(0.02)
+
+
+# A fixture `orbit web serve`. Its responses name the workspace and task the
+# builtin checks. `descendant-pipe` also starts a detached descendant that
+# keeps the server's output pipe open long after the server exits.
+DASHBOARD_ORBIT = r"""
+import http.server, json, os, subprocess, sys
+args = sys.argv[1:]
+assert args[2:4] == ["web", "serve"], args
+port = int(args[args.index("--port") + 1])
+mode = os.environ["QA_DASHBOARD_MODE"]
+if mode == "descendant-pipe":
+    subprocess.Popen([sys.executable, "-c",
+                      "import os, sys, time; os.setsid(); "
+                      "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(45)",
+                      os.environ["QA_DASHBOARD_HOLDER"]])
+body = {"/healthz": "ok",
+        "/api/workspaces": json.dumps([{"repo_root": os.getcwd()}]),
+        "/api/tasks": json.dumps([{"id": "QAF-1"}])}
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        payload = body.get(self.path, "").encode()
+        self.send_response(200 if payload else 404)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_):
+        pass
+
+http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+"""
+
+
+def dashboard_builtin_self_test(harness, scratch):
+    """The dashboard builtin is bounded and reports teardown honestly."""
+    from unittest import mock
+    qa = runpy.run_path(str(harness))
+    with tempfile.TemporaryDirectory(prefix="qa-dashboard-", dir=scratch) as tmp:
+        temp = Path(tmp).resolve()
+        work = temp / "workspace"
+        work.mkdir()
+        orbit = temp / "orbit"
+        orbit.write_text(f"#!{sys.executable}\n" + DASHBOARD_ORBIT)
+        orbit.chmod(0o755)
+        holder = temp / "holder.pid"
+        assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
+                      "task-api-reads-persisted-task"]
+        for mode in ("ready", "descendant-pipe", "cleanup-refused"):
+            print(f"dashboard builtin regression: {mode}", flush=True)
+            env = {**os.environ, "TMPDIR": str(temp), "QA_DASHBOARD_HOLDER": str(holder),
+                   "QA_DASHBOARD_MODE": "ready" if mode == "cleanup-refused" else mode}
+            started = time.monotonic()
+            try:
+                if mode == "cleanup-refused":
+                    # The host refuses the final process-group sweep.
+                    with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
+                        result = qa["dashboard_api_boundary"](str(orbit), temp / "home", work, env,
+                                                              "QAF-1", "fixture-candidate")
+                else:
+                    result = qa["dashboard_api_boundary"](str(orbit), temp / "home", work, env,
+                                                          "QAF-1", "fixture-candidate")
+                elapsed = time.monotonic() - started
+                # The descendant would hold the pipe for 45 s; supervision ends it.
+                assert elapsed < 40, (mode, elapsed, result)
+                assert "QAF-1" in result["stdout"], (mode, result)
+                if mode == "cleanup-refused":
+                    assert result["outcome"] == "FAIL" and result["assertions"] == [], (mode, result)
+                    assert result["cleanup_verified"] is False, (mode, result)
+                    assert "fixture cleanup refusal" in result["stderr"], (mode, result)
+                else:
+                    assert result["outcome"] == "PASS", (mode, result)
+                    assert result["assertions"] == assertions, (mode, result)
+                    assert result["cleanup_verified"] is True and result["exit_code"] == 0, (mode, result)
+                if mode == "descendant-pipe":
+                    pid = int(holder.read_text())
+                    try:
+                        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                    except OSError:
+                        state = "gone"
+                    if not os.path.isdir("/proc"):
+                        state = "gone" if subprocess.run(["kill", "-0", str(pid)],
+                                                         capture_output=True).returncode else "alive"
+                    assert state in ("gone", "Z"), (mode, pid, state)
+            finally:
+                if holder.exists():
+                    try:
+                        pid = int(holder.read_text())
+                        if os.path.isdir("/proc") and Path(f"/proc/{pid}/cmdline").read_bytes().find(
+                                str(holder).encode()) >= 0:
+                            os.kill(pid, signal.SIGKILL)
+                    except (OSError, ValueError):
+                        pass
+                    holder.unlink()

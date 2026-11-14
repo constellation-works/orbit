@@ -18,6 +18,20 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parent
 
 
+def native_nice_ceiling():
+    """Return the highest nice value this host lets a process lower itself to.
+
+    The ceiling is native: Linux stops at 19 and Darwin at 20, so a caller
+    already there cannot be observed running any lower. Probe it in a child
+    instead of guessing."""
+    probe = ("import os\n"
+             "try:\n    os.setpriority(os.PRIO_PROCESS, 0, 40)\n"
+             "except OSError:\n    pass\n"
+             "print(os.getpriority(os.PRIO_PROCESS, 0))\n")
+    return int(subprocess.run([sys.executable, "-c", probe], check=True,
+                              text=True, capture_output=True).stdout)
+
+
 class GuardrailTests(unittest.TestCase):
     def setUp(self):
         scratch = SCRIPTS.parent / ".orbit/tmp"
@@ -38,8 +52,18 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
-        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS"):
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS",
+                    "GUARD_TEST_NICE_ATTEMPTED"):
             self.env.pop(key, None)
+        # A caller already at the host's nice ceiling cannot be observed running
+        # lower, so the fallback `nice` marks the processes it lowered. It runs
+        # the real `nice`, so a refusal still fails visibly.
+        self.nice_ceiling = native_nice_ceiling()
+        real_nice = shutil.which("nice")
+        self.assertIsNotNone(real_nice, "the priority fixtures need the host's nice")
+        self.write_executable(self.bin / "nice",
+                              "#!/bin/sh\nGUARD_TEST_NICE_ATTEMPTED=1\nexport GUARD_TEST_NICE_ATTEMPTED\n"
+                              f"exec {shlex.quote(real_nice)} \"$@\"\n")
         # Pin the guard pool's width and ignore any host build-budget file.
         self.env.update(ORBIT_CARGO_JOBS="4", ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         self.targets = self.root / "targets.json"
@@ -101,7 +125,8 @@ if env_log:
                               "RUSTC_WORKSPACE_WRAPPER": os.environ.get("RUSTC_WORKSPACE_WRAPPER"),
                               "CLIPPY_ARGS": os.environ.get("CLIPPY_ARGS"),
                               "idle": idle is not None and os.sched_getscheduler(0) == idle,
-                              "nice": os.getpriority(os.PRIO_PROCESS, 0)}) + "\\n")
+                              "nice": os.getpriority(os.PRIO_PROCESS, 0),
+                              "nice_attempted": os.environ.get("GUARD_TEST_NICE_ATTEMPTED") == "1"}) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif sys.argv[1] == "test" and "--message-format" in sys.argv:
@@ -624,9 +649,26 @@ log("end {name}")
                               f'sleep {hold}\n'
                               f'printf "end {name}\\n" >> "{events}"\n')
 
+    def assert_runs_lowered(self, row, foreground):
+        """Assert a logged cargo call ran below the foreground's priority.
+
+        Linux's idle class or a higher nice value shows it directly. A
+        foreground already at the host's nice ceiling cannot be outranked, so
+        there the call must sit at that ceiling and have gone through the
+        fallback `nice` that the foreground did not."""
+        if row["idle"] and not foreground["idle"]:
+            return
+        if foreground["nice"] < self.nice_ceiling:
+            self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
+            return
+        self.assertEqual(row["nice"], self.nice_ceiling, (row, foreground))
+        self.assertTrue(row["nice_attempted"] and not foreground["nice_attempted"], (row, foreground))
+
     def write_priority_stub(self, name, priorities, events=None, hold=0):
         # Records whether the guard runs lowered: in Linux's idle class, or else
-        # at a higher nice value than this test process.
+        # at a higher nice value than this test process. A caller already at the
+        # nice ceiling cannot go higher, so there the fallback `nice` must have run.
+        caller = os.getpriority(os.PRIO_PROCESS, 0)
         self.write_executable(self.scripts / name, f'''#!/usr/bin/env python3
 import json, os, time
 def log(event):
@@ -635,8 +677,11 @@ def log(event):
             stream.write(event + "\\n")
 log("start {name}")
 idle = getattr(os, "SCHED_IDLE", None)
+nice = os.getpriority(os.PRIO_PROCESS, 0)
 lowered = ((idle is not None and os.sched_getscheduler(0) == idle)
-           or os.getpriority(os.PRIO_PROCESS, 0) > {os.getpriority(os.PRIO_PROCESS, 0)})
+           or nice > {caller}
+           or ({caller} == {self.nice_ceiling} == nice
+               and os.environ.get("GUARD_TEST_NICE_ATTEMPTED") == "1"))
 with open({str(priorities)!r}, "a") as stream:
     stream.write(json.dumps([{name!r}, lowered]) + "\\n")
 time.sleep({hold})
@@ -1063,7 +1108,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                          [dict(argv=folded, **lint)])
         # The workspace test listing runs in the main shell; nextest keeps its priority.
         listed = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
-        foreground = {key: listed[0][key] for key in ("idle", "nice")}
+        foreground = {key: listed[0][key] for key in ("idle", "nice", "nice_attempted")}
         # Cargo fingerprints this environment. The nextest listing and the
         # doctest build must see exactly the folded build's values, or each
         # recompiles every workspace member before it can run.
@@ -1093,8 +1138,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         background = [*production, *doctests, *builds]
         self.assertEqual(len(background), 4, observed)
         for row in background:
-            self.assertTrue((row["idle"] and not foreground["idle"]) or
-                            row["nice"] > foreground["nice"], (row, foreground))
+            self.assert_runs_lowered(row, foreground)
         runs = [row for row in observed if row["argv"][:2] == ["nextest", "run"]]
         self.assertEqual(len(runs), 1, observed)
         self.assertEqual({key: runs[0][key] for key in foreground}, foreground)
@@ -1120,7 +1164,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                       if row["argv"][0] in ("check", "test", "doc")]
         self.assertEqual(len(background), 3, observed)
         for row in background:
-            self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
+            # Without the idle class only nice remains, so it must be attempted.
+            self.assertFalse(row["idle"], row)
+            self.assertTrue(row["nice_attempted"], row)
+            self.assert_runs_lowered(row, foreground)
 
     def test_split_ci_modes_together_run_the_full_ci_work(self):
         """The hosted test-build and Check jobs split the full run between them."""
@@ -1262,8 +1309,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         formatting = next(row for row in observed if row["argv"][:1] == ["fmt"])
         for row in observed:
             if row["argv"][:1] in (["check"], ["doc"]) or "--doc" in row["argv"]:
-                self.assertTrue((row["idle"] and not formatting["idle"]) or row["nice"] > formatting["nice"],
-                                (row, formatting))
+                self.assert_runs_lowered(row, formatting)
 
         # The two hosted routes must execute the same guard set exactly once.
         # Each runner performs its own Python preflight; it is not guard work.

@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_automation::condition::CheckedAutoTaskStep;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{ArtifactManifestFileV2, Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    ArtifactManifestFileV2, ArtifactWriter, Task, TaskHistoryEntry, TaskStatus,
+};
 use orbit_types::workflow::{
     AUTO_TASK_EVIDENCE_SCHEMA_VERSION, AutoTaskCompletionContract, AutoTaskEvidenceBinding,
     AutoTaskEvidenceCandidate, AutoTaskEvidenceRef, AutoTaskStepRecord,
@@ -134,15 +136,29 @@ fn trusted_run(runtime: &OrbitRuntime, task: &Task) -> Result<(String, Option<St
     Ok((run_id, None))
 }
 
+/// The candidate manifest, the refs it was admitted with, each listed
+/// artifact's content, and the owner's authority facts about those artifacts.
 pub(super) type AdmittedEvidence = (
     AutoTaskEvidenceCandidate,
     Vec<AutoTaskEvidenceRef>,
     Map<String, Value>,
+    Map<String, Value>,
 );
+
+/// The writer class the owner stamped on an artifact, as an adapter reads it.
+fn artifact_writer_name(writer: ArtifactWriter) -> &'static str {
+    match writer {
+        ArtifactWriter::System => "system",
+        ArtifactWriter::Operator => "operator",
+    }
+}
 
 /// Read the candidate evidence and compare it with the owner's records. Every
 /// artifact must already exist when the task settled: evidence written later
-/// cannot support a completion that happened without it.
+/// cannot support a completion that happened without it. The last map holds,
+/// for each listed artifact the owner stamped with a trusted writer class
+/// (an operator surface or Orbit itself), that class and the digest it covers:
+/// an agent-attached artifact has no entry, whatever its content claims.
 pub(super) fn admitted_evidence(
     runtime: &OrbitRuntime,
     contract: &AutoTaskCompletionContract,
@@ -203,6 +219,7 @@ pub(super) fn admitted_evidence(
         sha256: manifest_file.sha256.clone(),
     }];
     let mut artifacts = Map::new();
+    let mut authority = Map::new();
     for listed in &candidate.artifacts {
         let file = on_time(&listed.path)?;
         if file.sha256 != listed.sha256 {
@@ -225,9 +242,15 @@ pub(super) fn admitted_evidence(
                 "json": serde_json::from_slice::<Value>(&content).ok(),
             }),
         );
+        if let Some(writer) = file.writer {
+            authority.insert(
+                listed.path.clone(),
+                json!({"sha256": listed.sha256, "writer": artifact_writer_name(writer)}),
+            );
+        }
         evidence.push(listed.clone());
     }
-    Ok((candidate, evidence, artifacts))
+    Ok((candidate, evidence, artifacts, authority))
 }
 
 /// A task as an adapter reads it, from the owner's record.

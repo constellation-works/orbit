@@ -21,10 +21,14 @@ pub(super) fn run_adapter(
     checked: &CheckedAutoTaskStep,
     contract: &AutoTaskCompletionContract,
     trusted: &TrustedIdentity,
-    evidence: (&AutoTaskEvidenceCandidate, &Map<String, Value>),
+    evidence: (
+        &AutoTaskEvidenceCandidate,
+        &Map<String, Value>,
+        &Map<String, Value>,
+    ),
     task: &Task,
 ) -> Result<(AutoTaskAdapterVerdict, String), String> {
-    let (candidate, artifacts) = evidence;
+    let (candidate, artifacts, artifact_authority) = evidence;
     let unavailable = |why: String| {
         format!(
             "`{}` evidence is unavailable: adapter `{}` {why}",
@@ -57,6 +61,9 @@ pub(super) fn run_adapter(
             "completed_at": trusted.completed_at,
             "execution_machine": trusted.execution_machine,
             "release_survey": release_survey,
+            // Owner-stamped writer classes of listed artifacts. Evidence
+            // content cannot authenticate itself; only these entries can.
+            "artifact_authority": artifact_authority,
         },
         "evidence": {"manifest": candidate, "artifacts": artifacts},
         "tasks": tasks,
