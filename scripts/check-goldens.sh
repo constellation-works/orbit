@@ -77,16 +77,19 @@ run_golden_test() {
 # Only the golden fixture: the binary's behavioural tests belong to the
 # affected-test gate, and beside it they multiply the store writes that slow
 # the fixture on a loaded host (ORB-15293).
-run_golden_test "$cargo" test -p orbit-core --test ci_failure_goldens \
+# Every invocation selects `-p orbit-cli` as the feature anchor so they all
+# resolve one workspace feature set (resolver v2 unifies over the selected
+# packages). The explicit `--test` / `--lib` selector keeps each run to its
+# golden target: Cargo only errors when no selected package has it.
+run_golden_test "$cargo" test -p orbit-core -p orbit-cli --test ci_failure_goldens \
   ci_failure_fixture_goldens -- --exact
-run_golden_test "$cargo" test -p orbit-tools --test tools -- \
+run_golden_test "$cargo" test -p orbit-tools -p orbit-cli --test tools -- \
   public_tool_surface::github_log_goldens:: mcp_definitions::
 run_golden_test "$cargo" test -p orbit-cli --test output -- help_goldens:: output_goldens::
 run_golden_test "$cargo" test -p orbit-cli --test mcp \
   mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot -- --exact
-run_golden_test "$cargo" test -p orbit-exec --test sandbox_profile_goldens
-run_golden_test "$cargo" test -p orbit-core --test sandbox_profile_goldens
+run_golden_test "$cargo" test -p orbit-exec -p orbit-core -p orbit-cli --test sandbox_profile_goldens
 
-run_golden_test "$cargo" test -p orbit-store --lib \
+run_golden_test "$cargo" test -p orbit-store -p orbit-cli --lib \
   driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact \
   driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens
