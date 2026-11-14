@@ -210,8 +210,8 @@ same order. To verify the colours, open the **Workspaces** chip: each workspace
 pill matches its entry's colour in that list, which is the colour key. The rail
 Workspace picker has no workspace colours, so use it for order only.
 
-Under **All workspaces**, the Tasks dock adds a **Fleet** tab between its **Drain**
-and **Locks held** tabs. Open it to see the **Fleet drains** pane, which
+Under **All workspaces**, the Tasks dock adds a **Fleet** tab right after its
+**Drain** tab. Open it to see the **Fleet drains** pane, which
 lists drain rows across the registered hosts and their workspaces. The tab is
 present only while **All workspaces** is selected in the rail picker; choosing a
 single workspace removes it.

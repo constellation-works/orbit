@@ -66,7 +66,7 @@ only; to open the dashboard of another machine, run
    the pull request open. Merge it on GitHub, then click **Approve** on the
    task to close it.
 
-![The Tasks view's status cards with Approve, View run and Ship actions, and the Drain, Locks held and Log dock tabs.](../../../assets/dashboard/dashboard-tasks.png)
+![The Tasks view's status cards with Approve, View run and Ship actions, and the Tasks dock beside them.](../../../assets/dashboard/dashboard-tasks.png)
 
 Two gates stay yours: a new task waits until you approve it, and a ship run
 stops at `review` without merging. Your agent can approve and ship for you

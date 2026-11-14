@@ -66,7 +66,7 @@ task as each one finishes. Tasks that overlap on locked paths wait their turn.
 | Agent | "Drain the backlog for four hours, eight at a time." |
 | CLI | `orbit run auto --for 4h --concurrency 8` |
 
-![The Tasks dock's Drain, Locks held and Log tabs, an Auto-drain card showing a CPU load throttle hold, and Start a window controls for 1 to 24 hours.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Tasks dock's Drain pane, with an Auto-drain card showing a CPU load throttle hold, and Start a window controls for 1 to 24 hours.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The window limits only when new work starts: a task already running when it
 closes still finishes. To see what a window would start, read the eligible

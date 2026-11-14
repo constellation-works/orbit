@@ -8,7 +8,7 @@ read a failed run, and change settings from a browser. It serves one host,
 has no login, and binds to loopback only. To use another machine's dashboard,
 tunnel to it over SSH or switch to a registered host with the host picker.
 
-![The Tasks view: status filters and task cards with Approve, View run and Ship, Drain, Locks held and Log dock tabs, and host load, memory and disk readings in the rail foot.](../../../assets/dashboard/dashboard-tasks.png)
+![The Tasks view: status filters and task cards with Approve, View run and Ship, the Tasks dock beside them, and host load, memory and disk readings in the rail foot.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
@@ -315,7 +315,7 @@ The **Drain** tab in the Tasks dock starts and watches a
 [delivery window](/how-to/continuous-delivery/): a time-bounded run that
 ships approved backlog tasks in parallel.
 
-![The Tasks dock with Drain, Locks held and Log tabs, an Auto-drain card showing the load throttle hold, and Start a window controls for 1 to 24 hours.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Tasks dock's Drain pane, with an Auto-drain card showing the load throttle hold, and Start a window controls for 1 to 24 hours.](../../../assets/dashboard/dashboard-drain-card.png)
 
 To start a window:
 
