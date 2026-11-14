@@ -52,19 +52,41 @@ unset ORBIT_LOG_GOLDEN_CASE
 
 cargo="${CARGO:-cargo}"
 
+# A filtered cargo test exits 0 when its filter matches zero tests, so a
+# renamed or deleted golden target would pass vacuously. Capture each run,
+# relay it, and fail when the harness reports zero executed tests.
+run_golden_test() {
+  local output status count
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output"
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
+  # Sum every "N passed" harness summary; a filter matching nothing reports
+  # a summary with 0 passed. No summary means no harness evidence to judge.
+  count="$(printf '%s\n' "$output" | awk '/test result:/ { for (i=1; i<=NF; i++) if ($i == "passed;" && i>1) total += $(i-1); summaries++ } END { print (summaries ? total+0 : -1) }')"
+  if [[ "$count" -eq 0 ]]; then
+    echo "check-goldens: cargo test matched zero tests: $*" >&2
+    return 1
+  fi
+}
+
 # Only the golden fixture: the binary's behavioural tests belong to the
 # affected-test gate, and beside it they multiply the store writes that slow
 # the fixture on a loaded host (ORB-15293).
-"$cargo" test -p orbit-core --test ci_failure_goldens \
+run_golden_test "$cargo" test -p orbit-core --test ci_failure_goldens \
   ci_failure_fixture_goldens -- --exact
-"$cargo" test -p orbit-tools --test tools -- \
+run_golden_test "$cargo" test -p orbit-tools --test tools -- \
   public_tool_surface::github_log_goldens:: mcp_definitions::
-"$cargo" test -p orbit-cli --test output -- help_goldens:: output_goldens::
-"$cargo" test -p orbit-cli --test mcp \
+run_golden_test "$cargo" test -p orbit-cli --test output -- help_goldens:: output_goldens::
+run_golden_test "$cargo" test -p orbit-cli --test mcp \
   mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot -- --exact
-"$cargo" test -p orbit-exec --test sandbox_profile_goldens
-"$cargo" test -p orbit-core --test sandbox_profile_goldens
+run_golden_test "$cargo" test -p orbit-exec --test sandbox_profile_goldens
+run_golden_test "$cargo" test -p orbit-core --test sandbox_profile_goldens
 
-"$cargo" test -p orbit-store --lib \
+run_golden_test "$cargo" test -p orbit-store --lib \
   driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact \
   driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens

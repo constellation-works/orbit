@@ -125,6 +125,18 @@ def judge_qa_results(inventory, report, candidate_id):
         observed = {item for row in rows for item in row.get("assertions", [])}
         if observed != set(scenario.get("assertions", [])):
             unavailable("assertions-mismatch", f"required scenario {name} has different assertions")
+        # Parity with producer scenario_decision in test-qa-full-sweep.py:
+        # a required browser PASS row needs retained evidence, and every
+        # retired case with a command needs a row that executed that command.
+        if scenario.get("capability") == "browser" and any(
+                not row.get("retained_evidence") for row in rows):
+            unavailable("retained-evidence-missing",
+                        f"required scenario {name} has a browser PASS row without retained_evidence")
+        for case in scenario.get("retired_cases") or []:
+            command = case.get("command") if isinstance(case, dict) else None
+            if command and not any(row.get("command") == command for row in rows):
+                unavailable("retired-case-not-executed",
+                            f"required scenario {name} retired case {case.get('retired')} has no executed command")
         capability = scenario.get("capability")
         if capability == "macos":
             # Use the harness's complete certificate and native-execution

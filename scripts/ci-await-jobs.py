@@ -279,7 +279,9 @@ class JobListingPoller:
         names = set()
         returned = 0
         total = None
-        for page in range(1, 11):
+        page = 0
+        while True:
+            page += 1
             if remaining <= 0:
                 raise ListingTimeout
             started = time.monotonic()

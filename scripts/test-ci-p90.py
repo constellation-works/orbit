@@ -60,5 +60,13 @@ class CiP90ReplayTests(unittest.TestCase):
 
 
 
+    def test_same_second_executed_job_is_counted_not_a_gap(self):
+        summary = self.replay([{"databaseId": 1, "headSha": "abcdef1234567", "jobs": [
+            job("Check / Clippy / Test", ended=0),
+        ]}])
+        self.assertTrue(summary["executed"], summary)
+        self.assertEqual(summary["check_seconds"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

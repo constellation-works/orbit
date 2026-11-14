@@ -30,6 +30,7 @@ libtest time plus the doctest time.
 """
 
 import argparse
+from collections import deque
 import contextlib
 import hashlib
 import json
@@ -783,6 +784,40 @@ def report_command_evidence(log_path):
               file=sys.stderr, flush=True)
 
 
+class BoundedCapture:
+    """Tail-bounded in-memory copy; the full stream still goes to its log/relay.
+
+    Keeps at most ``limit`` characters/bytes, dropping oldest whole lines, so a
+    verbose or runaway test cannot grow gate memory without limit. The tail
+    retains harness summaries and timing lines callers parse.
+    """
+
+    def __init__(self, limit, is_str=True):
+        self.limit = limit
+        self.parts = deque()
+        self.size = 0
+        self.is_str = is_str
+
+    def append(self, part):
+        if not self.parts and self.size == 0:
+            self.is_str = isinstance(part, str)
+        self.parts.append(part)
+        self.size += len(part)
+        while self.size > self.limit and len(self.parts) > 1:
+            dropped = self.parts.popleft()
+            self.size -= len(dropped)
+        if self.size > self.limit and self.parts:
+            # One line longer than the cap: keep only its tail.
+            only = self.parts[0]
+            self.parts[0] = only[-self.limit:] if self.limit else only[:0]
+            self.size = len(self.parts[0])
+
+    def text(self):
+        if self.is_str:
+            return "".join(self.parts)
+        return b"".join(self.parts)
+
+
 def run_nextest(command, environment):
     """Retain the complete merged stream, relaying diagnostics and failed blocks.
 
@@ -792,7 +827,7 @@ def run_nextest(command, environment):
     exit status and every line that leads with a host-notice prefix.
     """
     notices = []
-    captured = []
+    captured = BoundedCapture(COMMAND_EVIDENCE_BYTES)
     scratch = ROOT / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix="ci-test-affected-nextest-", suffix=".log",
@@ -827,7 +862,7 @@ def run_nextest(command, environment):
                 log.flush()
                 if exit_code:
                     report_command_evidence(Path(log.name))
-                return exit_code, notices, "".join(captured)
+                return exit_code, notices, captured.text()
             except BaseException:
                 process.terminate()
                 process.wait()
@@ -877,7 +912,7 @@ def run_observed(command, environment):
                 raise SystemExit(128 + signum)
 
             previous_sigterm = signal.signal(signal.SIGTERM, interrupted)
-        lines = []
+        lines = BoundedCapture(COMMAND_EVIDENCE_BYTES, is_str=False)
         errors = []
         failed = threading.Event()
         lock = threading.Lock()
@@ -912,7 +947,7 @@ def run_observed(command, environment):
                 break
         if errors:
             raise errors[0]
-        return process.wait(), b"".join(lines).decode("utf-8", errors="replace")
+        return process.wait(), lines.text().decode("utf-8", errors="replace")
     except BaseException:
         # Cleanup must not replace the original relay error. Kill the group
         # after the grace, before reaping the leader: a descendant may ignore

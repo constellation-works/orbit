@@ -102,5 +102,32 @@ class CorpusFrontmatterRegression(unittest.TestCase):
             self.assertLess(marker, next_heading)
 
 
+    def test_symlinked_index_is_refused_instead_of_written_through(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="corpus-index-link-", dir=scratch) as directory:
+            repo = Path(directory)
+            corpus = repo / "docs/agents/corpus"
+            (corpus / "guidelines").mkdir(parents=True)
+            (corpus / "guidelines/source-link.md").write_text(
+                '---\ntype: guideline\napplies_to: [agent_implement]\nstatus: active\n'
+                'links: []\n---\n'
+                '# Source link\n\n## Rule\nUse source evidence.\n\n'
+                '## Rationale\nLinks are data.\n\n## Escalation\nCheck unreadable sources.\n',
+                encoding="utf-8",
+            )
+            outside = repo / "outside.md"
+            outside.write_text("outside-original\n", encoding="utf-8")
+            (corpus / "INDEX.md").symlink_to(outside)
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/agent-corpus.py"),
+                 "--repo-root", str(repo)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("symlink refused", result.stderr)
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside-original\n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -360,11 +360,15 @@ wait_for "$detached_state/detached-pid"
 detached_pid="$(cat "$detached_state/detached-pid")"
 BACKGROUND_PIDS+=("$detached_pid")
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-detached" ORBIT_BUILD_SLOTS=1 \
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
   timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$detached_state" queued sleep 0.01 \
   2>"$TMP/detached-queue.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
-sleep 0.08
+# Wait until the queued wrapper reports it is waiting for admission: that
+# proves startup finished, so a missing start marker means it was not admitted.
+wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+  "$TMP/detached-queue.err"
 [[ ! -e "$detached_state/started-queued" ]] \
   || fail "detached case admitted a second command while the owner was running"
 touch "$detached_state/release-owner"
@@ -386,10 +390,13 @@ wait_for "$termination_state/started-owner"
 kill -TERM "$owner_pid"
 wait_for "$termination_state/terminating"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-termination-delay" ORBIT_BUILD_SLOTS=1 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 &
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 \
+  2>"$termination_state/queued.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
-sleep 0.08
+wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+  "$termination_state/queued.err"
 [[ ! -e "$termination_state/started-queued" ]] \
   || fail "cancellation released the slot before the command finished"
 touch "$termination_state/release-owner"
@@ -535,10 +542,13 @@ grep -Fq 'slot=1' "$TMP/nested/events" || fail "nested command lost slot number"
 grep -Fq "target=$TMP/targets/nested" "$TMP/nested/events" || fail "nested command lost target directory"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=5 \
   CARGO_TARGET_DIR="$TMP/targets/queued" \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 &
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 \
+  2>"$TMP/nested-queued.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
-sleep 0.08
+wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+  "$TMP/nested-queued.err"
 [[ ! -e "$TMP/nested/started-queued" ]] || fail "nested command lost its parent's slot"
 kill -TERM "$owner_pid"
 set +e
@@ -938,15 +948,21 @@ ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
 WATCH_MAKE_PID=$!
 BACKGROUND_PIDS+=("$WATCH_MAKE_PID")
 wait_for "$FAKE_WATCH_DIR/started-check-1"
-set +e
-# This short bound checks refusal, not startup/completion. The check holds its
-# slot until our explicit release below, independently of scheduling latency.
+# Probe in the background and wait until it reports waiting for admission:
+# that proves startup finished, so still running means the check holds its
+# slot, not that the probe was slow to start.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
-  timeout 0.4 "$WRAPPER" -- true
-during_check=$?
-set -e
-[[ "$during_check" == "124" ]] || fail "watch check iteration did not hold a slot (status $during_check)"
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
+  2>"$TMP/watch-probe.err" &
+probe_pid=$!
+BACKGROUND_PIDS+=("$probe_pid")
+wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+  "$TMP/watch-probe.err"
+kill -0 "$probe_pid" 2>/dev/null || fail "watch check iteration did not hold a slot (probe finished while check was running)"
 touch "$FAKE_WATCH_RELEASE"
+wait "$probe_pid" || fail "watch probe did not run after the check released its slot"
+forget_pid "$probe_pid"
 wait_for "$FAKE_WATCH_IDLE"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
   timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \

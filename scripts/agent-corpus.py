@@ -82,6 +82,8 @@ def generate_index(corpus, check):
         lines.append(f"<!-- agent-corpus-row {encoded} -->")
     expected = "\n".join(lines) + "\n"
     target = corpus / "INDEX.md"
+    if target.is_symlink():
+        raise ValueError(f"corpus symlink refused: {target}")
     if check:
         if not target.exists() or target.read_text(encoding="utf-8") != expected:
             raise ValueError(f"{target} is stale; run scripts/agent-corpus.py")
