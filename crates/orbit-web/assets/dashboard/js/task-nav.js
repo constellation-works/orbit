@@ -552,7 +552,9 @@ function taskPageHash(taskId) {
   return `#tasks/${encodeURIComponent(taskId)}${comment}`;
 }
 
-function buildTasksListHash(context) {
+// The list filter as query parameters; the open task is added by
+// buildTasksListHash.
+function filterParams(context) {
   const sp = new URLSearchParams();
   const order = statusOrder(context);
   const activeStatuses = activeStatusSet(context);
@@ -570,10 +572,23 @@ function buildTasksListHash(context) {
   if (waitingOnly) sp.set("waiting", "you");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
+  return sp;
+}
+
+function buildTasksListHash(context) {
+  const sp = filterParams(context);
   if (taskState.openTaskId) sp.set("open", taskState.openTaskId);
   const target = taskState.commentTarget;
   if (target && target.taskId === taskState.openTaskId) sp.set("comment", String(target.number));
   const qs = sp.toString();
+  return qs ? `#tasks?${qs}` : "#tasks";
+}
+
+// The list filter alone, which the rail's Tasks item reopens. An open task or
+// a page is not carried over: a hash naming one takes the in-place rewrite,
+// which skips the refresh, so the page layout would stay on screen.
+export function buildTasksFilterHash(context) {
+  const qs = filterParams(context).toString();
   return qs ? `#tasks?${qs}` : "#tasks";
 }
 

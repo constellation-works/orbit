@@ -95,11 +95,13 @@ export function destinationLabel(top) {
   return top === "run-detail" ? "Jobs › History" : RAIL_LABELS[top] || top;
 }
 
-// Rail destinations reopen their remembered view.
+// Rail destinations reopen their remembered view. A bare `tasks` reads as the
+// default status set, so Tasks routes to the list's own filter instead.
 function railRoute(ctx, tab) {
   if (tab === "diagnostics") return healthHash(ctx).slice(1);
   if (tab === "analytics") return analyticsSubtabRoute(ctx, ctx.getAnalyticsSubtab());
   if (tab === "jobs") return `jobs/${ctx.getJobsSubtab()}`;
+  if (tab === "tasks") return ctx.buildTasksFilterHash().slice(1);
   return tab;
 }
 
