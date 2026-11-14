@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-11-11
+last_updated: 2026-11-14
 last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
@@ -1060,17 +1060,18 @@ different contracts; a future equivalent surface can use this shape.
   sessions that can never call them.
 - [ORB-20156] — added the operator-only condition `clear_stall` tool.
 - [ORB-20370] — added the operator-only, unadvertised experiment `delete` tool.
-- [ORB-20382] — deprecated the operator `orbit.agent.invoke` path and hid it
-  from operator MCP sessions.
 - [ORB-20383] — removes both operator invocation and explorer delegation.
-- [ORB-20414] — moved `orbit.agent.invoke` into the opt-in `agent-invoke` MCP
-  toolset, which managed runs offered explorer delegation enable.
 - [ORB-21211] — added the governed fleet notice writes in the opt-in `notice`
   toolset.
 
 - [ORB-21745] — repaired the authorization catalog source anchors after the
   catalog split.
+- [ORB-22604] — recorded the on-call direction approving removal of agent invocation and the explorer
+- [ORB-22805] — removed the explore brief feature and its `workflow.explore_brief.*` keys
 - [ORB-22807] — removed the visual review tools, including the governed
   `orbit.visual.accept_dispute` row.
+- [ORB-22808] — deprecated unused config keys and simplified the config surface
+- [ORB-23047] — took dashboard governed-write authority from session state only
+- [ORB-24115] — added `orbit.drain.claim.effort` for a follower's late effort report on the governed floor
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

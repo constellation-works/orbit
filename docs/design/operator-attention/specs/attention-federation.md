@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, federated-mcp, spec]
 related_features: [operator-attention, federated-mcp, host-registry, distributed-drain, mcp-session-context]
 related_artifacts: [ORB-21164, ORB-21171]
-last_updated: 2026-11-08
+last_updated: 2026-11-14
 ---
 
 # Spec: Attention federation
@@ -338,6 +338,7 @@ edits the federated-mcp design and spec to say so, including this hop
 ## Task References
 
 - [ORB-21164] — specified the federated behaviour of attention
+- [ORB-21171] — implemented federation across workspaces and hosts, and `host_unhealthy`
 - [ORB-21182] — specified the candidate read that separates destination retrieval from the public response limit
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

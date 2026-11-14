@@ -1,7 +1,7 @@
 ---
 title: Operator Attention — Design
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-14
 last_validated: 2026-11-04
 status: Draft
 feature: operator-attention
@@ -133,11 +133,11 @@ default; the keys load with a deprecation warning and are ignored until 2026-12-
 | `fanout_budget_seconds` | `20` | Outer deadline for a cross-host call |
 | `per_workspace_item_cap` | `200` | Items kept per workspace |
 
-Slice 1 owns `orbit_config::AttentionSettings` and all eight registry keys. Supported readback is `orbit config get attention.<key> --json` (effective values), `orbit config keys` (descriptions and types), and `orbit config show` (layer provenance). No setting is changed by querying attention.
+The eight former keys are now fixed constants in code (for example `ATTENTION_CURSOR_TTL_HOURS` in `crates/orbit-common/src/governance/attention/cursor.rs` and the `ATTENTION_*` constants in `crates/orbit-core/src/application/attention/mod.rs`); [ORB-22808] left each key loading with a deprecation warning and ignored until 2026-12-08. No setting is changed by querying attention, and there is no supported `attention.<key>` readback of an effective value.
 
-Integer keys must be positive. Upper bounds are 8760 cursor hours, 87600 run-window hours, 525600 stuck minutes, 86400 cache seconds, 3600 source/fan-out seconds and 10000 workspace items. `age_bump_hours` accepts an empty list to disable aging; otherwise values must be strictly increasing positive hours up to 87600. Registry resolution validates these before admitting configuration. Slice 1 consumes cursor TTL, severity thresholds and item caps. Slices 2–4 own runtime/provider/fan-out behavior consuming the remaining fields.
+Slice 1 consumed cursor TTL, severity thresholds and item caps from the former settings; slices 2–4 consume the remaining fixed values for runtime, provider and fan-out behaviour.
 
-Configuration changes thresholds only. It does not add kinds, change `next`, or change what
+Configuration no longer changes thresholds; the fixed values govern them. It does not add kinds, change `next`, or change what
 counts as a condition; those are code and spec, so two operators' lists mean the same thing.
 
 ## 6. Slices
@@ -149,12 +149,12 @@ References below; all four implementation tasks are done.
    `pilot_warning`, `pilot_hold`, `blocked`, `decision_open` (with folding) and
    `review_waiting`; severity and `next`; every filter in the filter spec; fingerprint and the
    `--since` cursor; single-workspace and local `--all`; goldens, skill reference and docs.
-   Owns the FULL shared `[attention]` configuration: typed settings, validated defaults, registry, resolution and readback for every §5 key. Later slices consume this owner and create no competing schemas.
+   Owned the shared `[attention]` configuration while the §5 keys were live; after [ORB-22808] the bounds are fixed constants (§5) with no competing schemas.
 2. **Done — runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
    `degraded` reporting for sessions without the Operator capability; liveness check
-   documented per platform (the probe and its limitations are described below). Consumes the shared §5 settings from slice 1. Depends on slice 1.
+   documented per platform (the probe and its limitations are described below). Consumes the shared §5 fixed values. Depends on slice 1.
 3. **Done — provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
-   read and the friction adapter; offline degrade. Consumes the shared §5 settings from slice 1. Depends on slice 1.
+   read and the friction adapter; offline degrade. Consumes the shared §5 fixed values. Depends on slice 1.
    The provider read stays behind `github.run.list` (Orbit stays generic); freshness binds to the
    fetched `origin/<base>` head ([ORB-21680]), pending or unknown observations are not green, and `since` is the
    failing run's `updated_at` labelled as an onset-time proxy (`detail.since_source`), because the
@@ -166,7 +166,7 @@ References below; all four implementation tasks are done.
    [attention-federation](./specs/attention-federation.md#candidate-read): the slice calls
    that shape and does not merge a public page, produced by an omitted `limit`, as the
    destination's candidate set. Depends on slice 1; its unreachable-host item is useful
-   before slices 2 and 3 land. It consumes slice 1’s shared fan-out settings.
+   before slices 2 and 3 land. It consumes the shared §5 fixed fan-out value.
 
 No session hook, automation, notification or live configuration change is authorized.
 
@@ -236,5 +236,6 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
 - [ORB-21171] — slice 4: federation across workspaces and hosts, and `host_unhealthy`
 - [ORB-21680] — made CI attention use the fetched base-branch head
+- [ORB-22808] — fixed the former `[attention]` bounds at their defaults and deprecated the keys
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
