@@ -8,8 +8,7 @@ use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::JobRunTrigger;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::automation::members::{
-    MemberAssessment, MemberAttempt, MemberBatchEvidence, MemberEvidence, StateMember,
-    StateTriggerKind, bundle_crew,
+    MemberAttempt, MemberBatchEvidence, MemberEvidence, StateMember, StateTriggerKind, bundle_crew,
 };
 use serde_json::json;
 
@@ -204,57 +203,7 @@ impl MemberHost for Host<'_> {
             .map_err(Into::into)
     }
 
-    /// An assessment accepted under `material_v1` hashed every task field and
-    /// the head it pinned, so it can only be checked by recomputing that hash
-    /// at the pinned revision [ORB-13638]. When it still matches, nothing
-    /// that contract covered has changed — in particular none of the default
-    /// material fields — and the task keeps its assessment instead of joining
-    /// a re-pilot wave on upgrade. Any doubt answers `false`; a failure to
-    /// recompute is logged, so a silent re-pilot wave has a cause on record.
-    fn carries_forward(&self, member: &StateMember, assessment: &MemberAssessment) -> bool {
-        if self.trigger.kind != StateTriggerKind::PreparationEligible {
-            return false;
-        }
-        match self.legacy_fingerprint(member, assessment) {
-            Ok(legacy) => legacy.as_ref() == Some(&assessment.resulting_fingerprint),
-            Err(error) => {
-                tracing::warn!(
-                    routine = self.routine,
-                    member = member.key,
-                    receipt = assessment.receipt_id,
-                    error = %error,
-                    "could not recompute the material_v1 fingerprint at the assessment's pinned \
-                     revision; the member is assessed again"
-                );
-                false
-            }
-        }
-    }
-
     fn release(&self, attempt: &MemberAttempt) {
-        if attempt.kind == StateTriggerKind::PreparationEligible {
-            match self.has_legacy_assessment(attempt) {
-                Ok(true) => {
-                    tracing::debug!(
-                        routine = self.routine,
-                        attempt = attempt.id,
-                        "keeping the retired attempt's pin for its material_v1 assessment"
-                    );
-                    return;
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        routine = self.routine,
-                        attempt = attempt.id,
-                        error = %error,
-                        "could not determine whether the retired attempt's pin backs a material_v1 assessment; keeping it for doctor cleanup"
-                    );
-                    return;
-                }
-            }
-        }
-        self.pinned.borrow_mut().remove(&attempt.id);
         if let Err(error) = self
             .owner()
             .and_then(|owner| pins::release(&self.source(), &owner, attempt))

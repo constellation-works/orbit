@@ -30,9 +30,6 @@ pub(crate) struct Host<'a> {
     policy: PreparationPolicy,
     incidents: RefCell<super::incidents::IncidentSession>,
     instructions: RefCell<BTreeMap<String, InstructionSnapshot>>,
-    /// Attempt id → the commit its source pin names, resolved once per
-    /// attempt to carry pre-upgrade assessments forward.
-    pinned: RefCell<BTreeMap<String, Option<String>>>,
     /// The pin namespace owner, resolved once [ORB-14164].
     owner: RefCell<Option<pins::Owner>>,
     /// Resolve once per evaluation, best-effort fetching only outside dry

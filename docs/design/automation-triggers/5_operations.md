@@ -2,8 +2,8 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-11-07
-last_validated: 2026-11-01
+last_updated: 2026-11-14
+last_validated: 2026-11-14
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -685,25 +685,22 @@ and never adopts the pins it left behind. Attempt ids, receipts and action keys
 are unchanged.
 
 The checkpoint that settles, exhausts or retires the attempt releases its owned
-pin once it commits, except when the accepted result is a pre-upgrade
-`material_v1` assessment whose compatibility check still needs that revision; a
-retry keeps it, and a checkpoint that loses the generation fence releases
-nothing. Current `material_v2` results release at settlement. A release first
-requires the owner record to match, then deletes the ref only while it still
-names the attempt's commit; a refusal or failure is logged and leaves the pin.
-Admission refuses to pin into a namespace whose record names another owner, and
-never rebinds an existing pin to a different commit.
+pin once it commits; a retry keeps it, and a checkpoint that loses the
+generation fence releases nothing. A release first requires the owner record to
+match, then deletes the ref only while it still names the attempt's commit; a
+refusal or failure is logged and leaves the pin. Admission refuses to pin into
+a namespace whose record names another owner, and never rebinds an existing pin
+to a different commit.
 
 Releases before owner scoping pinned every attempt at the shared top level,
-`refs/orbit/automation/<attempt id>`. Those pins carry no owner, and an earlier
-client or another root sharing the repository may still read one, so they are
-read only as an exact fallback and never deleted by settlement or cleanup.
-`orbit doctor --fix-automation-pins` reclaims this owner's leaked pins: under
-the routine sweep lock it lists the owned namespace, then inventories this
-owner's consumers and this workspace's live pilot runs, keeps every pin an
-in-flight attempt, a live run or an accepted assessment names, and deletes the
-rest at their listed commit. It reports legacy pins and other owners'
-namespaces as retained without listing their contents
+`refs/orbit/automation/<attempt id>`. Those pins carry no owner, so they are
+never written or deleted by settlement or cleanup. `orbit doctor
+--fix-automation-pins` reclaims this owner's leaked pins: under the routine
+sweep lock it lists the owned namespace, then inventories this owner's
+consumers and this workspace's live pilot runs, keeps every pin an in-flight
+attempt or a live run names, and deletes the rest at their listed commit,
+including a pin that only an accepted assessment names. It reports legacy pins
+and other owners' namespaces as retained without listing their contents
 ([health-checks runbook](../../runbooks/health-checks.md#release-leaked-automation-attempt-pins)).
 
 The source currently understands GitHub PR evidence and authorized local direct
@@ -865,9 +862,10 @@ the source revision they assessed against, whichever mode applies.
 An accepted atomic task receipt settles automatic preparation across unrelated
 material or consumer policy changes; description/criteria edits make an eligible
 proposed or backlog task due for reassessment when no live execution claim or
-unresolved failed pilot holds it. Legacy member receipts can retain their
-`material_v1` source pin for carry-forward; replacing their assessment lets doctor
-cleanup release the unused pin. Scheduling reuse does not certify edited
+unresolved failed pilot holds it. A member receipt certified under the retired
+pre-2026-09-27 fingerprint contract is piloted again; its owned source pin is
+released at settlement, and doctor cleanup reclaims one that only that receipt
+still names. Scheduling reuse does not certify edited
 requirements for dispatch: new receipts seal description/criteria independently
 of configurable fingerprints, and older recorded component hashes are compared
 when available. Future requirement edits to older receipts that lack those hashes

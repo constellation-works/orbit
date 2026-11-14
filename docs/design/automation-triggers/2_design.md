@@ -2,7 +2,7 @@
 title: Automation Triggers — Design
 owner: codex
 last_updated: 2026-11-14
-last_validated: 2026-10-29
+last_validated: 2026-11-14
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -357,8 +357,10 @@ resolved model/provider, required tools, type, complexity, relations, dependency
 evidence and repository instructions are opt-in fields, and the pinned
 integration revision is recorded as evidence but is material only under
 `source_sensitivity: context_files` (a commit touched a selector path) or `any`
-(every head move). `material_v1` hashed all of them and treated any head move
-as stale, so every merge re-piloted every assessed task. Resolve dependency
+(every head move). The retired pre-2026-09-27 contract hashed all of them and
+treated any head move as stale, so every merge re-piloted every assessed task.
+An assessment accepted under that contract is piloted again; it is not compared
+against the old hash. Resolve dependency
 evidence, not raw done statuses, when it is opted in. Priority-only edits
 reorder candidates; comments, summaries, timestamps, run linkage and
 instrumentation never invalidate. Proposed/backlog share an eligibility class
