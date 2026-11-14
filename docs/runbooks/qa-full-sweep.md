@@ -213,9 +213,16 @@ command, assertion set, workflow/run identity, and hashes of the workflow,
 checker, inventory, and importer. Import accepts it only against a clean
 checkout of that exact commit;
 stale revisions, dirty candidates, wrong commands, missing assertions, failed
-or unrun outcomes, incomplete GitHub Actions provenance, and changed source
-hashes are rejected. The imported file hash is retained in the combined
-report. Each required workflow Cargo command now runs through the sweep's
+or unrun outcomes, missing GitHub Actions producer fields, and changed source
+hashes are rejected. Those checks cover the certificate's content only: its
+producer fields, transcripts and source hashes are all writable by whoever
+wrote the file, and a source hash proves content, not execution origin. So the
+sweep never credits an imported certificate. Its row stays `NOT_RUN` with no
+assertions, as a `native-certificate-claim` that retains the certificate, the
+assertions it claims (`certificate_assertions`) and its exact digest
+(`native_certificate_sha256`); the report decision stays `INCOMPLETE` on that
+row alone. Re-importing a schema-version 2 report keeps the claim and its
+original digest, and a macOS `PASS` row without a certificate is refused. Each required workflow Cargo command now runs through the sweep's
 `--record-native-command` transport, which retains the executed arguments,
 checkout revision, exit status and complete output under
 `.orbit/tmp/macos-native-execution/`. A timeout, lost supervisor result or
@@ -235,8 +242,16 @@ manual Mac.
 
 After the candidate lands, an operator must select the successful hosted
 `macOS Platform` run for the landed commit, download its evidence artifact
-through the authenticated GitHub Actions interface, and run from a clean
-checkout of that same commit. A newer `agent-main` push can replace a landed
+through the authenticated GitHub Actions interface (for example
+`gh run download <run-id> --name macos-platform-evidence-<run>-<attempt>`), and
+run from a clean checkout of that same commit. That download is the
+authentication; the file itself carries none. The readiness adapter credits the
+claim only when the readiness task holds an artifact with exactly the claim's
+`native_certificate_sha256` that the owner stamped with a trusted writer class:
+the operator attaches the downloaded file, unmodified, with
+`orbit task artifact put` from a bare operator shell (not inside an agent run),
+or Orbit's own machinery wrote it. The task's evidence manifest lists that
+artifact. A certificate an agent attached, or any other bytes, earns nothing. A newer `agent-main` push can replace a landed
 commit's waiting run before it starts, so that commit may have no
 `macOS Platform` run and the sweep cannot import hosted evidence for it. The
 newest landed commit always has one:
@@ -561,6 +576,19 @@ whether cleanup was verified. Verification requires a complete, readable supervi
 record with explicit descendant counts and worker exit observations. A missing,
 malformed or unfinished record leaves descendant facts `null` and cleanup unverified,
 even when the group sweep succeeds and a working-directory scan finds no workers.
+Process observation is three-valued: a process is alive, gone, or unknown. A
+process listing, identity read or working-directory read the host denies or
+cannot parse is unknown, never gone. The supervisor record and the settlement
+both carry `observation_complete` and `observation_errors`. An incomplete
+observation, whether the first scan was denied or visibility was lost after a
+worker was found, signals nothing it could not identify. It keeps a known worker
+recorded as not exited, adds `observation incomplete` to the command's stderr,
+leaves cleanup unverified and retains the root. `scratch_cleanup.observation_complete`
+and its warning record the reason. The `dashboard-api-boundary` builtin runs its
+`web serve` probe under the same supervisor. The server, its pipes and its
+descendants share that wait and sweep, so a descendant holding an output pipe
+cannot stall the sweep. A refused teardown fails the row with unverified
+cleanup, and the health, workspace and task assertions still apply.
 The bounded result reader allows the supervisor's command wait, ten-second TERM
 window and five-second KILL grace, plus time to publish its record; it also bounds
 partial-record reads. A refused group signal or expired reap deadline fails

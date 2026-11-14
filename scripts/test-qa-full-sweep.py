@@ -35,8 +35,16 @@ validate_npm_evidence = runpy.run_path(
 # group, start time and working directory without a subprocess, so it works
 # where `ps` is denied. The same source runs in the supervisor and in this
 # module (see _DARWIN_PROC), so both read one identity.
-_DARWIN_PROC_TABLE = r"""import ctypes, ctypes.util, os, struct
+_DARWIN_PROC_TABLE = r"""import ctypes, ctypes.util, errno, os, struct
 _libproc = None
+# Reasons a read was refused rather than finding the process gone. A caller
+# clears it before a read and treats any entry as an unknown observation.
+DARWIN_DENIED = []
+
+def _darwin_refused(what, pid):
+    code = ctypes.get_errno()
+    if code != errno.ESRCH:
+        DARWIN_DENIED.append(f"{what} for process {pid} failed: {os.strerror(code) if code else 'short read'}")
 
 def _libproc_handle():
     global _libproc
@@ -75,10 +83,13 @@ def darwin_identity(pid, with_cmdline=True):
     if lib is None:
         return None
     bsd = ctypes.create_string_buffer(136)
+    ctypes.set_errno(0)
     if lib.proc_pidinfo(pid, 3, 0, bsd, 136) != 136:
+        _darwin_refused("process info", pid)
         return None
     status, = struct.unpack_from("=I", bsd, 4)
     ppid, = struct.unpack_from("=I", bsd, 16)
+    uid, = struct.unpack_from("=I", bsd, 20)
     pgrp, = struct.unpack_from("=I", bsd, 100)
     sec, usec = struct.unpack_from("=QQ", bsd, 120)
     try:
@@ -87,9 +98,14 @@ def darwin_identity(pid, with_cmdline=True):
         sid = 0
     cwd = None
     path = ctypes.create_string_buffer(2352)
+    ctypes.set_errno(0)
     if lib.proc_pidinfo(pid, 9, 0, path, 2352) == 2352:
         text = path.raw[152:152 + 1024].split(b"\0", 1)[0].decode(errors="replace")
         cwd = text or None
+    elif uid == os.geteuid() and status != 5:
+        # Another user's process cannot be a worker here; an unreadable
+        # working directory of this user's own live process is unknown.
+        _darwin_refused("working directory", pid)
     return {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": sec * 1_000_000 + usec,
             "state": "Z" if status == 5 else "R", "cwd": cwd,
             "cmdline": darwin_cmdline(pid) if with_cmdline else ""}
@@ -100,10 +116,12 @@ def darwin_snapshot(with_cmdline=True):
         return None
     count = lib.proc_listpids(1, 0, None, 0)
     if count <= 0:
+        DARWIN_DENIED.append("process listing failed")
         return None
     pids = (ctypes.c_int * (count // 4 + 64))()
     got = lib.proc_listpids(1, 0, pids, ctypes.sizeof(pids))
     if got <= 0:
+        DARWIN_DENIED.append("process listing failed")
         return None
     found = {}
     for pid in pids[:got // 4]:
@@ -128,7 +146,7 @@ _SUPERVISOR_COMMAND_KILL_SECONDS = 1
 # Include the command's final wait and time to publish the settled record.
 _SUPERVISOR_RESULT_SECONDS = (_SUPERVISOR_COMMAND_KILL_SECONDS + _SUPERVISOR_TERM_SECONDS
                               + _SUPERVISOR_KILL_GRACE_SECONDS + 1)
-_PROCESS_SUPERVISOR = r"""import json, os, signal, subprocess, sys, threading, time
+_PROCESS_SUPERVISOR = r"""import errno, json, os, signal, subprocess, sys, threading, time
 result_fd = int(sys.argv[1])
 owner_fd = int(sys.argv[2])
 # Roots whose working-directory occupants the supervisor also owns when it is
@@ -154,35 +172,57 @@ def enable_subreaper():
         return False
 
 subreaper = enable_subreaper()
+# Process reads that were refused or failed, rather than finding a process
+# gone. Any entry makes this record's descendant facts unknown: an unreadable
+# table is not an empty one, and an unreadable worker has not exited.
+unobserved = []
+
+class Unreadable(Exception):
+    pass
+
+def refused(error, what):
+    if isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (errno.ENOENT, errno.ESRCH):
+        return None
+    raise Unreadable(f"{what}: {error}")
 
 def read_stat(pid):
     try:
         data = open(f"/proc/{pid}/stat", "rb").read()
-    except OSError:
-        return None
+    except OSError as error:
+        return refused(error, f"process {pid} status is unreadable")
     end = data.rfind(b")")
-    if end < 0:
-        return None
-    fields = data[end + 2:].split()
-    if len(fields) < 20:
-        return None
+    fields = data[end + 2:].split() if end >= 0 else []
     try:
         return {"state": fields[0].decode(), "ppid": int(fields[1]), "pgrp": int(fields[2]),
                 "sid": int(fields[3]), "starttime": int(fields[19])}
-    except ValueError:
-        return None
+    except (IndexError, ValueError, UnicodeError):
+        raise Unreadable(f"process {pid} status is malformed")
 
 # @DARWIN_PROC_TABLE@
 def identity(pid):
+    # None only when the process is gone; Unreadable when the read failed.
     if sys.platform == "darwin" and not os.path.isdir("/proc"):
-        return darwin_identity(pid)
+        DARWIN_DENIED.clear()
+        info = darwin_identity(pid)
+        if DARWIN_DENIED:
+            raise Unreadable(DARWIN_DENIED[0])
+        return info
     if os.path.isdir("/proc"):
         stat = read_stat(pid)
         if stat is None:
             return None
         try:
             cwd = os.readlink(f"/proc/{pid}/cwd")
-        except OSError:
+        except OSError as error:
+            if isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (errno.ENOENT, errno.ESRCH):
+                return None
+            try:
+                owner = os.stat(f"/proc/{pid}").st_uid
+            except OSError as owner_error:
+                return refused(owner_error, f"process {pid} owner is unreadable")
+            # Another user's process cannot be a worker of this command.
+            if owner == os.geteuid():
+                raise Unreadable(f"process {pid} working directory is unreadable: {error}")
             cwd = None
         try:
             raw = open(f"/proc/{pid}/cmdline", "rb").read()
@@ -194,12 +234,13 @@ def identity(pid):
     return None
 
 def snapshot():
+    # Raises Unreadable unless every visible process was read.
     found = {}
     if os.path.isdir("/proc"):
         try:
             entries = os.listdir("/proc")
-        except OSError:
-            return found
+        except OSError as error:
+            raise Unreadable(f"process table is unreadable: {error}")
         for entry in entries:
             if entry.isdigit():
                 info = identity(int(entry))
@@ -207,13 +248,16 @@ def snapshot():
                     found[info["pid"]] = info
         return found
     if sys.platform == "darwin":
+        DARWIN_DENIED.clear()
         table = darwin_snapshot()
+        if DARWIN_DENIED:
+            raise Unreadable(DARWIN_DENIED[0])
         if table is not None:
             return table
     try:
         out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
-    except (OSError, subprocess.CalledProcessError):
-        return found
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise Unreadable(f"process table is unreadable: {error}")
     for line in out.splitlines():
         parts = line.split()
         if len(parts) < 4:
@@ -223,15 +267,32 @@ def snapshot():
                       "state": "?", "cwd": None, "cmdline": ""}
     return found
 
-def alive(pid, starttime):
+def state(pid, starttime):
+    # "alive", "gone", or "unknown" when the identity could not be read.
     direct = os.path.isdir("/proc") or sys.platform == "darwin"
-    info = identity(pid) if direct else snapshot().get(pid)
-    if info is None or info.get("state") == "Z":
-        return False
-    return info.get("starttime") == starttime
+    try:
+        info = identity(pid) if direct else snapshot().get(pid)
+    except Unreadable as error:
+        if str(error) not in unobserved:
+            unobserved.append(str(error))
+        return "unknown"
+    if info is None or info.get("state") == "Z" or info.get("starttime") != starttime:
+        return "gone"
+    return "alive"
 
-def descendants(root):
-    procs = snapshot()
+def alive(pid, starttime):
+    return state(pid, starttime) == "alive"
+
+def observed_snapshot():
+    try:
+        return snapshot()
+    except Unreadable as error:
+        if str(error) not in unobserved:
+            unobserved.append(str(error))
+        return {}
+
+def descendants(root, procs=None):
+    procs = observed_snapshot() if procs is None else procs
     children = {}
     for pid, info in procs.items():
         children.setdefault(info["ppid"], []).append(pid)
@@ -259,11 +320,12 @@ def cwd_under(cwd):
     return False
 
 def owned(root):
-    found = descendants(root)
+    procs = observed_snapshot()
+    found = descendants(root, procs)
     if subreaper or not roots:
         return found
     seen = {info["pid"] for info in found}
-    for pid, info in snapshot().items():
+    for pid, info in procs.items():
         if pid > 1 and pid != os.getpid() and pid not in seen and cwd_under(info.get("cwd")):
             found.append(info)
     return found
@@ -329,7 +391,7 @@ def reap(root, deadline_s=REAP_TERM_SECONDS, kill_grace_s=REAP_KILL_GRACE_SECOND
                 if signal_confirmed(info, sig):
                     signaled.add(pid)
         for record in records.values():
-            if not alive(record["pid"], record["starttime"]):
+            if state(record["pid"], record["starttime"]) == "gone":
                 record["exited"] = True
         while True:
             try:
@@ -353,7 +415,7 @@ def reap(root, deadline_s=REAP_TERM_SECONDS, kill_grace_s=REAP_KILL_GRACE_SECOND
     detached = []
     open_descendants = 0
     for record in records.values():
-        record["exited"] = not alive(record["pid"], record["starttime"])
+        record["exited"] = state(record["pid"], record["starttime"]) == "gone"
         if not record["exited"]:
             open_descendants += 1
         if record["detached"]:
@@ -378,7 +440,8 @@ try:
     command = subprocess.Popen(sys.argv[4:])
 except OSError as error:
     print(str(error), file=sys.stderr, flush=True)
-    payload = {"exit_code": 127, "detached_workers": [], "open_descendants": 0, "subreaper": subreaper}
+    payload = {"exit_code": 127, "detached_workers": [], "open_descendants": 0, "subreaper": subreaper,
+               "observation_complete": True, "observation_errors": []}
 else:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     while command.poll() is None and not stop.is_set():
@@ -399,7 +462,8 @@ else:
             pass
     detached, open_descendants = reap(os.getpid())
     payload = {"exit_code": command.returncode, "detached_workers": detached,
-               "open_descendants": open_descendants, "subreaper": subreaper}
+               "open_descendants": open_descendants, "subreaper": subreaper,
+               "observation_complete": not unobserved, "observation_errors": unobserved[:20]}
 try:
     os.write(result_fd, json.dumps(payload).encode() + b"\n")
     os.close(result_fd)
@@ -480,22 +544,38 @@ os._exit(0)
 """
 
 
+class ProcessObservationUnavailable(OSError):
+    """A process-table read failed for a reason other than the process being gone.
+
+    What that read would have shown is unknown: never an empty table, a
+    missing worker or an exited one (STD-02 §R29, STD-03 §R29)."""
+
+
+def _process_gone_error(error):
+    """Whether a failed process read means the process no longer exists."""
+    return isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (errno.ENOENT, errno.ESRCH)
+
+
 def _proc_stat(pid):
+    """Status fields from /proc, None when the process is gone.
+
+    Raises ProcessObservationUnavailable when the read is refused or the
+    record is unreadable."""
     try:
         data = open(f"/proc/{pid}/stat", "rb").read()
-    except OSError:
-        return None
+    except OSError as error:
+        if _process_gone_error(error):
+            return None
+        raise ProcessObservationUnavailable(error.errno, f"process {pid} status is unreadable: {error}") from error
     end = data.rfind(b")")
-    if end < 0:
-        return None
-    fields = data[end + 2:].split()
-    if len(fields) < 20:
-        return None
+    fields = data[end + 2:].split() if end >= 0 else []
     try:
+        if len(fields) < 20:
+            raise ValueError(f"{len(fields)} fields")
         return {"state": fields[0].decode(), "ppid": int(fields[1]), "pgrp": int(fields[2]),
                 "sid": int(fields[3]), "starttime": int(fields[19])}
-    except ValueError:
-        return None
+    except (ValueError, UnicodeError) as error:
+        raise ProcessObservationUnavailable(f"process {pid} status is malformed: {error}") from error
 
 
 def _proc_table_native():
@@ -506,17 +586,38 @@ def _proc_table_native():
 
 
 def _proc_identity(pid):
-    """Process identity from /proc or libproc. None when the pid is gone or unreadable."""
+    """Process identity from /proc or libproc. None only when the pid is gone.
+
+    A refused or failed read raises ProcessObservationUnavailable. A working
+    directory this user cannot read is unknown only for its own processes:
+    another user's process could not be one of this sweep's workers."""
     if not os.path.isdir("/proc"):
         if _DARWIN_PROC and _DARWIN_PROC["_libproc_handle"]() is not None:
-            return _DARWIN_PROC["darwin_identity"](pid)
+            denied = _DARWIN_PROC["DARWIN_DENIED"]
+            denied.clear()
+            info = _DARWIN_PROC["darwin_identity"](pid)
+            if denied:
+                raise ProcessObservationUnavailable(f"process {pid} is unreadable: {denied[0]}")
+            return info
         return None
     stat = _proc_stat(pid)
     if stat is None:
         return None
     try:
         cwd = os.readlink(f"/proc/{pid}/cwd")
-    except OSError:
+    except OSError as error:
+        if _process_gone_error(error):
+            return None
+        try:
+            owner = os.stat(f"/proc/{pid}").st_uid
+        except OSError as owner_error:
+            if _process_gone_error(owner_error):
+                return None
+            raise ProcessObservationUnavailable(
+                owner_error.errno, f"process {pid} owner is unreadable: {owner_error}") from owner_error
+        if owner == os.geteuid():
+            raise ProcessObservationUnavailable(
+                error.errno, f"process {pid} working directory is unreadable: {error}") from error
         cwd = None
     try:
         raw = open(f"/proc/{pid}/cmdline", "rb").read()
@@ -528,26 +629,34 @@ def _proc_identity(pid):
 
 
 def _proc_snapshot():
+    """Every visible process identity.
+
+    Raises ProcessObservationUnavailable when the table or any entry in it
+    could not be read: a partial table is not a complete one."""
     found = {}
     if os.path.isdir("/proc"):
         try:
             entries = os.listdir("/proc")
-        except OSError:
-            return found
+        except OSError as error:
+            raise ProcessObservationUnavailable(error.errno, f"process table is unreadable: {error}") from error
         for entry in entries:
             if entry.isdigit():
                 info = _proc_identity(int(entry))
                 if info is not None:
                     found[info["pid"]] = info
         return found
-    if _DARWIN_PROC:
+    if _DARWIN_PROC and _DARWIN_PROC["_libproc_handle"]() is not None:
+        denied = _DARWIN_PROC["DARWIN_DENIED"]
+        denied.clear()
         table = _DARWIN_PROC["darwin_snapshot"]()
-        if table is not None:
-            return table
+        if denied or table is None:
+            raise ProcessObservationUnavailable(
+                f"process table is unreadable: {denied[0] if denied else 'libproc listing failed'}")
+        return table
     try:
         output = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
-    except (OSError, subprocess.CalledProcessError):
-        return found
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ProcessObservationUnavailable(f"process table is unreadable: {error}") from error
     for line in output.splitlines():
         parts = line.split()
         if len(parts) < 4:
@@ -561,15 +670,24 @@ def _proc_snapshot():
     return found
 
 
+def _proc_state(pid, starttime):
+    """"alive" for the same running incarnation, "gone" once it has exited or
+    been replaced, and "unknown" when its identity cannot be read."""
+    try:
+        if _proc_table_native():
+            info = _proc_identity(pid)
+        else:
+            info = _proc_snapshot().get(pid)
+    except ProcessObservationUnavailable:
+        return "unknown"
+    if info is None or info.get("state") == "Z" or info.get("starttime") != starttime:
+        return "gone"
+    return "alive"
+
+
 def _proc_alive(pid, starttime):
-    """True only while the same process identity is still running."""
-    if _proc_table_native():
-        info = _proc_identity(pid)
-    else:
-        info = _proc_snapshot().get(pid)
-    if info is None or info.get("state") == "Z":
-        return False
-    return info.get("starttime") == starttime
+    """True only while the same process identity is observed running."""
+    return _proc_state(pid, starttime) == "alive"
 
 
 def _cwd_under(cwd, root: Path) -> bool:
@@ -642,17 +760,34 @@ def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
     or an identity that survives the grace (for example in uninterruptible
     sleep), stays recorded as not exited so cleanup cannot be reported as
     verified.
+
+    A process-table scan or identity read that is refused or fails leaves
+    ``observation_complete`` False with its reason in ``observation_errors``:
+    an unreadable table is not an empty root, and a known worker that became
+    unreadable has not exited. Such a worker is neither signalled nor
+    recorded as exited.
     """
     root = Path(root)
     records = {}
     signaled = set()
+    errors = []
     deadline = time.monotonic() + deadline_s
     kill_deadline = deadline + kill_grace_s
     me = os.getpid()
+
+    def unobserved(error):
+        if str(error) not in errors:
+            errors.append(str(error))
+
     while True:
         now = time.monotonic()
         matched = []
-        for info in _proc_snapshot().values():
+        try:
+            table = _proc_snapshot()
+        except ProcessObservationUnavailable as error:
+            unobserved(error)
+            table = {}
+        for info in table.values():
             pid = info["pid"]
             if pid <= 1 or pid == me or info.get("state") == "Z":
                 continue
@@ -674,8 +809,11 @@ def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
                 if _signal_confirmed(info, sig):
                     signaled.add(info["pid"])
         for record in records.values():
-            if not _proc_alive(record["pid"], record["starttime"]):
+            state = _proc_state(record["pid"], record["starttime"])
+            if state == "gone":
                 record["exited"] = True
+            elif state == "unknown":
+                unobserved(f"process {record['pid']} became unreadable after it was observed")
         pending = [info for info in matched if not records[info["pid"]]["exited"]]
         if records and all(record["exited"] for record in records.values()) and not pending:
             break
@@ -686,7 +824,10 @@ def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
         time.sleep(0.05)
     workers = []
     for record in records.values():
-        record["exited"] = not _proc_alive(record["pid"], record["starttime"])
+        state = _proc_state(record["pid"], record["starttime"])
+        if state == "unknown":
+            unobserved(f"process {record['pid']} became unreadable after it was observed")
+        record["exited"] = state == "gone"
         workers.append({key: record[key] for key in
                         ("pid", "pgid", "sid", "ppid", "cwd", "cmdline", "starttime", "exited")})
     # cwd_visible is False on a host whose process table has no working
@@ -696,7 +837,24 @@ def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
     # observed incarnation (non-Linux): such a worker is never signalled
     # by number, so it stays not exited above.
     return {"workers": workers, "cwd_visible": _proc_table_native(),
-            "identity_signal_available": _pidfd_supported()}
+            "identity_signal_available": _pidfd_supported(),
+            "observation_complete": not errors, "observation_errors": errors}
+
+
+def settlement_unverified_reason(settlement):
+    """Why a settlement does not prove a clean root, or None when it does."""
+    if settlement.get("error"):
+        return f"detached worker settlement failed: {settlement['error']}"
+    if settlement.get("cwd_visible") is not True:
+        return ("detached worker cleanup NOT_RUN: this host has no process "
+                "working-directory source")
+    if settlement.get("observation_complete") is not True:
+        reasons = "; ".join(settlement.get("observation_errors") or []) or "no observation record"
+        return f"detached worker observation incomplete: {reasons}"
+    if any(not isinstance(worker, dict) or worker.get("exited") is not True
+           for worker in settlement.get("workers") or []):
+        return "detached worker still alive after fixture cleanup"
+    return None
 
 
 def _fixture_ownership_roots(cwd, env):
@@ -743,6 +901,9 @@ def _merge_worker_records(existing, extra):
 
 
 def _workers_clear(evidence):
+    # An incomplete process observation leaves the counts below unproven.
+    if evidence.get("observation_complete") is not True:
+        return False
     if type(evidence.get("open_descendants")) is not int or evidence["open_descendants"] != 0:
         return False
     workers = evidence.get("detached_workers")
@@ -775,7 +936,7 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
     evidence = {"command": argv, "started_at": started, "exit_code": None,
                 "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False,
                 "cleanup_verified": False, "detached_workers": None, "open_descendants": None,
-                "subreaper": False}
+                "subreaper": False, "observation_complete": None}
     if os.name != "posix":
         evidence["stderr"] = "QA process-group supervision requires a POSIX host"
         return evidence
@@ -863,10 +1024,17 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
         if (isinstance(workers, list)
                 and all(isinstance(worker, dict) and type(worker.get("exited")) is bool for worker in workers)
                 and type(open_descendants) is int and open_descendants >= 0
-                and type(payload.get("subreaper")) is bool):
+                and type(payload.get("subreaper")) is bool
+                and type(payload.get("observation_complete")) is bool):
             evidence["detached_workers"] = workers
             evidence["open_descendants"] = open_descendants
             evidence["subreaper"] = payload["subreaper"]
+            evidence["observation_complete"] = payload["observation_complete"]
+            if not payload["observation_complete"]:
+                reasons = payload.get("observation_errors")
+                reasons = "; ".join(str(item) for item in reasons) if isinstance(reasons, list) else ""
+                evidence["stderr"] += ("\nQA supervisor process observation incomplete; descendant cleanup "
+                                       f"is unverified: {reasons or 'no reason recorded'}")
         else:
             evidence["stderr"] += "\nQA supervisor cleanup record incomplete"
         if not adopt_exit_code:
@@ -962,7 +1130,9 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 # even when the supervisor has already exited.
                 evidence["cleanup_verified"] = bool(swept and workers_clear)
                 if not workers_clear:
-                    if evidence["open_descendants"] is None:
+                    if evidence["observation_complete"] is False:
+                        pass
+                    elif evidence["open_descendants"] is None:
                         evidence["stderr"] += "\ndescendant cleanup is unverified without a supervisor cleanup record"
                     else:
                         evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
@@ -992,7 +1162,12 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 try:
                     extra = []
                     for root in _fixture_ownership_roots(cwd, env):
-                        extra.extend(settle_detached_workers_under(root).get("workers") or [])
+                        settlement = settle_detached_workers_under(root)
+                        extra.extend(settlement.get("workers") or [])
+                        if settlement.get("observation_complete") is not True:
+                            # An unreadable scan proves nothing about this root.
+                            evidence["cleanup_verified"] = False
+                            evidence["stderr"] += "\n" + settlement_unverified_reason(settlement)
                     if extra:
                         evidence["detached_workers"] = _merge_worker_records(
                             evidence.get("detached_workers") or [], extra)
@@ -2587,59 +2762,92 @@ spec:
         ["initialize-negotiates-jsonrpc", "tools-list-is-structured", "workspace-list-returns-bound-checkout",
          "task-show-round-trips-over-mcp", "cross-workspace-mcp-read-refused"], candidate_id, failure))
 
-    web_assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
-                      "task-api-reads-persisted-task"]
-    try:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-    except OSError as error:
-        evidence = {"command": ["bind", "127.0.0.1"], "exit_code": None,
-                    "stdout": "", "stderr": str(error), "cleanup_verified": True}
-        add_result(results, "dashboard-api-boundary",
-                   finalize_result(evidence, web_assertions, candidate_id,
-                                   "loopback listener unavailable"))
-        return results, None
-    web = subprocess.Popen([orbit_bin, "--root", str(root), "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"],
-                           cwd=work, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    web_evidence = {"command":["GET","/healthz","GET","/api/workspaces","GET","/api/tasks"],
-                    "exit_code":1,"stdout":"","stderr":"dashboard did not become ready","outcome":"FAIL"}
-    failure = "dashboard did not become ready"
-    try:
-        for _ in range(80):
-            if web.poll() is not None:
-                break
-            try:
-                health = urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1).read().decode()
-                workspaces = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/workspaces", timeout=1).read())
-                tasks = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/tasks", timeout=1).read())
-                combined = json.dumps({"health":health,"workspaces":workspaces,"tasks":tasks})
-                if str(work.resolve()) not in combined or task_id not in combined:
-                    raise ValueError("API responses do not identify the fixture workspace and task")
-                web_evidence.update({"exit_code":0,"stdout":combined,"stderr":""})
-                failure = None
-                break
-            except (OSError, json.JSONDecodeError, ValueError):
-                time.sleep(.1)
-    finally:
-        web.terminate()
-        try:
-            web.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            web.kill()
-        captured_stdout, captured_stderr = web.communicate()
-        web_evidence["cleanup_verified"] = True
-        if failure:
-            web_evidence["stdout"] = captured_stdout
-            web_evidence["stderr"] = captured_stderr or web_evidence["stderr"]
-    add_result(results, "dashboard-api-boundary", finalize_result(web_evidence,
-        web_assertions,
-        candidate_id, failure))
+    add_result(results, "dashboard-api-boundary",
+               dashboard_api_boundary(orbit_bin, root, work, env, task_id, candidate_id))
     return results, None
 
 
+# The dashboard builtin's client. It runs as one supervised command, so the
+# server, any descendant and both output pipes get the same bounded wait,
+# group sweep and descendant settlement as every other command (run()). The
+# server inherits the command's output; the responses come back on one
+# marked line.
+_DASHBOARD_PROBE = r"""import json, subprocess, sys, time, urllib.request
+orbit, root, port, ready_seconds = sys.argv[1:5]
+base = f"http://127.0.0.1:{port}"
+web = subprocess.Popen([orbit, "--root", root, "web", "serve", "--host", "127.0.0.1",
+                        "--port", port, "--no-open"], stdin=subprocess.DEVNULL)
+answer = None
+try:
+    deadline = time.monotonic() + float(ready_seconds)
+    while answer is None and web.poll() is None and time.monotonic() < deadline:
+        try:
+            health = urllib.request.urlopen(base + "/healthz", timeout=1).read().decode()
+            workspaces = json.loads(urllib.request.urlopen(base + "/api/workspaces", timeout=1).read())
+            tasks = json.loads(urllib.request.urlopen(base + "/api/tasks", timeout=1).read())
+            answer = {"health": health, "workspaces": workspaces, "tasks": tasks}
+        except (OSError, ValueError):
+            time.sleep(.1)
+finally:
+    web.terminate()
+    try:
+        web.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        web.kill()
+        web.wait(timeout=5)
+print("qa-dashboard-responses: " + json.dumps(answer), flush=True)
+raise SystemExit(0 if answer is not None else 1)
+"""
+_DASHBOARD_READY_SECONDS = 20
+
+
+def dashboard_api_boundary(orbit_bin, root, work, env, task_id, candidate_id, *, port=None):
+    """Serve the candidate dashboard and read its health, workspace and task APIs.
+
+    Returns the dashboard-api-boundary row. Teardown is the shared bounded
+    supervision: a server or descendant that keeps an output pipe, survives
+    the group sweep or cannot be observed leaves cleanup unverified, and the
+    row cannot pass."""
+    web_assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
+                      "task-api-reads-persisted-task"]
+    if port is None:
+        try:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+        except OSError as error:
+            evidence = {"command": ["bind", "127.0.0.1"], "exit_code": None,
+                        "stdout": "", "stderr": str(error), "cleanup_verified": True}
+            return finalize_result(evidence, web_assertions, candidate_id, "loopback listener unavailable")
+    evidence = observe_local_command(run(
+        [sys.executable, "-c", _DASHBOARD_PROBE, orbit_bin, str(root), str(port),
+         str(_DASHBOARD_READY_SECONDS)],
+        cwd=work, env=env, timeout=_DASHBOARD_READY_SECONDS + 40))
+    evidence["requests"] = ["GET", "/healthz", "GET", "/api/workspaces", "GET", "/api/tasks"]
+    failure = None
+    try:
+        marked = [line for line in evidence["stdout"].splitlines()
+                  if line.startswith("qa-dashboard-responses: ")]
+        answer = json.loads(marked[-1].split(": ", 1)[1]) if marked else None
+        if not isinstance(answer, dict):
+            raise ValueError("dashboard did not become ready")
+        combined = json.dumps(answer)
+        if str(Path(work).resolve()) not in combined or task_id not in combined:
+            raise ValueError("API responses do not identify the fixture workspace and task")
+    except (ValueError, json.JSONDecodeError) as error:
+        failure = str(error)
+    return finalize_result(evidence, web_assertions, candidate_id, failure)
+
+
 def validate_hosted_macos_evidence(body, scenario, candidate, repo, *, source_files=None):
-    """Check candidate files in a checkout or an explicit repository-path mount map."""
+    """Check a native certificate's content against candidate files.
+
+    Reads a checkout or an explicit repository-path mount map. This checks
+    what the certificate says, never where it came from: producer fields,
+    transcripts and source hashes are all writable by whoever wrote the file,
+    and a source hash proves content, not execution origin. A certificate
+    earns credit only through owner-recorded artifact authority for its exact
+    digest (see native_certificate_claim and the readiness adapter)."""
     if body.get("evidence_type") != "orbit-macos-platform" or body.get("platform") != "macos":
         raise ValueError("hosted evidence has the wrong type or platform")
     if candidate.get("status"):
@@ -2656,7 +2864,7 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo, *, source_fi
     producer = body.get("producer", {})
     required_producer = ["repository", "run_id", "run_attempt", "workflow_ref", "workflow_sha"]
     if producer.get("system") != "github-actions" or any(not producer.get(key) for key in required_producer):
-        raise ValueError("hosted evidence lacks authenticated GitHub Actions provenance")
+        raise ValueError("hosted evidence lacks its GitHub Actions producer fields")
     if not str(producer["run_id"]).isdigit() or not str(producer["run_attempt"]).isdigit():
         raise ValueError("hosted evidence has invalid GitHub Actions run identity")
     if ".github/workflows/ci-macos.yml@" not in str(producer["workflow_ref"]):
@@ -3454,7 +3662,7 @@ while True:
             try:
                 wait_until(lambda: marker_values(stuck_ready).get("waiting") == "1", 5,
                            "stuck settle worker did not start")
-                with mock.patch.dict(globals(), {"_proc_alive": lambda _pid, _starttime: True}):
+                with mock.patch.dict(globals(), {"_proc_state": lambda _pid, _starttime: "alive"}):
                     stuck_settlement = settle_detached_workers_under(
                         stuck_root, deadline_s=0.2, kill_grace_s=0.3)
                 stuck_workers = stuck_settlement.get("workers") or []
@@ -4115,6 +4323,33 @@ def expand_scenario_command(command, playwright_module, evidence_dir):
             .replace("{evidence_dir}", str(evidence_dir)) for part in command]
 
 
+NATIVE_CERTIFICATE_CLAIM = "native-certificate-claim"
+NATIVE_AUTHORITY_GAP = ("owner-authenticated macOS run/artifact authority: the readiness task needs this exact "
+                        "certificate (native_certificate_sha256) attached from an operator surface")
+
+
+def native_certificate_claim(body, scenario, candidate_id, certificate_sha256, imported_from, evidence_sha256):
+    """The row an imported native certificate earns here: a validated claim, never a PASS.
+
+    The sweep cannot authenticate where a certificate came from, so the row
+    keeps the certificate and its exact digest, and stays NOT_RUN without
+    assertions. Only the readiness adapter credits it, and only when the owner
+    records a trusted writer for an artifact with that digest."""
+    if not re.fullmatch(r"[0-9a-f]{64}", str(certificate_sha256)):
+        raise ValueError("native certificate has no exact sha256 digest")
+    return {
+        "scenario": scenario["id"], "command": body["command"], "exit_code": None,
+        "stdout": json.dumps({"producer": body["producer"],
+                              "source_revision": body["source_revision"]}, sort_keys=True),
+        "stderr": NATIVE_AUTHORITY_GAP, "outcome": "NOT_RUN", "assertions": [],
+        "evidence_type": NATIVE_CERTIFICATE_CLAIM, "certificate_assertions": body["assertions"],
+        "missing_capabilities": [NATIVE_AUTHORITY_GAP],
+        "cleanup_verified": True, "candidate_id": candidate_id,
+        "imported_from": imported_from, "evidence_sha256": evidence_sha256,
+        "native_certificate_sha256": certificate_sha256, "native_evidence": body,
+    }
+
+
 def import_platform_evidence(paths, inventory, candidate, repo):
     imported = []
     candidate_id = candidate["candidate_id"]
@@ -4126,16 +4361,8 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             if scenario is None:
                 raise ValueError(f"{path}: macos-platform is absent from the inventory")
             validate_hosted_macos_evidence(body, scenario, candidate, repo)
-            imported.append({
-                "scenario": "macos-platform", "command": body["command"], "exit_code": 0,
-                "stdout": json.dumps({"producer": body["producer"],
-                                      "source_revision": body["source_revision"]}, sort_keys=True),
-                "stderr": "", "outcome": "PASS", "assertions": body["assertions"],
-                "cleanup_verified": True,
-                "candidate_id": candidate_id, "imported_from": str(path),
-                "evidence_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "native_evidence": body,
-            })
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            imported.append(native_certificate_claim(body, scenario, candidate_id, digest, str(path), digest))
             continue
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
             raise ValueError(f"{path}: evidence is for a different or unsupported candidate")
@@ -4146,6 +4373,19 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             scenario = scenarios.get(result.get("scenario"))
             if not scenario:
                 raise ValueError(f"{path}: imported scenario is not declared")
+            if scenario.get("capability") == "macos" and "native_evidence" in result:
+                # A re-imported certificate stays a claim bound to its
+                # original digest; a report row cannot promote it to PASS.
+                if result.get("command") != scenario.get("command"):
+                    raise ValueError(f"{path}: imported command does not match the required check")
+                if result.get("candidate_id") != candidate_id:
+                    raise ValueError(f"{path}: result candidate does not match report candidate")
+                validate_hosted_macos_evidence(result["native_evidence"], scenario, candidate, repo)
+                imported.append(native_certificate_claim(
+                    result["native_evidence"], scenario, candidate_id,
+                    result.get("native_certificate_sha256"), str(path),
+                    hashlib.sha256(path.read_bytes()).hexdigest()))
+                continue
             if scenario.get("capability") == "local" or result.get("outcome") != "PASS":
                 continue
             expected_command = scenario.get("command")
@@ -4163,10 +4403,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             if set(result.get("assertions", [])) != set(scenario["assertions"]):
                 raise ValueError(f"{path}: imported assertions do not match the required guarantees")
             if scenario.get("capability") == "macos":
-                validate_hosted_macos_evidence(result.get("native_evidence", {}), scenario, candidate, repo)
-                # Validated native execution records each prove verified
-                # cleanup, so the imported row earns it from them.
-                result = {**result, "cleanup_verified": True}
+                raise ValueError(f"{path}: a macOS PASS row without its native certificate earns nothing")
             if scenario.get("capability") == "linux" and body.get("environment", {}).get("os") != "Linux":
                 raise ValueError(f"{path}: Linux cases require Linux execution evidence")
             validate_cargo_test_evidence(result["command"], result, scenario.get("required_tests", []),
@@ -4458,10 +4695,7 @@ def main():
         scratch_retained = (
             bool(unverified_commands)
             or any(result.get("cleanup_verified") is False for result in results)
-            or detached_worker_settlement.get("cwd_visible") is not True
-            or bool(detached_worker_settlement.get("error"))
-            or any(worker.get("exited") is not True
-                   for worker in detached_worker_settlement.get("workers") or []))
+            or settlement_unverified_reason(detached_worker_settlement) is not None)
         if not scratch_retained:
             scratch_cleanup.callback(shutil.rmtree, tmp, ignore_errors=True)
 
@@ -4486,17 +4720,9 @@ def main():
         scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
                                    "leftover path(s) remain under the scratch temp dir")
     detached_workers = detached_worker_settlement.get("workers") or []
-    if detached_worker_settlement.get("cwd_visible") is False:
-        settlement_warning = ("harness scratch cleanup did not finish; detached worker cleanup "
-                              "NOT_RUN: this host has no process working-directory source")
-    elif detached_worker_settlement.get("error"):
-        settlement_warning = ("harness scratch cleanup did not finish; detached worker "
-                              f"settlement failed: {detached_worker_settlement['error']}")
-    elif any(worker.get("exited") is not True for worker in detached_workers):
-        settlement_warning = ("harness scratch cleanup did not finish; detached worker "
-                              "still alive after fixture cleanup")
-    else:
-        settlement_warning = None
+    settlement_reason = settlement_unverified_reason(detached_worker_settlement)
+    settlement_warning = (f"harness scratch cleanup did not finish; {settlement_reason}"
+                          if settlement_reason else None)
     if settlement_warning:
         scratch_cleanup_warning = (f"{scratch_cleanup_warning}; {settlement_warning}"
                                    if scratch_cleanup_warning else settlement_warning)
@@ -4529,6 +4755,8 @@ def main():
                             "leftover_paths": scratch_leftovers,
                             "warning": scratch_cleanup_warning,
                             "detached_workers": detached_workers,
+                            "observation_complete": detached_worker_settlement.get("observation_complete") is True,
+                            "observation_errors": detached_worker_settlement.get("observation_errors") or [],
                             "unverified_commands": unverified_commands},
         "results": results, "findings": decision_failures,
         "capability_gaps": [{"scenario": row["scenario"],

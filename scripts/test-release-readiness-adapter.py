@@ -19,6 +19,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 REVISION = "b" * 40
 CANDIDATE = "native-proof-candidate"
+CERTIFICATE = "macos-platform-evidence.json"
 IDENTITY_PATHS = (
     "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
     "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
@@ -152,7 +153,8 @@ class NativeReadinessRegression(unittest.TestCase):
             {"head": REVISION, "status": []}, ROOT)
         report = {
             "schema_version": 2, "candidate": {"id": CANDIDATE, "source_revision": REVISION},
-            "source_state": {"status": []}, "environment": {"os": "Linux"}, "decision": "PASS",
+            "source_state": {"status": []}, "environment": {"os": "Linux"}, "decision": "INCOMPLETE",
+            "findings": [f"{cls.native_scenario['id']}: missing, failed, or unrun evidence"],
             "inventory_sha256": hashlib.sha256(inventory_bytes).hexdigest(), "results": [],
         }
         for scenario in inventory["scenarios"]:
@@ -160,7 +162,9 @@ class NativeReadinessRegression(unittest.TestCase):
                 row = {"scenario": scenario["id"], "candidate_id": CANDIDATE,
                        "outcome": "PASS", "assertions": scenario.get("assertions", [])}
                 if scenario.get("capability") == "macos":
-                    row["native_evidence"] = cls.native
+                    # The sweep records an imported certificate as a claim.
+                    row.update(outcome="NOT_RUN", assertions=[], evidence_type="native-certificate-claim",
+                               certificate_assertions=scenario["assertions"], native_evidence=cls.native)
                 if scenario.get("capability") == "browser":
                     row["retained_evidence"] = {"directory": "/retained", "files": [{"path": "proof.json", "sha256": "0" * 64}]}
                 if scenario.get("command"):
@@ -187,18 +191,53 @@ class NativeReadinessRegression(unittest.TestCase):
                        "trusted": {"source_revision": REVISION, "task_id": "fixture"},
                        "tasks": {}, "evidence": {"artifacts": artifacts}}
 
-    def verdict(self, native):
+    def verdict(self, native, writer="operator", attached=None, row_digest=None):
+        """Judge a report whose macOS claim carries `native`.
+
+        `attached` is the certificate stored as a task artifact (by default the
+        same bytes) and `writer` the class the owner stamped on it; None means
+        an agent attached it, so the owner records no authority."""
         request = copy.deepcopy(self.request)
+        stored = json.dumps(native if attached is None else attached, sort_keys=True).encode()
+        digest = hashlib.sha256(stored).hexdigest()
+        request["evidence"]["artifacts"][CERTIFICATE] = {"sha256": digest, "json": json.loads(stored)}
+        request["trusted"]["artifact_authority"] = (
+            {CERTIFICATE: {"sha256": digest, "writer": writer}} if writer else {})
         report = request["evidence"]["artifacts"]["qa-full-sweep-report.json"]["json"]
         for row in report["results"]:
             if row["scenario"] == self.native_scenario["id"]:
                 row["native_evidence"] = native
+                row["native_certificate_sha256"] = row_digest or hashlib.sha256(
+                    json.dumps(native, sort_keys=True).encode()).hexdigest()
         result = subprocess.run(
             [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
             input=json.dumps(request), text=True, capture_output=True, timeout=30,
             cwd=self.inputs, env={**os.environ, "ORBIT_SCRIPT_IN": str(self.inputs)})
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
+
+    def test_fabricated_certificate_needs_owner_artifact_authority(self):
+        # A well-formed certificate with invented producer fields, invented
+        # PASS transcripts and copied source hashes proves only its content.
+        for writer in ("operator", "system"):
+            with self.subTest(writer=writer):
+                self.assertEqual(self.verdict(self.native, writer)["status"], "passed")
+        other = copy.deepcopy(self.native)
+        other["producer"]["run_id"] = "456"
+        cases = {
+            # Agent-attached: the owner stamps no writer class.
+            "agent-attached": dict(writer=None),
+            "unknown-writer": dict(writer="agent"),
+            # The authenticated artifact is another certificate than the row's.
+            "different-certificate": dict(attached=other),
+            "row-digest-not-authenticated": dict(row_digest="0" * 64),
+            "row-digest-missing": dict(row_digest="not-a-digest"),
+        }
+        for name, options in cases.items():
+            with self.subTest(name=name):
+                verdict = self.verdict(self.native, **options)
+                self.assertEqual(verdict["status"], "unavailable", verdict)
+                self.assertEqual(verdict["reasons"][0]["code"], "platform-evidence-unauthenticated", verdict)
 
     def test_native_certificate_required_for_readiness(self):
         self.assertEqual(self.verdict(self.native)["status"], "passed")

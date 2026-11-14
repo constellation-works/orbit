@@ -27,6 +27,12 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 CONTRACT = "release-readiness/v1"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+# Writer classes the owner stamps from the write path itself: an operator
+# surface outside any agent run, or Orbit's own machinery. An agent-attached
+# artifact has no class, whatever its content says about its origin.
+AUTHORITATIVE_WRITERS = {"operator", "system"}
+NATIVE_CLAIM = "native-certificate-claim"
 
 QA_REPORT = "qa-full-sweep-report.json"
 QA_FORECAST = "forecast-history-qa.json"
@@ -103,12 +109,78 @@ def load_inventory():
         unavailable("inventory-unavailable", f"the QA inventory is unreadable: {error}")
 
 
-def judge_qa_results(inventory, report, candidate_id):
+def authenticated_native_certificate(request, row, name):
+    """The certificate a native row names, read from an owner-authenticated artifact.
+
+    The row's certificate, producer fields, transcripts and source hashes are
+    all candidate-written, so none of them authenticates itself. The owner's
+    trusted artifact authority must record a trusted writer for an evidence
+    artifact whose exact digest is the row's native_certificate_sha256, and
+    that artifact must be the very certificate the row carries."""
+    digest = row.get("native_certificate_sha256")
+    if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
+        unavailable("platform-evidence-unauthenticated", f"{name} names no native certificate digest")
+    authority = request["trusted"].get("artifact_authority")
+    if not isinstance(authority, dict):
+        unavailable("platform-evidence-unauthenticated",
+                    f"{name}: the owner supplied no artifact authority for native evidence")
+    artifacts = request["evidence"]["artifacts"]
+    for path, entry in authority.items():
+        if not (isinstance(entry, dict) and entry.get("sha256") == digest
+                and entry.get("writer") in AUTHORITATIVE_WRITERS):
+            continue
+        listed = artifacts.get(path)
+        if not isinstance(listed, dict) or listed.get("sha256") != digest:
+            continue
+        certificate = listed.get("json")
+        if isinstance(certificate, dict) and certificate == row.get("native_evidence"):
+            return certificate
+    unavailable("platform-evidence-unauthenticated",
+                f"{name}: no operator- or Orbit-written artifact has the native certificate digest {digest}")
+
+
+def judge_native_rows(request, scenario, rows):
+    """A macOS scenario earns its assertions only from an authenticated certificate.
+
+    The QA sweep records an imported certificate as a NOT_RUN claim; this is
+    where it is credited, through the harness's content validator after the
+    owner's artifact authority has bound its exact digest."""
+    name = scenario["id"]
+    inputs = Path(os.environ["ORBIT_SCRIPT_IN"])
+    source_files = {
+        path: inputs / Path(path).name
+        for path in (
+            "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
+            "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
+        )
+    }
+    for row in rows:
+        if row.get("evidence_type") != NATIVE_CLAIM:
+            unavailable("platform-evidence-missing", f"{name} has a row that is not a native certificate claim")
+        certificate = authenticated_native_certificate(request, row, name)
+        if row.get("certificate_assertions") != certificate.get("assertions"):
+            unavailable("assertions-mismatch", f"{name} claims assertions its certificate does not carry")
+    try:
+        validate_native = runpy.run_path(str(inputs / "test-qa-full-sweep.py"))[
+            "validate_hosted_macos_evidence"]
+        report = artifact_json(request, QA_REPORT)
+        candidate = {"head": report["candidate"]["source_revision"],
+                     "status": report["source_state"]["status"]}
+        for row in rows:
+            validate_native(row["native_evidence"], scenario, candidate, inputs, source_files=source_files)
+    except (OSError, ImportError, KeyError, TypeError, AttributeError, ValueError) as error:
+        unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
+
+
+def judge_qa_results(request, inventory, report, candidate_id):
     """The inventory is the read-only coverage contract: every required scenario
-    needs a passing, same-candidate result with exactly its required assertions."""
+    needs a passing, same-candidate result with exactly its required assertions.
+    A macOS scenario instead needs an authenticated native certificate for each
+    claim row. Returns the scenarios discharged that way."""
     results = report.get("results")
     if not isinstance(results, list):
         unavailable("report-malformed", "the report has no results")
+    discharged = set()
     for scenario in inventory["scenarios"]:
         if not scenario.get("required"):
             continue
@@ -118,6 +190,13 @@ def judge_qa_results(inventory, report, candidate_id):
         rows = [row for row in results if isinstance(row, dict) and row.get("scenario") == name]
         if not rows:
             unavailable("scenario-missing", f"required scenario {name} has no result")
+        capability = scenario.get("capability")
+        if capability == "macos":
+            if any(row.get("candidate_id") != candidate_id for row in rows):
+                unavailable("evidence-stale", f"required scenario {name} ran on another candidate")
+            judge_native_rows(request, scenario, rows)
+            discharged.add(name)
+            continue
         if any(row.get("outcome") != "PASS" for row in rows):
             unavailable("scenario-not-passed", f"required scenario {name} did not pass")
         if any(row.get("candidate_id") != candidate_id for row in rows):
@@ -137,42 +216,24 @@ def judge_qa_results(inventory, report, candidate_id):
             if command and not any(row.get("command") == command for row in rows):
                 unavailable("retired-case-not-executed",
                             f"required scenario {name} retired case {case.get('retired')} has no executed command")
-        capability = scenario.get("capability")
-        if capability == "macos":
-            # Use the harness's complete certificate and native-execution
-            # contract, against declared candidate files rather than report labels.
-            inputs = Path(os.environ["ORBIT_SCRIPT_IN"])
-            source_files = {
-                path: inputs / Path(path).name
-                for path in (
-                    "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
-                    "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
-                )
-            }
-            try:
-                validate_native = runpy.run_path(str(inputs / "test-qa-full-sweep.py"))[
-                    "validate_hosted_macos_evidence"]
-                candidate = {"head": report["candidate"]["source_revision"],
-                             "status": report["source_state"]["status"]}
-                for row in rows:
-                    validate_native(row.get("native_evidence", {}), scenario, candidate,
-                                    inputs, source_files=source_files)
-            except (OSError, ImportError, KeyError, TypeError, AttributeError, ValueError) as error:
-                unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
         if capability == "linux" and report.get("environment", {}).get("os") != "Linux" and not all(
             row.get("imported_from") and row.get("evidence_sha256") for row in rows
         ):
             unavailable("platform-evidence-missing", f"{name} has no matching Linux evidence")
+    return discharged
 
 
-def judge_capability_gaps(request, inventory, report, candidate_id, revision):
+def judge_capability_gaps(request, inventory, report, candidate_id, revision, native_discharged=()):
     """A required capability gap stays unavailable until evidence for this exact
     candidate discharges it. The report's own decision may then be INCOMPLETE
-    only for gaps discharged that way."""
+    only for gaps discharged that way, and for native scenarios whose claim an
+    authenticated certificate discharged (the sweep itself never credits one)."""
     gaps = inventory.get("required_capability_gaps", {})
     decision = report.get("decision")
     findings = report.get("findings", [])
-    if decision == "PASS" and not findings and not gaps:
+    native_findings = {f"{name}: missing, failed, or unrun evidence" for name in native_discharged}
+    findings = [finding for finding in findings if finding not in native_findings]
+    if decision in ("PASS", "INCOMPLETE") and not findings and not gaps:
         return
     if decision not in ("PASS", "INCOMPLETE"):
         unavailable("report-malformed", f"the report decision is {decision!r}")
@@ -230,8 +291,8 @@ def judge_qa(request):
     if report.get("inventory_sha256") != inventory_sha:
         unavailable("inventory-mismatch", "the report ran a different coverage inventory")
     candidate_id = candidate["id"]
-    judge_qa_results(inventory, report, candidate_id)
-    judge_capability_gaps(request, inventory, report, candidate_id, revision)
+    native_discharged = judge_qa_results(request, inventory, report, candidate_id)
+    judge_capability_gaps(request, inventory, report, candidate_id, revision, native_discharged)
     judge_qa_forecast(request, candidate_id, revision)
 
 

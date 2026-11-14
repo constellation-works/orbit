@@ -55,7 +55,13 @@ definition would split that sign-off, so the owner adds one block to the native 
        macOS row retains its full `native_evidence` certificate: matching command and
        assertions, passing outcome, GitHub Actions producer, candidate source-file
        digests, and every required native command's completed passing execution record.
-       The adapter uses the QA harness's native certificate validator. Linux evidence
+       The sweep records it as a `NOT_RUN` claim with the certificate's exact
+       `native_certificate_sha256`. Only the owner can authenticate it: list the same
+       certificate bytes as an artifact the operator attached outside any agent run (or
+       Orbit wrote). The owner passes each listed artifact's trusted writer class to the
+       adapter as `trusted.artifact_authority`; a certificate without one earns nothing,
+       whatever its producer fields say. The adapter then uses the QA harness's native
+       certificate validator. Linux evidence
        never stands in for it. Record what is missing rather than filling it in: a gap
        leaves the step unavailable.
    ```

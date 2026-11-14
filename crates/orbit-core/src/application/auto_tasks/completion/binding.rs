@@ -102,14 +102,15 @@ pub(super) fn validate_completion(
 ) -> Result<AutoTaskCompletionReceipt, String> {
     let trusted = trust::trusted_identity(runtime, step, checked, record, task)?;
     let completed_at = trusted.completed_at;
-    let (candidate, evidence, artifacts) = trust::admitted_evidence(runtime, contract, &trusted)?;
+    let (candidate, evidence, artifacts, authority) =
+        trust::admitted_evidence(runtime, contract, &trusted)?;
     let (verdict, adapter_digest) = adapter::run_adapter(
         runtime,
         step,
         checked,
         contract,
         &trusted,
-        (&candidate, &artifacts),
+        (&candidate, &artifacts, &authority),
         task,
     )?;
     if verdict.status != AutoTaskResultStatus::Passed {
