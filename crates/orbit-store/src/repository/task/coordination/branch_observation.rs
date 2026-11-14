@@ -23,7 +23,10 @@ use super::TaskCommitBoundary;
 // the manifest entry and blob, the envelope rewrite and `updated_at`, and the
 // task index replacement. Not carried over, because an observation of an
 // artifact and optionally a comment does not need them:
-// - lexical search refresh: indexed task fields exclude artifacts and comments;
+// - lexical search refresh at this layer: the core seam that retains a
+//   receipt refreshes the index (artifact paths and comments are indexed
+//   fields); a receipt deferred to claim settlement is covered by the
+//   next ordinary task write or reindex, like other claim-commit text;
 // - history entries and status-transition effects: `update_task` adds none
 //   without a status or field change;
 // - `resume_evidence_hold`: only System or Operator writers satisfy review

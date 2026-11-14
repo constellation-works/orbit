@@ -116,16 +116,23 @@ impl OrbitRuntime {
     ///
     /// When the lexical index holds task chunks, FTS5 BM25 over
     /// `corpus_fts` ranks first: it matches non-adjacent terms and orders by
-    /// relevance. The index carries only title, description, plan,
-    /// execution summary, and acceptance criteria, so the bundle matcher then
-    /// supplements what FTS cannot see — comments, `external_refs`, artifact
-    /// manifest paths, and tasks not yet indexed — appended in index order
-    /// behind the BM25 hits [DANI-10445]. Without task chunks the bundle
-    /// matcher is the only source. Neither source opens artifact payloads.
+    /// relevance. A substring supplement then appends, in index order
+    /// behind the BM25 hits [DANI-10445], the tasks BM25's token semantics
+    /// cannot see — a query inside a token, in comments, `external_refs` or
+    /// artifact manifest paths. For a task whose chunks carry sidecar
+    /// coverage the supplement reads the trigram substring index over
+    /// those chunks; only tasks without that coverage (not yet indexed, or
+    /// indexed before it was recorded) still go through the bundle matcher,
+    /// so a fully covered store performs no bundle-document reads and one
+    /// index freshness pass for the whole search. When the status
+    /// selection cannot be answered from the generated index (or there is
+    /// no lexical index), the bundle matcher supplements every task as
+    /// before. Neither source opens artifact payloads.
     ///
     /// When fewer than `limit` full matches survive, append any-term indexed
     /// hits ordered by the best chunk's matched-term count, then BM25. Partial
-    /// labels report that chunk's count; bundle-only fields stay substring-based.
+    /// labels report that chunk's count; the substring supplement above
+    /// stays substring-based for every field it covers.
     /// This fill reads one window of [`OR_SCAN_CHUNKS_PER_RESULT`] chunks per
     /// requested result, so a selective filter over common terms costs one
     /// query and a bounded number of hydrations; partial hits ranked past the
@@ -136,9 +143,9 @@ impl OrbitRuntime {
     /// lexical matches are all filtered out: BM25 is read in bounded pages,
     /// continuing past rejected chunks until the budget fills or the ranking
     /// runs out. A hit whose indexed status is not in `statuses` is dropped
-    /// before its bundle is read, and the bundle matcher selects `statuses`
-    /// from the index, so on a mostly terminal workspace the tasks a default
-    /// search leaves out cost no read.
+    /// before its bundle is read, and the supplement iterates that same
+    /// status selection, so on a mostly terminal workspace the tasks a
+    /// default search leaves out cost no read.
     fn lexical_task_candidates(
         &self,
         query: &str,
@@ -153,11 +160,14 @@ impl OrbitRuntime {
             Ok(index) if index.has_source_kind(SOURCE_KIND_TASK)? => Some(index),
             _ => None,
         };
-        let selectable = match lexical {
+        let selectable_order = match lexical {
             Some(_) => self.task_ids_in_statuses(statuses)?,
             None => None,
         };
-        let selectable = |id: &str| selectable.as_ref().is_none_or(|ids| ids.contains(id));
+        let selectable_ids: Option<BTreeSet<String>> = selectable_order
+            .as_ref()
+            .map(|ids| ids.iter().cloned().collect());
+        let selectable = |id: &str| selectable_ids.as_ref().is_none_or(|ids| ids.contains(id));
         if let Some(index) = lexical {
             // BM25 ranks chunks, while this branch returns tasks. Size each
             // page by the number of task fields normally indexed, then keep
@@ -194,24 +204,90 @@ impl OrbitRuntime {
             }
         }
 
-        // The bundle matcher supplements the BM25 hits, in index order, until
-        // the budget fills. `accepts` and the tasks BM25 already returned are
-        // judged from envelopes, so neither costs a bundle read, and the scan
-        // stops as soon as the budget is full.
+        // The substring supplement follows the BM25 hits, in index order,
+        // until the budget fills. `accepts` and the tasks BM25 already
+        // returned are judged from envelopes, so neither costs a bundle
+        // read, and the scan stops as soon as the budget is full.
         if candidates.len() < candidate_limit {
-            let seen = RefCell::new(&mut seen);
-            self.search_tasks_visit(
-                query,
-                &[],
-                Some(statuses),
-                &|task| accepts(task) && !seen.borrow().contains(&task.id),
-                &mut |task| {
-                    if seen.borrow_mut().insert(task.id.clone()) {
-                        candidates.push((lexical_task_hit(&task), task));
+            match (lexical, selectable_order.as_ref()) {
+                (Some(index), Some(order)) => {
+                    let covered = index.sidecar_indexed_task_ids()?;
+                    let substring = index.substring_task_ids(query)?;
+                    // Bundle-matcher matches for the tasks the substring
+                    // index cannot vouch for, collected first (capped at
+                    // the remaining budget, which bounds how many of them
+                    // the merged index order can still admit) so covered
+                    // and uncovered hits interleave in that one order.
+                    // `admit` judges uncovered-ness from the envelope, so
+                    // a covered task costs this scan no document read; a
+                    // fully covered selection skips the scan entirely.
+                    let mut bundle_matches: std::collections::BTreeMap<
+                        String,
+                        orbit_types::task::Task,
+                    > = std::collections::BTreeMap::new();
+                    if order
+                        .iter()
+                        .any(|id| !covered.contains(id) && !seen.contains(id))
+                    {
+                        let remaining = candidate_limit - candidates.len();
+                        let mut collected = Vec::new();
+                        self.search_tasks_visit(
+                            query,
+                            &[],
+                            Some(statuses),
+                            &|task| {
+                                accepts(task)
+                                    && !seen.contains(&task.id)
+                                    && !covered.contains(task.id.as_str())
+                            },
+                            &mut |task| {
+                                collected.push(task);
+                                collected.len() < remaining
+                            },
+                        )?;
+                        for task in collected {
+                            bundle_matches.insert(task.id.clone(), task);
+                        }
                     }
-                    candidates.len() < candidate_limit
-                },
-            )?;
+                    for id in order {
+                        if candidates.len() == candidate_limit {
+                            break;
+                        }
+                        if seen.contains(id) {
+                            continue;
+                        }
+                        if covered.contains(id) {
+                            if !substring.contains(id) {
+                                continue;
+                            }
+                            seen.insert(id.clone());
+                            if let Some(task) = self.lexical_hit_task(id)
+                                && accepts(&task)
+                            {
+                                candidates.push((lexical_task_hit(&task), task));
+                            }
+                        } else if let Some(task) = bundle_matches.remove(id) {
+                            seen.insert(id.clone());
+                            candidates.push((lexical_task_hit(&task), task));
+                        }
+                    }
+                }
+                _ => {
+                    let seen = RefCell::new(&mut seen);
+                    self.search_tasks_visit(
+                        query,
+                        &[],
+                        Some(statuses),
+                        &|task| accepts(task) && !seen.borrow().contains(&task.id),
+                        &mut |task| {
+                            if seen.borrow_mut().insert(task.id.clone()) {
+                                candidates.push((lexical_task_hit(&task), task));
+                            }
+                            candidates.len() < candidate_limit
+                        },
+                    )?;
+                }
+            }
         }
         // Full FTS and bundle matches retain priority. Only a short page
         // needs the broader pass, and single-term queries cannot be partial.
@@ -246,14 +322,16 @@ impl OrbitRuntime {
         Ok(candidates)
     }
 
-    /// The tasks whose indexed status is one of `statuses`, answered by the
-    /// generated index without reading an envelope. `None` when the index
-    /// cannot answer, or for a worker, which reads through its owner: every
-    /// hit is then hydrated and judged by `accepts`.
+    /// The tasks whose indexed status is one of `statuses`, in the
+    /// generated index's listing order, answered without reading an
+    /// envelope. This selection is the search's one index freshness pass:
+    /// BM25 filtering and the substring supplement both reuse it. `None`
+    /// when the index cannot answer, or for a worker, which reads through
+    /// its owner: every hit is then hydrated and judged by `accepts`.
     fn task_ids_in_statuses(
         &self,
         statuses: &[TaskStatus],
-    ) -> Result<Option<BTreeSet<String>>, OrbitError> {
+    ) -> Result<Option<Vec<String>>, OrbitError> {
         if self.worker_invocation().is_some() {
             return Ok(None);
         }
