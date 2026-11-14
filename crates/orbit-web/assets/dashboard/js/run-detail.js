@@ -357,8 +357,8 @@ export function renderRunDetailMeta() {
     || el("div");
   feedback.dataset.key = "run-detail-feedback";
   const wrap = el("div");
-  const back = el("button", { class: "back-action", text: "← Jobs › History" });
-  back.addEventListener("click", () => setActiveTab("jobs/history"));
+  const back = el("button", { class: "back-action", text: _runDetailCtx.runDetailBackLabel() });
+  back.addEventListener("click", () => _runDetailCtx.returnFromRunDetail());
   const actions = el("div", { class: "run-detail-actions" }, [back]);
   if (run.retry_source_run_id) {
     const sourceId = run.retry_source_run_id;

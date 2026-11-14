@@ -239,6 +239,39 @@ function parseHashRoute(raw) {
 
 let _routerCtx = null;
 
+// Origins belong to this document's session, not to a copied URL or a reload.
+// History state carries only a key; the labels stay in memory. Stamp after
+// normalization, which can replace an entry and clear its state.
+const routeSession = `${Date.now()}:${Math.random()}`;
+const routeEntries = new Map();
+let currentRouteEntry = null;
+
+function recordRouteEntry(label, fromAddress) {
+  const key = window.history.state?.orbitRouteEntry;
+  let entry = fromAddress ? routeEntries.get(key) : currentRouteEntry;
+  if (!entry) {
+    entry = {
+      key: `${routeSession}:${routeEntries.size}`,
+      originLabel: currentRouteEntry?.label || null,
+    };
+    routeEntries.set(entry.key, entry);
+  }
+  entry.label = label;
+  currentRouteEntry = entry;
+  window.history.replaceState({ ...window.history.state, orbitRouteEntry: entry.key }, "");
+}
+
+/// Name the previous dashboard entry, or History for an untracked deep link.
+export function runDetailBackLabel() {
+  return `← ${currentRouteEntry?.originLabel || "Jobs › History"}`;
+}
+
+/// Traverse one entry without adding history; deep links open History instead.
+export function returnFromRunDetail() {
+  if (currentRouteEntry?.originLabel) window.history.back();
+  else setActiveTab("jobs/history");
+}
+
 function getCtx() {
   if (!_routerCtx) {
     throw new Error("router not initialized; call initRouter(routerContext()) before using router APIs");
@@ -838,11 +871,19 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // operator made adds an entry.
   const rewriteInPlace = hashChanged && (opts.fromAddress || legacyRoute || opts.repairRoute || taskLink || runLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
-    window.history.replaceState(null, "", hash);
+    window.history.replaceState(window.history.state, "", hash);
     // The rewrite fires no event, so the address it wrote is routed already.
     routedHref = window.location.href;
   } else if (hashChanged) {
     window.location.hash = hash;
+  }
+  // A hash assignment routes again through the address listener (which may
+  // even run during the assignment). Only that pass records the new entry,
+  // so the programmatic pass cannot overwrite its origin with the run itself.
+  if (!hashChanged || rewriteInPlace) {
+    recordRouteEntry(top === "run-detail" ? ctx.getRunId()
+      : top === "jobs" ? `Jobs › ${ctx.getJobsSubtab()[0].toUpperCase()}${ctx.getJobsSubtab().slice(1)}`
+      : destinationLabel(top), opts.fromAddress);
   }
   if (opts.refresh !== false && (!hashChanged || rewriteInPlace)) ctx.refreshDashboard();
 }
