@@ -193,7 +193,7 @@ exec "$ORBIT_REAL_GIT" "$@"
         deny_patterns: Vec::new(),
         scanner_failure_behavior: ScannerFailureBehavior::Reject,
     };
-    let publish = || publish_task_snapshot(&registry, request.clone(), &policy, None);
+    let publish = || publish_task_snapshot(&registry, request.clone(), &policy);
     let before = publish().expect_err("global-helper-only publication must fail");
     assert!(before.to_string().contains("failed"));
     assert!(
@@ -219,7 +219,7 @@ esac
         generation: published.generation,
         commit: published.commit_id,
     });
-    let publish = || publish_task_snapshot(&registry, acknowledged.clone(), &policy, None);
+    let publish = || publish_task_snapshot(&registry, acknowledged.clone(), &policy);
     orbit_store::compose::workspace_task_backends(registry.clone(), "ws_credentials".into())
         .task
         .create_task(crate::support::create_params(

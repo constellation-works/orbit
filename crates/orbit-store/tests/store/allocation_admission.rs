@@ -381,7 +381,6 @@ allocation_test!(
                     deny_patterns: Vec::new(),
                     scanner_failure_behavior: ScannerFailureBehavior::AllowUnchecked,
                 },
-                None,
             )
             .unwrap_or_else(|error| panic!("{publication_id}: publish: {error}"));
             for &(case, previous, expected) in rows {

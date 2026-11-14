@@ -77,7 +77,7 @@ impl Fixture {
     }
 
     fn publish(&self) -> Result<PublicationPublishOutcome, OrbitError> {
-        publish_task_snapshot(&self.registry, self.request(), &policy(), None)
+        publish_task_snapshot(&self.registry, self.request(), &policy())
     }
 
     fn request(&self) -> PublicationPublishRequest {
@@ -155,7 +155,6 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
                     &registry,
                     winner_request,
                     &policy(),
-                    None,
                     Some(&|stage, commit| {
                         if stage == PendingWriteStage::After {
                             ready_tx
@@ -182,7 +181,7 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
             losing_request.published_at += chrono::Duration::seconds(1);
             let losing_commit = RefCell::new(String::new());
             let error = publish_task_snapshot_inner(
-                &fixture.registry, losing_request, &policy(), None,
+                &fixture.registry, losing_request, &policy(),
                 Some(&|stage, commit| {
                     if stage == PendingWriteStage::Before {
                         assert_ne!(commit, landed_commit, "attempts must stage distinct commits from the same parent");
@@ -235,7 +234,6 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
                 &fixture.registry,
                 request.clone(),
                 &policy(),
-                None,
                 Some(&|_, _| panic!("reconciliation must not stage another push")),
             )
             .expect("retry reconciles landed commit despite losing evidence");
@@ -253,7 +251,7 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
         for last in [request.last_success.clone(), None] {
             let mut foreign_request = request.clone();
             foreign_request.last_success = last;
-            let error = publish_task_snapshot(&fixture.registry, foreign_request, &policy(), None)
+            let error = publish_task_snapshot(&fixture.registry, foreign_request, &policy())
                 .expect_err("unrelated remote history remains an authority conflict");
             assert!(
                 error
