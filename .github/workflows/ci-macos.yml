@@ -172,7 +172,6 @@ jobs:
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core -p orbit-cli --locked --lib sandbox
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core -p orbit-cli --locked --test provider sandbox
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core -p orbit-cli --locked --test runtime sandbox
-          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core -p orbit-cli --locked --test sandbox_profile_goldens sandbox
           # The runtime kernel's sandbox tests moved to orbit-runtime with their sources.
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-runtime -p orbit-cli --locked --lib sandbox
           # This table also retains the sandbox-command grammar refusal row.

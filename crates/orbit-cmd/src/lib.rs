@@ -38,6 +38,7 @@ pub use registry::{routines as registry_routines, runtime as registry_runtime};
 pub use task::{owner as task_owner, store as task_store};
 pub mod update;
 mod workspace_catalog;
+pub mod workspace_removal;
 
 #[cfg(test)]
 mod tests;
@@ -49,10 +50,7 @@ pub use doctor::{
     misplaced_plugin_enablement_row, provider_limit_findings, run_doctor_report,
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
-pub use task_store::{
-    bound_partition_id, checkout_task_store_partitions, remove_checkout_task_stores,
-    retain_task_store_on_catalog_remove, task_store_partition_path,
-};
+pub use task_store::{bound_partition_id, remove_checkout_task_stores, task_store_partition_path};
 
 mod worker_coordination;
 

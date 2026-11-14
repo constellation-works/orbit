@@ -1740,7 +1740,9 @@ rows = json.loads((root / "rows.json").read_text(encoding="utf-8"))
 text = stdout + "\n" + stderr
 completed = set(re.findall(r"(?m)^qa-scenario-pass: (\S+)$", text))
 credited = sorted(set(rows) & completed)
-evidence = {"stdout": stdout, "stderr": stderr, "exit_code": 0}
+# Cleanup is proven, so only the SKIP notice decides the outcome (unproven
+# cleanup fails closed since ORB-24361).
+evidence = {"stdout": stdout, "stderr": stderr, "exit_code": 0, "cleanup_verified": True}
 notices = qa.execution_notices(dict(evidence))
 settled = qa.finalize_result(dict(evidence), ["executed"], "candidate")
 framed = {

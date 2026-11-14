@@ -116,7 +116,43 @@ impl LexicalStore {
         sidecars: &TaskSidecarSearchText,
         sidecar_coverage: bool,
     ) -> Result<usize, OrbitError> {
+        // Chunk first so a write that leaves indexed text unchanged (status,
+        // comment or history-only updates) skips the write transaction
+        // entirely instead of churning identical FTS postings.
+        let mut desired = desired_task_chunks(task, sidecars);
+        desired.sort();
         let mut conn = self.lock()?;
+        // Served by chunks_by_address(source_kind, source_id, field, chunk_idx).
+        let mut stored = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT field, chunk_idx, content FROM chunks \
+                     WHERE source_kind = ?1 AND source_id = ?2 \
+                     ORDER BY field, chunk_idx",
+                )
+                .map_err(err)?;
+            let rows = stmt
+                .query_map(params![SOURCE_KIND_TASK, task.id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(err)?;
+            let mut stored = Vec::new();
+            for row in rows {
+                stored.push(row.map_err(err)?);
+            }
+            stored
+        };
+        stored.sort();
+        // Any difference — including no stored chunks, so a task left
+        // unindexed by an earlier failure is still repaired by its next
+        // write — takes today's delete-and-insert path below.
+        if !stored.is_empty() && stored == desired {
+            return Ok(stored.len());
+        }
         let tx = conn.transaction().map_err(err)?;
         tx.execute(
             "DELETE FROM chunks WHERE source_kind = ?1 AND source_id = ?2",
@@ -319,6 +355,23 @@ fn record_coverage(
     Ok(())
 }
 
+/// The `(field, chunk_idx, content)` rows [`insert_task`] would write for
+/// this task, in field order. The skip check in
+/// [`LexicalStore::index_task`] sorts a copy for comparison against the
+/// stored rows; the write path inserts this order unchanged.
+fn desired_task_chunks(
+    task: &Task,
+    sidecars: &TaskSidecarSearchText,
+) -> Vec<(String, i64, String)> {
+    let mut out = Vec::new();
+    for field in task_fields_with_sidecars(task, sidecars) {
+        for (idx, chunk) in chunk_text(&field.text).iter().enumerate() {
+            out.push((field.field.clone(), idx as i64, chunk.clone()));
+        }
+    }
+    out
+}
+
 fn insert_task(
     conn: &Connection,
     task: &Task,
@@ -326,18 +379,10 @@ fn insert_task(
 ) -> Result<usize, OrbitError> {
     let mut count = 0;
     let mut stmt = conn.prepare_cached("INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content) VALUES (?1, ?2, ?3, ?4, ?5)").map_err(err)?;
-    for field in task_fields_with_sidecars(task, sidecars) {
-        for (idx, chunk) in chunk_text(&field.text).iter().enumerate() {
-            stmt.execute(params![
-                SOURCE_KIND_TASK,
-                task.id,
-                field.field,
-                idx as i64,
-                chunk
-            ])
+    for (field, idx, chunk) in desired_task_chunks(task, sidecars) {
+        stmt.execute(params![SOURCE_KIND_TASK, task.id, field, idx, chunk])
             .map_err(err)?;
-            count += 1;
-        }
+        count += 1;
     }
     Ok(count)
 }
