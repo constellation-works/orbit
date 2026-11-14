@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 
 use orbit_store::contracts::ExperimentRecord;
 
+use crate::application::experiment::definition::{Better, Kind, MetricSpec, metric_spec};
 use crate::application::experiment::readout::model::{
-    Better, CostSource, Kind, MetricSpec, Outcome, ReviewableDenominator, TaskOutcome,
+    CostSource, Outcome, ReviewableDenominator, TaskOutcome,
 };
 use crate::application::experiment::readout::stats::Cell;
 
@@ -12,6 +13,7 @@ use super::model::{
     ReadoutMetric, SegmentEstimate,
 };
 use super::stats;
+use crate::application::statistics;
 
 pub(super) fn values<'a>(tasks: impl Iterator<Item = &'a TaskOutcome>, metric: &str) -> Vec<f64> {
     tasks
@@ -30,7 +32,7 @@ pub(super) fn estimate(label: &str, spec: &MetricSpec, values: &[f64]) -> Estima
             Estimate {
                 n,
                 mean: stats::mean(values),
-                mean_interval: stats::wilson(successes, n),
+                mean_interval: statistics::wilson_95(successes, n),
                 median: None,
                 median_interval: None,
                 successes: Some(successes),
@@ -39,9 +41,15 @@ pub(super) fn estimate(label: &str, spec: &MetricSpec, values: &[f64]) -> Estima
         Kind::Mean => Estimate {
             n,
             mean: stats::mean(values),
-            mean_interval: stats::bootstrap(&format!("{label}:mean"), values, stats::mean),
-            median: stats::median(values),
-            median_interval: stats::bootstrap(&format!("{label}:median"), values, stats::median),
+            mean_interval: stats::bootstrap(&format!("{label}:mean"), values, |sample| {
+                stats::mean(sample)
+            }),
+            median: statistics::median(&mut values.to_vec()),
+            median_interval: stats::bootstrap(
+                &format!("{label}:median"),
+                values,
+                statistics::median,
+            ),
             successes: None,
         },
         // A ratio is not a mean of per-task values. Callers use `ratio_estimate`.
@@ -67,16 +75,8 @@ fn ratio_estimate(label: &str, pairs: &[stats::WeightedPair]) -> Estimate {
     }
 }
 
-fn line_numerator(metric: &str) -> Option<&'static str> {
-    match metric {
-        "cost_per_line" => Some("cost_usd"),
-        "lead_time_per_line" => Some("lead_time"),
-        _ => None,
-    }
-}
-
 pub(super) fn included_pair(task: &TaskOutcome, metric: &str) -> Option<stats::WeightedPair> {
-    let numerator = line_numerator(metric)?;
+    let numerator = metric_spec(metric)?.line_numerator?;
     let ReviewableDenominator::Measured(lines) = task.reviewable else {
         return None;
     };
@@ -109,7 +109,9 @@ fn ratio_counts<'a>(
     tasks: impl Iterator<Item = &'a TaskOutcome>,
     metric: &str,
 ) -> (usize, usize, usize, usize) {
-    let numerator = line_numerator(metric).unwrap_or("");
+    let numerator = metric_spec(metric)
+        .and_then(|spec| spec.line_numerator)
+        .unwrap_or("");
     let mut open = 0;
     let mut unmeasured = 0;
     let mut zero = 0;
@@ -225,7 +227,7 @@ pub(super) fn metric_readout(
         .unwrap_or_default();
     ReadoutMetric {
         metric: spec.name.to_string(),
-        exploratory: super::super::definition::experiment_metric_is_step_local(spec.name),
+        exploratory: spec.step_local,
         kind: match spec.kind {
             Kind::Mean => "mean",
             Kind::Rate => "rate",
@@ -236,7 +238,7 @@ pub(super) fn metric_readout(
             Better::Higher => "higher",
         },
         unit: spec.unit,
-        measured: spec.measured,
+        measured: true,
         arms,
         differences,
     }

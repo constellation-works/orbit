@@ -4,6 +4,8 @@ use orbit_engine::TaskActivityUpdate;
 use orbit_types::identity::{all_agent_families, infer_agent_family_from_model};
 use orbit_types::task::{CrewSource, Task, TaskHistoryEntry, TaskStatus};
 
+use crate::application::task::TaskRow;
+
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
@@ -54,8 +56,13 @@ pub(super) struct TaskUpdateContext {
 
 /// A locked write's result plus what the after-lock side effects need: the
 /// status it replaced and the status note it recorded.
+///
+/// `row` is the post-write bundle when that write did not attach evidence.
+/// A later status transition can append history outside the lock, so callers
+/// drop the row when the status changed and read again for a full response.
 pub(super) struct LockedTaskUpdate {
     pub(super) task: Task,
+    pub(super) row: Option<TaskRow>,
     pub(super) previous_status: TaskStatus,
     pub(super) status_note: Option<String>,
 }
@@ -146,8 +153,20 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
+        Ok(self
+            .update_task_with_identity_applied(id, params, agent, model)?
+            .0)
+    }
+
+    pub(in crate::application::task) fn update_task_with_identity_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_context(
+        self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
@@ -264,8 +283,20 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
+        Ok(self
+            .force_update_task_with_identity_applied(id, params, agent, model)?
+            .0)
+    }
+
+    pub(in crate::application::task) fn force_update_task_with_identity_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_context(
+        self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
@@ -311,9 +342,9 @@ impl OrbitRuntime {
         model: Option<String>,
         status_note: Option<String>,
         owner: Option<String>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_context(
+        self.update_task_applied(
             id,
             params,
             TaskUpdateContext {

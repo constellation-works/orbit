@@ -6,7 +6,10 @@
 //!   payload. A link stored without one is `absent`, distinct from a filer's
 //!   explicit `unclassified`; neither is ever guessed.
 //! - **layer** is where the fix landed: the regression task's landed paths,
-//!   else its declared footprint, mapped through [`LAYER_TABLE`].
+//!   else its declared footprint, mapped through the workspace's
+//!   `workflow.regression_layers` table. The scan resolves it under the
+//!   table it records in [`CodebaseFacts`], so a filter, breakdown and
+//!   cross-tab always read the table the layers were resolved with.
 //! - **detected_by** is who found it: the regression task's tags through
 //!   [`DETECTOR_TABLE`], else its filer.
 //!
@@ -23,6 +26,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
+use orbit_config::RegressionLayerDefinition;
 use orbit_types::task::{
     RegressionClassification, RegressionEscape, RegressionNature, Task, TaskOrigin,
 };
@@ -35,114 +39,11 @@ use super::sections::{Params, Tally, rate_fields};
 const ABSENT: &str = "absent";
 /// A regression task with neither a landed diff nor a declared path.
 const UNKNOWN_LAYER: &str = "unknown";
-/// A path no rule of [`LAYER_TABLE`] matches.
+/// A path no `workflow.regression_layers` row matches.
 const OTHER_LAYER: &str = "other";
 /// Layers that accompany a fix rather than locate it: chosen only when the
 /// fix touched nothing else.
 const SUPPORTING_LAYERS: &[&str] = &["ci_tests", "docs_skills"];
-
-/// How a [`LAYER_TABLE`] rule matches a repository-relative path.
-enum PathRule {
-    /// The path starts with this text.
-    Prefix(&'static str),
-    /// A directory component of the path is exactly this name.
-    Dir(&'static str),
-    /// The path ends with this text.
-    Suffix(&'static str),
-}
-
-use PathRule::{Dir, Prefix, Suffix};
-
-/// Every path's layer, from the crate and module layout ARCHITECTURE.md
-/// describes. The first row with a matching rule wins, so tests and docs are
-/// recognised wherever they sit and a narrow module precedes its crate. A
-/// path no row matches is `other`. The rows' order is also the order every
-/// breakdown lists layers in.
-const LAYER_TABLE: &[(&str, &[PathRule])] = &[
-    (
-        "ci_tests",
-        &[
-            Prefix(".github/"),
-            Prefix("scripts/ci-"),
-            Prefix("scripts/test-"),
-            Dir("tests"),
-            Dir("testdata"),
-            Dir("fixtures"),
-        ],
-    ),
-    (
-        "docs_skills",
-        &[
-            Prefix("docs/"),
-            Prefix("crates/orbit-core/assets/skills/"),
-            Prefix("plugin/"),
-            Suffix(".md"),
-        ],
-    ),
-    (
-        "dashboard",
-        &[Prefix("crates/orbit-web/"), Prefix("desktop/")],
-    ),
-    (
-        "sandbox_policy",
-        &[
-            Prefix("crates/orbit-policy/"),
-            Prefix("crates/orbit-exec/"),
-            Prefix("crates/orbit-types/src/policy/"),
-            Prefix("crates/orbit-core/src/adapter/engine_host/actions/sandbox/"),
-        ],
-    ),
-    (
-        "store_migration",
-        &[
-            Prefix("crates/orbit-store/"),
-            Prefix("crates/orbit-search/"),
-            Prefix("crates/orbit-common/src/migration/"),
-        ],
-    ),
-    (
-        "vcs_delivery",
-        &[
-            Prefix("crates/orbit-engine/src/executor/automation/vcs/"),
-            Prefix("crates/orbit-engine/src/executor/automation/ci/"),
-            Prefix("crates/orbit-engine/src/executor/automation/review/"),
-            Prefix("crates/orbit-core/src/application/landing/"),
-            Prefix("crates/orbit-core/src/application/review/"),
-            Prefix("crates/orbit-automation/src/delivery/"),
-            Prefix("crates/orbit-automation/src/review/"),
-        ],
-    ),
-    (
-        "config",
-        &[
-            Prefix("crates/orbit-config/"),
-            Prefix("crates/orbit-registry/"),
-            Prefix("crates/orbit-core/src/application/config/"),
-        ],
-    ),
-    (
-        "cli_mcp",
-        &[
-            Prefix("crates/orbit-cli/"),
-            Prefix("crates/orbit-mcp/"),
-            Prefix("crates/orbit-cmd/"),
-            Prefix("crates/orbit-tools/"),
-            Prefix("crates/orbit-common/src/governance/"),
-            Prefix("crates/orbit-core/src/adapter/tool_host/"),
-        ],
-    ),
-    (
-        "runtime_lifecycle",
-        &[
-            Prefix("crates/orbit-core/"),
-            Prefix("crates/orbit-engine/"),
-            Prefix("crates/orbit-automation/"),
-            Prefix("crates/orbit-agent/"),
-            Prefix("crates/orbit-types/src/task/"),
-            Prefix("crates/orbit-types/src/workflow/"),
-        ],
-    ),
-];
 
 /// Who found a regression, by the regression task's tags. The first row
 /// holding a matching tag wins; a pattern ending in `*` matches by prefix.
@@ -207,14 +108,15 @@ const NATURE: usize = 0;
 const ESCAPE: usize = 1;
 const LAYER: usize = 2;
 
-/// Every value a dimension takes, in breakdown order.
-fn values(dimension: usize) -> Vec<&'static str> {
+/// Every value a dimension takes, in breakdown order; a layer is one of
+/// `layers`, in table order, then `other` and `unknown`.
+fn values(dimension: usize, layers: &[RegressionLayerDefinition]) -> Vec<&str> {
     match dimension {
         NATURE => NATURES.to_vec(),
         ESCAPE => ESCAPES.to_vec(),
-        LAYER => LAYER_TABLE
+        LAYER => layers
             .iter()
-            .map(|(layer, _)| *layer)
+            .map(|layer| layer.name.as_str())
             .chain([OTHER_LAYER, UNKNOWN_LAYER])
             .collect(),
         _ => DETECTOR_TABLE
@@ -235,7 +137,7 @@ pub(super) struct RegressionLink {
     /// The regression task: it carries the link and fixes the defect.
     pub(super) task_id: String,
     /// nature, escape, layer and detected_by, as [`DIMENSIONS`] orders them.
-    dims: [&'static str; 4],
+    dims: [String; 4],
     /// `landed`, `footprint` or `none`: what the layer was read from.
     layer_source: &'static str,
     /// The link's severity and who set it; `absent` for both without a
@@ -306,12 +208,23 @@ impl PendingLink {
         }
     }
 
-    /// Complete the link with the layer of `fix`, the regression task.
-    pub(super) fn resolve(self, fix: Option<&TaskFacts>) -> RegressionLink {
-        let (layer, layer_source) = fix.map_or((UNKNOWN_LAYER, "none"), fix_layer);
+    /// Complete the link with the layer of `fix`, the regression task, under
+    /// `layers`.
+    pub(super) fn resolve(
+        self,
+        fix: Option<&TaskFacts>,
+        layers: &[RegressionLayerDefinition],
+    ) -> RegressionLink {
+        let (layer, layer_source) =
+            fix.map_or((UNKNOWN_LAYER, "none"), |fix| fix_layer(fix, layers));
         RegressionLink {
             task_id: self.task_id,
-            dims: [self.nature, self.escape, layer, self.detected_by],
+            dims: [
+                self.nature.to_string(),
+                self.escape.to_string(),
+                layer.to_string(),
+                self.detected_by.to_string(),
+            ],
             layer_source,
             severity: self.severity,
             sites: self.sites,
@@ -368,29 +281,23 @@ fn detected_by(
     }
 }
 
-/// The layer of one path: the first [`LAYER_TABLE`] row with a matching rule.
-fn path_layer(path: &str) -> &'static str {
-    let matched = |rule: &PathRule| match rule {
-        Prefix(prefix) => path.starts_with(prefix),
-        Suffix(suffix) => path.ends_with(suffix),
-        // Every component but the last names a directory; a directory
-        // anchor's path ends in `/`, so its own name counts too.
-        Dir(name) => {
-            let mut components: Vec<&str> = path.split('/').collect();
-            components.pop();
-            components.contains(name)
-        }
-    };
-    LAYER_TABLE
+/// The layer of one path: the first `layers` row with a matching rule, so
+/// tests and docs are recognised wherever they sit when their rows lead and
+/// a narrow module precedes its crate. A path no row matches is `other`.
+fn path_layer<'a>(path: &str, layers: &'a [RegressionLayerDefinition]) -> &'a str {
+    layers
         .iter()
-        .find(|(_, rules)| rules.iter().any(matched))
-        .map_or(OTHER_LAYER, |(layer, _)| layer)
+        .find(|layer| layer.matches(path))
+        .map_or(OTHER_LAYER, |layer| layer.name.as_str())
 }
 
 /// The layer a fix sits in, and what it was read from: the layer most of its
 /// landed paths (else its declared footprint) map to, a supporting layer
 /// only when nothing else was touched; ties go to the earlier layer.
-fn fix_layer(fix: &TaskFacts) -> (&'static str, &'static str) {
+fn fix_layer<'a>(
+    fix: &TaskFacts,
+    layers: &'a [RegressionLayerDefinition],
+) -> (&'a str, &'static str) {
     let landed: Vec<String> = fix
         .landed
         .as_ref()
@@ -405,15 +312,15 @@ fn fix_layer(fix: &TaskFacts) -> (&'static str, &'static str) {
     if paths.is_empty() {
         return (UNKNOWN_LAYER, "none");
     }
-    let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for path in &paths {
-        *counts.entry(path_layer(path)).or_default() += 1;
+        *counts.entry(path_layer(path, layers)).or_default() += 1;
     }
-    let order = values(LAYER);
+    let order = values(LAYER, layers);
     let pick = |supporting: bool| {
         order
             .iter()
-            .filter(|layer| SUPPORTING_LAYERS.contains(layer) == supporting)
+            .filter(|layer| SUPPORTING_LAYERS.iter().any(|name| name == *layer) == supporting)
             .filter_map(|layer| Some((*layer, *counts.get(layer)?)))
             // `max_by_key` keeps the last maximum; reversing keeps the first.
             .rev()
@@ -433,27 +340,29 @@ fn anchor_path(anchor: &Anchor) -> String {
 }
 
 /// A selection of regressions: at most one value per dimension.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RegressionFilter {
-    dims: [Option<&'static str>; 4],
+    dims: [Option<String>; 4],
 }
 
 impl RegressionFilter {
     /// Validate a filter. Each value must be one its dimension takes,
-    /// `absent` and `unclassified` included for nature and escape, and
-    /// `unknown` for a layer.
+    /// `absent` and `unclassified` included for nature and escape, and for a
+    /// layer a name of `layers` (the workspace's `workflow.regression_layers`),
+    /// `other` or `unknown`.
     pub fn parse(
         nature: Option<&str>,
         escape: Option<&str>,
         layer: Option<&str>,
         detected_by: Option<&str>,
+        layers: &[RegressionLayerDefinition],
     ) -> Result<Self, OrbitError> {
-        let mut dims = [None; 4];
+        let mut dims: [Option<String>; 4] = Default::default();
         for (index, raw) in [nature, escape, layer, detected_by].into_iter().enumerate() {
             let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
                 continue;
             };
-            let known = values(index);
+            let known = values(index, layers);
             let Some(value) = known.iter().find(|value| **value == raw) else {
                 return Err(OrbitError::InvalidInput(format!(
                     "{} must be one of {}; got '{raw}'",
@@ -461,7 +370,7 @@ impl RegressionFilter {
                     known.join(", ")
                 )));
             };
-            dims[index] = Some(*value);
+            dims[index] = Some((*value).to_string());
         }
         Ok(Self { dims })
     }
@@ -470,10 +379,10 @@ impl RegressionFilter {
     fn admits(&self, link: &RegressionLink, skip: Option<usize>) -> bool {
         self.dims
             .iter()
-            .zip(link.dims)
+            .zip(&link.dims)
             .enumerate()
             .all(|(index, (wanted, value))| {
-                Some(index) == skip || wanted.is_none_or(|w| w == value)
+                Some(index) == skip || wanted.as_ref().is_none_or(|wanted| wanted == value)
             })
     }
 
@@ -494,7 +403,7 @@ impl RegressionFilter {
         Value::Object(
             DIMENSIONS
                 .iter()
-                .zip(self.dims)
+                .zip(&self.dims)
                 .map(|(dimension, value)| (dimension.to_string(), json!(value)))
                 .collect(),
         )
@@ -525,7 +434,7 @@ pub(super) fn summary(facts: &CodebaseFacts, params: &Params) -> Value {
         .iter()
         .enumerate()
         .map(|(index, dimension)| {
-            let rows: Vec<Value> = values(index)
+            let rows: Vec<Value> = values(index, &facts.regression_layers)
                 .into_iter()
                 .map(|value| {
                     let count = links
@@ -597,8 +506,8 @@ pub(super) fn summary(facts: &CodebaseFacts, params: &Params) -> Value {
         "regressed": done.iter().filter(|task| filter.regressed(task)).count(),
         "breakdowns": breakdowns,
         "cross_tabs": {
-            "nature_escape": cross_tab(&kept, NATURE, ESCAPE),
-            "escape_layer": cross_tab(&kept, ESCAPE, LAYER),
+            "nature_escape": cross_tab(&kept, NATURE, ESCAPE, &facts.regression_layers),
+            "escape_layer": cross_tab(&kept, ESCAPE, LAYER, &facts.regression_layers),
         },
     });
     if let Some(object) = summary.as_object_mut() {
@@ -609,9 +518,14 @@ pub(super) fn summary(facts: &CodebaseFacts, params: &Params) -> Value {
 
 /// Link counts by one dimension (rows) and another (columns), each listing
 /// only the values some link takes, in breakdown order.
-fn cross_tab(links: &[&RegressionLink], row: usize, column: usize) -> Value {
-    let present = |dimension: usize| -> Vec<&'static str> {
-        values(dimension)
+fn cross_tab(
+    links: &[&RegressionLink],
+    row: usize,
+    column: usize,
+    layers: &[RegressionLayerDefinition],
+) -> Value {
+    let present = |dimension: usize| -> Vec<&str> {
+        values(dimension, layers)
             .into_iter()
             .filter(|value| links.iter().any(|link| link.dims[dimension] == *value))
             .collect()

@@ -16,7 +16,9 @@
 use chrono::{DateTime, Utc};
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 
-use super::model::{CellRow, Rng};
+use crate::application::statistics::SplitMix64;
+
+use super::model::CellRow;
 use super::review_modes::ReviewMode;
 
 /// Returns are observed, and drawn, for at most 90 days after a setback.
@@ -295,7 +297,7 @@ impl ReturnCurve {
     /// at the same instant is still drawn. A positive age has elapsed
     /// every atom at or before it. Both choices use `return_atom_elapsed`,
     /// so the remaining mass is the complement.
-    pub(super) fn draw(&self, rng: &mut Rng, age: f64) -> Follow {
+    pub(super) fn draw(&self, rng: &mut SplitMix64, age: f64) -> Follow {
         let elapsed: f64 = self
             .atoms
             .iter()

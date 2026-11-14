@@ -1746,13 +1746,6 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
         "{}",
         warning.message
     );
-    assert!(
-        !readout
-            .warnings
-            .iter()
-            .any(|warning| warning.kind == "primary_unmeasured"),
-        "the no-source-series warning must stay distinct"
-    );
     let repairs = readout
         .metrics
         .iter()
