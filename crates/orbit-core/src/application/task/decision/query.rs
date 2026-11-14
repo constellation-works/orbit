@@ -60,7 +60,7 @@ impl OrbitRuntime {
             for file in &row.artifacts {
                 self.stores()
                     .task_artifacts()
-                    .task_artifact_from_manifest(id, file)?;
+                    .read_manifest_artifact(id, file)?;
             }
             let observed_at = chrono::Utc::now();
             let requests = self.task_decision_requests_with_audit(
@@ -78,7 +78,8 @@ impl OrbitRuntime {
                         Some(file) => self
                             .stores()
                             .task_artifacts()
-                            .task_artifact_from_manifest(id, file),
+                            .read_manifest_artifact(id, file)
+                            .map(Some),
                         None => Ok(None),
                     })
                 },

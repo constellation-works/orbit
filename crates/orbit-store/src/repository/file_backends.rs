@@ -603,14 +603,6 @@ impl TaskHistoryStoreBackend for TaskV2Store {
 }
 
 impl TaskArtifactStoreBackend for TaskV2Store {
-    fn task_artifact_from_manifest(
-        &self,
-        id: &str,
-        file: &ArtifactManifestFileV2,
-    ) -> Result<Option<TaskArtifact>, OrbitError> {
-        self.in_boundary(|| self.task_artifact_from_manifest(id, file))
-    }
-
     fn get_task_artifact_manifest(
         &self,
         id: &str,

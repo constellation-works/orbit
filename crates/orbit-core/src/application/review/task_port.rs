@@ -63,9 +63,11 @@ impl TaskReviewPort for OrbitRuntime {
             return Ok(false);
         };
         let artifact = if use_snapshot {
-            self.stores()
-                .task_artifacts()
-                .task_artifact_from_manifest(&task.id, file)?
+            Some(
+                self.stores()
+                    .task_artifacts()
+                    .read_manifest_artifact(&task.id, file)?,
+            )
         } else {
             self.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?
         };

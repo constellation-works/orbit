@@ -17,7 +17,9 @@ use super::types::TaskBundleV2;
 use jsonl::scan_jsonl_records;
 use read::{read_required_bytes, read_required_text};
 
-pub(crate) use artifacts::copy_artifact_blobs;
+pub(crate) use artifacts::{
+    ManifestBlobReadFailure, copy_artifact_blobs, read_verified_manifest_blob,
+};
 pub(crate) use commit::{
     PENDING_WRITE_FILE_NAME, PendingWriteGuard, publish_envelope, recover_pending_bundle_at,
     recover_pending_write, truncate_jsonl_file,

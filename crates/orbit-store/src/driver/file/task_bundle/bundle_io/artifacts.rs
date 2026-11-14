@@ -7,8 +7,8 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, create_private_dir_all};
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACT_MANIFEST_FILE_NAME,
-    TASK_ARTIFACTS_DIR_NAME,
+    ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_FILES_DIR_NAME,
+    TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
 };
 use std::fs::{self};
 use std::path::Path;
@@ -54,6 +54,37 @@ pub(super) fn read_artifact_manifest(
     }
 }
 
+/// Why reading one contained blob named by `file` did not yield verified
+/// bytes. Callers map each case to their own error class and message text;
+/// `Error` passes a containment or I/O refusal through unchanged.
+#[derive(Debug)]
+pub(crate) enum ManifestBlobReadFailure {
+    Missing,
+    SizeMismatch,
+    DigestMismatch,
+    Error(OrbitError),
+}
+
+/// Read the contained blob `file` names under `artifact_dir` and check its
+/// size and sha256 against `file`.
+pub(crate) fn read_verified_manifest_blob(
+    artifact_dir: &Path,
+    file: &ArtifactManifestFileV2,
+) -> Result<Vec<u8>, ManifestBlobReadFailure> {
+    let bytes = match read_contained_artifact_blob(artifact_dir, &file.blob) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(ManifestBlobReadFailure::Missing),
+        Err(error) => return Err(ManifestBlobReadFailure::Error(error)),
+    };
+    if bytes.len() as u64 != file.size_bytes {
+        return Err(ManifestBlobReadFailure::SizeMismatch);
+    }
+    if sha256_hex(&bytes) != file.sha256 {
+        return Err(ManifestBlobReadFailure::DigestMismatch);
+    }
+    Ok(bytes)
+}
+
 /// Copy every blob referenced by `manifest` from `source_bundle_dir` into
 /// `dest_bundle_dir`, validating source content against the manifest as it
 /// goes. Used by `orbit task import` to round-trip `artifacts/files/**`
@@ -82,28 +113,24 @@ pub(crate) fn copy_artifact_blobs(
         // Containment is against the source root. The destination does not
         // exist yet; checking it would refuse every ordinary copy.
         let source = source_artifact_dir.join(&file.blob);
-        let bytes = match read_contained_artifact_blob(&source_artifact_dir, &file.blob)? {
-            Some(bytes) => bytes,
-            None => {
-                return Err(OrbitError::Store(format!(
-                    "artifact source missing for blob {}",
-                    source.display()
-                )));
-            }
-        };
-        if bytes.len() as u64 != file.size_bytes {
-            return Err(OrbitError::Store(format!(
-                "artifact source size mismatch for {}",
-                source.display()
-            )));
-        }
-        let actual_sha256 = sha256_hex(&bytes);
-        if actual_sha256 != file.sha256 {
-            return Err(OrbitError::Store(format!(
-                "artifact source sha256 mismatch for {}",
-                source.display()
-            )));
-        }
+        let bytes =
+            read_verified_manifest_blob(&source_artifact_dir, file).map_err(
+                |failure| match failure {
+                    ManifestBlobReadFailure::Missing => OrbitError::Store(format!(
+                        "artifact source missing for blob {}",
+                        source.display()
+                    )),
+                    ManifestBlobReadFailure::SizeMismatch => OrbitError::Store(format!(
+                        "artifact source size mismatch for {}",
+                        source.display()
+                    )),
+                    ManifestBlobReadFailure::DigestMismatch => OrbitError::Store(format!(
+                        "artifact source sha256 mismatch for {}",
+                        source.display()
+                    )),
+                    ManifestBlobReadFailure::Error(error) => error,
+                },
+            )?;
         let dest = dest_artifact_dir.join(&file.blob);
         atomic_write_bytes(&dest, &bytes).map_err(|err| OrbitError::from_write_io(&dest, err))?;
     }
@@ -116,28 +143,21 @@ fn validate_artifact_manifest_files(
 ) -> Result<(), OrbitError> {
     for file in &manifest.files {
         let blob_path = artifact_dir.join(&file.blob);
-        let bytes = match read_contained_artifact_blob(artifact_dir, &file.blob)? {
-            Some(bytes) => bytes,
-            None => {
-                return Err(OrbitError::Store(format!(
-                    "artifact manifest references missing file {}",
-                    blob_path.display()
-                )));
-            }
-        };
-        if bytes.len() as u64 != file.size_bytes {
-            return Err(OrbitError::Store(format!(
+        read_verified_manifest_blob(artifact_dir, file).map_err(|failure| match failure {
+            ManifestBlobReadFailure::Missing => OrbitError::Store(format!(
+                "artifact manifest references missing file {}",
+                blob_path.display()
+            )),
+            ManifestBlobReadFailure::SizeMismatch => OrbitError::Store(format!(
                 "artifact manifest size mismatch for {}",
                 blob_path.display()
-            )));
-        }
-        let actual_sha256 = sha256_hex(&bytes);
-        if actual_sha256 != file.sha256 {
-            return Err(OrbitError::Store(format!(
+            )),
+            ManifestBlobReadFailure::DigestMismatch => OrbitError::Store(format!(
                 "artifact manifest sha256 mismatch for {}",
                 blob_path.display()
-            )));
-        }
+            )),
+            ManifestBlobReadFailure::Error(error) => error,
+        })?;
     }
     Ok(())
 }
