@@ -615,7 +615,7 @@
       },
       {
         "name": "layer",
-        "description": "For show, analytics: Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "description": "For show, analytics: Count only regressions whose fix sits in this layer: a name from the workspace's `workflow.regression_layers`, `other` or `unknown`.",
         "param_type": "string",
         "required": false
       },
