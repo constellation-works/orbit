@@ -13,7 +13,7 @@ use super::activity_catalog::{
 };
 use super::artifact::{
     ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
-    ManagedCatalog, init_command, provenance, read_artifact,
+    ManagedCatalog, catalog_auto_task_base_branch, init_command, provenance, read_artifact,
 };
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
@@ -274,6 +274,8 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
         } else {
             Default::default()
         };
+        let auto_task_base_branch =
+            (kind == ArtifactKind::AutoTask).then(|| catalog_auto_task_base_branch(runtime));
         for (name, rendered) in embedded {
             if opted_out.contains(name) {
                 continue;
@@ -294,7 +296,7 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                     &on_disk,
                     tracked.get(name),
                     auto_task_settings.get(name),
-                    runtime.workspace_base_branch(),
+                    auto_task_base_branch.as_deref().unwrap_or_default(),
                 )
             {
                 findings.push(auto_task_fork_finding(

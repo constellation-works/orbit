@@ -590,9 +590,21 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
 
     // An explicit --root pins global_root to shared_root. In that mode an
     // orbit-dir-only fallback would silently select the first unrelated
-    // checkout registered under the shared data directory.
+    // checkout registered under the shared data directory, so it is used
+    // only when exactly one registered checkout claims this shared root as
+    // its orbit dir: that checkout is the workspace the explicit root
+    // names, wherever the caller stands. Several checkouts sharing one
+    // orbit dir stay unbound here; cwd above is authoritative for them.
     if canonical_or_original(&roots.global_root) == shared {
-        return Ok(None);
+        return Ok(
+            unique_registered_checkout_for_shared_root(registry, &shared).map(
+                |(workspace, checkout)| ResolvedWorkspaceSelection {
+                    workspace: workspace.clone(),
+                    checkout: checkout.clone(),
+                    local_root: roots.local_root.clone(),
+                },
+            ),
+        );
     }
 
     Ok(
@@ -604,6 +616,18 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
             }
         }),
     )
+}
+
+/// The sole registered checkout whose orbit dir is `shared`, when exactly
+/// one local workspace claims it. `None` when none or several do.
+pub(super) fn unique_registered_checkout_for_shared_root<'a>(
+    registry: &'a WorkspaceRegistry,
+    shared: &Path,
+) -> Option<(&'a Workspace, &'a WorkspaceCheckout)> {
+    let mut matches = workspace_registry::local_workspaces(registry)
+        .filter(|(_, checkout)| canonical_or_original(&checkout.orbit_dir) == shared);
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
 }
 
 pub(super) fn canonical_or_original(path: &Path) -> PathBuf {

@@ -321,6 +321,45 @@ impl ManagedCatalog {
     }
 }
 
+/// The base branch shipped auto-tasks in this runtime's catalogs are
+/// judged against: the registered base branch of the workspace whose
+/// catalog is being read.
+///
+/// A bound runtime already carries that branch. An unbound runtime — for
+/// example `orbit doctor --root <workspace>` run from outside the
+/// checkout, where root resolution supplies no binding — recovers it from
+/// the registry entry whose checkout claims this runtime's shared or
+/// local root as its orbit dir, when every such entry agrees on the
+/// branch. Anything else keeps the `[workflow] base_branch` fallback.
+pub(super) fn catalog_auto_task_base_branch(runtime: &OrbitRuntime) -> String {
+    if runtime.workspace_runtime_binding().is_some() {
+        return runtime.workspace_base_branch().to_string();
+    }
+    let registered_branch = (|| {
+        let path = orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
+        let load = orbit_registry::workspace_registry::load_registry_from_read_only(&path).ok()?;
+        let candidates = [
+            runtime.shared_root(),
+            runtime.local_root(),
+            runtime.paths().local_dir.clone(),
+        ];
+        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let mut branches = BTreeSet::new();
+        for (workspace, checkout) in
+            orbit_registry::workspace_registry::local_workspaces(&load.registry)
+        {
+            if candidates
+                .iter()
+                .any(|candidate| canonical(candidate) == canonical(&checkout.orbit_dir))
+            {
+                branches.insert(workspace.base_branch.clone());
+            }
+        }
+        (branches.len() == 1).then(|| branches.into_iter().next())?
+    })();
+    registered_branch.unwrap_or_else(|| runtime.workspace_base_branch().to_string())
+}
+
 /// Every managed catalog for this runtime, in doctor display order.
 fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
     let global_root = runtime.global_root();
@@ -331,6 +370,7 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
         .workspace_seeding_policies()
         .map(|policies| SeedingPolicyExclusions::of(&policies))
         .unwrap_or_default();
+    let auto_task_base_branch = catalog_auto_task_base_branch(runtime);
     let owned = |assets: &[(&str, &str)]| -> Vec<(String, String)> {
         assets
             .iter()
@@ -365,7 +405,7 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
             DEFAULT_AUTO_TASK_FILES.iter().map(|(name, content)| {
                 (
                     (*name).to_string(),
-                    render_default_auto_task(content, runtime.workspace_base_branch()).into_owned(),
+                    render_default_auto_task(content, &auto_task_base_branch).into_owned(),
                 )
             }),
         )
