@@ -72,6 +72,13 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     ] {
         assert_eq!(client.call_tool_err(tool, input)["code"], "invalid_input");
     }
+    let missing_workspace =
+        client.call_tool_err("orbit_task_update", json!({"id": id, "verdict": {}}));
+    assert_eq!(missing_workspace["code"], "invalid_input");
+    assert!(
+        message_contains(&missing_workspace, "`verdict`"),
+        "{missing_workspace}"
+    );
     assert_eq!(
         client.call_tool_err(
             "orbit_run",

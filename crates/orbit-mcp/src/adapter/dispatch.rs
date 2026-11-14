@@ -327,9 +327,27 @@ impl OrbitToolServer {
                 .as_deref()
                 .is_none_or(|selector| selector.trim().is_empty())
         {
-            // Name `view` only when the caller set it. Other echo conditions,
-            // such as `mode` on `auto`, need a selector and nothing else.
-            let guidance = if input.get("view").is_some() {
+            let fields = definition
+                .map(|definition| {
+                    definition
+                        .rules
+                        .workspace_echo
+                        .matching_input_fields(&input)
+                })
+                .unwrap_or_default();
+            let trigger = if fields.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "input {} requires this selector; ",
+                    fields
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let guidance = if fields.contains(&"view") {
                 "`view` reads never use the session's bound workspace. Pass `workspace` with a \
                  selector copied from `orbit_workspace_list`, or omit `view` to use the bound \
                  workspace"
@@ -338,7 +356,7 @@ impl OrbitToolServer {
             };
             return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
                 "tool '{canonical}' requires an explicit workspace selector from discovery: \
-                 {guidance}"
+                 {trigger}{guidance}"
             ))));
         }
         let host = Arc::clone(&self.host);

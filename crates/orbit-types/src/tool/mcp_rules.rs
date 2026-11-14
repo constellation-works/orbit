@@ -61,6 +61,18 @@ pub enum McpWorkspaceEcho {
 }
 
 impl McpWorkspaceEcho {
+    /// Input fields in matching echo conditions, in declaration order.
+    pub fn matching_input_fields<'a>(&'a self, input: &Value) -> Vec<&'a str> {
+        let mut fields = Vec::new();
+        if let Self::WhenAny(conditions) = self {
+            for condition in conditions.iter().filter(|condition| condition.holds(input)) {
+                condition.collect_fields(&mut fields);
+            }
+        }
+        fields.dedup();
+        fields
+    }
+
     /// Evaluate the declared conditions without interpreting tool names.
     pub fn applies(&self, input: &Value) -> bool {
         match self {
@@ -91,6 +103,21 @@ pub enum McpInputCondition {
 }
 
 impl McpInputCondition {
+    fn collect_fields<'a>(&'a self, fields: &mut Vec<&'a str>) {
+        match self {
+            Self::Present(key) | Self::True(key) | Self::Equals { key, .. } => {
+                if !fields.contains(&key.as_str()) {
+                    fields.push(key);
+                }
+            }
+            Self::All(conditions) => {
+                for condition in conditions {
+                    condition.collect_fields(fields);
+                }
+            }
+        }
+    }
+
     fn holds(&self, input: &Value) -> bool {
         match self {
             Self::Present(key) => input.get(key).is_some(),

@@ -379,3 +379,39 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
         "ORB-24434 guarded update (complete) must name the selector: {complete_message}"
     );
 }
+
+#[test]
+fn guarded_missing_envelope_names_selector_and_remedy() {
+    if crate::isolated_test::run_in_child(
+        "required_inputs::guarded_missing_envelope_names_selector_and_remedy",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let input = json!({"workspace": fixture.repo, "id": "T", "verdict": {}});
+    let output = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.task.update",
+            "--input",
+            &input.to_string(),
+            "--json",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "invalid_input");
+    let message = error["error"].as_str().unwrap();
+    for expected in [
+        "missing `request_id`",
+        "'verdict' selects guarded update",
+        "expected_revision",
+        "snapshot",
+        "ordinary update",
+    ] {
+        assert!(message.contains(expected), "missing {expected}: {message}");
+    }
+}
