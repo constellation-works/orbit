@@ -672,6 +672,7 @@
         "repository/task/coordination/tests/sidecar_reads.rs::a_settled_history_read_does_not_wait_for_a_partition_section",
         "repository/task/v2/tests/concurrency.rs::a_reader_never_observes_a_transition_between_its_event_and_its_envelope",
         "repository/task/v2/tests/listing.rs::envelope_only_page_reads_no_bundles_and_matches_hydrated_envelope_fields",
+        "repository/task/v2/tests/listing.rs::small_status_lookup_returns_only_its_targets_across_workspaces",
         "repository/task/v2/tests/repair_gate.rs::concurrent_readers_across_store_instances_share_one_attempt",
         "repository/task/v2/tests/repair_gate.rs::degraded_reads_still_fail_on_task_field_corruption",
         "repository/task/v2/tests/repair_gate.rs::removing_the_edge_through_a_supported_update_repairs_on_the_next_read",

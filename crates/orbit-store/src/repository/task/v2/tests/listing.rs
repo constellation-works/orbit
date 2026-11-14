@@ -89,3 +89,63 @@ fn envelope_only_page_reads_no_bundles_and_matches_hydrated_envelope_fields() {
         assert!(compact_row.artifacts.is_empty());
     }
 }
+
+#[test]
+fn small_status_lookup_returns_only_its_targets_across_workspaces() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let mut ids = Vec::new();
+    for index in 0..6 {
+        ids.push(
+            store
+                .create_task(create_params(&format!("Task {index}"), TaskStatus::Backlog))
+                .expect("create task")
+                .id,
+        );
+    }
+    let registry =
+        TaskRegistryStore::open(&task_registry_path(temp.path())).expect("open registry");
+    let other = bound_store(&registry, &temp, "orbit-other-123456", "other");
+    let foreign = other
+        .create_task(create_params("Foreign", TaskStatus::Done))
+        .expect("create foreign task")
+        .id;
+
+    // Two workspace targets: exactly those two, not the whole workspace.
+    let targets = [ids[0].clone(), ids[1].clone()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let index = store
+        .task_status_index_for(&store.workspace_id, &targets)
+        .expect("workspace status lookup");
+    assert_eq!(index.len(), 2, "bounded lookup returned {index:?}");
+    assert_eq!(index.get(&ids[0]), Some(&TaskStatus::Backlog));
+    assert_eq!(index.get(&ids[1]), Some(&TaskStatus::Backlog));
+
+    // One cross-workspace target resolves where it is registered.
+    let targets = [foreign.clone()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let index = store
+        .task_status_index_for(&store.workspace_id, &targets)
+        .expect("cross-workspace status lookup");
+    assert_eq!(index, [(foreign, TaskStatus::Done)].into_iter().collect());
+
+    // A missing target under a prefix no workspace uses stays absent, and a
+    // missing target under this workspace's own prefix is represented by one
+    // indexed task of that prefix (never by the target itself), so its label
+    // stays `missing` exactly as under the whole-workspace projection.
+    let own_prefix = ids[0].split('-').next().expect("id prefix").to_string();
+    let missing_own = format!("{own_prefix}-999999");
+    let targets = [missing_own.clone(), "ZZZ-999999".to_string()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let index = store
+        .task_status_index_for(&store.workspace_id, &targets)
+        .expect("missing-target status lookup");
+    assert!(!index.contains_key(&missing_own));
+    assert!(!index.contains_key("ZZZ-999999"));
+    assert_eq!(index.len(), 1, "one representative only: {index:?}");
+    let representative = index.keys().next().expect("representative");
+    assert!(representative.starts_with(&format!("{own_prefix}-")));
+}

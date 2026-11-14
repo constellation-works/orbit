@@ -47,7 +47,7 @@ use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 use super::pull_request_links::PullRequestLinks;
-use super::record_json::{task_record_json, task_show_field_json};
+use super::record_json::{task_record_json, task_show_field_json_with_row};
 use super::screened::ScreenedTaskWrite;
 use super::{TaskOsReadout, TaskRow};
 
@@ -221,12 +221,16 @@ pub(crate) fn task_write_response_from_row(
             runtime.task_crew_read(task).insert_into(&mut object);
             Value::Object(object)
         }
-        TaskWriteResponsePolicy::Projected(projection) => task_fields_response_json_projected(
-            runtime,
-            task,
-            &projection.fields,
-            projection.keyed_single,
-        )?,
+        TaskWriteResponsePolicy::Projected(projection) => {
+            task_fields_response_json_projected_hydrated(
+                runtime,
+                task,
+                row,
+                &projection.fields,
+                projection.keyed_single,
+                None,
+            )?
+        }
     };
     metadata.insert_into(&mut response);
     Ok(response)
@@ -291,22 +295,47 @@ pub fn task_fields_response_json_projected(
     fields: &[String],
     keyed_single: bool,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = if fields
+    task_fields_response_json_projected_hydrated(runtime, task, None, fields, keyed_single, None)
+}
+
+/// [`task_fields_response_json_projected`] over a caller-hydrated `row` and,
+/// when supplied, a caller-owned status index (for example a list page's
+/// `status_by_id`). With a status override no per-row status-index query
+/// runs; without one the bounded [`task_reference_status_index`] is computed
+/// once for the whole projection, not per field. With no row, sidecars are
+/// read from the store exactly as the unhydrated projection reads them.
+pub(crate) fn task_fields_response_json_projected_hydrated(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    row: Option<&TaskRow>,
+    fields: &[String],
+    keyed_single: bool,
+    status_override: Option<&BTreeMap<String, TaskStatus>>,
+) -> Result<Value, OrbitError> {
+    let computed_status;
+    let status_by_id: Option<&BTreeMap<String, TaskStatus>> = if fields
         .iter()
         .any(|field| matches!(field.as_str(), "resolved_dependencies" | "relations"))
     {
-        Some(task_reference_status_index(runtime, task)?)
+        match status_override {
+            Some(index) => Some(index),
+            None => {
+                computed_status = task_reference_status_index(runtime, task)?;
+                Some(&computed_status)
+            }
+        }
     } else {
-        None
+        // Pilot warnings still consult the index when one is supplied.
+        status_override
     };
     if fields.len() == 1 && !keyed_single {
-        return task_show_field_json(runtime, task, &fields[0], status_by_id.as_ref());
+        return task_show_field_json_with_row(runtime, task, row, &fields[0], status_by_id);
     }
     let mut object = Map::new();
     for field in fields {
         object.insert(
             field.clone(),
-            task_show_field_json(runtime, task, field, status_by_id.as_ref())?,
+            task_show_field_json_with_row(runtime, task, row, field, status_by_id)?,
         );
     }
     Ok(Value::Object(object))

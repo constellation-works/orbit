@@ -5,6 +5,7 @@ use orbit_types::task::{ArtifactPresentation, Task, TaskArtifact, artifact_prese
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
+use crate::application::task::task_fields_response_json_projected_hydrated;
 use crate::application::task::{
     TaskLintReport, TaskRow, task_fields_response_json_projected, task_record_json,
     task_reference_status_index, task_show_json,
@@ -38,6 +39,24 @@ pub(super) fn task_fields_to_json(
     keyed_single: bool,
 ) -> Result<Value, OrbitError> {
     task_fields_response_json_projected(runtime, task, fields, keyed_single)
+}
+
+/// [`task_fields_to_json`] over the row `orbit.task.show` already hydrated,
+/// so its sidecar fields do not re-read the store.
+pub(super) fn task_fields_to_json_from_row(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    fields: &[String],
+    keyed_single: bool,
+) -> Result<Value, OrbitError> {
+    task_fields_response_json_projected_hydrated(
+        runtime,
+        &row.task,
+        Some(row),
+        fields,
+        keyed_single,
+        None,
+    )
 }
 
 pub(super) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {

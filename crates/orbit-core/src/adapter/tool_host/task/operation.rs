@@ -26,7 +26,7 @@ use super::super::input::{
     parse_optional_task_origin, parse_task_priority, parse_task_status, parse_task_type,
 };
 use super::super::json::{
-    serialize_error, serialize_task_lint_report, serialize_task_show, task_fields_to_json,
+    serialize_error, serialize_task_lint_report, serialize_task_show, task_fields_to_json_from_row,
 };
 use super::write::{TaskWriteOutput, write_response_fields};
 
@@ -568,7 +568,14 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                         ));
                     }
                 };
-                project_listed_task(runtime, &row.task, &fields.fields, readout, &mut warnings)?
+                project_listed_task(
+                    runtime,
+                    &row,
+                    &fields.fields,
+                    readout,
+                    &status_by_id,
+                    &mut warnings,
+                )?
             }
         };
         tasks.push(value);
@@ -598,11 +605,13 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
 /// were asked for.
 fn project_listed_task(
     runtime: &OrbitRuntime,
-    task: &Task,
+    row: &TaskRow,
     fields: &[String],
     os_readout: &TaskOsReadout,
+    status_by_id: &std::collections::BTreeMap<String, orbit_types::task::TaskStatus>,
     warnings: &mut Vec<String>,
 ) -> Result<Value, OrbitError> {
+    let task = &row.task;
     let mut projected = Map::new();
     for field in fields {
         projected.insert(
@@ -614,7 +623,7 @@ fn project_listed_task(
                     .placement_wait(task)
                     .map_or(Value::Null, Value::String)
             } else {
-                task_listing_field_json(runtime, task, field, warnings)?
+                task_listing_field_json(runtime, row, field, status_by_id, warnings)?
             },
         );
     }
@@ -736,9 +745,9 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     let row = show_task_row(runtime, &id)?;
     match fields {
         Some(projection) => {
-            let projected = task_fields_to_json(
+            let projected = task_fields_to_json_from_row(
                 runtime,
-                &row.task,
+                &row,
                 &projection.fields,
                 projection.keyed_single,
             )?;
