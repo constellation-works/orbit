@@ -16,8 +16,11 @@ evidence_output=""
 # because `--all-targets` lints examples and `--tests` does not. This repo has
 # no benches. Dependencies keep the configured sccache rustc wrapper; Cargo
 # chains it in front of clippy-driver for workspace members. The default keeps
-# the per-package listing, without that lint, for callers whose `-p` artifacts
-# are already warm (the macOS job, local runs without --workspace-build).
+# the per-invocation listing, without that lint, for callers whose artifacts
+# are already warm (the macOS job, local runs without --workspace-build): it
+# forwards every `-p` on the workflow line, including the macOS job's
+# `-p orbit-cli` feature anchor, so the listing builds under the same
+# feature resolution as the job.
 # [DANI-10428]
 # --packages CRATE,... (with --workspace-build) builds only those crates, the
 # pull-request test build of the affected crates, and lists only the filters
@@ -138,6 +141,11 @@ class FilteredTest(NamedTuple):
     """One workflow `cargo test` step, reduced to what decides its test set."""
 
     package: str
+    # Every `-p` selection on the line, in order. The first names the package
+    # whose tests the filter selects; later ones (the macOS job's orbit-cli
+    # feature anchor) only unify the feature resolution, and the target
+    # selectors keep their tests out of the run.
+    packages: list[str]
     test_filter: str
     darwin_only: bool
     # Cargo target selectors (`--test <name>`, `--lib`, `--bins`, ...) that
@@ -209,7 +217,7 @@ def filtered_cargo_tests() -> list[FilteredTest]:
             separator = len(tokens)
 
         cargo_args = tokens[cargo_index + 2:separator]
-        package = None
+        packages: list[str] = []
         selectors: list[str] = []
         positional: list[str] = []
         index = 0
@@ -237,15 +245,16 @@ def filtered_cargo_tests() -> list[FilteredTest]:
             if value is None:
                 continue
             if option in ("-p", "--package"):
-                package = package or value
+                if value not in packages:
+                    packages.append(value)
             elif option in CARGO_NAMED_SELECTORS:
                 selectors += [option, value]
 
-        if package is None or not positional:
+        if not packages or not positional:
             continue
 
         commands.append(FilteredTest(
-            package, positional[0], darwin_only, selectors,
+            packages[0], packages, positional[0], darwin_only, selectors,
             libtest_filter_flags(tokens[separator + 1:]),
         ))
 
@@ -383,7 +392,9 @@ def binary_matches_selectors(binary: TestBinary, selectors: list[str]) -> bool:
 def list_filtered_tests(step: FilteredTest) -> str | None:
     if not workspace_build:
         return run_listing(
-            ["cargo", "test", "-p", step.package, "--locked", *step.selectors, step.test_filter,
+            ["cargo", "test",
+             *[argument for name in step.packages for argument in ("-p", name)],
+             "--locked", *step.selectors, step.test_filter,
              "--", "--list", *step.libtest_flags],
             f"filtered cargo test failed for {step.describe()!r}",
         )
