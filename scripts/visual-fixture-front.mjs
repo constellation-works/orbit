@@ -589,6 +589,137 @@ function backendIdentity(argv0) {
   };
 }
 
+/// Normalise `seed.hosts` to the `/api/hosts` HostRow shape the dashboard
+/// reads (crates/orbit-cmd `HostRow`). Only remote rows may be declared;
+/// the serving host's own row always comes from the backend (or the
+/// synthesised fallback in `serveFixtureHosts`). Invalid rows fail
+/// readiness instead of rendering a half-shaped picker.
+function fixtureHostRows(seed) {
+  const rows = seed.hosts ?? [];
+  if (!Array.isArray(rows)) fail('seed.hosts must be an array');
+  const names = new Set();
+  const ids = new Set();
+  return rows.map((row, index) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      fail(`seed.hosts[${index}] must be an object`);
+    }
+    if (row.local) fail(`seed.hosts[${index}] must be a remote host (local is the serving host)`);
+    for (const key of ['name', 'machine_id']) {
+      if (typeof row[key] !== 'string' || !row[key].trim() || /[\t\r\n]/.test(row[key])) {
+        fail(`seed.hosts[${index}].${key} must be a non-empty single-line string`);
+      }
+    }
+    const nameKey = row.name.toLowerCase();
+    if (names.has(nameKey) || ids.has(row.machine_id)) {
+      fail(`seed.hosts[${index}] duplicates a declared host name or machine_id`);
+    }
+    names.add(nameKey);
+    ids.add(row.machine_id);
+    return {
+      name: row.name,
+      machine_id: row.machine_id,
+      ssh: typeof row.ssh === 'string' ? row.ssh : null,
+      task_prefix: typeof row.task_prefix === 'string' ? row.task_prefix : null,
+      local: false,
+      legacy: false,
+      reachable: typeof row.reachable === 'boolean' ? row.reachable : null,
+      error: row.error && typeof row.error === 'object' ? row.error : null,
+      binary_version: typeof row.binary_version === 'string' ? row.binary_version : null,
+      protocol_fingerprint: typeof row.protocol_fingerprint === 'string' ? row.protocol_fingerprint : null,
+      host_os: typeof row.host_os === 'string' ? row.host_os : null,
+      skew: row.skew === true,
+      skew_fields: Array.isArray(row.skew_fields) ? row.skew_fields.filter((f) => typeof f === 'string') : [],
+      workspaces: Array.isArray(row.workspaces) ? row.workspaces : [],
+    };
+  });
+}
+
+function fetchUpstreamBody(upstream, pathname) {
+  const resolved = resolveUpstreamPath(upstream, pathname);
+  if (!resolved || resolved.error) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let request;
+    try {
+      request = confinedDispatch(upstream, resolved.target, 'GET', { host: upstream.host });
+    } catch {
+      resolve(null);
+      return;
+    }
+    request.on('response', (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', (chunk) => {
+        size += chunk.length;
+        if (size <= 1024 * 1024) chunks.push(chunk);
+      });
+      response.on('end', () => {
+        resolve(response.statusCode === 200 ? Buffer.concat(chunks).toString('utf8') : null);
+      });
+      response.on('error', () => resolve(null));
+    });
+    request.setTimeout(2000, () => request.destroy(new Error('timeout')));
+    request.on('error', () => resolve(null));
+    request.end();
+  });
+}
+
+function sendJson(res, value) {
+  const body = Buffer.from(JSON.stringify(value));
+  res.writeHead(200, {
+    'content-type': 'application/json',
+    'content-length': body.length,
+    'cache-control': 'no-cache',
+    'x-content-type-options': 'nosniff',
+  });
+  res.end(body);
+}
+
+/// GET /api/hosts for a seed declaring remote hosts: the backend's own
+/// list (fetched with probe=false, so no seeded remote is ever probed over
+/// SSH) with the declared remotes appended. When the backend cannot give
+/// a JSON list (the stub backend in the front's own tests), a synthesised
+/// serving-host row stands in so the picker still renders. Every other
+/// host route (show, connection, mutations) keeps proxying unchanged.
+async function serveFixtureHosts(res, upstream, fixtureHosts) {
+  let payload = null;
+  const raw = await fetchUpstreamBody(upstream, '/api/hosts?probe=false');
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.hosts)) payload = parsed;
+    } catch {
+      payload = null;
+    }
+  }
+  if (!payload) {
+    payload = {
+      host_file: 'hosts.toml',
+      legacy: false,
+      hosts: [{
+        name: 'visual-fixture', machine_id: 'hm_visual_fixture', ssh: null,
+        task_prefix: 'VIS', local: true, legacy: false, reachable: true,
+        error: null, binary_version: null, protocol_fingerprint: null,
+        host_os: null, skew: false, skew_fields: [], workspaces: [],
+      }],
+      generation: 0,
+      load_error: null,
+      host_edit: { authorized: false, reason: 'fixture host rows are read-only' },
+    };
+  }
+  const knownNames = new Set(payload.hosts.map((row) => String(row.name || '').toLowerCase()));
+  const knownIds = new Set(payload.hosts.map((row) => row.machine_id));
+  payload.hosts = [
+    ...payload.hosts,
+    ...fixtureHosts.filter((row) => !knownNames.has(row.name.toLowerCase()) && !knownIds.has(row.machine_id)),
+  ];
+  if (!('generation' in payload)) payload.generation = 0;
+  if (!('load_error' in payload)) payload.load_error = null;
+  if (!('host_edit' in payload)) {
+    payload.host_edit = { authorized: false, reason: 'fixture host rows are read-only' };
+  }
+  sendJson(res, payload);
+}
+
 async function main() {
   const repo = requireEnv('ORBIT_FIXTURE_REPO');
   let loaded;
@@ -609,13 +740,16 @@ async function main() {
   const provenancePath = requireEnv('ORBIT_FIXTURE_PROVENANCE');
   const launcher = process.env.ORBIT_FIXTURE_LAUNCHER || '';
   let seed = {};
-  if (overlay === 'experiment' || overlay === 'scorecard') {
+  if (process.env.ORBIT_FIXTURE_SEED) {
     try {
       seed = JSON.parse(fs.readFileSync(requireEnv('ORBIT_FIXTURE_SEED'), 'utf8'));
     } catch (error) {
       fail(`fixture seed unreadable: ${error.message}`);
     }
   }
+  // Fixture-only remote host rows (`seed.hosts`): served by this front on
+  // GET /api/hosts below, never by the backend or any production path.
+  const fixtureHosts = fixtureHostRows(seed);
 
   let sourceRevision = '';
   let sourceDirty = false;
@@ -679,6 +813,13 @@ async function main() {
         return;
       }
       const pathname = parsed.pathname;
+      if (req.method === 'GET' && pathname === '/api/hosts' && fixtureHosts.length > 0) {
+        serveFixtureHosts(res, upstream, fixtureHosts).catch((error) => {
+          if (!res.headersSent) sendPlain(res, 500, `fixture hosts unreadable: ${error.message}`);
+          else res.end();
+        });
+        return;
+      }
       // Ranking routes: the implementers scorecard is the seed's `scorecard`;
       // reviewers and pilots come from the seed's `scorecards` map.
       const rankingRole = req.method === 'GET' && overlay === 'scorecard'

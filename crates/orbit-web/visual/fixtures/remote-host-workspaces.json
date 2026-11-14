@@ -1,0 +1,30 @@
+{
+  "fixture": "remote-host-workspaces",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [
+    { "title": "Review the remote host picker states", "complexity": "medium", "status": "proposed" },
+    { "title": "Check the phone rail workspace column", "complexity": "low", "status": "in-progress" }
+  ],
+  "hosts": [
+    {
+      "name": "fixture-remote",
+      "machine_id": "hm_fixture_remote",
+      "ssh": "fixture-remote.invalid",
+      "task_prefix": "REM",
+      "reachable": false,
+      "error": { "code": "unreachable_destination", "message": "fixture remote is intentionally unreachable" },
+      "binary_version": "0.49.0",
+      "protocol_fingerprint": null,
+      "host_os": "linux",
+      "skew": false,
+      "skew_fields": [],
+      "workspaces": [
+        { "id": "ws_fixture_remote", "name": "remote-workspace", "role": "owner", "owner_machine_id": null, "status": "active" }
+      ]
+    }
+  ],
+  "workspaces": [
+    { "name": "work" },
+    { "name": "second-workspace" }
+  ]
+}
