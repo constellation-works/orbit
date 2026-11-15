@@ -339,7 +339,13 @@ prints separate provenance: source revision, renderer hash, served-asset hash, a
 file hash and version. Those identities are not compared, and nothing in the record attests
 that the static assets and the backend are the same build. A JSON file in the fixture scratch
 directory is the full record (`static_backend_identity_compared` is false). Before readiness,
-the fixture probes route presence with `OPTIONS`: concrete `/api` paths from the checkout dashboard, plus each checkout route that can serve a dashboard template. A trailing-slash prefix is not a request, and a query suffix is not a path segment.
+the fixture probes route presence with `OPTIONS`: concrete `/api` paths from the
+checkout dashboard, plus each checkout route that can serve a dashboard template.
+`taskMutationPath` suffixes are read from its checkout callers, including literal
+assignments and dynamic action/artifact segments, before matching templates to
+routes. Unresolved helper call shapes refuse readiness; the route table alone
+does not make an unused backend action a candidate request. A trailing-slash
+prefix is not a request, and a query suffix is not a path segment.
 If that check is not established, readiness is refused. Payload compatibility is outside the
 check and is not attested. `visual/capture.json` remains system-written. Its `commit` is still
 the candidate revision (§4.4): the pixels come from that checkout's assets, not from a claim

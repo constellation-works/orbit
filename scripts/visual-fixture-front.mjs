@@ -10,7 +10,8 @@
 // yet, so a capped backend stream cannot outlive the client. Readiness is
 // refused when a declared asset is missing or unreadable, or when OPTIONS probes do not
 // establish that the backend has each /api path the checkout dashboard can request.
-// Template segments are filled from the checkout route table. Payload
+// Task helper suffixes come from checkout callers and literal assignments;
+// template segments are filled from the checkout route table. Payload
 // schemas are not compared. Provenance records the
 // renderer, source revision and asset hashes separately from the backend
 // and does not claim those identities match.
@@ -92,7 +93,8 @@ function extractLiterals(source) {
         if (source[cursor] === '`') break;
         if (source[cursor] === '$' && source[cursor + 1] === '{') {
           // A substitution that is its own path segment is a parameter.
-          // One glued on, such as `?refresh=true`, is not part of the path.
+          // Glued query substitutions do not extend the path. Composed task
+          // helper suffixes are resolved from their callers separately below.
           if (value.endsWith('/')) value += PROBE_SEGMENT;
           let depth = 1;
           cursor += 2;
@@ -214,6 +216,41 @@ function instantiateTemplate(templatePath, routes, literals) {
   return emitted;
 }
 
+// taskWorkspacePath/withWorkspace add queries and hostPath wraps a complete
+// path in the existing /api/on/{host}/{*path} route. taskMutationPath instead
+// appends path components: discover its callers before instantiating routes.
+// This is a deliberately limited static reader, not a JavaScript evaluator.
+// Refuse unfamiliar call shapes rather than silently dropping their suffix.
+function taskMutationTemplates(sources) {
+  const declaration = sources.join('\n').match(/function\s+taskMutationPath\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+  const prefixes = declaration ? extractLiterals(declaration[1]).filter((value) => value.startsWith('/api/')) : [];
+  const literalPattern = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`;
+  const argsPattern = new RegExp(`^\\s*[\\w$]+\\s*(?:,\\s*(${literalPattern}|[\\w$]+))?\\s*\\)`);
+  const templates = [];
+  for (const source of sources) {
+    for (const call of source.matchAll(/\btaskMutationPath\s*\(/g)) {
+      if (/function\s+$/.test(source.slice(0, call.index))) continue;
+      if (prefixes.length !== 1) throw new Error('cannot resolve taskMutationPath definition');
+      const args = source.slice(call.index + call[0].length).match(argsPattern);
+      if (!args) throw new Error('cannot resolve taskMutationPath arguments');
+      const argument = args[1];
+      let suffixes = argument ? extractLiterals(argument) : [''];
+      if (argument && suffixes.length === 0) {
+        const identifier = argument.replace(/[$]/g, '\\$&');
+        const assignments = new RegExp(`\\b${identifier}\\s*=\\s*(${literalPattern})`, 'g');
+        suffixes = [...source.matchAll(assignments)].flatMap((match) => extractLiterals(match[1]));
+      }
+      if (suffixes.length === 0) throw new Error(`cannot resolve taskMutationPath suffix ${argument}`);
+      for (const suffix of suffixes) {
+        const composed = normalizeApiPath(prefixes[0] + suffix);
+        if (!composed) throw new Error(`cannot resolve taskMutationPath suffix ${argument}`);
+        templates.push(composed);
+      }
+    }
+  }
+  return templates;
+}
+
 /**
  * Concrete /api paths the checkout dashboard can request.
  * A trailing-slash prefix is not a request. A template segment is probed as
@@ -224,8 +261,8 @@ export function candidateApiPaths(dashboardDir) {
   const found = new Set();
   const templates = [];
   const literals = new Set();
-  for (const file of firstPartyDashboardFiles(dashboardDir)) {
-    const source = fs.readFileSync(file, 'utf8');
+  const sources = firstPartyDashboardFiles(dashboardDir).map((file) => fs.readFileSync(file, 'utf8'));
+  for (const source of sources) {
     for (const literal of extractLiterals(source)) {
       if (/^[A-Za-z0-9._~-]+$/.test(literal)) literals.add(literal);
       const pattern = /\/api\/[A-Za-z0-9._~/-]+/g;
@@ -238,6 +275,7 @@ export function candidateApiPaths(dashboardDir) {
       }
     }
   }
+  templates.push(...taskMutationTemplates(sources));
   const routes = checkoutApiRoutes(dashboardDir);
   for (const template of templates) {
     const concrete = instantiateTemplate(template, routes, literals);
