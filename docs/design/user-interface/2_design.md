@@ -483,9 +483,11 @@ fleet panel. The host-resource detail's **Open Tasks dock** link leads to the Ta
 
 Both cards project `GET /api/workflows/auto/readiness`. The status header
 carries the phase (Idle, Draining, Winding down, Pull drain or Read-only) and
-the live window's deadline. Its figures count running and admitted workers,
-plus approved and held proposals for an approving window. Workspace leaf
-occupancy has a slot meter (continuous past 24, hatched past its limit), an
+the live window's deadline. The live window shows live pilots, recovery agents
+and reviewers from readiness `live_agents` (the row is omitted when that field
+is absent), followed by the per-reason hold breakdown for an approving window.
+Workspace leaf occupancy has a slot meter (continuous past 24, hatched past its
+limit), an
 accessible used/ceiling label, a binding-constraint explanation and the
 per-pipeline split. Throttle, provider, crew and pilot holds remain visible.
 Forecast peaks use compact meters against admission thresholds; their tooltips
