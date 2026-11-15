@@ -73,6 +73,16 @@ Verify the seams against the current checkout before editing. These are the auth
 7. State MCP and shell-tool reach precisely. If the provider has no MCP client, do not add one by implication: the execution envelope must direct the agent to the `orbit` binary supplied on its `PATH`, and tests must retain whatever provider shell capability this route needs. Tool grants and caller-role gates remain enforced by `orbit tool run`.
 8. Declare `host_os` when the executor cannot run on every Orbit host. It sits on the asset beside `sandbox` and is a non-empty subset of `linux`, `macos` and `windows`. Omit it to leave the executor unrestricted; an empty list or an unknown name is refused at load and the error names the asset. Admission intersects the declaration with the task's `os:` tags and does not change what those tags mean. An explicit crew this host cannot run waits for a host that can; it is not redrawn. Admission draws and `workflow.default_crew` skip a crew this host's OS excludes; creation-time pool draws keep one a host serving the workspace can run (a registered host with a claim in this workspace in the last seven days), as [CONFIG.md](../CONFIG.md) describes. Copy a new shipped declaration onto an installed default only when that install still omits `host_os`. Muse declares no `host_os`: Muse runs on macOS and Linux, so it stays unrestricted and its sandbox marker is translated per host at seed time.
 
+On a nonzero CLI exit, completion diagnostics inspect the retained raw stdout
+protocol before reducing it to assistant text. Known authentication, quota,
+usage-limit, capacity and refusal frames keep their typed handling. Other
+provider-owned error prose (including Codex `error` and `turn.failed`) is
+bounded and redacted under `provider error:`, ahead of the stderr tail. It is
+diagnostic context and does not acquire classification from quoted failure
+markers. Assistant/tool text and Orbit response envelopes are not provider
+error evidence. A startup banner alone therefore cannot hide an error frame
+that the capture retained.
+
 ### Worked configuration: Antigravity
 
 This existing lane demonstrates the separation between executor identity and inference model. It is a configuration example, not an instruction to install or log into Antigravity during development.

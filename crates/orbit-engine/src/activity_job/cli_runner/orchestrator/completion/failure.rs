@@ -10,7 +10,7 @@ use super::super::super::spawn_diagnostics::{
 };
 use super::super::super::supervisor::CapturedOutput;
 use super::super::limit::reported_limit;
-use super::frames::provider_reported;
+use super::frames;
 use crate::activity_job::dispatcher::ResolvedSandbox;
 use orbit_agent::{
     DeclaredResponseFailure, antigravity_background_task_diagnostic,
@@ -21,8 +21,9 @@ use orbit_agent::{
 use orbit_common::security::redaction::PatternRedactor;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use orbit_types::workflow::{
-    CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
-    TRANSIENT_FAILURE_MARKER, provider_failure_text, with_failed_account,
+    CLI_PROVIDER_ERROR_SEPARATOR, CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass,
+    ProviderLimitFailure, STALLED_MARKER, TRANSIENT_FAILURE_MARKER, provider_failure_text,
+    with_failed_account,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -311,7 +312,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 provider.as_str(),
                 &diagnostic,
             ))
-        } else if let Some(limit) = provider_reported(
+        } else if let Some(limit) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -321,7 +322,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // A usage limit keeps its reported reset even when another
             // stderr line or provider frame also carries a billing error.
             Some(limit_failure(&limit, &format!("{diagnostic}: ")))
-        } else if let Some(quota) = provider_reported(
+        } else if let Some(quota) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -339,7 +340,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     bounded_diagnostic(&quota, redaction)
                 ),
             ))
-        } else if let Some(capacity) = provider_reported(
+        } else if let Some(capacity) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -359,7 +360,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     bounded_diagnostic(&capacity, redaction)
                 ),
             ))
-        } else if let Some(refusal) = provider_reported(
+        } else if let Some(refusal) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -379,6 +380,21 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 ),
             ))
         } else if generic_diagnostic || result_terminal_diagnostic {
+            // Unknown provider-owned errors are evidence, not a new failure
+            // class. Keep their prose ahead of startup-only stderr without
+            // allowing quoted markers to change existing accounting.
+            let diagnostic = if generic_diagnostic {
+                frames::provider_failure_diagnostic(provider.as_str(), stdout.protocol_bytes())
+                    .map(|cause| {
+                        format!(
+                            "{diagnostic}{CLI_PROVIDER_ERROR_SEPARATOR}{}",
+                            bounded_diagnostic(&cause, redaction)
+                        )
+                    })
+                    .unwrap_or(diagnostic)
+            } else {
+                diagnostic
+            };
             // Context only: classify the unchanged exit message, never words,
             // typed markers or check-repair phrases a provider happens to
             // quote on stderr (`failure_classification_text`).

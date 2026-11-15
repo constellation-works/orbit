@@ -40,6 +40,36 @@ pub(super) fn provider_reported_failure(provider: &str, stdout: &[u8]) -> bool {
     stdout_frames(stdout).any(|frame| provider_failure(provider, &frame).is_some())
 }
 
+/// The last provider-owned failure's prose when no typed diagnostic matched.
+/// Generic errors (notably Codex `error` / `turn.failed`) must not disappear
+/// just because their message is outside the known auth/limit vocabulary.
+pub(super) fn provider_failure_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
+    stdout_frames(stdout)
+        .filter_map(|frame| {
+            let failure = provider_failure(provider, &frame)?;
+            let sources = [Some(failure), failure.get("error")];
+            let cause = failure
+                .as_str()
+                .into_iter()
+                .chain(sources.into_iter().flatten().flat_map(|source| {
+                    ["message", "result", "text", "error"]
+                        .into_iter()
+                        .filter_map(|key| source.get(key).and_then(Value::as_str))
+                }))
+                .chain(
+                    failure
+                        .get("errors")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+                .find(|text| !text.trim().is_empty())?;
+            Some(format!("{provider}: {cause}"))
+        })
+        .last()
+}
+
 /// Claude's exact formatting-only terminal, never quoted assistant/tool content.
 /// Unlike diagnostic frame readers, this requires a complete JSON stream with
 /// the terminal as its last value and no earlier provider failure or result.
