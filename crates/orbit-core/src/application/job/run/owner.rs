@@ -96,20 +96,23 @@ pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str>
     }
     match classify_run_owner(run) {
         OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
-        OwnerIdentity::Verified => {
-            // SAFETY: `getpgrp` takes no pointer arguments and only reads the
-            // calling process's group id, so it cannot invalidate memory or
-            // deliver a signal. The raw value is compared directly because the
-            // safe `ancestry::current_process_group` helper maps small pgids
-            // to `None`, which would change this equality check.
-            let this_group = unsafe { libc::getpgrp() };
-            match owner_process_group_id(pid) {
-                Some(pgid) if pgid as u32 == pid && pgid == this_group => {
+        OwnerIdentity::Verified => match owner_process_group_id(pid) {
+            Some(pgid) if pgid as u32 == pid => {
+                // SAFETY: `getpgrp` takes no pointer arguments and only reads
+                // the calling process's group id, so it cannot invalidate
+                // memory or deliver a signal. The raw value is compared
+                // directly because the safe `ancestry::current_process_group`
+                // helper maps small pgids to `None`, which would change this
+                // equality check.
+                let this_group = unsafe { libc::getpgrp() };
+                if pgid == this_group {
                     Some("its worker shares this process's group")
+                } else {
+                    None
                 }
-                _ => None,
             }
-        }
+            _ => None,
+        },
         OwnerIdentity::LegacyLiveUnverified | OwnerIdentity::ProbeUnavailable => {
             Some("its worker's process identity cannot be verified")
         }
