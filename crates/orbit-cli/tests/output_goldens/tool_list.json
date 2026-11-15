@@ -1962,7 +1962,7 @@
       },
       {
         "name": "record",
-        "description": "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 note characters. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
+        "description": "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 600 note characters, where notes describe only this cycle's delta. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
         "param_type": "object",
         "required": true
       },
