@@ -7,11 +7,11 @@ status: Draft
 feature: automation-triggers
 doc_role: decisions
 type: design
-summary: Standing rules for automation triggers; an operator's `no-pilot` tag skips ordinary pilot holds and leaves a current host-operational hold in place.
+summary: Standing rules for automation triggers; an operator's `no-pilot` tag skips ordinary pilot holds and leaves a current host-operational hold in place, and `readiness-waived` waives backlog readiness gaps.
 tags: [automation-triggers, pilot]
-paths: ["crates/orbit-core/src/application/task/pilot/**"]
+paths: ["crates/orbit-core/src/application/task/pilot/**", "crates/orbit-core/src/application/task/readiness_waiver.rs"]
 related_features: [routines, user-interface]
-related_artifacts: [ORB-21238, ORB-21767]
+related_artifacts: [ORB-21238, ORB-21767, ORB-25084]
 ---
 
 # Automation Triggers — Decisions
@@ -57,10 +57,35 @@ Preserve that admission protection. Offer Skip pilot only for a hold the tag rel
 - A task tagged `no-pilot` can still be held on a current host-operational finding. Removing the tag does not clear that hold either.
 - Cost: an operator who expected the old Skip pilot button to dispatch this hold must use re-scope or an operator decision instead. The button for stale, operator-validation, native-OS, duplicate and already-landed holds is unchanged.
 
+## `readiness-waived` is an operator waiver of readiness gaps
+
+**Recorded:** 2026-11 · [ORB-25084]
+
+### Context
+
+A backlog task with no `context_files` waits for the task pilot and then runs only alone (`awaiting_footprint`, `awaiting_exclusive_slot`), and one with unassessed complexity is withheld. The only fixes were editing the task, a pilot run, or the `no-diff-expected` tag, which misstates a task that does edit files. The dashboard also put the footprint wait under "Waiting on locks · Held by: Lock holder unavailable", although no task holds a lock.
+
+### Decision
+
+An operator adds the `readiness-waived` tag, from Readiness (**Waive readiness**) or `orbit task update --tag`, to waive every backlog readiness gap: missing context files and unassessed complexity. The waivable set is what `readiness_gaps` reports at the backlog stage; the readout lists it as `readiness.waivable`, and a waived gap stays listed as advisory with `waived: true`. The proposed stage is not waivable: approval still needs a prepared task.
+
+- File locks: a waived task with no context files holds no file lock and reserves nothing. It does not wait for a pilot or an exclusive slot, does not reserve the tree, and does not hold the tree while it runs. In its wave it counts as editing work: it respects a task that holds or reserves the tree, and an exclusive waiter behind it waits for it. Other work may run beside it, and may conflict with it; the operator accepts that.
+- Complexity: the task is admitted with `unassessed` complexity, and its crew resolves from the configured crew or the workspace default.
+- Not waivable: host OS, `requires_labels`, the browser kit for `ui` work and a human-crew assignment, the set [ORB-25082] keeps for explicit ship; also dependencies, real lock holders, pilot holds, schedules and `no-drain`. None of them is a readiness gap, so the tag never reaches them.
+- Authority: only an operator adds the tag; an agent's write is refused whole and filing a task with it is refused. Removing it is open to every writer. History records `readiness_waived` (actor and the gaps waived) and `readiness_waiver_removed` (actor and the gaps that apply again).
+- The dashboard names the empty-context waits as `awaiting footprint` and `awaiting exclusive slot` in "Waiting, other", not as lock waits.
+
+### Consequences
+
+- A tag carries the waiver, as `no-pilot` carries the pilot skip, so no task field or store migration is needed. The unknown-footprint rule in the drain and in forecast reads one predicate, `footprint_rule_applies`; the complexity gate and the readiness readout read `readiness_gaps`, which applies the same waiver.
+- Cost: a waived task with no context files can edit files another running task edits; the drain no longer protects against that conflict.
+
 ## Task References
 
 - [ORB-21238] — made the `no-pilot` tag an operator skip of stale pilot holds, with a Readiness "Skip pilot" button.
 - [ORB-21767] — kept a current host-operational hold when `no-pilot` is added.
 - [ORB-24879] — stopped the dashboard from offering Skip pilot for that hold, and from saying dispatch proceeds while it remains.
+- [ORB-25082] — explicit ship overriding drain readiness gates while keeping host-capability and human-crew refusals.
+- [ORB-25084] — added the operator's `readiness-waived` waiver of backlog readiness gaps.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

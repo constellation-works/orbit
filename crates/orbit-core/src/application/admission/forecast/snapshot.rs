@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::{Task, TaskStatus, declares_no_footprint};
+use orbit_types::task::{Task, TaskStatus, footprint_rule_applies};
 
 use crate::OrbitRuntime;
 use crate::application::admission::backlog_exclusion::{
@@ -142,7 +142,7 @@ impl OrbitRuntime {
 
         let no_footprint: Vec<bool> = tasks
             .iter()
-            .map(|task| declares_no_footprint(&task.tags, &task.context_files))
+            .map(|task| footprint_rule_applies(&task.tags, &task.context_files))
             .collect();
         let waiting = tasks
             .iter()

@@ -139,9 +139,9 @@ pub use os_requirement::{
 };
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use readiness::{
-    ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage, TaskReadiness,
-    backlog_footprint_warning, declares_no_footprint, readiness_gaps, task_readiness,
-    task_readiness_json,
+    READINESS_WAIVED_TAG, ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage,
+    TaskReadiness, backlog_footprint_warning, declares_no_footprint, footprint_rule_applies,
+    readiness_gaps, task_readiness, task_readiness_json, waives_readiness,
 };
 pub use receipt::CommentReceipt;
 pub use regression::{

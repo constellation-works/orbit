@@ -575,7 +575,8 @@ fn write_field(value: &Value, field: &str, text: &mut String) -> Result<(), Orbi
 }
 
 /// The human readiness readout of a `proposed` or `backlog` task: `ready` or
-/// `not ready`, then one indented line per gap with its fix. `None` for any
+/// `not ready`, then one indented line per gap with its fix, marking a gap an
+/// operator waived. `None` for any
 /// other status, whose record carries no readiness.
 fn readiness_text(readiness: &Value) -> Option<String> {
     let ready = readiness.get("ready")?.as_bool()?;
@@ -586,9 +587,14 @@ fn readiness_text(readiness: &Value) -> Option<String> {
         .map_or(&[][..], Vec::as_slice)
     {
         let part = |key: &str| gap.get(key).and_then(Value::as_str).unwrap_or_default();
+        let waived = if gap.get("waived").and_then(Value::as_bool) == Some(true) {
+            ", waived"
+        } else {
+            ""
+        };
         let _ = write!(
             text,
-            "\n  - {} [{}]: {} Fix: {}.",
+            "\n  - {} [{}{waived}]: {} Fix: {}.",
             part("code"),
             part("severity"),
             part("message"),

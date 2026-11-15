@@ -152,7 +152,7 @@ whose `context_files` overlap cannot run at once;
 | Reason | Meaning | What to do |
 |---|---|---|
 | `surface_reserved` | A critical or high-priority task ahead in the queue is waiting on file locks this task overlaps. | Nothing. It starts once that task starts. |
-| `awaiting_footprint`, `awaiting_exclusive_slot` | The task has no `context_files`, so it holds no lock. The drain waits for the pilot to fill them in, then runs the task alone. | File such tasks as `proposed` so the pilot prepares them first. |
+| `awaiting_footprint`, `awaiting_exclusive_slot` | The task has no `context_files`, so it holds no lock. The drain waits for the pilot to fill them in, then runs the task alone. | File such tasks as `proposed` so the pilot prepares them first, or have an operator [waive readiness](/how-to/dashboard/#waive-readiness) to let the drain run it beside other work. |
 | `pilot_assessment_stale` | The description or criteria changed after the last assessment. | [Repilot the task](#if-you-edit-a-piloted-task). |
 | `pilot_duplicate`, `pilot_already_landed` | The latest pilot assessment found duplicate or already-landed work. | Read the finding in the task comments, then repilot or [record a decision](#override-a-pilot-admission-hold). |
 | `native_os_required` | The criteria need native-host evidence this host cannot produce. | Route the task to a capable host, re-scope the criteria, or [record a decision](#override-a-pilot-admission-hold). |

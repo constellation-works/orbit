@@ -362,9 +362,11 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
-/* An operator's skip of a pilot-held task, under the hold it lifts, and the
-   host-operational remedy that skip cannot release. */
+/* An operator's skip of a pilot-held task, under the hold it lifts, the
+   operator's readiness waiver, and the host-operational remedy that skip
+   cannot release. */
 .readiness-skip-pilot,
+.readiness-waiver,
 .readiness-host-operational {
   --attention-fg: var(--warn-fg);
   display: flex;
