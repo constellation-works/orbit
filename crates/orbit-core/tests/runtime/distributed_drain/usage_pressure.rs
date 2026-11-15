@@ -1,7 +1,7 @@
 //! [ORB-17773] A pull follower reports per-crew weekly usage pressure
 //! from its own readings in its pull capability, and its claimed leaf
-//! carries the task's automatic crew source and complexity for the
-//! follower-side re-draw. Under `static` the follower reports no
+//! carries the task's crew source and complexity (here an explicit crew)
+//! for the follower-side re-draw. Under `static` the follower reports no
 //! pressure and pull admission is unchanged.
 
 use chrono::Duration;

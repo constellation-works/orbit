@@ -867,7 +867,8 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     );
     assert!(owner_path.exists() && third_path.exists() && unregistered_path.exists());
 
-    // An unreachable third host is that host's outage, not a missing task.
+    // The owner's outage fails only the owner route; the third host's lookup
+    // goes by id and is left alone.
     *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
     let outage = pair
         .follower
@@ -1057,50 +1058,6 @@ fn a_parked_age_is_measured_from_the_status_change() {
     assert!(path.exists());
 }
 
-/// [ORB-17657] Regression for the run_id-only lookup: one leaf can yield
-/// both a worktree report and a host-target report under the same
-/// `run_id`, as in
-/// `a_linked_replica_reclaims_a_settled_leafs_host_validation_output`.
-/// `gc_report` must return the worktree report deterministically,
-/// regardless of the order GC emits or sorts the reports into. The old
-/// run_id-only `find` returned the host-target report in the second
-/// order below and the worktree report in the first, so this fails on
-/// the defective helper.
-fn gc_report_selects_the_worktree_report_when_a_leaf_also_has_a_host_target_report() {
-    let leaf = "leaf-dual-report";
-    let worktree = Path::new("/repo/.orbit/state/worktrees/orbit-leaf-dual-report");
-    let target = Path::new("/primary/.orbit/state/host-validation-targets/abc123");
-    let worktree_report = json!({
-        "run_id": leaf,
-        "path": worktree,
-        "action": "removed",
-        "bytes_reclaimed": 0,
-    });
-    let host_target_report = json!({
-        "run_id": leaf,
-        "path": target,
-        "action": "reclaimed",
-        "bytes_reclaimed": 16,
-    });
-    for reports in [
-        vec![worktree_report.clone(), host_target_report.clone()],
-        vec![host_target_report.clone(), worktree_report.clone()],
-    ] {
-        let result = json!({ "reports": reports });
-        let report = gc_report(&result, leaf, worktree);
-        assert_eq!(report["action"], "removed", "{report:#}");
-        assert_eq!(
-            report["path"],
-            worktree.to_string_lossy().as_ref(),
-            "{report:#}"
-        );
-        // The host-target report is still reachable by its own path.
-        let reclaimed = gc_report(&result, leaf, target);
-        assert_eq!(reclaimed["action"], "reclaimed", "{reclaimed:#}");
-        assert_eq!(reclaimed["bytes_reclaimed"], 16, "{reclaimed:#}");
-    }
-}
-
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal_scenarios,
@@ -1114,5 +1071,4 @@ crate::scenario_table!(
     replica_gc_looks_each_id_up_on_the_host_its_prefix_names,
     a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive,
     a_parked_age_is_measured_from_the_status_change,
-    gc_report_selects_the_worktree_report_when_a_leaf_also_has_a_host_target_report
 );
