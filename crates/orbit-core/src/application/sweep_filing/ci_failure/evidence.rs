@@ -368,15 +368,18 @@ pub(super) fn deferred_errors(deferred: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-/// [ORB-15517] Whether every deferred gap is a run-scoped collection error,
-/// the only kind collection's sweep history counts toward degrading or
-/// escalating. A registration gap (owner lookup, missing investigation) has
-/// no such threshold, so deferring it would defer it forever.
+/// Whether every deferred gap has collection's run-scoped retry bound.
+/// The missing-jobs registration error is produced by collection and tracked
+/// in the same history; other registration errors may originate in filing and
+/// have no such bound.
 pub(super) fn deferral_is_bounded(deferred: &[Value]) -> bool {
     let errors = deferred_errors(deferred);
     !errors.is_empty()
         && errors.iter().all(|error| {
-            error.get("stage").and_then(Value::as_str) != Some("registration")
+            let missing_jobs = error["stage"] == "registration"
+                && error["operation"] == "run_view"
+                && error["message"] == "failed run returned no failed jobs";
+            (error.get("stage").and_then(Value::as_str) != Some("registration") || missing_jobs)
                 && error.get("run_id").is_some_and(|run_id| !run_id.is_null())
         })
 }

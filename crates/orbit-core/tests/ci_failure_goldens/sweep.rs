@@ -53,6 +53,91 @@ esac
 pub(crate) const JOB_NAME: &str = "Check / Clippy / Test";
 pub(crate) const FAILED_STEP: &str = "Test";
 
+#[test]
+fn missing_failed_jobs_are_held_then_escalated_or_filed_when_available() {
+    if !isolated_with_fake_gh(
+        "sweep::missing_failed_jobs_are_held_then_escalated_or_filed_when_available",
+    ) {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    workspace.push_red_run(8100, 9200, &unbindable_log());
+    let view_path = workspace.state.join("run-8100.json");
+    let complete_view = std::fs::read_to_string(&view_path).unwrap();
+    let mut empty_view: Value = serde_json::from_str(&complete_view).unwrap();
+    empty_view["jobs"] = json!([]);
+    write_json(&view_path, &empty_view);
+
+    for _ in 0..2 {
+        let (evidence, filed) = workspace.sweep();
+        assert!(
+            evidence["retryable_errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| {
+                    error["stage"] == "registration"
+                        && error["operation"] == "run_view"
+                        && error["message"] == "failed run returned no failed jobs"
+                }),
+            "{evidence:#}"
+        );
+        let filed = filed.expect("missing jobs should hold the sweep");
+        assert_eq!(filed["outcome"], "deferred", "{filed:#}");
+        assert_eq!(filed["filed_count"], 0, "{filed:#}");
+        assert!(open_sweep_tasks(&workspace.runtime).is_empty());
+    }
+    let incidents = workspace
+        .runtime
+        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .unwrap();
+    assert_eq!(incidents.affected_runs_by_class.get("deferred"), Some(&2));
+    assert_eq!(incidents.affected_runs_by_class.get("unexpected"), None);
+    let (evidence, filed) = workspace.sweep();
+    assert_eq!(
+        evidence["landing_evidence_incomplete"][0]["consecutive_sweeps"], 3,
+        "{evidence:#}"
+    );
+    let filed = filed.unwrap();
+    assert_eq!(
+        filed["evidence_incomplete"].as_array().unwrap().len(),
+        1,
+        "{filed:#}"
+    );
+    let tasks = open_sweep_tasks(&workspace.runtime);
+    assert_eq!(tasks.len(), 1);
+    assert!(
+        tasks[0]
+            .tags
+            .iter()
+            .any(|tag| tag == "ci-evidence-incomplete")
+    );
+
+    let mut recovered = Workspace::new();
+    let log = [
+        "HEAD is now at {checkout} Merge into agent-main",
+        "##[group]Run cargo test",
+        "##[endgroup]",
+        "thread 'regression' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "error: test failed",
+        "##[error]Process completed with exit code 101.",
+    ]
+    .map(|line| format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {line}\n"))
+    .concat();
+    recovered.push_red_run(8101, 9201, &log);
+    let path = recovered.state.join("run-8101.json");
+    let complete = std::fs::read_to_string(&path).unwrap();
+    let mut empty: Value = serde_json::from_str(&complete).unwrap();
+    empty["jobs"] = json!([]);
+    write_json(&path, &empty);
+    assert_eq!(recovered.sweep().1.unwrap()["outcome"], "deferred");
+    std::fs::write(path, complete).unwrap();
+    let (_, filed) = recovered.sweep();
+    let filed = filed.unwrap();
+    assert_eq!(filed["filed_count"], 1, "{filed:#}");
+}
+
 /// Run `test` in a child whose `PATH` starts with the substitute `gh`.
 /// Returns true inside that child.
 pub(crate) fn isolated_with_fake_gh(test: &str) -> bool {
