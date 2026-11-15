@@ -16,14 +16,15 @@ fails CI on any edit; changes come only from a re-sync.
 | STD-04 | 2 | Testing and verification — test design, hermetic tests, honest gates, docs as contracts, and evidence-based verification conduct | [STD-04-testing-and-verification/STD-04.md](STD-04-testing-and-verification/STD-04.md) |
 | STD-05 | 1 | Security boundaries — authority, filesystem containment, child environments, redaction, local network surfaces, supply chain and consent | [STD-05-security-boundaries/STD-05.md](STD-05-security-boundaries/STD-05.md) |
 | STD-06 | 1 | Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature | [STD-06-design-docs-and-feature-tracking/STD-06.md](STD-06-design-docs-and-feature-tracking/STD-06.md) |
-| STD-07 | 10 | UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state | [STD-07-ui-ux/STD-07.md](STD-07-ui-ux/STD-07.md) |
+| STD-07 | 11 | UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state | [STD-07-ui-ux/STD-07.md](STD-07-ui-ux/STD-07.md) |
+| STD-08 | 1 | Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, size stated at design time | [STD-08-economy/STD-08.md](STD-08-economy/STD-08.md) |
 
 Each standard is a directory. `STD-nn.md` holds its rules, where they apply and how to
 deviate: read it first. `why.md` explains each rule, `checks.md` names the gate that
 enforces it, `exemplars.md` points at worked examples in Orbit, and `CHANGELOG.md`
 records its versions.
 
-Source: the constellation umbrella `docs/standards/` at commit `0e971371c163a645ac4eaabd211981a1b44bf139`.
+Source: the constellation umbrella `docs/standards/` at commit `9261b4318ce5d60c0c6aaf3cf8129ecf1d4d6ab8`.
 
 ## Normative
 
