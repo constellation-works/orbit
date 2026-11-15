@@ -164,7 +164,9 @@ must decide what happens next, follow these steps:
 2. **Route by cause.**
    - **Transient** (host restart, provider outage, a killed worker, a forge
      refusal): resume the stopped run with `orbit job resume <run-id>` where
-     it is resumable, or requeue the task.
+     it is resumable, or requeue the task. A completion held on unreadable or
+     throttled check evidence can be resumed this way; it re-observes the
+     existing pull request and checks its head before proceeding.
    - **Defects** (findings that hold, missing work): record them as remaining
      work on the task, then return it to `backlog` and re-ship it. The next
      run resumes the kept candidate and repairs it; it does not re-implement.

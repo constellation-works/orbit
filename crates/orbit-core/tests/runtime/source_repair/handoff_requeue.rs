@@ -304,6 +304,88 @@ fn requeue_keeps_the_published_owner_refusals() {
     assert_eq!(status(&f), TaskStatus::Blocked);
 }
 
+/// A newer publication must not be silently associated with the old owner.
+fn requeue_refuses_a_newer_different_publication() {
+    for (pr, head) in [("18", "old-head"), ("17", "different-head")] {
+        let (f, _) = escalated_handoff_fixture(None, None);
+        let mut newer = f
+            .runtime
+            .insert_job_run(
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids":[f.task]})),
+                None,
+            )
+            .unwrap();
+        newer.state = JobRunState::Cancelled;
+        newer.finished_at = Some(Utc::now());
+        save_run(&f, &newer);
+        let state = orbit_types::workflow::PipelineState::new(
+            newer.run_id.clone(),
+            newer.job_id.clone(),
+            newer.input.clone().unwrap(),
+        );
+        f.runtime.write_run_state(&newer.run_id, &state).unwrap();
+        checkpoint(
+            &f,
+            &newer.run_id,
+            8,
+            "pr_open",
+            json!({"pr_number": pr, "head_sha": head}),
+        );
+        let message = refused(&f, false, "different newer publication");
+        assert!(message.contains("newer execution"), "{message}");
+    }
+}
+
+fn requeue_names_the_held_completion_resume() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    let mut newer = f
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            Utc::now(),
+            Some(json!({"task_ids":[f.task]})),
+            None,
+        )
+        .unwrap();
+    newer.retry_source_run_id = Some(f.source.run_id.clone());
+    newer.state = JobRunState::Held;
+    newer.finished_at = Some(Utc::now());
+    save_run(&f, &newer);
+    let now = Utc::now();
+    f.runtime
+        .complete_job_run_step(
+            &newer.run_id,
+            &orbit_store::contracts::JobRunStepParams {
+                step_index: 9,
+                target_type: orbit_types::workflow::JobTargetType::Activity,
+                target_id: "pr_complete".into(),
+                state: JobRunState::Held,
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: None,
+                lock_wait_ms: None,
+                agent_response_json: None,
+                error_code: Some(
+                    orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
+                        .error_code()
+                        .into(),
+                ),
+                error_message: Some("failed-job log unreadable".into()),
+            },
+        )
+        .unwrap();
+    let message = refused(&f, false, "held completion");
+    assert!(
+        message.contains(&format!("orbit job resume {}", newer.run_id)),
+        "{message}"
+    );
+}
+
 /// A discarded candidate is never resumed, and a changed specification is
 /// reported with discard-and-rerun as its exit, which then implements fresh.
 fn changed_or_discarded_candidates_are_refused_with_a_discard_exit() {
@@ -1152,6 +1234,8 @@ crate::scenario_table!(
     a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable,
     operator_requeue_resumes_the_failure_handoff_candidate_and_pull_request,
     requeue_keeps_the_published_owner_refusals,
+    requeue_refuses_a_newer_different_publication,
+    requeue_names_the_held_completion_resume,
     changed_or_discarded_candidates_are_refused_with_a_discard_exit,
     a_transient_infra_block_is_requeued_onto_its_candidate_after_the_probe,
     transient_requeues_are_bounded_per_publication,

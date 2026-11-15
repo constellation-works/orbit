@@ -564,3 +564,42 @@ fn expiry_leaves_a_task_admitted_under_an_unrelated_run_alone() {
     );
     assert_eq!(fx.retries(&held_run), 0);
 }
+
+#[test]
+fn completion_with_inconclusive_check_evidence_can_be_resumed() {
+    if run_isolated_test(
+        "forge_hold_resume::completion_with_inconclusive_check_evidence_can_be_resumed",
+    ) {
+        return;
+    }
+    let fx = Fixture::new();
+    let (_task, run) = fx.held_delivery(None);
+    let now = Utc::now();
+    fx.jobs
+        .complete_job_run_step(
+            &run,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 2,
+                target_type: JobTargetType::Activity,
+                target_id: "pr_complete".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: Some(1),
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Held,
+                error_code: Some(
+                    orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
+                        .error_code()
+                        .into(),
+                ),
+                error_message: Some("failed-job log was throttled after bounded waits".into()),
+            },
+        )
+        .unwrap();
+    fx.runtime
+        .submit_resume_run(&run, Some("operator"), None)
+        .expect("completion can re-observe the existing pull request");
+    assert_eq!(fx.retries(&run), 1);
+}
