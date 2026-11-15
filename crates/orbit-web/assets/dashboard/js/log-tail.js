@@ -304,7 +304,9 @@ export function revealDockStart() {
 // showing leaves the list when the window narrows. Two columns keep both
 // (tasks.css).
 export function setDockRouteShown(shown) {
-  $("tasks-main")?.classList.toggle("dock-route", Boolean(shown) && tasksOneColumn());
+  const dockRouteShown = Boolean(shown) && tasksOneColumn();
+  $("tasks-main")?.classList.toggle("dock-route", dockRouteShown);
+  return dockRouteShown;
 }
 
 /// Place the filter bar, then level the active tab's first card with the
