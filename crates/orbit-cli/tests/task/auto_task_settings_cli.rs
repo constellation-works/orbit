@@ -937,28 +937,177 @@ fn runtime_roots(fixture: &Fixture) -> (PathBuf, PathBuf) {
     )
 }
 
+/// Kills and reaps an unrelated bystander process on drop.
+struct Bystander(std::process::Child);
+
+impl Drop for Bystander {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only probes for the process; nothing is delivered.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+fn stalled_worker_pid(guard: &AutoTaskWorkerGuard<'_>) -> u32 {
+    guard
+        .worker_pid(Duration::from_secs(30))
+        .unwrap_or_else(|| panic!("no worker pid for {}", guard.run_id))
+}
+
+fn assert_worker_terminated_and_reaped(runtime: &orbit_core::OrbitRuntime, run_id: &str, pid: u32) {
+    assert!(
+        orbit_core::test_support::pipeline_worker_observer_completed(
+            &runtime.paths().repo_root,
+            run_id,
+            pid
+        ),
+        "worker {pid} of {run_id} was not reaped"
+    );
+    assert!(!process_alive(pid), "worker {pid} of {run_id} survived");
+}
+
+#[test]
+fn stalled_auto_task_worker_is_terminated_and_reaped_on_timeout_and_unwind() {
+    const TEST: &str = "auto_task_settings_cli::stalled_auto_task_worker_is_terminated_and_reaped_on_timeout_and_unwind";
+    if crate::isolated_test::run_in_child(TEST) {
+        return;
+    }
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let fixture = Fixture::new();
+    let (global, workspace) = runtime_roots(&fixture);
+    // The stalled worker carries the run marker in its environment only, as
+    // the real worker does after `env` execs it.
+    install_auto_task_worker_command(
+        &global,
+        [
+            format!(
+                "{AUTO_TASK_WORKER_RUN_ENV}={}",
+                orbit_core::test_support::RUN_ID_PLACEHOLDER
+            ),
+            "/bin/sleep".to_string(),
+            "600".to_string(),
+        ],
+    );
+    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap_or_else(|error| panic!("runtime: {error}"));
+    let bystander = Bystander(
+        std::process::Command::new("/bin/sleep")
+            .arg("600")
+            .spawn()
+            .unwrap_or_else(|error| panic!("bystander: {error}")),
+    );
+    let bystander_pid = bystander.0.id();
+
+    // Timeout: the fixture terminates and reaps the stalled worker.
+    let path = write_auto_task_job(&fixture, "stalled-timeout", RUN_FAILURE);
+    let guard = submit_auto_task_job(&runtime, &global, &path, "stalled-timeout", RUN_FAILURE);
+    let run_id = guard.run_id.clone();
+    let pid = stalled_worker_pid(&guard);
+    assert!(process_alive(pid), "stalled worker {pid} must be running");
+    let timed_out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        await_auto_task_park(
+            &runtime,
+            "stalled-timeout",
+            &guard,
+            Duration::from_millis(300),
+        )
+    }));
+    assert!(
+        timed_out.is_err(),
+        "a stalled worker must time out the fixture"
+    );
+    assert_worker_terminated_and_reaped(&runtime, &run_id, pid);
+    drop(guard);
+
+    // Unwind after submission: dropping the guard terminates and reaps.
+    let path = write_auto_task_job(&fixture, "stalled-unwind", RUN_FAILURE);
+    let unwound_run = std::cell::RefCell::new(None);
+    let unwound_pid = std::cell::RefCell::new(None);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let guard = submit_auto_task_job(&runtime, &global, &path, "stalled-unwind", RUN_FAILURE);
+        *unwound_run.borrow_mut() = Some(guard.run_id.clone());
+        *unwound_pid.borrow_mut() = Some(stalled_worker_pid(&guard));
+        panic!("fixture failed after worker submission");
+    }));
+    assert!(unwound.is_err());
+    let unwound_run = unwound_run.into_inner().expect("submitted run");
+    let unwound_pid = unwound_pid.into_inner().expect("worker pid");
+    assert_worker_terminated_and_reaped(&runtime, &unwound_run, unwound_pid);
+
+    assert!(
+        process_alive(bystander_pid),
+        "cleanup must not signal unrelated processes"
+    );
+}
+
 /// Foreground `run_job_v2_from_yaml` refuses auto-task steps. Submit the job
 /// the way an operator does, and let this process's substitute worker execute
 /// the detached run until the step parks.
 const AUTO_TASK_JOB_WORKER: &str = "auto_task_settings_cli::execute_submitted_auto_task_job";
 
+const AUTO_TASK_WORKER_RUN_ENV: &str = "ORBIT_TEST_AUTO_TASK_RUN";
+
+/// How long a submitted auto-task step may take to park before the fixture
+/// terminates its worker.
+const AUTO_TASK_PARK_TIMEOUT: Duration = Duration::from_secs(90);
+
 fn install_auto_task_job_worker(global: &Path, workspace: &Path) {
     orbit_common::test_env::assert_child_test_exists(AUTO_TASK_JOB_WORKER);
     let exe = std::env::current_exe().unwrap_or_else(|error| panic!("test exe: {error}"));
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        "env".to_string(),
-        format!("ORBIT_TEST_AUTO_TASK_GLOBAL={}", global.display()),
-        format!("ORBIT_TEST_AUTO_TASK_WORKSPACE={}", workspace.display()),
-        format!(
-            "ORBIT_TEST_AUTO_TASK_RUN={}",
-            orbit_core::test_support::RUN_ID_PLACEHOLDER
-        ),
-        exe.to_string_lossy().into_owned(),
-        "--exact".to_string(),
-        AUTO_TASK_JOB_WORKER.to_string(),
-        "--ignored".to_string(),
-        "--nocapture".to_string(),
-    ]);
+    install_auto_task_worker_command(
+        global,
+        [
+            format!("ORBIT_TEST_AUTO_TASK_GLOBAL={}", global.display()),
+            format!("ORBIT_TEST_AUTO_TASK_WORKSPACE={}", workspace.display()),
+            // `env` execs the worker, so the run marker lives in its environment
+            // (not argv) and the recorded worker PID is the executing process.
+            format!(
+                "{AUTO_TASK_WORKER_RUN_ENV}={}",
+                orbit_core::test_support::RUN_ID_PLACEHOLDER
+            ),
+            exe.to_string_lossy().into_owned(),
+            "--exact".to_string(),
+            AUTO_TASK_JOB_WORKER.to_string(),
+            "--ignored".to_string(),
+            "--nocapture".to_string(),
+        ],
+    );
+}
+
+/// Records the worker's own PID before `exec`, so the fixture knows the
+/// identity of the child it launched even if the worker stalls before it
+/// claims its run (the run records a PID only on that claim).
+const AUTO_TASK_WORKER_LAUNCH: &str = r#"echo $$ > "$0.tmp" && mv "$0.tmp" "$0" && exec "$@""#;
+
+fn auto_task_worker_pid_file(global: &Path, run_id: &str) -> PathBuf {
+    global.join(format!("{run_id}.auto-task-worker.pid"))
+}
+
+fn install_auto_task_worker_command(
+    global: &Path,
+    env_and_command: impl IntoIterator<Item = String>,
+) {
+    orbit_core::test_support::install_substitute_pipeline_worker(
+        [
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            AUTO_TASK_WORKER_LAUNCH.to_string(),
+            auto_task_worker_pid_file(global, orbit_core::test_support::RUN_ID_PLACEHOLDER)
+                .to_string_lossy()
+                .into_owned(),
+            "env".to_string(),
+        ]
+        .into_iter()
+        .chain(env_and_command),
+    );
 }
 
 #[test]
@@ -975,7 +1124,7 @@ fn execute_submitted_auto_task_job() {
         .unwrap_or_else(|error| panic!("worker {run}: {error}"));
 }
 
-fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
+fn write_auto_task_job(fixture: &Fixture, job: &str, auto_task: &str) -> PathBuf {
     let path = fixture.repo.join(format!("{job}.yaml"));
     fs::write(
         &path,
@@ -984,10 +1133,28 @@ fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
         ),
     )
     .unwrap();
+    path
+}
+
+fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
+    let path = write_auto_task_job(fixture, job, auto_task);
     let (global, workspace) = runtime_roots(fixture);
     install_auto_task_job_worker(&global, &workspace);
     let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
         .unwrap_or_else(|error| panic!("{job} runtime: {error}"));
+    let guard = submit_auto_task_job(&runtime, &global, &path, job, auto_task);
+    await_auto_task_park(&runtime, job, &guard, AUTO_TASK_PARK_TIMEOUT)
+}
+
+/// Submit the job and own its worker from the moment the run exists, so an
+/// unwind anywhere after submission still terminates and reaps it.
+fn submit_auto_task_job<'a>(
+    runtime: &'a orbit_core::OrbitRuntime,
+    global: &Path,
+    path: &Path,
+    job: &str,
+    auto_task: &str,
+) -> AutoTaskWorkerGuard<'a> {
     let submitted = runtime
         .submit_job_run(
             path.to_str().unwrap_or_else(|| panic!("{job} path")),
@@ -995,11 +1162,21 @@ fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
             Some("test"),
         )
         .unwrap_or_else(|error| panic!("{job} ({auto_task}) submit: {error}"));
-    await_auto_task_park(&runtime, job, &submitted.run_id)
+    AutoTaskWorkerGuard {
+        runtime,
+        pid_file: auto_task_worker_pid_file(global, &submitted.run_id),
+        run_id: submitted.run_id,
+    }
 }
 
-fn await_auto_task_park(runtime: &orbit_core::OrbitRuntime, job: &str, run_id: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(90);
+fn await_auto_task_park(
+    runtime: &orbit_core::OrbitRuntime,
+    job: &str,
+    guard: &AutoTaskWorkerGuard<'_>,
+    timeout: Duration,
+) -> String {
+    let run_id = guard.run_id.as_str();
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
             return reason;
@@ -1009,25 +1186,88 @@ fn await_auto_task_park(runtime: &orbit_core::OrbitRuntime, job: &str, run_id: &
         }
         thread::sleep(Duration::from_millis(50));
     }
-    stop_auto_task_job_worker(run_id);
-    let grace = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
-            return reason;
-        }
-        if Instant::now() >= grace {
-            break;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
+    let reaped = guard.terminate_and_reap();
     let run = runtime
         .show_job_run(run_id)
         .unwrap_or_else(|error| panic!("{job} show {run_id}: {error}"));
     panic!(
-        "{job} run {run_id} did not park ({:?}); worker log:\n{}",
+        "{job} run {run_id} did not park within {timeout:?} ({:?}); worker terminated and reaped: {reaped}; worker log:\n{}",
         run.state,
         worker_log(runtime, run_id)
     );
+}
+
+/// Owns the detached substitute worker of one submitted run. Termination is
+/// bound to the PID the launched worker recorded for itself, never to a
+/// command-line pattern, so it cannot signal another run's worker. Dropping the
+/// guard (including on unwind) terminates and reaps that worker.
+struct AutoTaskWorkerGuard<'a> {
+    runtime: &'a orbit_core::OrbitRuntime,
+    run_id: String,
+    pid_file: PathBuf,
+}
+
+impl AutoTaskWorkerGuard<'_> {
+    /// The launched worker's PID, once it has recorded one.
+    fn worker_pid(&self, wait: Duration) -> Option<u32> {
+        let deadline = Instant::now() + wait;
+        loop {
+            let recorded = fs::read_to_string(&self.pid_file)
+                .ok()
+                .and_then(|pid| pid.trim().parse().ok());
+            if let Some(pid) = recorded {
+                return Some(pid);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// SIGKILL the worker's process group if this process has not reaped it
+    /// yet, then wait for the launch observer to reap it. Returns whether the
+    /// worker is reaped. Idempotent, and never panics (it also runs while
+    /// unwinding).
+    fn terminate_and_reap(&self) -> bool {
+        let Some(pid) = self.worker_pid(Duration::from_secs(10)) else {
+            return false;
+        };
+        let workspace = &self.runtime.paths().repo_root;
+        let reaped = || {
+            orbit_core::test_support::pipeline_worker_observer_completed(
+                workspace,
+                &self.run_id,
+                pid,
+            )
+        };
+        // Until the observer reaps the child, its PID cannot be reused, so
+        // these signals can only reach the worker this fixture launched. The
+        // worker is its own session (and group) leader, so the group signal
+        // also ends anything it spawned.
+        if !reaped() {
+            // SAFETY: `pid` is this run's unreaped child; SIGKILL only ends it
+            // and its own process group.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !reaped() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+}
+
+impl Drop for AutoTaskWorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.terminate_and_reap();
+    }
 }
 
 /// The park text, once this process has reaped the substitute worker.
@@ -1069,13 +1309,6 @@ fn worker_log(runtime: &orbit_core::OrbitRuntime, run_id: &str) -> String {
         Ok(None) => "(no worker log)".to_string(),
         Err(error) => format!("worker log unreadable: {error}"),
     }
-}
-
-fn stop_auto_task_job_worker(run_id: &str) {
-    let needle = format!("ORBIT_TEST_AUTO_TASK_RUN={run_id}");
-    let _ = std::process::Command::new("pkill")
-        .args(["-KILL", "-f", &needle])
-        .status();
 }
 
 fn evaluate_named(
