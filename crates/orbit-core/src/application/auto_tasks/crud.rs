@@ -441,6 +441,18 @@ impl OrbitRuntime {
                             "auto-task '{name}' has no bundled contract to adopt"
                         ))
                     })?;
+            let current = self.require_validated_auto_task(name)?;
+            if current.name != super::settings::RUN_FAILURE_PATTERNS_NAME {
+                return Err(OrbitError::InvalidInput(format!(
+                    "auto-task '{name}' has no bundled contract to adopt"
+                )));
+            }
+            // A body that already carries the contract is returned as loaded:
+            // adopting it must not write an edit stamp or a settings entry.
+            let mut probe = current.clone();
+            if !super::settings::adopt_bundled_run_failure_contract(&mut probe, &bundled) {
+                return Ok(current);
+            }
             return self.try_edit_auto_task(name, |definition| {
                 if definition.name != super::settings::RUN_FAILURE_PATTERNS_NAME {
                     return Err(OrbitError::InvalidInput(format!(

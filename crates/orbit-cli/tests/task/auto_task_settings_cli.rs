@@ -571,6 +571,23 @@ fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
 }
 
 #[test]
+fn adopt_on_a_compliant_managed_body_writes_nothing() {
+    let fixture = Fixture::new();
+    // The shipped body already carries the host-aware contract, so adopting it
+    // is a no-op: it must not record an operator edit stamp or settings entry.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--adopt-bundled-contract",
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert_eq!(shown["layering"]["body"], "managed", "{shown}");
+    assert!(shown["layering"]["settings"].is_null(), "{shown}");
+}
+
+#[test]
 fn auto_task_settings_and_managed_bodies() {
     for (name, check) in [
         (
