@@ -73,6 +73,14 @@ A rule is here only when its correction recurred.
 - **R33 (metadata on its own line).** "meta-data, e.g. "sol, sol@xhigh, sol@high", can be
   placed as a new row" (7995d040, ORB-24113): the Agents rank table ran each model's crews
   inline after its name, so long names and crew lists competed for one line.
+- **R40 (inline list separators and icon spacing).** On the task detail's relation rows:
+  "can you tell me what is wrong with this?", "also less margins around ⓘ", "there should
+  be some right margin after comma", then "ok and add it to standard" (f09993e5, ORB-25033,
+  F2026-11-303). Regression from rendered as `ORB-20629 ⓘ  ,ORB-17603 ⓘ`: the ⓘ's 44px tap
+  target took up layout space, so the comma landed about 15px after the icon and touched
+  the next id. Related to separated monospace ids with a bare sans space, so they read as
+  run together. R1 covered gaps between siblings, but not separators inside one line or the
+  space a tap target may add.
 
 ## Typography
 
@@ -211,7 +219,13 @@ A rule is here only when its correction recurred.
   card's header (title, host select, state pill, time left) and its counts row each broke
   onto two lines. R14 covered a status line of text, R27 a lone orphan, R38 a row of controls
   with space beside it, and R23 said narrow widths drop secondary content without giving an
-  order.
+  order. Version 6 said members shrink "when the row does not fit" but not that they keep
+  full size where it does. The Tasks dock tabs then shrank to 12px behind a fixed 440px
+  container query (ORB-24810), which also covered the dock's normal width, where the 13.5px
+  tabs fit. The owner corrected it: "these got smaller than before. can you revert it back to
+  its original size. make them smaller only when there is no more space. and update ux rule"
+  (f09993e5, ORB-25032, F2026-11-302). Version 7 keeps full size wherever the row fits, and
+  names tab strips.
 
 ## Process
 
