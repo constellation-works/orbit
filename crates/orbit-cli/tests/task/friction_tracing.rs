@@ -51,9 +51,14 @@ fn friction_submissions_emit_once_after_persistence_without_body_or_secrets() {
     // Reject both before persistence and at store validation, after a valid
     // submission, so an accidental event on a failed write adds to the count.
     for input in [
-        json!({"action": "add", "action": "add", "body": "Missing identity"}),
+        json!({"action": "add", "body": "Missing identity"}),
         json!({"action": "add", "body": "Invalid tag", "model": "codex", "tags": ["unknown-tag"]}),
-        json!({"body": "Missing task", "model": "codex", "during_task": "AQ-99999"}),
+        json!({
+            "action": "add",
+            "body": "Missing task",
+            "model": "codex",
+            "during_task": "AQ-99999"
+        }),
     ] {
         fixture
             .command(&[
