@@ -43,8 +43,9 @@ impl OrbitRuntime {
         log_best_effort("record run deferral", run_id.unwrap_or_default(), result);
     }
 
-    /// Record a provider capacity, usage-limit or unavailability deferral;
-    /// every other hold already names its own resumption.
+    /// Record a provider capacity, usage-limit, unavailability or
+    /// busy-footprint deferral; every other hold already names its own
+    /// resumption.
     pub(crate) fn record_held_deferral(
         &self,
         run: &JobRun,
@@ -54,7 +55,8 @@ impl OrbitRuntime {
         if let Some(
             held @ (HeldFailure::ProviderCapacity
             | HeldFailure::ProviderLimit
-            | HeldFailure::ProviderUnavailable),
+            | HeldFailure::ProviderUnavailable
+            | HeldFailure::FootprintUnavailable),
         ) = held
         {
             self.record_run_deferral(Some(&run.run_id), held.error_code(), message, Value::Null);

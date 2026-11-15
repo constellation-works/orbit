@@ -101,6 +101,10 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             UnrepairableFailure::OwnerSignoffRequired => {
                 "recorded owner approval is still missing; another agent cannot record it"
             }
+            UnrepairableFailure::FootprintUnavailable => {
+                "the resumed published delivery's deferred footprint stayed held past its \
+                 wait; no editor started and the candidate was not judged"
+            }
         });
     }
     // A `worktree_setup` that could not find a dependency is not transient:

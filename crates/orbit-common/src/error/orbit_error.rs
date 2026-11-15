@@ -192,6 +192,18 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// A resumed published delivery's deferred footprint was still held by
+    /// another task when its wait expired. Displays exactly as
+    /// [`Self::Execution`]; the variant carries the typed
+    /// `footprint_unavailable` step code so run finalization holds the run
+    /// instead of failing it. The run-stopped refusal from the same wait
+    /// stays [`Self::Execution`]: cancellation is not a hold.
+    #[error("execution failed: {0}")]
+    #[serde(
+        rename = "Execution",
+        serialize_with = "serialize_footprint_unavailable"
+    )]
+    FootprintUnavailable(String),
     /// Executable-generation admission refused an operation. Displays and
     /// serializes exactly as [`Self::Execution`]; callers select clock handling
     /// by the refusal kind, never from its message.
@@ -471,6 +483,13 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
         _ => "",
     });
     format!("{kind} not found: {id}{guidance}")
+}
+
+fn serialize_footprint_unavailable<S: serde::Serializer>(
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(message)
 }
 
 fn serialize_absorbed_candidate<S: serde::Serializer>(

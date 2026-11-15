@@ -282,6 +282,16 @@ pub enum DispatchError {
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
 
+    /// A resumed published delivery's deferred footprint was still held by
+    /// another task when its wait expired, so the editing agent never
+    /// started. Displays exactly as the host's refusal; the variant carries
+    /// the typed `footprint_unavailable` code so the run ends held for a
+    /// later admission instead of failed, without retry, step or final
+    /// recovery, or the failure handoff. The run-stopped refusal from the
+    /// same wait is a plain permanent failure, never this variant.
+    #[error("execution failed: {0}")]
+    FootprintUnavailable(String),
+
     /// An inspection cannot start: the filesystem profile is not
     /// `reviewer`, the provider has no CLI runtime, or its executor declares
     /// no `inspection_args`. Configuration errors never spend a provider
@@ -428,6 +438,7 @@ impl DispatchError {
                 | DispatchError::RetryConfigInvalid { .. }
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
+                | DispatchError::FootprintUnavailable(_)
                 | DispatchError::InspectionToolsUnavailable { .. }
                 | DispatchError::ImageInputUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
@@ -470,6 +481,7 @@ impl DispatchError {
             DispatchError::ImageInputUnavailable { .. } => wf::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,
             DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
             DispatchError::DeliveryRefused { refusal, .. } => refusal.error_code(),
+            DispatchError::FootprintUnavailable(_) => wf::FOOTPRINT_UNAVAILABLE_ERROR_CODE,
             _ if wf::is_validation_environment_failure(None, Some(&text())) => {
                 wf::VALIDATION_ENVIRONMENT_ERROR_CODE
             }
@@ -498,6 +510,9 @@ impl DispatchError {
         match self {
             DispatchError::OwnerRouteUnavailable { .. } => {
                 Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable)
+            }
+            DispatchError::FootprintUnavailable(_) => {
+                Some(orbit_types::workflow::StepFailureCode::FootprintUnavailable)
             }
             _ => None,
         }
@@ -531,6 +546,9 @@ impl DispatchError {
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
     match error {
         DispatchError::ProtocolSkew(message) => OrbitError::ProtocolSkew(message),
+        // The typed footprint code survives the boundary so finalization
+        // holds the run instead of failing it.
+        DispatchError::FootprintUnavailable(message) => OrbitError::FootprintUnavailable(message),
         DispatchError::JobValidation(message) => OrbitError::JobValidation(message),
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())

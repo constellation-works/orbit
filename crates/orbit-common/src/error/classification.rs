@@ -96,6 +96,7 @@ impl OrbitError {
             OrbitError::RemoteTool { code, .. } => code.as_str(),
             OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
             OrbitError::Execution(_)
+            | OrbitError::FootprintUnavailable(_)
             | OrbitError::UpgradeAdmissionRefused(_)
             | OrbitError::PrivateVcs(_)
             | OrbitError::ForgeUnavailable(_)
@@ -277,6 +278,9 @@ impl OrbitError {
             return Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable);
         }
         match self {
+            Self::FootprintUnavailable(_) => {
+                Some(orbit_types::workflow::StepFailureCode::FootprintUnavailable)
+            }
             Self::RemoteTool { code, .. } => {
                 Some(orbit_types::workflow::StepFailureCode::parse(code.as_str()))
             }

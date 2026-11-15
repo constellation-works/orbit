@@ -211,6 +211,7 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message: redact(&message),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::FootprintUnavailable(m) => OrbitError::FootprintUnavailable(redact(&m)),
         OrbitError::UpgradeAdmissionRefused(mut refusal) => {
             refusal.message = redact(&refusal.message);
             OrbitError::UpgradeAdmissionRefused(refusal)
