@@ -1213,6 +1213,61 @@ fn a_guide_cited_codeql_finding_is_refused_for_each_neighbouring_miss() {
     }
 }
 
+const WORDY_GUIDE_SOURCE: &str = "\
+# Fixture guide
+A docs-only github push on a rust main branch skips the CodeQL run; a task tagged `security` or `security-review` runs it locally.
+Only Linux extracts every module; elsewhere the script exits 3.
+";
+
+/// The guide line's other words (`docs`, `github`, `rust`, `main`) name no
+/// trigger, so a task carrying one of them gets no OS lock. A task tagged
+/// with a backtick-quoted trigger on the same line is still admitted.
+fn a_guide_codeql_line_triggers_only_on_the_tags_it_names() {
+    for task_tags in [["docs"], ["github"], ["rust"], ["main"]] {
+        let workspace = Workspace::new();
+        workspace.commit_file(GUIDE_PATH, WORDY_GUIDE_SOURCE, "add repository guide");
+        let task = backlog_task(
+            &workspace,
+            &["The repository's documented pre-handoff checks pass."],
+            &task_tags,
+        );
+        let applied = apply(
+            &workspace,
+            &task,
+            Some(json!([{
+                "criterion": 1, "os": "linux", "evidence": guide_evidence(),
+            }])),
+        );
+        refused(
+            &applied,
+            "names CodeQL together with a tag this task carries",
+        );
+        assert!(
+            tags(&workspace, &task)
+                .iter()
+                .all(|tag| !tag.starts_with("os:")),
+            "{task_tags:?}: {applied}"
+        );
+        assert_eq!(exclusion(&workspace, &task), None, "{task_tags:?}");
+    }
+
+    let workspace = Workspace::new();
+    workspace.commit_file(GUIDE_PATH, WORDY_GUIDE_SOURCE, "add repository guide");
+    let task = backlog_task(
+        &workspace,
+        &["The repository's documented pre-handoff checks pass."],
+        &["security-review"],
+    );
+    assess(
+        &workspace,
+        &task,
+        Some(json!([{
+            "criterion": 1, "os": "linux", "evidence": guide_evidence(),
+        }])),
+    );
+    assert_eq!(tags(&workspace, &task), ["security-review", "os:linux"]);
+}
+
 /// A security task whose check is explicitly routed to owner external
 /// evidence, and portable platform criteria, get no OS lock: the pilot
 /// records no guide finding for them and admission stays unchanged.
@@ -1278,5 +1333,6 @@ crate::scenario_table!(
     guide_cited_codeql_routes_to_linux_scenarios,
     a_security_task_with_a_guide_cited_codeql_rule_routes_to_linux,
     a_guide_cited_codeql_finding_is_refused_for_each_neighbouring_miss,
+    a_guide_codeql_line_triggers_only_on_the_tags_it_names,
     a_security_task_with_an_external_evidence_route_is_not_pinned
 );

@@ -661,7 +661,9 @@ pilot to leave `required_os` empty. One further exception is a
 repository-required validation: when a tag the task carries triggers a
 validation the workspace guide (`AGENTS.md`/`CLAUDE.md`) requires and states
 only Linux can produce — a `security`-tagged task's local CodeQL run in this
-repository — the pilot may cite both guide lines at their `path:line`
+repository, where the guide line names the trigger tag in backticks after
+`tagged` and other words on that line trigger nothing — the pilot may cite
+both guide lines at their `path:line`
 (the tag-to-CodeQL requirement and the only-Linux statement) instead of a
 cfg gate, and apply confirms both in the pinned source before admitting
 `os: linux`. The pilot makes no such finding when the task or a workspace

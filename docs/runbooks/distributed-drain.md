@@ -434,8 +434,9 @@ entry's `os` is that OS. A portable criterion, a gate on an unnamed item, an
 still rejected. The rejection tells the pilot to leave `required_os` empty,
 and the repair pilot re-answers. A tag-triggered repository validation is
 the other admitted citation: when the workspace guide ties a tag the task
-carries to a required CodeQL run and states only Linux can produce it, the
-pilot cites both guide lines and apply confirms them in the pinned source
+carries to a required CodeQL run (the tag is backtick-quoted after `tagged`;
+other words on the line name no trigger) and states only Linux can produce
+it, the pilot cites both guide lines and apply confirms them in the pinned source
 before admitting `os: linux`; an explicit owner/external-evidence route
 for that check, and any mere platform mention, admit no such finding. When every
 `required_os` entry names one OS and the task carries no `os:` tag, the pilot's
