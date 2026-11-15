@@ -231,20 +231,35 @@ export function residentsDockShown() {
   return shownDockMode() === "residents";
 }
 
+// The one-column Tasks layout: the list or the dock, never both (tasks.css).
+const TASKS_ONE_COLUMN_QUERY = "(max-width: 1000px)";
+
+function tasksOneColumn() {
+  return typeof window.matchMedia === "function" && window.matchMedia(TASKS_ONE_COLUMN_QUERY).matches;
+}
+
 export function chooseDockMode(mode) {
   setDockMode(mode);
   const url = new URL(window.location.href);
   const [route, query = ""] = url.hash.slice(1).split("?");
   if (route !== "tasks") return;
   const params = new URLSearchParams(query);
-  params.set("dock", mode);
-  url.hash = `tasks?${params}`;
+  // The selection itself is remembered in the dock prefs (setDockMode). Only a
+  // tab chosen in the one-column dock route is part of the address: there the
+  // dock stands in for the list. With both columns showing, the choice is
+  // inside the Tasks page, so it drops `dock=` and a reload or collapse to one
+  // column keeps the list.
+  if (tasksOneColumn()) params.set("dock", mode);
+  else {
+    params.delete("dock");
+    params.delete("dockMode");
+    params.delete("panel");
+  }
+  const rest = params.toString();
+  url.hash = rest ? `tasks?${rest}` : "tasks";
   window.history.replaceState(null, "", url);
-  // ORB-19732: replaceState bypasses the router, so mirror its Tasks-branch
-  // dock-route sync here. Without it a desktop tab selection leaves
-  // `tasks-main` without `dock-route` until a reload routes the same hash,
-  // and a resize to phone width keeps the list instead of the selected dock.
-  setDockRouteShown(true);
+  // replaceState bypasses the router, so mirror its Tasks-branch dock-route sync.
+  setDockRouteShown(params.has("dock"));
   // ORB-19783: the router's last-routed address must follow this rewrite, or a
   // later hash navigation back to the list URL is skipped as already routed.
   recordRoutedHref();
@@ -282,11 +297,14 @@ export function revealDockStart() {
   card.scrollIntoView?.({ block: "nearest" });
 }
 
-// At phone width an explicit dock route (`dock=` in the Tasks hash) shows the
-// dock in place of the list. The router calls this on every Tasks route, so a
-// route without `dock=` brings the list back. Desktop keeps both (tasks.css).
+// In the one-column layout an explicit dock route (`dock=` in the Tasks hash)
+// shows the dock in place of the list. The router calls this on every Tasks
+// route, so a route without `dock=` brings the list back. The route counts only
+// when it is reached at that width: a dock link followed with both columns
+// showing leaves the list when the window narrows. Two columns keep both
+// (tasks.css).
 export function setDockRouteShown(shown) {
-  $("tasks-main")?.classList.toggle("dock-route", Boolean(shown));
+  $("tasks-main")?.classList.toggle("dock-route", Boolean(shown) && tasksOneColumn());
 }
 
 /// Place the filter bar, then level the active tab's first card with the

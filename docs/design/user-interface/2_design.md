@@ -386,7 +386,13 @@ From any other destination, or a full task page, the rail's **Tasks** item
 reopens the list with the filter it was left on (status chips, More filters and
 search), not the default set; it does not reopen an open task. A bare `#tasks`
 on a fresh load still shows the default set.
-Any Tasks route without `dock=` shows the list again. The rail marks Drain rather than Tasks while the Drain dock route stands in for the
+Any Tasks route without `dock=` shows the list again. The dock replaces the list only
+when it was reached at that width: with both columns showing, picking a dock tab is a
+choice inside the Tasks page, not a navigation, so it is remembered as the dock's tab
+but leaves `dock=` out of the address, and narrowing the window, reloading or stepping
+Back at one column shows the list. A `#tasks?dock=…` link followed with both columns
+showing likewise leaves the list when the window narrows. Choosing a tab in the
+one-column dock route keeps `dock=`. Widening shows both columns. The rail marks Drain rather than Tasks while the Drain dock route stands in for the
 list. A Log or Notices dock route keeps Tasks marked. The dock route is how a phone drives a drain: its tabs and drain controls
 are 44px targets, Stop and Start stick to the foot of the scrolling pane, and a
 live window folds the Start form behind **Start another window**, so state, Stop
