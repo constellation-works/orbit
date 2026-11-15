@@ -5,10 +5,13 @@
 //! `CLAUDE.md`/`AGENTS.md` line requiring a local CodeQL run for a task
 //! tagged `security`, with only Linux able to extract every module). Apply
 //! reads the cited lines from the pinned source: one cited line must name
-//! CodeQL together with a tag the task carries, and another cited line in
-//! the same guide must state that only Linux can produce the run. Any other
-//! citation stays with the caller's portable-criterion refusal, so a
-//! platform mention alone never becomes an OS lock.
+//! CodeQL together with a tag the guide names as its trigger (a
+//! backtick-quoted tag after `tagged`) that the task carries, and another
+//! cited line in the same guide must state that only Linux can produce the
+//! run. Any other word on the line is not a trigger, so a task carrying
+//! `docs` or `github` is not locked by a line that merely mentions those
+//! words. Any other citation stays with the caller's portable-criterion
+//! refusal, so a platform mention alone never becomes an OS lock.
 
 use std::path::Path;
 
@@ -83,12 +86,13 @@ pub(super) fn admit_guide_gate(
         cited.push((*line_no, *line));
     }
     let trigger = cited.iter().any(|(_, line)| {
-        let lower = line.to_ascii_lowercase();
-        lower.contains("codeql")
-            && check
-                .tags
-                .iter()
-                .any(|tag| contains_token(&lower, &tag.trim().to_ascii_lowercase()))
+        line.to_ascii_lowercase().contains("codeql")
+            && guide_trigger_tags(line).iter().any(|named_tag| {
+                check
+                    .tags
+                    .iter()
+                    .any(|tag| tag.trim().eq_ignore_ascii_case(named_tag))
+            })
     });
     if !trigger {
         return Err(refuse(
@@ -224,25 +228,32 @@ fn valid_source_path(path: &str) -> bool {
         && saw_letter
 }
 
-/// Whether `token` occurs in `text` bounded by non-token bytes. Backticks
-/// and punctuation separate, so a quoted tag in a guide line still matches.
-fn contains_token(text: &str, token: &str) -> bool {
-    if token.is_empty() {
-        return false;
-    }
-    let mut rest = text;
-    while let Some(index) = rest.find(token) {
-        let end = index + token.len();
-        let before = index == 0 || !is_token_byte(rest.as_bytes()[index - 1]);
-        let after = end == rest.len() || !is_token_byte(rest.as_bytes()[end]);
-        if before && after {
-            return true;
+/// The tags a guide line names as CodeQL triggers, lowercased: the
+/// backtick-quoted tags that follow the word `tagged`, joined only by `or`,
+/// `and` or commas, as in "is tagged `security` or `security-review`, or
+/// edits ...". Every other word on the line, such as `docs`, `github` or
+/// `main`, names no trigger.
+fn guide_trigger_tags(line: &str) -> Vec<String> {
+    let lower = line.to_ascii_lowercase();
+    let mut tags = Vec::new();
+    for (index, _) in lower.match_indices("tagged") {
+        let starts_word = index == 0 || !lower.as_bytes()[index - 1].is_ascii_alphanumeric();
+        if !starts_word {
+            continue;
         }
-        rest = &rest[index + 1..];
+        for word in lower[index + "tagged".len()..].split_whitespace() {
+            let word = word.trim_end_matches([',', '.', ';']);
+            if matches!(word, "or" | "and") {
+                continue;
+            }
+            match word
+                .strip_prefix('`')
+                .and_then(|rest| rest.strip_suffix('`'))
+            {
+                Some(tag) if !tag.is_empty() => tags.push(tag.to_string()),
+                _ => break,
+            }
+        }
     }
-    false
-}
-
-fn is_token_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+    tags
 }
