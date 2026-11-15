@@ -675,7 +675,8 @@ fn dispatch_v2_activity_inner(
         Err(
             DispatchError::ReviewEvidenceHold(_)
             | DispatchError::ForgeUnavailableHold(_)
-            | DispatchError::DeliveryRefused { .. },
+            | DispatchError::DeliveryRefused { .. }
+            | DispatchError::FootprintUnavailable(_),
         ) => "held",
         Err(DispatchError::ChildRunCancelled { .. }) => "cancelled",
         Err(_) => "error",
