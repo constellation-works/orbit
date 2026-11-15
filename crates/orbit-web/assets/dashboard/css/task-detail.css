@@ -777,8 +777,8 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* The Artifacts container holds the rows directly up to one page, and the
-   toolbar, paged list and pagination beyond it, so the card wraps all of them. */
+/* The Artifacts container holds the list at every count, plus the toolbar and
+   pagination when paged, so the card wraps all of them. */
 .artifacts {
   min-width: 0;
   border: 1px solid var(--border);

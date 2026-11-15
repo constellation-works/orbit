@@ -275,11 +275,13 @@ export function buildArtifacts(task) {
     });
     units.push({ artifact, row, preview, search: `${path} ${mediaType}`.toLowerCase() });
   }
+  const list = el("div", { class: "artifacts-list" });
   if (units.length <= ARTIFACTS_PAGE_SIZE) {
     for (const unit of units) {
-      wrap.appendChild(unit.row);
-      wrap.appendChild(unit.preview);
+      list.appendChild(unit.row);
+      list.appendChild(unit.preview);
     }
+    wrap.appendChild(list);
     return wrap;
   }
 
@@ -297,7 +299,6 @@ export function buildArtifacts(task) {
   const toolbar = el("div", { class: "artifacts-toolbar" }, [filterLabel, filterInput]);
   const status = el("div", { class: "artifacts-status", role: "status", "aria-live": "polite" });
   status.id = `artifact-status-${task.id}`;
-  const list = el("div", { class: "artifacts-list" });
   const empty = el("p", { class: "field-empty artifacts-empty", text: "No artifacts match this filter." });
   empty.hidden = true;
   const prev = el("button", { class: "action artifacts-page-btn", type: "button", text: "Previous" });
