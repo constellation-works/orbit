@@ -173,9 +173,10 @@ function parseDrainTarget(value) {
 }
 function drainTargetText(name, host, role) {
   const short = name.length > DRAIN_TARGET_NAME_CHARS ? `${name.slice(0, DRAIN_TARGET_NAME_CHARS - 1)}…` : name;
-  // The closing mark keeps the right-to-left select from moving the ")" when
-  // the head of the text is clipped.
-  return `${short} · ${host} (${role})\u200E`;
+  // The leading and closing marks keep the right-to-left select from reordering
+  // leading digits/punctuation (which the bidi algorithm would otherwise reorder
+  // in an RTL paragraph) and moving the trailing ")" when the head of the text is clipped.
+  return `\u200E${short} · ${host} (${role})\u200E`;
 }
 // The header row keeps every member at full size while it fits (STD-07 R39).
 // A fixed breakpoint cannot tell fitting from overflowing rows, so the row's
