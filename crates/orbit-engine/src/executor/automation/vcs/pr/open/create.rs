@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use orbit_common::{OrbitError, security::release::sha256_hex};
 use orbit_types::workflow::{
     FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
@@ -347,30 +349,13 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                     }
                     Err(error) => return Err(Box::new((FailedHandoffPhase::PrCreate, error))),
                 };
-                let pr_url = created
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| {
-                        Box::new((
-                            FailedHandoffPhase::PrCreate,
-                            OrbitError::Execution(
-                                "private automation VCS PR create did not return a PR url"
-                                    .to_string(),
-                            ),
-                        ))
-                    })?;
-                let (pr_number, viewed_url, _) =
-                    lookup::view_pr(host, &context.workspace_path, &pr_url)
-                        .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
+                let (pr_number, pr_url) = view_created_pr(host, &context.workspace_path, &created)?;
                 let mut output = lookup::pr_output(lookup::PrOutput {
                     decision: "performed",
                     pr_created: true,
                     pr_reused: false,
                     pr_number,
-                    pr_url: viewed_url.or(Some(pr_url)),
+                    pr_url,
                     base,
                     head,
                     base_ref,
@@ -384,6 +369,31 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             Err(error) => return Err(Box::new((FailedHandoffPhase::PrLookup, error))),
         }
     }
+}
+
+#[allow(clippy::type_complexity)]
+fn view_created_pr<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    created: &Value,
+) -> Result<(String, Option<String>), Box<(FailedHandoffPhase, OrbitError)>> {
+    let created_url = created
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            Box::new((
+                FailedHandoffPhase::PrCreate,
+                OrbitError::Execution(
+                    "private automation VCS PR create did not return a PR url".to_string(),
+                ),
+            ))
+        })?;
+    let (pr_number, viewed_url, _) = lookup::view_pr(host, workspace_path, &created_url)
+        .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
+    Ok((pr_number, viewed_url.or(Some(created_url))))
 }
 
 /// Create or reuse a PR for an already-pushed recovery branch without the
@@ -417,18 +427,8 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
             "workspace_path": workspace_path,
         }),
     )?;
-    let url = created
-        .get("url")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            OrbitError::Execution(
-                "private automation VCS PR create did not return a PR url".to_string(),
-            )
-        })?;
-    let (number, viewed_url, _) = lookup::view_pr(host, workspace_path, url)?;
-    Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
+    let (number, url) = view_created_pr(host, workspace_path, &created).map_err(|error| error.1)?;
+    Ok((number, url, true))
 }
 
 fn invalid_prepare(error: OrbitError) -> Box<(FailedHandoffPhase, OrbitError)> {
