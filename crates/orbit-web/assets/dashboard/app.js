@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
 import { taskPilotWarningsFilter, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, refreshChips, refreshPinnedTask, renderTasks, syncTaskControls, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import * as globalSearch from './js/global-search.js';
@@ -1416,9 +1416,13 @@ async function initWorkspaceSelector() {
       }
       const live = fleet?.items?.find(row => !row.error && servable(row.workspace_id)
         && ["draining", "pulling", "winding_down"].includes(row.phase));
+      // With no active registry default, the fallback is the first owned
+      // workspace in `/api/workspaces` (registry) order, as before. The
+      // pickers list alphabetically, so the default board does not move.
+      const registryOwned = entries.filter(isOwnedWorkspace);
       const def = dashboardWorkspaces.find(w => w.is_default && w.status === "active");
-      const firstActive = dashboardWorkspaces.find(w => w.status === "active");
-      initial = live?.workspace_id || (def || firstActive || dashboardWorkspaces[0]).id;
+      const firstActive = registryOwned.find(w => w.status === "active");
+      initial = live?.workspace_id || (def || firstActive || registryOwned[0]).id;
     }
     setSelectedWorkspaces([]);
     setWorkspace(initial);

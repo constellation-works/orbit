@@ -46,9 +46,28 @@ export function isOwnedWorkspace(workspace) {
   return !!workspace && workspace.checkout_role !== "replica";
 }
 
-/// The owned rows of a `/api/workspaces` list, in list order.
+// Alphabetical order for names a picker shows: case-insensitive, so `alpha`
+// sorts with `Alpha`, and `beta` after both. Every picker sorts through this.
+const displayNameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+export function compareDisplayNames(left, right) {
+  return displayNameCollator.compare(String(left), String(right));
+}
+
+/// Picker order for workspaces: alphabetical by the name the picker shows,
+/// case-insensitive, with ties broken by workspace id.
+export function compareWorkspacePickerOrder(left, right) {
+  return compareDisplayNames(left.name || left.id, right.name || right.id)
+    || compareDisplayNames(left.id, right.id);
+}
+
+/// The owned rows of a `/api/workspaces` list in picker order. This is the one
+/// list the rail, Propose a task, the task filter, the Drain target and the
+/// All workspaces grouping are all built from. The server keeps registry order.
 export function ownedWorkspaces(workspaces) {
-  return (Array.isArray(workspaces) ? workspaces : []).filter(isOwnedWorkspace);
+  return (Array.isArray(workspaces) ? workspaces : [])
+    .filter(isOwnedWorkspace)
+    .sort(compareWorkspacePickerOrder);
 }
 
 // Replica checkouts of the selected host when that host owns no workspace.
@@ -273,9 +292,9 @@ export function setWorkspace(id) {
 // listeners re-render labels when the list arrives.
 let workspaceNames = new Map();
 const workspaceNameListeners = new Set();
-// Owned rows last given to `setWorkspaceNames`, in that list's order. The
-// Tasks filter and the All workspaces drain select both read this catalog;
-// the task filter does not narrow the drain select.
+// Owned rows last given to `setWorkspaceNames`, in that list's order (picker
+// order, from `ownedWorkspaces`). The Tasks filter and the All workspaces drain
+// select both read this catalog; the task filter does not narrow the drain select.
 let workspaceCatalog = [];
 
 export function setWorkspaceNames(workspaces) {
@@ -287,14 +306,14 @@ export function setWorkspaceNames(workspaces) {
   for (const listener of workspaceNameListeners) listener();
 }
 
-/// Owned workspaces last published by `setWorkspaceNames`, in list order.
+/// Owned workspaces last published by `setWorkspaceNames`, in picker order.
 export function workspaceCatalogEntries() {
   return workspaceCatalog;
 }
 
-// Where a workspace sits in the picker (`/api/workspaces` order); the All
-// workspaces task list groups each status section in this order. An id the
-// list does not hold sorts after every listed one.
+// Where a workspace sits in the picker (picker order, alphabetical by name);
+// the All workspaces task list groups each status section in this order. An
+// id the list does not hold sorts after every listed one.
 let workspaceOrder = new Map();
 
 export function workspacePickerIndex(id) {
