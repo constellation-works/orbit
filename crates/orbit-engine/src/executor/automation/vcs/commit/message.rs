@@ -482,8 +482,9 @@ fn regression_trailers(
     trailers
 }
 
-/// `name <email>` in the current scheme when `email` is an address Orbit
-/// wrote (old or new); anyone else's identity is kept as written.
+/// `name <email>` in the current scheme when `email` is a role address Orbit
+/// writes at `orbit.invalid` or a historical `orbit.local` address (see
+/// [`orbit_role_for_email`]); anyone else's identity is kept as written.
 fn current_identity(name: &str, email: &str) -> String {
     match orbit_role_for_email(email) {
         Some(role) => {
