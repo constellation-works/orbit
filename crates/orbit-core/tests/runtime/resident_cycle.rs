@@ -10,6 +10,8 @@ mod assignment_lifecycle;
 mod control_admission;
 mod deadline_expiry;
 mod landing;
+#[cfg(unix)]
+mod launch;
 
 use std::path::PathBuf;
 use std::sync::Arc;

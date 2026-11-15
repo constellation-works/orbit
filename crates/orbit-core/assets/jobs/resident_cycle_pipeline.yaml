@@ -15,8 +15,9 @@
 #    the cycle's grant and keys each write `resident:<mandate>:<cycle>:<n>`.
 #    It ends by writing one checkpoint through `orbit.resident.checkpoint`.
 #    Observe creates a detached managed worktree of the workspace HEAD and
-#    the cycle launches in it (`workspace_path`): a direct launch in the
-#    registered checkout cannot enforce the policy's non-subtree
+#    the cycle launches in it (`workspace_path` and matching `repo_root`):
+#    a direct launch in the registered checkout cannot enforce the policy's
+#    non-subtree
 #    `denyModify **/.env` under linux-bwrap, so the sandbox refused it
 #    before the agent ran.
 # 3. finalize synthesizes an `incomplete` checkpoint when the agent wrote
@@ -49,12 +50,22 @@ spec:
         task_ids: "{{ input.task_ids }}"
 
     - id: cycle
-      when: "{{ steps.observe.output.cycle_count }} != 0"
+      when: "{{ steps.observe.output.cycle_count }} != 0 && {{ steps.observe.output.workspace_path }} != null"
       target: activity:resident_cycle
       default_input:
         brief: "{{ steps.observe.output }}"
         crew: "{{ steps.observe.output.crew }}"
         workspace_path: "{{ steps.observe.output.workspace_path }}"
+        repo_root: "{{ steps.observe.output.workspace_path }}"
+
+    # A null repo_root is an invalid declared pair. When observe could not
+    # create a worktree, omit both path declarations and use the primary.
+    - id: cycle_fallback
+      when: "{{ steps.observe.output.cycle_count }} != 0 && {{ steps.observe.output.workspace_path }} == null"
+      target: activity:resident_cycle
+      default_input:
+        brief: "{{ steps.observe.output }}"
+        crew: "{{ steps.observe.output.crew }}"
 
     - id: finalize
       target: activity:resident_finalize

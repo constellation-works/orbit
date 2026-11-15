@@ -72,6 +72,12 @@ spec:
           the agent launches there. Absent when no worktree could be
           created, in which case the launch stays in the registered
           checkout.
+      repo_root:
+        type: string
+        description: >
+          The same managed checkout as workspace_path, declaring the pair
+          required by the agent's worktree-integrity check. Omitted together
+          with workspace_path when launching in the registered checkout.
   # The durable output is the checkpoint the cycle writes; this report is
   # advisory and settles nothing.
   output_schema_json:
