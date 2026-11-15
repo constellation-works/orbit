@@ -35,3 +35,7 @@ removed or changed in meaning.
   icon sits close to its item, and an enlarged tap target adds no visible space). From the
   owner's task-detail relation-row corrections in session f09993e5 (ORB-25033,
   F2026-11-303).
+- **v9 (2026-11-15):** adds R41 (every button carries a short hover help saying what it
+  does, including consequences the label does not show, and why it is disabled), and R32
+  names a button's effect as detail a tooltip may add. From the owner's direction in
+  session f09993e5 (F2026-11-304).
