@@ -718,6 +718,78 @@ fn ci_missing_checkout_sha_defers_then_escalates_on_landing_branch() {
     );
 }
 
+/// Acceptance: the missing-checkout reproduction also holds when the sweep's
+/// investigation budget is exhausted. Seven red runs against a budget of six
+/// leave one run listed but not investigated (`investigation_budget`) beside
+/// the investigated runs' `checkout_evidence` gaps. Both are run-scoped, so the
+/// sweep defers rather than fails, files nothing and opens no task.
+#[test]
+fn ci_missing_checkout_sha_with_exhausted_budget_defers_without_filing() {
+    if !isolated_with_fake_gh(
+        "sweep::ci_missing_checkout_sha_with_exhausted_budget_defers_without_filing",
+    ) {
+        return;
+    }
+    let log = [
+        "##[group]Run cargo test",
+        "##[endgroup]",
+        "thread 'missing_checkout_regression' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "error: test failed",
+        "##[error]Process completed with exit code 101.",
+    ]
+    .map(|payload| format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {payload}\n"))
+    .concat();
+    // Red runs of one workflow on one branch supersede each other, so each
+    // extra current failure needs its own pushed branch.
+    let mut workspace = Workspace::new();
+    workspace.push_red_run(8_400, 9_500, &log);
+    let head = workspace.head.clone();
+    for run in 1..7u64 {
+        let branch = format!("task/{}-budget", 8_400 + run);
+        git(
+            &workspace.repo,
+            &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+        );
+        workspace.publish_red_run(
+            &branch,
+            "pull_request",
+            &head,
+            8_400 + run,
+            &[9_500 + run],
+            &log,
+        );
+    }
+    let (evidence, filed) = workspace.sweep();
+    assert!(
+        evidence["retryable_errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error["operation"] == json!("investigation_budget")),
+        "the investigation budget must be exhausted: {evidence:#}"
+    );
+    let output = filed.expect("an exhausted budget and a missing SHA defer instead of failing");
+    assert_eq!(output["outcome"], json!("deferred"), "{output:#}");
+    assert_eq!(output["filed_count"], json!(0), "{output:#}");
+    let reasons: Vec<&Value> = output["deferred"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entry| entry["reasons"].as_array().unwrap())
+        .collect();
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason["operation"] == json!("checkout_evidence")),
+        "the missing checkout SHA is held as a deferred reason: {output:#}"
+    );
+    assert!(
+        open_sweep_tasks(&workspace.runtime).is_empty(),
+        "{output:#}"
+    );
+}
+
 /// B4: newer red runs on task branches origin has since deleted outnumber the
 /// agent-main failure and carry more failed jobs than the job-log budget, so a
 /// slot or log read spent on them would starve agent-main.

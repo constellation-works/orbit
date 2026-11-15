@@ -59,7 +59,8 @@
 #   finding: it is reported in `file`'s `deferred` list with its reasons and
 #   left for a later sweep, while every complete finding in the same snapshot
 #   still files, dedupes, and pilots. When every current failure is deferred
-#   for a run-scoped collection error, which the sweep history degrades or
+#   for a run-scoped collection error, or for a run-scoped missing checkout SHA
+#   (`registration`/`checkout_evidence`), which the sweep history degrades or
 #   escalates after three sweeps, `file` reports `deferred` with a
 #   `deferred_count` and the sweep succeeds; it records a
 #   `pipeline.run.deferred` audit row, which Incidents lists as `deferred`.
@@ -67,8 +68,9 @@
 #   or listing read — leaves the whole snapshot in doubt, so `file` files
 #   nothing and reports `deferred` (stage `collection_or_investigation`,
 #   with the retryable errors and audit) and records a
-#   `pipeline.run.deferred` row for a later sweep to retry. A registration,
-#   dedupe, or task-creation failure, or a snapshot in which nothing else
+#   `pipeline.run.deferred` row for a later sweep to retry. A registration
+#   (other than the run-scoped checkout SHA gap above), dedupe, or
+#   task-creation failure, or a snapshot in which nothing else
 #   was complete enough to file, still fails `file` with a bounded
 #   `retryable_error` payload. The job retry wrapper retries
 #   the handoff; no current failure is consumed as a clean result.
