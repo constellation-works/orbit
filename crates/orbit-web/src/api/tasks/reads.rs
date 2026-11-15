@@ -71,7 +71,7 @@ use std::sync::Arc;
 /// The cross-workspace `/api/tasks/all` aggregate shares the filters and the
 /// envelope, but not this order: it cuts pages workspace by workspace in
 /// `/api/workspaces` order, and its cursor names the workspace it resumes in
-/// (see `list_all_tasks` in `api/workspaces.rs`).
+/// (see `list_all_tasks` in `api/workspaces/all_tasks.rs`).
 ///
 /// ## Per-status form (`group=status`)
 ///
