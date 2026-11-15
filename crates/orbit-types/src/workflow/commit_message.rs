@@ -378,22 +378,39 @@ impl From<&CommitMessage> for MergeMessage {
 pub struct ComposedSubject {
     /// `<type>: <summary> [ID]… (#PR)`.
     pub subject: String,
-    /// The summary lost words, so the body should carry it whole.
+    /// The summary was shortened or altered, so the body should carry it whole.
     pub summary_cut: bool,
 }
 
 /// Compose `<type>: <summary> [ID]… (#PR)` within [`COMMIT_SUBJECT_BUDGET`]
 /// characters. The summary is cut at a word boundary (trailing punctuation
 /// dropped, no ellipsis); a single word longer than the room is cut at a
-/// character. When ids alone leave the summary less than a minimum, trailing
-/// ids leave the subject: callers carry every id in `Orbit-Task` trailers.
+/// character. Literal ellipses and bracketed comma lists are rewritten to
+/// comply with subject validation. When ids alone leave the summary less than
+/// a minimum, trailing ids leave the subject: callers carry every id in `Orbit-Task` trailers.
 pub fn compose_subject(
     commit_type: CommitType,
     summary: &str,
     task_ids: &[&str],
     pr_number: Option<u64>,
 ) -> ComposedSubject {
-    let summary = single_line(summary);
+    let original = single_line(summary);
+    let mut segments = original.split('[');
+    let mut summary = segments.next().unwrap_or_default().replace('…', "...");
+    for segment in segments {
+        if let Some((token, rest)) = segment.split_once(']')
+            && token.contains(',')
+        {
+            summary.push('[');
+            summary.push_str(&token.replace('…', "...").replace(',', ";"));
+            summary.push(']');
+            summary.push_str(&rest.replace('…', "..."));
+        } else {
+            summary.push('[');
+            summary.push_str(&segment.replace('…', "..."));
+        }
+    }
+    let altered = summary != original;
     let prefix = format!("{}: ", commit_type.as_str());
     let pr = pr_number
         .map(|number| format!(" (#{number})"))
@@ -419,7 +436,7 @@ pub fn compose_subject(
     let (kept, summary_cut) = shorten_at_word(&summary, room);
     ComposedSubject {
         subject: format!("{prefix}{kept}{suffix}"),
-        summary_cut,
+        summary_cut: summary_cut || altered,
     }
 }
 
