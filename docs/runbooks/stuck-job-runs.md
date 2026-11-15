@@ -1297,8 +1297,12 @@ That refusal is a hold, not a failure: no editor started, so the run ends
 `held` under the `footprint_unavailable` code, the published branch and pull
 request are untouched, and the task returns to the backlog
 (`footprint_unavailable_requeued`) for a later admission once the holders
-release. Nothing needs an operator unless the same holders keep the locks
-across admissions. A run that stops while it waits is different: its refusal
+release. The task stays bound to the held run; admission and the next run's
+adoption look through it to the publication it adopted, so readiness still
+reports `published_delivery` and the next run reuses the same branch and pull
+request. Nothing needs an operator unless the same holders keep the locks
+across admissions, or the held run had already pushed or opened a pull request
+itself (then the next run refuses as for any newer publishing attempt). A run that stops while it waits is different: its refusal
 (`run stopped while … waited`) carries no code and still fails.
 Another resumed run that still waits for its own footprint holds no file and is
 no holder, so two overlapping resumed runs take the footprint one after the

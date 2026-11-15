@@ -84,6 +84,22 @@ fn repairable_stopped_source(source: &JobRun) -> bool {
         && (source.state == JobRunState::Failed || held_for_review_decision(source))
 }
 
+/// Checkpoints by which a run published to the remote or the forge itself.
+/// A local `commit` is not one: the next adoption re-applies the publication.
+const OWN_PUBLICATION_KEYS: [&str; 5] = ["push", "pr_open", "landing_push", "re_push", "re_push_2"];
+
+/// `run` stopped `held` because its deferred footprint stayed busy
+/// ([`HeldFailure::FootprintUnavailable`]): no editor started.
+fn footprint_held(run: &JobRun) -> bool {
+    run.job_id == workflow::TASK_PR_PIPELINE_JOB
+        && run.state == JobRunState::Held
+        && source_owner_is_gone(run)
+        && run.steps.iter().any(|step| {
+            HeldFailure::of(step.error_code.as_deref(), step.error_message.as_deref())
+                == Some(HeldFailure::FootprintUnavailable)
+        })
+}
+
 /// A publication the next run may adopt: a stopped failed or cancelled
 /// delivery, or a stopped review-decision hold.
 fn adoptable_published_source(source: &JobRun) -> bool {
@@ -135,6 +151,47 @@ pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(
 }
 
 impl OrbitRuntime {
+    /// The preserved publication `run` adopted, when `run` is a resumed
+    /// published delivery that ended held on its busy deferred footprint
+    /// without publishing anything of its own.
+    ///
+    /// Such a run skips final recovery, so nothing re-preserves the
+    /// publication under its id, and terminal cleanup leaves the task bound
+    /// to it. It changed nothing remote: the publication it adopted is still
+    /// exactly the one the next run must adopt, so the published-resume
+    /// lookups judge that source instead [ORB-24993]. The adoption is
+    /// authenticated as recorded ([`Self::read_owner_publication_binding`]);
+    /// anything unproven answers `None` and keeps the ordinary refusal.
+    fn footprint_held_adopted_source(&self, run: &JobRun) -> Result<Option<String>, OrbitError> {
+        if !footprint_held(run) {
+            return Ok(None);
+        }
+        let Some(state) = self.read_run_state(&run.run_id)? else {
+            return Ok(None);
+        };
+        if OWN_PUBLICATION_KEYS
+            .iter()
+            .any(|key| state.pipeline.get(*key).is_some_and(|v| !v.is_null()))
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .read_owner_publication_binding(&run.run_id, false)
+            .ok()
+            .flatten()
+            .map(|binding| binding.source_run_id))
+    }
+
+    /// `run_id`, or the publication it adopted when it is a footprint-held
+    /// resumed delivery ([`Self::footprint_held_adopted_source`]).
+    fn published_source_through_footprint_hold(&self, run_id: &str) -> Result<String, OrbitError> {
+        let adopted = match self.get_job_run_backend(run_id)? {
+            Some(run) => self.footprint_held_adopted_source(&run)?,
+            None => None,
+        };
+        Ok(adopted.unwrap_or_else(|| run_id.to_string()))
+    }
+
     /// `run_id`, when a requeue of `task` would preserve its publication: a
     /// local, unclaimed owner PR run that pushed or opened its pull request.
     fn published_owner_requeue_source(
@@ -214,12 +271,16 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<PublishedResume>, OrbitError> {
-        let Some(source_id) = task.job_run_id.as_deref() else {
+        let Some(bound_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
         if task.status != TaskStatus::Backlog || !self.task_run_is_local(task) {
             return Ok(None);
         }
+        // A footprint hold requeues the task still bound to the held run,
+        // which only adopted this publication [ORB-24993].
+        let source_id = self.published_source_through_footprint_hold(bound_id)?;
+        let source_id = source_id.as_str();
         let Some(source) = self.get_job_run_backend(source_id)? else {
             return Ok(None);
         };
@@ -557,7 +618,7 @@ impl OrbitRuntime {
             let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
                 job_id: Some(workflow::TASK_PR_PIPELINE_JOB.into()),
                 task_id: Some(task_id.into()),
-                limit: Some(2),
+                limit: Some(super::successor::SUCCESSOR_CHAIN_WINDOW),
                 include_steps: false,
                 ..Default::default()
             })?;
@@ -566,17 +627,37 @@ impl OrbitRuntime {
                     "newer execution makes publication association ambiguous",
                 ));
             }
-            Ok(runs
-                .get(1)
-                .ok_or_else(|| refuse("published predecessor is missing"))?
-                .run_id
-                .clone())
+            // Runs held on a busy footprint after adopting the publication
+            // changed nothing remote; they stand aside for the publisher
+            // they adopted, and must all name it [ORB-24993].
+            let mut adopted = Vec::new();
+            for run in runs.iter().skip(1) {
+                let Some(run) = self.get_job_run_backend(&run.run_id)? else {
+                    return Err(refuse("published predecessor is missing"));
+                };
+                if let Some(source) = self.footprint_held_adopted_source(&run)? {
+                    adopted.push(source);
+                    continue;
+                }
+                if adopted.iter().any(|source| *source != run.run_id) {
+                    return Err(refuse(
+                        "a footprint-held attempt adopted another publication than its predecessor",
+                    ));
+                }
+                return Ok(run.run_id);
+            }
+            Err(refuse("published predecessor is missing"))
         };
         // Setup can stamp the task and lose its reply before checkpointing
         // the prior id. Never skip a newer attempt to find an older publication.
         let recovered_source;
-        let source_id = match source_id {
-            Some(id) => id,
+        let source_id: &str = match source_id {
+            // The binding setup recorded may be a footprint-held run that only
+            // adopted this publication [ORB-24993].
+            Some(id) => {
+                recovered_source = self.published_source_through_footprint_hold(id)?;
+                &recovered_source
+            }
             None if !records.is_empty() || task.github_pr_number().is_some() => {
                 recovered_source = predecessor()?;
                 &recovered_source
