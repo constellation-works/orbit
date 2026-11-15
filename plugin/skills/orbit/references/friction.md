@@ -44,6 +44,11 @@ orbit tool run orbit.friction --input '{"action":"add",
 `during_task` must name an existing task; an id that names none is refused as not
 found instead of being recorded.
 
+When an MCP session has no execution model, friction creation records the
+receiving host's resolved process actor in `model`, matching task-write
+attribution. This also applies to federated routes: no per-call model is
+needed. Updating a friction preserves its original attribution.
+
 **Write the `title` yourself.** It is the record's handle everywhere the corpus
 is scanned — `friction list`, the dashboard, and the search someone runs before
 filing a duplicate. A handle that doesn't name its subject is invisible to that
