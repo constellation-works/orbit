@@ -246,9 +246,10 @@ A backlog task with readiness gaps (no context files, or unassessed
 complexity) shows **Waive readiness** in Readiness. Confirm it to add the
 `readiness-waived` tag: the drain then admits the task like ready work. A task
 with no context files holds no file lock, so it no longer waits for the pilot
-or for an exclusive slot and may run beside other work. Only an operator can
-add the tag, and a new task cannot be filed with it. Task history records
-`readiness_waived` with who waived it and which gaps.
+or for an exclusive slot and may run beside other work; a task with declared
+context files keeps its file lock protection while waiving only the complexity
+gate. Only an operator can add the tag, and a new task cannot be filed with it.
+Task history records `readiness_waived` with who waived it and which gaps.
 
 Readiness then shows who waived it and **Remove waiver**, which removes the tag
 and records `readiness_waiver_removed`; the gaps hold the task again. The
