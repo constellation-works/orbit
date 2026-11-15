@@ -185,8 +185,8 @@ selector outside the agent sandbox before handoff, pinning the passing logs. A
 failing replay fails the claim, as does one that runs no test or prints a skip;
 an empty selector list, more than 16 selectors, or a selector outside that
 grammar is refused before anything runs. A candidate that also changes the base
-is refused for this outcome. The owner accepts the checkpoint only when it names this task and its
-pinned base and its selectors still admit.
+is refused for this outcome. The owner accepts the checkpoint only when it
+names this task and its pinned base and its selectors still admit.
 
 Artifact-backed evidence stays authoritative. A verifier report or already-landed
 report that the implementer supplies is imported and verified first, and a
