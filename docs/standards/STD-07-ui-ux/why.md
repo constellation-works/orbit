@@ -233,6 +233,12 @@ A rule is here only when its correction recurred.
   its original size. make them smaller only when there is no more space. and update ux rule"
   (f09993e5, ORB-25032, F2026-11-302). Version 7 keeps full size wherever the row fits, and
   names tab strips.
+- **R42 (controls sized by content).** The owner asked for the drain card's target select
+  to be wider (ORB-25031), and the fix gave it a fixed `width: 330px`. Looking at the result
+  he asked: "and yes I asked for wider, but how should we determine an optimal width?"
+  (f09993e5, ORB-25074, F2026-11-310). A fixed width is a guess: it leaves an empty box for
+  short names and clips long ones. R39 said how a row shrinks but not how wide a member
+  starts. The owner approved sizing it from its longest option, capped by the row.
 
 ## Process
 
