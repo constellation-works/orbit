@@ -1,24 +1,36 @@
 #!/usr/bin/env python3
-"""Repack the same nextest tar stream for transfer or native extraction.
+"""Repack a nextest archive's tar stream for transfer, or extract the transfer.
 
-Usage: ci-repack-nextest.py pack|unpack SOURCE DESTINATION [--parts N]
-Requires zstd on PATH. Neither operation extracts members or replaces an
-existing destination. Transfer frames use a bounded 512 MiB history; unpack
-restores a small-window frame that nextest's default decoder accepts.
+Usage: ci-repack-nextest.py pack|extract SOURCE DESTINATION [--parts N]
+Requires zstd on PATH. Transfer frames use a bounded 512 MiB history, which
+nextest's own decoder does not accept.
 
-The transfer is split into N byte ranges, SOURCE.1 to SOURCE.N for unpack and
-DESTINATION.1 to DESTINATION.N for pack, so the shards can download them as
-separate artifacts in parallel. Unpack reads every part in order and fails
+Pack re-encodes the archive SOURCE for transfer and never replaces an
+existing destination. Extract decodes the transfer once and writes its
+members under the existing directory DESTINATION, as `cargo nextest run
+--archive-file --extract-to DESTINATION --extract-overwrite` would, without
+re-encoding the stream for nextest and decoding it a second time. Only
+regular files and directories under `target/` are admitted, through
+tarfile's `data` filter (no absolute or escaping paths, links, devices or
+set-id bits); anything else, or a stream that does not decode completely,
+fails. A shard then runs nextest from the extraction's
+`target/nextest/binaries-metadata.json` and `cargo-metadata.json`.
+
+The transfer is split into N byte ranges, DESTINATION.1 to DESTINATION.N for
+pack and SOURCE.1 to SOURCE.N for extract, so the shards can download them as
+separate artifacts in parallel. Extract reads every part in order and fails
 unless their concatenation decodes completely.
 """
 
 import argparse
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import threading
 import time
 
 COPY_BYTES = 8 * 1024 * 1024
@@ -65,6 +77,61 @@ def recode(zstd, sources, output, options):
                 child.wait()
 
 
+def extract(zstd, sources, destination):
+    """Decode the concatenated sources and extract the tar stream under `destination`."""
+    decoder = subprocess.Popen([zstd, "-q", "-dc", "-M512MB"], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE)
+    fed = []
+
+    def feed():
+        # This process reads the decoder's output, so the parts are written
+        # to its input from a second thread, in order.
+        try:
+            for source in sources:
+                with source.open("rb") as part:
+                    shutil.copyfileobj(part, decoder.stdin, COPY_BYTES)
+            fed.append(True)
+        except (BrokenPipeError, OSError):
+            pass  # The decoder exited early; its status reports why.
+        finally:
+            try:
+                decoder.stdin.close()
+            except BrokenPipeError:
+                pass
+
+    feeder = threading.Thread(target=feed)
+    feeder.start()
+    members = 0
+    try:
+        try:
+            with tarfile.open(fileobj=decoder.stdout, mode="r|") as archive:
+                for member in archive:
+                    parts = PurePosixPath(member.name).parts
+                    if (not parts or parts[0] != "target" or ".." in parts
+                            or not (member.isfile() or member.isdir())):
+                        raise RuntimeError(f"refusing archive member {member.name!r}")
+                    archive.extract(member, destination, filter="data")
+                    members += 1
+        except tarfile.TarError as error:
+            raise RuntimeError(f"tar stream invalid: {error}") from error
+        # Read past the end-of-archive marker, so a truncated or corrupt
+        # frame after it still fails the decoder.
+        while decoder.stdout.read(COPY_BYTES):
+            pass
+        decoded = decoder.wait()
+        feeder.join()
+        if decoded or not fed:
+            raise RuntimeError(f"zstd failed: decoder={decoded} fed={bool(fed)}")
+        if members == 0:
+            raise RuntimeError("the archive holds no members")
+        return members
+    finally:
+        if decoder.poll() is None:
+            decoder.kill()
+            decoder.wait()
+        feeder.join()
+
+
 def split(source, destinations, temporaries):
     """Copy `source` into consecutive byte ranges, one new temporary per destination."""
     size = source.stat().st_size
@@ -85,7 +152,7 @@ def split(source, destinations, temporaries):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("pack", "unpack"))
+    parser.add_argument("mode", choices=("pack", "extract"))
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--parts", type=int, default=1)
@@ -104,14 +171,21 @@ def main():
         options = ["-3", "--long=29", "-T0"]
     else:
         sources = part_paths(args.source, args.parts)
-        destinations = [args.destination]
-        options = ["-1"]
     if not all(source.is_file() for source in sources):
         parser.error("source must be an existing compressed archive with every part")
+
+    started = time.monotonic()
+    if args.mode == "extract":
+        if not args.destination.is_dir():
+            parser.error("destination must be an existing directory")
+        members = extract(zstd, sources, args.destination)
+        print(f"nextest-repack: mode=extract parts={args.parts} "
+              f"input_bytes={sum(source.stat().st_size for source in sources)} "
+              f"members={members} wall_seconds={time.monotonic() - started:.3f}")
+        return
     if any(os.path.lexists(destination) for destination in destinations):
         parser.error("destination already exists; refusing to replace it")
 
-    started = time.monotonic()
     temporaries = []
     published = []
     try:
@@ -119,11 +193,8 @@ def main():
         temporaries.append(whole)
         with whole.open("wb") as output:
             recode(zstd, sources, output, options)
-        if args.mode == "pack":
-            split(whole, destinations, temporaries)
-            staged = temporaries[1:]
-        else:
-            staged = [whole]
+        split(whole, destinations, temporaries)
+        staged = temporaries[1:]
         # link publishes without overwriting a destination created since the
         # initial check. Every temporary is on its destination's filesystem.
         for temporary, destination in zip(staged, destinations):

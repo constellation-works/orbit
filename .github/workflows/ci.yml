@@ -1110,18 +1110,23 @@ jobs:
           path: ${{ runner.temp }}
 
       # Native nextest decoders cap their history below the transfer window.
-      # Re-encode the identical tar stream from every part in order (a missing
-      # part fails); leave safe extraction to nextest.
-      - name: Restore native nextest archive
-        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py unpack "$RUNNER_TEMP/nextest-transfer.tar.zst" "$RUNNER_TEMP/nextest-archive.tar.zst" --parts "$NEXTEST_ARCHIVE_PARTS"
+      # [ORB-24987] Decode every part in order (a missing or truncated part
+      # fails) and extract the tar stream once, under this checkout's target/,
+      # instead of re-encoding it for nextest and having nextest decode and
+      # extract it again (9-13 s plus 5-7 s on the critical path hosted).
+      # Only regular files and directories under target/ pass tarfile's
+      # `data` filter.
+      - name: Extract nextest archive
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py extract "$RUNNER_TEMP/nextest-transfer.tar.zst" "$PWD" --parts "$NEXTEST_ARCHIVE_PARTS"
 
       # The archive extracts to target/ under this checkout, the path the test
       # build compiled against, so `env!("CARGO_BIN_EXE_orbit")` and fixture
-      # paths resolve as they did there. Profile ci raises test-threads above
-      # the 4-vCPU runner default. The sampler prints one cpu-util line and
-      # keeps nextest's exit status. An affected-crates archive can leave a
-      # partition empty, which passes; the full archive cannot (the test
-      # build's partition guard fails on an empty shard).
+      # paths resolve as they did there. nextest runs from that extraction's
+      # metadata, as the partition guard lists it. Profile ci raises
+      # test-threads above the 4-vCPU runner default. The sampler prints one
+      # cpu-util line and keeps nextest's exit status. An affected-crates
+      # archive can leave a partition empty, which passes; the full archive
+      # cannot (the test build's partition guard fails on an empty shard).
       - name: Run nextest shard
         env:
           CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
@@ -1138,8 +1143,9 @@ jobs:
           TIMEFORMAT='nextest_shard_seconds=%R'
           time ./scripts/cpu-utilisation.sh --label nextest -- \
             cargo nextest run --profile ci --no-fail-fast --success-output immediate \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap "$PWD" --extract-to "$PWD" --extract-overwrite \
+            --binaries-metadata target/nextest/binaries-metadata.json \
+            --cargo-metadata target/nextest/cargo-metadata.json \
+            --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
             --partition "count:$PARTITION/$NEXTEST_PARTITIONS" --no-tests pass \
             ${filter[@]+"${filter[@]}"}
 

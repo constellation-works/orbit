@@ -531,11 +531,13 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   stream per artifact; a single stream ran at 3–10 MB/s on some runners),
   in at most three download attempts. The first two attempts continue on
   error; the third fails the job, so nextest does not run without the
-  archive. It restores a native small-window encoding of
-  their concatenation with
-  `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
-  `cargo nextest run --profile ci --partition count:k/N`
-  from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
+  archive. It decodes their concatenation once and extracts it under the
+  checkout's `target/` with
+  `ci-repack-nextest.py extract SOURCE DESTINATION --parts N` (only regular
+  files and directories under `target/`, through tarfile's `data` filter),
+  and runs `cargo nextest run --profile ci --partition count:k/N` from that
+  extraction's `--binaries-metadata` and `--cargo-metadata`,
+  where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
   The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
   run the same steps on nine more test runners, selecting partitions 5, 2 and
   6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
