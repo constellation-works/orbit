@@ -666,8 +666,11 @@ supply own `context_files` yourself. Empty context holds no context lock.
 Distributed pull admission, an explicit ship and a single-slot local drain
 admit selector-free backlog tasks on the next pass. A local drain or ship with
 more than one slot waits for this host's task pilot to prepare one
-(`awaiting_footprint`), then runs it only alone (`awaiting_exclusive_slot`). Undeclared edit conflicts are handled at
-landing by rebase and conflict repair. Operator task-scope reservation still
+(`awaiting_footprint`), then runs it only alone (`awaiting_exclusive_slot`),
+unless an operator tagged it `readiness-waived`: that waiver admits it like
+ready work, beside other editing work, with no file lock or whole-tree
+reservation. Undeclared edit conflicts are handled at landing by rebase and
+conflict repair. Operator task-scope reservation still
 requires a declared surface. A live task-pilot preparation (its reservation
 from prepare, then its checkpoint) still holds its tasks until that run settles.
 

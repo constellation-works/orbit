@@ -111,7 +111,8 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
 - `context_files` are optional, but an empty list holds no context lock. A single-slot local
   drain, an explicit `orbit run ship <id>` and owner pull admission admit a backlog task with no
   selectors on the next pass. A local drain or discovery ship with more than one slot treats such
-  a task (no `no-diff-expected` tag) as a whole-tree footprint [ORB-15191]. While an enabled
+  a task (no `no-diff-expected` tag and no operator `readiness-waived` tag) as
+  a whole-tree footprint [ORB-15191]. While an enabled
   `preparation_eligible` routine this host owns would still prepare it (its eligibility admits
   the task, the pilot has not assessed it, and `max_wait_minutes + deadline_minutes` since its
   last change have not elapsed), the task waits as `awaiting_footprint`. Otherwise it starts only
@@ -1797,6 +1798,7 @@ this table retains its requirements without claiming the entire matrix was execu
 | In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
 | Critical or high-priority task waits on several locks that free one at a time | It reserves its surface: lower-ranked backlog work overlapping it waits as `surface_reserved` naming it, non-overlapping work admits, and it takes the wave once its locks free. At most two reserve per pass; nothing persists between passes ([ORB-14310]) |
 | Backlog task with no `context_files` in a multi-slot local drain or discovery ship | Waits for this host's task pilot (`awaiting_footprint`), else runs only with no other leaf in flight (`awaiting_exclusive_slot`) and holds the tree while it runs; single-slot runs, explicit ship and owner pull admission keep admitting it on the next pass ([ORB-15191]) |
+| Same task tagged `readiness-waived` by an operator | Admitted like ready work in a multi-slot drain: no pilot wait, no exclusive slot, no whole-tree reservation; holds no file lock and runs beside other editing work ([ORB-25084]) |
 | Authorized handoff with no drain running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
 | Explicit ship, owner drains, leftover `ship_sweep` routine | Ship and drains take common admission and none grants merge rights or bypasses slot accounting; a leftover routine loads as retired and never fires |
 | Epic retirement with active old runs, including roots in review | Operator reconciles execution and reservations before migration following the runbook checklist |

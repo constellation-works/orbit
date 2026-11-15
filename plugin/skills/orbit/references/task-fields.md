@@ -164,7 +164,11 @@ pagination for a projection.
   holds no context lock. A single-slot run, an explicit ship and owner pull
   admit such a backlog task on the next pass; a drain or ship with more than
   one slot waits for the task pilot (`awaiting_footprint`), then runs it only
-  alone (`awaiting_exclusive_slot`). Declared selectors keep their existing
+  alone (`awaiting_exclusive_slot`), unless an operator has tagged the task
+  `readiness-waived`. That waiver admits the task like ready work: it holds no
+  file lock, reserves no tree and may run beside other editing work. Only an
+  operator adds the tag; an agent's write that adds it is refused, and a new
+  task cannot be filed with it. Declared selectors keep their existing
   conflict checks; undeclared edit conflicts surface at landing.
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
   status first. Not an `orbit.task.add` input: it is refused as an unknown
