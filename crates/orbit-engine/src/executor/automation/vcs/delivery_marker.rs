@@ -27,36 +27,53 @@ const MAX_MARKER_LEN: usize = 64;
 
 /// Commits whose message names `marker` (brackets included) within `scope`:
 /// as a bracketed marker, as one id of an older comma-separated bracket list
-/// (`[ORB-1, ORB-2]`), or as an `Orbit-Task` trailer value.
+/// (`[ORB-1, ORB-2]`), or as an `Orbit-Task` trailer value. Quoted `Fixes:`
+/// attribution is excluded, and `max_count` limits only accepted deliveries.
 pub(super) fn commits_matching(
     repo_root: &Path,
     marker: &str,
     scope: &[&str],
+    max_count: Option<usize>,
 ) -> Result<Vec<String>, OrbitError> {
     let id = marker
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(marker);
-    let id = escape_extended_regex(id);
+    let escaped_id = escape_extended_regex(id);
     // Anchor the comma-list alternative inside brackets: an id is a list
     // member only between `[` and the matching `]`, with no other `[` in
     // between (each `[` opens its own candidate, as in `delivery_markers`),
     // never in prose such as `Related work: ORB-111, ORB-222, ORB-333`.
-    let grep = format!("--grep=\\[([^][]*, ?)?{id}(, ?[^][]*)?\\]|^Orbit-Task: {id}$");
+    let grep =
+        format!("--grep=\\[([^][]*, ?)?{escaped_id}(, ?[^][]*)?\\]|^Orbit-Task: {escaped_id}$");
     let mut args = vec![
         "log",
         "--no-color",
-        "--format=%H",
+        "-z",
+        "--format=%H%x00%B",
         "--extended-regexp",
         &grep,
     ];
     args.extend_from_slice(scope);
-    Ok(git_output(repo_root, &args)?
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    // Git's grep is only a candidate prefilter: it also sees quoted Fixes
+    // subjects. Keep messages paired with their SHAs using NUL separators,
+    // then apply the shared ownership parser before counting matches. Passing
+    // --max-count to Git would let newer quotes hide an older owned delivery.
+    let history = git_output(repo_root, &args)?;
+    let mut fields = history.split('\0');
+    Ok(
+        std::iter::from_fn(|| Some((fields.next()?, fields.next()?)))
+            .filter(|(_, message)| {
+                let mut owned = false;
+                // The caller already knows the task id. Keep accepting ids
+                // that the conservative marker-discovery grammar would omit.
+                visit_owned_delivery_tokens(message, |token| owned |= token == id);
+                owned
+            })
+            .take(max_count.unwrap_or(usize::MAX))
+            .map(|(sha, _)| sha.to_string())
+            .collect(),
+    )
 }
 
 /// Whether any commit reachable from `from` carries `marker`.
@@ -65,7 +82,7 @@ pub(super) fn marker_reachable(
     marker: &str,
     from: &str,
 ) -> Result<bool, OrbitError> {
-    Ok(!commits_matching(repo_root, marker, &["--max-count=1", from])?.is_empty())
+    Ok(!commits_matching(repo_root, marker, &[from], Some(1))?.is_empty())
 }
 
 /// The bracketed delivery markers a commit message carries, in first-seen
@@ -84,34 +101,39 @@ pub(super) fn marker_reachable(
 /// had no room for every id still reports each one. An older subject's
 /// comma-separated list (`[ORB-1, ORB-2]`) yields one marker per id.
 pub(super) fn delivery_markers(message: &str) -> Vec<String> {
-    let owned = owned_text(message);
     let mut markers: Vec<String> = Vec::new();
-    let mut push = |token: &str| {
+    visit_owned_delivery_tokens(message, |token| {
         if is_marker(token) {
             let marker = format!("[{token}]");
             if !markers.contains(&marker) {
                 markers.push(marker);
             }
         }
-    };
+    });
+    markers
+}
+
+/// Share attribution and token boundaries between known-id searches and
+/// conservative discovery; only discovery imposes the marker-shape grammar.
+fn visit_owned_delivery_tokens(message: &str, mut visit: impl FnMut(&str)) {
+    let owned = owned_text(message);
     for candidate in owned.split('[').skip(1) {
         let Some((token, _)) = candidate.split_once(']') else {
             continue;
         };
         if token.contains(',') {
-            token.split(',').map(str::trim).for_each(&mut push);
+            token.split(',').map(str::trim).for_each(&mut visit);
         } else {
-            push(token);
+            visit(token);
         }
     }
     for line in owned.lines().skip(1) {
         if let Some(trailer) = Trailer::parse_line(line)
             && trailer.key == TrailerKey::OrbitTask
         {
-            push(trailer.value.trim());
+            visit(trailer.value.trim());
         }
     }
-    markers
 }
 
 /// `text` with every POSIX extended-regex metacharacter escaped.

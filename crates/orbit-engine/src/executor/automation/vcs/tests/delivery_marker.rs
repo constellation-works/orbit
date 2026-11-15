@@ -87,7 +87,7 @@ fn commits_matching_ignores_comma_list_prose_but_matches_delivery_markers() {
         &["feat: trailer delivery", "Body.\n\nOrbit-Task: ORB-222"],
     );
 
-    let matched = commits_matching(repo.path(), "[ORB-222]", &["HEAD"]).unwrap();
+    let matched = commits_matching(repo.path(), "[ORB-222]", &["HEAD"], None).unwrap();
     assert_eq!(matched, vec![trailer, list, single]);
     assert!(!matched.contains(&prose));
     assert!(!matched.contains(&unclosed));
