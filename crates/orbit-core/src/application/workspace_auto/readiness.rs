@@ -642,6 +642,14 @@ fn readiness_snapshot_with_detail(
     } else {
         None
     };
+    // The drain card's three live-agent figures. Omitted when the runs cannot
+    // be read, so an older client and a failed observation both leave the row
+    // off. Fleet rows do not report it.
+    if matches!(depth, ReadinessDepth::Full)
+        && let Some(counts) = super::live_agents::observe_live_agents(runtime)
+    {
+        payload["live_agents"] = counts;
+    }
     Ok((payload, detail))
 }
 

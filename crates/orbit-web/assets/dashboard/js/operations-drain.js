@@ -294,40 +294,55 @@ function renderAutoDrainHead(payload) {
   announcedDrainState = stateKey;
 }
 
-// The live window as one row of figures: what still runs, what it has
-// admitted and, when it was started with approve-proposed, what it approved
-// and held. Its run and deadline live in the footer and header. Empty when no
-// auto window is live.
-function autoDrainWindow(payload) {
-  const { capacity, phase, running, pulling } = autoDrainPhase(payload);
-  if (pulling || phase === "idle") return null;
+// What each live-agent figure counts. The title is the definition; the visible
+// word is only the group.
+const LIVE_AGENT_FIGURES = [
+  ["pilots", "Agent processes running now that pilot tasks"],
+  ["recovery", "Agent processes running now that fix or recover work"],
+  ["reviewers", "Agent processes running now that review work"],
+];
+
+// A non-negative integer, or null when this payload does not carry the figure.
+function liveAgentInteger(live, key) {
+  if (!live || typeof live !== "object") return null;
+  const value = live[key];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+// The three live-agent figures, or null when the payload has no complete
+// count object. A missing object leaves the row off; zeros still render.
+function liveAgentStats(live) {
+  const figures = LIVE_AGENT_FIGURES.map(([key, title]) => {
+    const value = liveAgentInteger(live, key);
+    return value === null ? null : { key, title, value };
+  });
+  if (figures.some(figure => figure === null)) return null;
   const stats = el("dl", { class: "drain-window-stats" });
   stats.id = "auto-drain-live";
-  stats.setAttribute("aria-label", "This window");
-  const stat = (key, label, value, detail = "", title = "") => {
-    const figure = el("div", { class: "drain-window-stat", title }, [
-      el("dt", { text: label }),
-      el("dd", { text: String(value) }),
-      detail ? el("span", { class: "drain-window-stat-detail", text: detail }) : null,
+  for (const figure of figures) {
+    const row = el("div", { class: "drain-window-stat", title: figure.title }, [
+      el("dt", { text: figure.key }),
+      el("dd", { text: String(figure.value) }),
     ]);
-    figure.dataset.stat = key;
-    stats.appendChild(figure);
-  };
-  stat("running", "running", running);
-  if (capacity.admitted_workers != null) stat("admitted", "admitted", capacity.admitted_workers);
-  const approvals = autoDrainApprovals(payload.approvals);
-  if (approvals) stat("approved", "approved", approvals.approved, approvals.held, approvals.title);
-  if (stats.children.length === 0) return null;
-  // Full counts stay in the row's name/title when members shrink or drop.
-  const countParts = [`${running} running`];
-  if (capacity.admitted_workers != null) countParts.push(`${capacity.admitted_workers} admitted`);
-  if (approvals) {
-    countParts.push(`${approvals.approved} approved`);
-    if (approvals.held) countParts.push(approvals.held);
+    row.dataset.stat = figure.key;
+    stats.appendChild(row);
   }
-  const countSummary = `This window: ${countParts.join(", ")}`;
+  // Full counts stay in the row's name/title when members shrink or drop.
+  const countSummary = `This window: ${figures.map(figure => `${figure.value} ${figure.key}`).join(", ")}`;
   stats.setAttribute("aria-label", countSummary);
   stats.title = countSummary;
+  return stats;
+}
+
+// The live window: pilots, recovery and reviewers running now. A payload
+// without those counts shows no figures. The approval line under them stays.
+// Empty when no auto window is live.
+function autoDrainWindow(payload) {
+  const { phase, pulling } = autoDrainPhase(payload);
+  if (pulling || phase === "idle") return null;
+  const stats = liveAgentStats(payload && payload.live_agents);
+  const approvals = autoDrainApprovals(payload.approvals);
   if (!approvals || !approvals.reasons.length) return stats;
   const summary = el("div", { class: "drain-approval-summary" });
   approvals.reasons.forEach(([reason, count], index) => {
@@ -340,7 +355,7 @@ function autoDrainWindow(payload) {
     }
     summary.append(item);
   });
-  return el("div", { class: "drain-window" }, [stats, summary]);
+  return el("div", { class: "drain-window" }, stats ? [stats, summary] : [summary]);
 }
 
 // The card's last row: the coordinator run (or the replica's pull drain), the

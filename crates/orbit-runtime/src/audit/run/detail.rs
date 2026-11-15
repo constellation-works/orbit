@@ -81,6 +81,11 @@ pub(crate) struct BoundedRunProgress {
     /// Audit rows this read loaded, never more than
     /// [`BOUNDED_PROGRESS_ROW_BUDGET`].
     pub rows_read: usize,
+    /// `activity.started` names of provider children that have not finished
+    /// and whose process is still alive. Taken from the structural window
+    /// before the display cap, so a long retry history cannot hide a live
+    /// child. A truncated window can still omit one.
+    pub live_activity_names: Vec<String>,
 }
 
 /// Kind-filtered windows that decide bounded progress.
@@ -100,6 +105,7 @@ struct ProgressProjection {
     step_indices: HashMap<String, u32>,
     known: HashMap<String, Value>,
     ancestry_complete: bool,
+    live_activity_names: Vec<String>,
 }
 
 /// What a bounded run-detail read observed.
@@ -157,6 +163,7 @@ impl RuntimeKernel {
                 steps_complete: true,
                 complete: true,
                 rows_read: 0,
+                live_activity_names: Vec::new(),
             });
         }
         let mut reader = TrailReader {
@@ -176,7 +183,20 @@ impl RuntimeKernel {
             progress: projection.progress,
             steps: projection.steps,
             rows_read: reader.rows_read,
+            live_activity_names: projection.live_activity_names,
         })
+    }
+
+    /// Activity names of provider children that are still running.
+    ///
+    /// Each name is the enclosing `activity.started` event's `activity_name`:
+    /// the pipeline step id for an ordinary step, and the recovery activity's
+    /// own name when recovery dispatches one. A run with no v2 audit evidence
+    /// yields an empty list. A truncated structural window can omit a child.
+    pub fn live_agent_activity_names(&self, run_id: &str) -> Result<Vec<String>, OrbitError> {
+        Ok(self
+            .collect_bounded_run_progress_with(run_id, probe_process_liveness)?
+            .live_activity_names)
     }
 
     /// Read the lifecycle, structural and sample windows for bounded
@@ -260,6 +280,14 @@ impl RuntimeKernel {
             .cloned();
         let records =
             provider_processes_from_events(run_id, events(&windows.provider), &step_indices, probe);
+        // Count before the display cap. That cap keeps at most eight children
+        // for run-show; open children are preferred, but a run can have more
+        // live agents than the cap and the count must not drop them.
+        let live_activity_names = records
+            .iter()
+            .filter(|process| !process.finished && process.liveness == ProcessLiveness::Alive)
+            .filter_map(|process| enclosing_activity_name(&process.event_id, &known))
+            .collect();
         let (provider_processes, dropped) =
             bound_provider_processes(records, MAX_PROVIDER_PROCESSES);
         let progress = RunExecutionProgress {
@@ -281,6 +309,7 @@ impl RuntimeKernel {
             step_indices,
             known,
             ancestry_complete,
+            live_activity_names,
         })
     }
 
@@ -478,6 +507,32 @@ impl TrailReader<'_> {
         }
         Ok(frontier.is_empty())
     }
+}
+
+/// The `activity_name` of the nearest `activity.started` ancestor.
+///
+/// Pipeline steps record the step id there. A recovery dispatch records the
+/// recovery activity's name. The walk stops at a missing parent or a cycle.
+fn enclosing_activity_name(event_id: &str, known: &HashMap<String, Value>) -> Option<String> {
+    let mut current = Some(event_id.to_string());
+    let mut seen = HashSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return None;
+        }
+        let raw = known.get(&id)?;
+        if raw.get("body_kind").and_then(Value::as_str) == Some("activity_started") {
+            return raw
+                .get("activity_name")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        current = raw
+            .get("parent_event_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    None
 }
 
 fn push_parent(

@@ -10,6 +10,7 @@ mod classify;
 mod drains;
 mod job_port;
 mod limiters;
+mod live_agents;
 mod mode;
 mod pilot_coordination;
 mod projection;
