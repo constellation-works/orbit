@@ -2,13 +2,14 @@
 //! an `orbit.attention` query untouched and be reported as degraded, while
 //! an ordinary operational metadata read still recovers it.
 
-use chrono::Utc;
+use chrono::{Duration, SecondsFormat, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::JobRunStepParams;
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::PipelineState;
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 
@@ -353,9 +354,105 @@ fn delivery_hold_attention_next_is_workspace_qualified_with_tool() {
     }
 }
 
+fn run_stuck_respects_declared_windows_and_progress() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let orbit = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&orbit).unwrap();
+    std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &orbit).unwrap();
+    let operator = session(McpCapability::Operator);
+    let jobs = runtime.stores().jobs();
+    let now = Utc::now();
+
+    // Seed a running run started `started` ago. When `deadline` is set the
+    // pipeline state stamps it as `open_window` (as `drain_window` does)
+    // and `progress` becomes the state's `updated_at`.
+    let seed = |job: &str,
+                input: Value,
+                started: chrono::DateTime<Utc>,
+                deadline: Option<chrono::DateTime<Utc>>,
+                progress: Option<chrono::DateTime<Utc>>|
+     -> String {
+        let run = jobs
+            .insert_job_run(job, 1, started, Some(input.clone()), None)
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, started, std::process::id())
+            .unwrap();
+        if let Some(deadline) = deadline {
+            let mut state = PipelineState::new(run.run_id.clone(), job.to_string(), input);
+            state.record_pipeline_output(
+                "open_window",
+                json!({"deadline": deadline.to_rfc3339_opts(SecondsFormat::Secs, true)}),
+            );
+            state.updated_at = progress.unwrap_or(now);
+            jobs.write_run_state(&run.run_id, &state).unwrap();
+        }
+        run.run_id
+    };
+
+    // Long drain inside its 5h window, pipeline advancing now: healthy.
+    let healthy = seed(
+        "workspace_auto_pipeline",
+        json!({"for_seconds": 18000}),
+        now - Duration::hours(3),
+        Some(now + Duration::hours(2)),
+        Some(now),
+    );
+    // Drain 5h past its 1h deadline (beyond the grace bound), even though
+    // its pipeline still advances: stuck.
+    let past_deadline = seed(
+        "workspace_auto_pipeline",
+        json!({"for_seconds": 3600}),
+        now - Duration::hours(6),
+        Some(now - Duration::hours(5)),
+        Some(now),
+    );
+    // Drain inside its window whose progress stalled at its start: stuck.
+    let stalled = seed(
+        "workspace_auto_pipeline",
+        json!({"for_seconds": 18000}),
+        now - Duration::hours(3),
+        Some(now + Duration::hours(2)),
+        Some(now - Duration::hours(3)),
+    );
+    // No declared bound, running for 3h: fixed fallback still flags it.
+    let boundless = seed("some_job", json!({}), now - Duration::hours(3), None, None);
+
+    let response = call(&runtime, json!({"kind": "run_stuck"}), &operator);
+    let flagged: Vec<&str> = response["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["refs"]["run_id"].as_str().unwrap())
+        .collect();
+    assert!(
+        !flagged.contains(&healthy.as_str()),
+        "drain inside its window with advancing pipeline must not be run_stuck: {response}"
+    );
+    for expected in [&past_deadline, &stalled, &boundless] {
+        assert!(
+            flagged.contains(&expected.as_str()),
+            "run {expected} must be run_stuck: {response}"
+        );
+    }
+    let past = response["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["refs"]["run_id"] == past_deadline)
+        .unwrap();
+    assert!(
+        past["detail"]["declared_deadline"].is_string(),
+        "past-deadline item names its declared deadline: {response}"
+    );
+}
+
 crate::scenario_table!(
     attention_observation,
     attention_does_not_recover_a_pending_task_commit,
     friction_attention_does_not_recover_a_pending_task_commit,
     delivery_hold_attention_next_is_workspace_qualified_with_tool,
+    run_stuck_respects_declared_windows_and_progress,
 );

@@ -171,6 +171,81 @@ impl RuntimeAttention<'_> {
             || self.runtime.load_v2_job_asset_by_name(&run.job_id).is_ok())
     }
 
+    /// Declared bound and last progress for a running run.
+    ///
+    /// The declared deadline is the one in force: a drain's stamped
+    /// deadline (with any operator extension) from its pipeline state,
+    /// else an explicit `deadline`/`deadline_at`/`expires_at` in the run
+    /// input, else `started_at + for_seconds`/`window_seconds`/
+    /// `timeout_seconds`/`ttl_seconds` from the input. `None` means the
+    /// run declares no bound and the fixed fallback applies.
+    ///
+    /// Last progress is the newest of the pipeline state's `updated_at`,
+    /// any recorded step start/finish, and the run's own start. Reading
+    /// pipeline state here is a raw store read, like the run rows above:
+    /// it never reconciles or resumes anything.
+    fn run_stuck_bounds(&self, run: &JobRun) -> (Option<DateTime<Utc>>, DateTime<Utc>) {
+        let state = self
+            .runtime
+            .stores()
+            .jobs()
+            .read_run_state(&run.run_id)
+            .ok()
+            .flatten();
+        let base = run.started_at.unwrap_or(run.scheduled_at);
+        let mut last_progress = base;
+        if let Some(state) = &state {
+            last_progress = last_progress.max(state.updated_at);
+        }
+        let recorded = self
+            .runtime
+            .stores()
+            .jobs()
+            .get_job_run(&run.run_id)
+            .ok()
+            .flatten();
+        let steps: &[orbit_types::workflow::JobRunStep] = match &recorded {
+            Some(recorded) if !recorded.steps.is_empty() => &recorded.steps,
+            _ => &run.steps,
+        };
+        for step in steps {
+            for at in [step.started_at, step.finished_at].into_iter().flatten() {
+                last_progress = last_progress.max(at);
+            }
+        }
+        let mut deadline = state.as_ref().and_then(job::drain_deadline);
+        if let Some(input) = &run.input {
+            for key in ["deadline", "deadline_at", "expires_at", "window_deadline"] {
+                if let Some(text) = input.get(key).and_then(Value::as_str)
+                    && let Ok(parsed) = DateTime::parse_from_rfc3339(text.trim())
+                {
+                    let parsed = parsed.with_timezone(&Utc);
+                    deadline = Some(deadline.map_or(parsed, |current| current.max(parsed)));
+                }
+            }
+            for key in [
+                "for_seconds",
+                "window_seconds",
+                "timeout_seconds",
+                "ttl_seconds",
+                "duration_seconds",
+            ] {
+                let seconds = input.get(key).and_then(|value| match value {
+                    Value::Number(number) => number.as_f64(),
+                    Value::String(text) => text.trim().parse().ok(),
+                    _ => None,
+                });
+                if let Some(seconds) = seconds.filter(|s| s.is_finite() && *s > 0.0)
+                    && let Some(candidate) = Duration::try_milliseconds((seconds * 1000.0) as i64)
+                        .and_then(|delta| base.checked_add_signed(delta))
+                {
+                    deadline = Some(deadline.map_or(candidate, |current| current.max(candidate)));
+                }
+            }
+        }
+        (deadline, last_progress)
+    }
+
     fn run_items(
         &self,
         kind: AttentionKind,
@@ -210,67 +285,84 @@ impl RuntimeAttention<'_> {
                 {
                     continue;
                 }
-                let (since, cause) =
-                    match kind {
-                        AttentionKind::RunFailed
-                            if is_newest
-                                && matches!(
-                                    run.state,
-                                    JobRunState::Failed
-                                        | JobRunState::Timeout
-                                        | JobRunState::Interrupted
-                                ) =>
+                let mut declared_deadline: Option<DateTime<Utc>> = None;
+                let mut last_progress_at: Option<DateTime<Utc>> = None;
+                let (since, cause) = match kind {
+                    AttentionKind::RunFailed
+                        if is_newest
+                            && matches!(
+                                run.state,
+                                JobRunState::Failed
+                                    | JobRunState::Timeout
+                                    | JobRunState::Interrupted
+                            ) =>
+                    {
+                        let Some(finished) = run.finished_at else {
+                            continue;
+                        };
+                        if finished
+                            < self.now
+                                - Duration::hours(i64::from(super::ATTENTION_RUN_WINDOW_HOURS))
                         {
-                            let Some(finished) = run.finished_at else {
-                                continue;
-                            };
-                            if finished
-                                < self.now
-                                    - Duration::hours(i64::from(super::ATTENTION_RUN_WINDOW_HOURS))
-                            {
-                                continue;
-                            }
-                            // The failure window bounds candidates, not supersession:
-                            // a newer long-running or completed submission can sit
-                            // outside it. Consult the exact latest job/task row.
-                            let latest = self.runtime.stores().jobs().list_job_runs_filtered(
-                                &JobRunQuery {
+                            continue;
+                        }
+                        // The failure window bounds candidates, not supersession:
+                        // a newer long-running or completed submission can sit
+                        // outside it. Consult the exact latest job/task row.
+                        let latest =
+                            self.runtime
+                                .stores()
+                                .jobs()
+                                .list_job_runs_filtered(&JobRunQuery {
                                     job_id: Some(run.job_id.clone()),
                                     task_id: task_id.clone(),
                                     limit: Some(1),
                                     include_steps: false,
                                     ..Default::default()
-                                },
-                            )?;
-                            if latest
-                                .first()
-                                .is_some_and(|latest| latest.run_id != run.run_id)
-                            {
-                                continue;
-                            }
-                            (finished, None)
-                        }
-                        AttentionKind::RunStuck
-                            if matches!(run.state, JobRunState::Running | JobRunState::Pending) =>
+                                })?;
+                        if latest
+                            .first()
+                            .is_some_and(|latest| latest.run_id != run.run_id)
                         {
-                            let since = run.started_at.unwrap_or(run.scheduled_at);
-                            let cause = if (run.pid.is_some() || run.state == JobRunState::Running)
-                                && job::run_owner_liveness(run) == RunOwnerLiveness::Stopped
-                            {
-                                "dead_owner"
-                            } else if self.now - since
-                                >= Duration::minutes(i64::from(
-                                    super::ATTENTION_RUN_STUCK_AFTER_MINUTES,
-                                ))
-                            {
-                                "wall_clock_bound"
-                            } else {
-                                continue;
-                            };
-                            (since, Some(cause))
+                            continue;
                         }
-                        _ => continue,
-                    };
+                        (finished, None)
+                    }
+                    AttentionKind::RunStuck
+                        if matches!(run.state, JobRunState::Running | JobRunState::Pending) =>
+                    {
+                        let since = run.started_at.unwrap_or(run.scheduled_at);
+                        let bound =
+                            Duration::minutes(i64::from(super::ATTENTION_RUN_STUCK_AFTER_MINUTES));
+                        let cause = if (run.pid.is_some() || run.state == JobRunState::Running)
+                            && job::run_owner_liveness(run) == RunOwnerLiveness::Stopped
+                        {
+                            "dead_owner"
+                        } else {
+                            let (deadline, last_progress) = self.run_stuck_bounds(run);
+                            declared_deadline = deadline;
+                            last_progress_at = Some(last_progress);
+                            match deadline {
+                                // Inside its declared window a run is
+                                // stuck only when progress has stalled
+                                // for the bound; past the deadline the
+                                // same bound is the grace before it is
+                                // reported (dead owner above still wins).
+                                Some(deadline)
+                                    if self.now < deadline + bound
+                                        && self.now - last_progress < bound =>
+                                {
+                                    continue;
+                                }
+                                Some(_) => "wall_clock_bound",
+                                None if self.now - since >= bound => "wall_clock_bound",
+                                None => continue,
+                            }
+                        };
+                        (since, Some(cause))
+                    }
+                    _ => continue,
+                };
                 let (claimed, held) = self.run_claim_state(run)?;
                 let high = if kind == AttentionKind::RunFailed {
                     claimed
@@ -326,8 +418,16 @@ impl RuntimeAttention<'_> {
                     Some(_) => "Run exceeds the configured wall-clock bound".into(),
                     None => format!("Run ended {}", run.state),
                 });
-                let item = self.item(kind, refs, since, &reason,
-                    json!({"job_id": run.job_id, "state": run.state, "cause": cause, "held_claim": high}), next);
+                let mut detail = json!({"job_id": run.job_id, "state": run.state, "cause": cause, "held_claim": high});
+                if let Some(deadline) = declared_deadline {
+                    detail["declared_deadline"] =
+                        json!(deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+                }
+                if let Some(progress) = last_progress_at {
+                    detail["last_progress_at"] =
+                        json!(progress.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+                }
+                let item = self.item(kind, refs, since, &reason, detail, next);
                 let state = if let Some(cause) = cause {
                     json!({"run_id": run.run_id, "cause": cause})
                 } else {

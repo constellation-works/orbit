@@ -15,7 +15,12 @@ Scope defaults to the current workspace; `--workspace` repeats, and `--all` read
 Runtime kinds read stored runs without reconciliation. `run_failed` reports recent failed,
 timed-out or interrupted runs, suppressing older attempts superseded by a newer submission
 of the same job/task and runs already named by a blocked item. `run_stuck` detects a gone
-owner before reconciliation or a run beyond 120 minutes. Linux uses
+owner before reconciliation or a run beyond its bound: a run that declares a deadline (a
+drain's stamped or extended window, or an explicit deadline/timeout in its input) is stuck
+only past that deadline plus 120 minutes, or when its pipeline `updated_at` or step activity
+has stalled for 120 minutes — a drain inside its window whose pipeline is still advancing is
+not stuck, and its item names `declared_deadline` and `last_progress_at`; a run that declares
+no bound is stuck beyond 120 minutes. Linux uses
 `/proc` start identity with PID-namespace fencing; macOS uses libproc with a bounded `ps`
 fallback. Unavailable identity is not proof of death; the age bound still applies. Active
 runs remain visible beyond the 48-hour failure window.
