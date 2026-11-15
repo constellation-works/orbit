@@ -65,15 +65,17 @@ available. Several `workspaces=` values open **All workspaces** with that filter
 one value opens that workspace's board.
 
 With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**, **Log**. Drain reuses the Auto-drain body, with an
-**Auto-draining** header followed by a workspace select, an owner-first host select and phase pill.
-The workspace select lists the selected host's owned workspaces in alphabetical order,
-defaulting to the first with a live drain on any host; the host select lists
-that workspace's owner first and selected by default, then its follower hosts,
-and changing the workspace resets the host to the owner. The owner's concrete
-board shows the same host select, without a workspace select, and the owner
+**Auto-draining** header followed by one drain-target select and phase pill.
+The drain-target select holds one option per workspace-host pair (`workspace · host (role)`),
+grouped by workspace for the selected host's owned workspaces in alphabetical order,
+defaulting to the owner of the first with a live drain on any host, or of the
+first when none is live. Within each group the owner host comes first, labelled
+`(owner)`, followed by follower hosts holding a replica of the workspace, labelled
+`(pull)`; failed hosts stay labelled `(unknown)`. The owner's concrete
+board shows the same drain-target select, holding only that workspace's pairs, and the owner
 stays the default there. Followers are readable
 through the host forward. The chosen workspace's drain on the chosen host is
-shown, or Idle when none is live there; both choices survive a reload, with a
+shown, or Idle when none is live there; the chosen workspace and host survive a reload, with a
 remembered value that no longer exists falling back to those defaults.
 Aggregate controls remain read-only. Fleet holds the existing fleet drains card,
 one tab per host when more than one is registered (the chosen tab is

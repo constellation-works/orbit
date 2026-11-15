@@ -469,7 +469,7 @@ either action, readiness is read from the chosen host, even when the fleet
 snapshot still reports Idle. A forwarding-write refusal disables Start and
 Stop with the existing read-only reason; a missing replica or unavailable
 owner disables Start with the replica card's existing unavailable-owner
-message. Switching either select retires pending readbacks from the previous
+message. Switching the drain-target select retires pending readbacks from the previous
 pair. An owner's concrete workspace board shows the same drain-target select,
 holding only that workspace's pairs: the owner first and selected by
 default, then each follower holding a replica. The owner's selection keeps

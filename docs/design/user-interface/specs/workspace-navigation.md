@@ -190,14 +190,14 @@ immediately after **More**, and only under All workspaces. The rail is a
 single-select again: **All workspaces** first, then the selected host's owned
 workspaces. Choosing one opens that board; All opens the aggregate. Several
 `workspaces=` values open All workspaces with the chip filter applied; one
-value opens that board. All workspaces keeps its owner-first Auto-drain host
+value opens that board. All workspaces keeps its owner-first drain-target
 select and Fleet dock tab. This step adds no All hosts entry, catalog or
 owner routing, and does not collapse follower workspaces. It precedes the
 original catalog phase 1; the revised phase 2 below describes the drain
 controls that build on it.
 Replica entries have since left the workspace dropdown: the rail and the
 All workspaces aggregate list only the selected host's owned workspaces, and
-the Auto-drain card's workspace select follows that owned list rather than
+the Auto-drain card's target select follows that owned list rather than
 the Tasks chip filter (its groups still list follower hosts). A
 remembered or linked replica falls back to the host's owned workspaces. The
 owner's concrete board shows that same target select, so a follower pull drain
