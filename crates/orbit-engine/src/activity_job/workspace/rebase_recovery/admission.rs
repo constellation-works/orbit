@@ -14,6 +14,7 @@ use super::git::{
     completion_recovery_base_ref, recovery_conflicting_paths, stopped_head_on_pin, unmerged_paths,
     validate_failed_step_identity,
 };
+use super::intent::ResolutionIntentSlot;
 use super::metadata::RecoveryMetadata;
 
 impl WorktreeBoundaryGuard {
@@ -172,6 +173,14 @@ impl WorktreeBoundaryGuard {
                     "stopped rebase HEAD does not descend from target base",
                 ));
             }
+            let resolution_intent = ResolutionIntentSlot::admit(
+                input,
+                &self.assigned_root,
+                &self.run_id,
+                step_id,
+                target,
+            )
+            .map_err(|reason| invalid(&reason))?;
             let metadata = RecoveryMetadata::capture(&self.assigned_root, path)?;
             let task_scope_digest = self
                 .recovery_task_id(input)
@@ -206,6 +215,7 @@ impl WorktreeBoundaryGuard {
                         .map(str::to_string)
                 },
                 task_scope_digest,
+                resolution_intent,
             });
             return Ok(());
         }

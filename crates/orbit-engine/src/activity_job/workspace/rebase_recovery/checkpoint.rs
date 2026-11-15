@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use super::super::fingerprint::git_stdout;
 use super::super::{DispatchError, WorktreeBoundaryGuard};
+use super::intent::ResolutionIntentSlot;
 use super::metadata::RecoveryMetadata;
 
 pub(in crate::activity_job::workspace) struct RebaseRecoveryCheckpoint {
@@ -24,6 +25,9 @@ pub(in crate::activity_job::workspace) struct RebaseRecoveryCheckpoint {
     /// The task's scope when recovery was admitted; an absorbed continuation
     /// carries it so settlement can refuse a task edited since [ORB-14668].
     pub(super) task_scope_digest: Option<String>,
+    /// This invocation's resolution intent slot, when the engine allocated
+    /// one; only its verified intents adopt an unchanged side [F2026-11-277].
+    pub(super) resolution_intent: Option<ResolutionIntentSlot>,
 }
 
 /// How the host continuation of an admitted stopped rebase ended.

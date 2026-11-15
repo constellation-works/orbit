@@ -68,6 +68,8 @@ mod dirty_rescue;
 #[cfg(unix)]
 mod generated_regeneration;
 mod preparation;
+#[cfg(unix)]
+mod resolution_intent;
 mod trash;
 mod unlocked_revalidation;
 

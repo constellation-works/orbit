@@ -156,6 +156,23 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
     }
 }
 
+/// Whether `root` is inside a rebase stopped on unmerged entries, with HEAD
+/// detached as Git leaves it.
+fn stopped_rebase(root: &std::path::Path) -> Result<bool, orbit_common::OrbitError> {
+    if git_command_success(root, &["symbolic-ref", "--quiet", "HEAD"])? {
+        return Ok(false);
+    }
+    let mut in_progress = false;
+    for backend in ["rebase-merge", "rebase-apply"] {
+        let path =
+            std::path::PathBuf::from(git_output(root, &["rev-parse", "--git-path", backend])?);
+        if root.join(path).is_dir() {
+            in_progress = true;
+        }
+    }
+    Ok(in_progress && !git_output(root, &["ls-files", "--unmerged"])?.is_empty())
+}
+
 fn deterministic_action(step: &JobV2Step) -> Option<&str> {
     match &step.body {
         JobV2StepBody::Target(TargetStep {
@@ -196,6 +213,14 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
             .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
     };
     if output(&["status", "--porcelain"])?.is_empty() {
+        return Ok(());
+    }
+    // A rebase stopped on conflicts (detached HEAD, unmerged entries) is not
+    // a repair this host commits: the resumed rebasing step reports the same
+    // stop, and conflict recovery's authenticated host continuation adopts
+    // the repaired files and continues it [F2026-11-277]. Every other
+    // detached or moved checkout still needs its symbolic branch below.
+    if stopped_rebase(root).map_err(|error| refused(&error.to_string()))? {
         return Ok(());
     }
     let (root_before, head_before, branch_before) = source_before

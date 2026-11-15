@@ -511,10 +511,39 @@ host-owned `.orbit/` state stay out of it. Admission also requires HEAD to keep
 a stopped rebase's shape (detached, descending from `onto`), so an earlier
 actor that re-attached or moved HEAD is refused before the provider launches.
 Every other check is unchanged: the metadata, ownership, index and unmerged-set
-checks, and `git diff --check` over the whole conflict set. One limit remains.
-Where Git left one side of a non-textual conflict, an earlier resolution that
-keeps exactly that side looks the same as an untouched conflict. It is refused
-as unrepaired, as it was before adoption.
+checks, and `git diff --check` over the whole conflict set. Where Git left
+one side of a non-textual conflict, an earlier resolution that keeps exactly
+that side looks the same as an untouched conflict, so content alone still
+refuses it as unrepaired.
+
+After [F2026-11-277], a modify/delete conflict whose correct resolution keeps
+one side unchanged (or deletes the path) is adopted through an authenticated
+resolution intent instead. Before dispatching `pr_conflict_recovery` the
+executor names a fresh slot under the canonical worktree's
+`.orbit/tmp/rebase-resolution/`, created one real directory at a time, in the
+leaf's input as `resolution_intent {path, schema_version, run_id,
+failed_step_id, attempt, nonce, target_base_sha, task_ids}`; a worktree that
+does not resolve gets no slot. Admission binds that slot into the in-memory
+checkpoint only when it names this run, failed step and pinned base at its
+exact allocated path and nothing is there yet. The leaf writes
+`{…bindings, resolutions: [{path, resolution: keep_candidate |
+keep_target_base | delete}]}`. After the provider exits the host reads it
+without following links (a regular file, at most 64 KiB, unknown fields
+refused, every binding equal to the slot's, no path named twice); a missing
+file is no intent and an invalid one refuses continuation. Each entry must
+name an authorized, non-host-owned, non-regenerated conflict path that is a
+modify/delete conflict (exactly one of stages 2 and 3). `keep_target_base`
+(stage 2) and `keep_candidate` (stage 3) require that stage to exist as a
+regular file, and the worktree to hold that exact blob and executable bit as
+a regular, marker-free file; `delete` requires the path to be absent. Any
+mismatch refuses the continuation, and every later check (metadata, ownership,
+unmerged set, `git diff --check`, staging, `rebase --continue`, completion) is
+unchanged. Content conflicts, including binary-ancestor and custom-driver
+stops, are never adopted by an intent. Final recovery that repairs such a
+stop and resumes its rebasing step makes no host repair commit while the
+checkout is a rebase stopped on unmerged entries with HEAD detached: the
+resumed step reports the stop, and this continuation completes it. Any other
+dirty checkout without its symbolic branch is still refused.
 
 After [DANI-10439], the base ref itself is not part of that identity. A linked
 worktree shares remote-tracking refs with every sibling checkout, so on a busy
