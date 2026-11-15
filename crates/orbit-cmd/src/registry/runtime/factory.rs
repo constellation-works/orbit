@@ -225,12 +225,6 @@ impl RegisteredRuntimeFactory {
         orbit_core::runtime::try_resolve_initialized_cwd_roots_with_hint(cwd, hint.as_ref())
     }
 
-    pub fn initialize_with_root_override(
-        root_override: Option<&Path>,
-    ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides(root_override, None)
-    }
-
     /// Bootstrap a CLI runtime from `--root` and/or `--workspace`.
     ///
     /// `--workspace` is the workspace selector (name, `ws_*` id, or absolute
