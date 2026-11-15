@@ -256,6 +256,16 @@ retired tool. Sync recognizes historical shipped bodies by exact body digest;
 it cannot decide which local prose to discard. Do not weaken that matcher,
 delete/recreate the definition, or use `restore` to replace an existing fork.
 
+`run-failure-patterns` has a narrower reconciliation. When its effective body
+omits the bundled host-aware deduplication rule (machine id, leaf run id and
+task id), `orbit auto-task show` and `list` report a stale contract, `orbit
+doctor` flags it, and minting is held until the body is reconciled.
+`orbit auto-task update run-failure-patterns --adopt-bundled-contract` appends
+only that bundled paragraph and acceptance criterion and keeps every other
+field. It cannot be combined with another edit, and it writes nothing when the
+body already carries the rule. Any other stale fork still uses the procedure
+below.
+
 Use the owning checkout and its registered workspace explicitly. This is an
 operator change after review, separate from preparing or testing a repair:
 

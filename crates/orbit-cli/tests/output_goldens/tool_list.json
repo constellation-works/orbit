@@ -532,6 +532,12 @@
         "required": false
       },
       {
+        "name": "adopt_bundled_contract",
+        "description": "For update: Append the bundled contract the effective body omits, keeping every other field.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "name": "acknowledge_unconditional",
         "description": "For mint: True acknowledges unconditional creation; requires operator authority.",
         "param_type": "boolean",

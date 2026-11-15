@@ -299,13 +299,33 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                     auto_task_base_branch.as_deref().unwrap_or_default(),
                 )
             {
-                findings.push(auto_task_fork_finding(
+                let mut finding = auto_task_fork_finding(
                     name,
                     path,
                     tracked.contains_key(name),
                     &overrides.overrides,
                     overrides.stale_shipped_body,
-                ));
+                );
+                if let (Ok(effective), Some(bundled)) = (
+                    orbit_common::protocol::yaml::parse_auto_task_yaml(&on_disk),
+                    crate::application::auto_tasks::settings::bundled_run_failure_definition(
+                        auto_task_base_branch.as_deref().unwrap_or_default(),
+                    ),
+                ) && let Some(stale) =
+                    crate::application::auto_tasks::settings::stale_run_failure_contract(
+                        &effective, &bundled,
+                    )
+                {
+                    finding.detail = format!(
+                        "{} Stale contract: this body omits {} (missing: {}); a scan \
+                         minted from it would undercount host-distinct follower failures.",
+                        finding.detail,
+                        stale.contract,
+                        stale.missing.join(", ")
+                    );
+                    finding.remediation = stale.remediation;
+                }
+                findings.push(finding);
                 continue;
             }
             match tracked.get(name) {

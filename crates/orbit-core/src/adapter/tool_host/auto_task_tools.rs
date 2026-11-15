@@ -191,6 +191,9 @@ fn update(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
         template,
         enabled: input.optional_bool("enabled")?,
         granted_tools: input.optional_string_list("granted_tools")?,
+        adopt_bundled_contract: input
+            .optional_bool("adopt_bundled_contract")?
+            .unwrap_or(false),
     };
     let waived = params.waive_batch.is_some();
     let definition = runtime.auto_task_update(&name, params)?;

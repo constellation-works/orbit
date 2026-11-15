@@ -132,6 +132,17 @@ fn list(value: Value, filter: StateFilter) -> CommandOut {
         }
     }
     for record in &records {
+        if let Some(stale) = record.get("stale_contract") {
+            table = table.trailing_notice(format!(
+                "stale contract [{}]: omits {} (missing: {}); minting is held; {}",
+                text(record, "name"),
+                text(stale, "contract"),
+                strings(&stale["missing"]).join(", "),
+                text(stale, "remediation")
+            ));
+        }
+    }
+    for record in &records {
         if let Some(reason) = record["skipped_reason"].as_str() {
             let label = if is_plugin_inactive(record) {
                 "inactive"
@@ -237,6 +248,15 @@ fn show(value: Value) -> CommandOut {
     let _ = writeln!(out, "  definition source: {}", text(source, "path"));
     if let Some(layering) = doc.get("layering") {
         let _ = writeln!(out, "  body: {}", body_summary(layering));
+        if let Some(stale) = layering.get("stale_contract") {
+            let _ = writeln!(
+                out,
+                "  warning: stale contract: this body omits {} (missing: {}); minting is held; {}",
+                text(stale, "contract"),
+                strings(&stale["missing"]).join(", "),
+                text(stale, "remediation")
+            );
+        }
         if let Some(settings) = layering.get("settings") {
             let fields = settings_fields(settings);
             let _ = writeln!(
