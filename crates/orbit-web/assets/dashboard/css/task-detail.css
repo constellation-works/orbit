@@ -362,8 +362,10 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
-/* An operator's skip of a pilot-held task, under the hold it lifts. */
-.readiness-skip-pilot {
+/* An operator's skip of a pilot-held task, under the hold it lifts, and the
+   host-operational remedy that skip cannot release. */
+.readiness-skip-pilot,
+.readiness-host-operational {
   --attention-fg: var(--warn-fg);
   display: flex;
   flex-wrap: wrap;
@@ -371,6 +373,17 @@
   gap: 4px 8px;
   margin-top: 4px;
 }
+.readiness-host-operational {
+  flex-direction: column;
+  align-items: stretch;
+}
+.readiness-host-operational-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.readiness-host-operational .readiness-fix { margin: 0; }
 /* The pool leads the card, followed by linked blockers or a concise cause. */
 .readiness-drain {
   display: flex;

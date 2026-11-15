@@ -58,6 +58,20 @@
   font-size: 12px;
   font-style: italic;
 }
+.notice-coverage {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.notice-coverage-lead { margin: 0; }
+.notice-coverage-reason {
+  margin: 4px 0 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+.notice-kind-partial { color: var(--state-pending); }
+.notice-coverage-banner .notice-banner-meta { overflow-wrap: anywhere; }
 
 /* The list: flat rows split by a hairline, on the panel's own edges.
    The dock is 320–440px, so a row is two lines at every width: the facts,
@@ -239,5 +253,5 @@
 @media (max-width: 760px) {
   .notice-banner { padding: 6px 12px; }
   .notice-close-open { min-width: 44px; min-height: 36px; }
-  .notice-group-heading, .notice-open-empty { padding-inline: 12px; }
+  .notice-group-heading, .notice-open-empty, .notice-coverage { padding-inline: 12px; }
 }
