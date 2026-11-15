@@ -4,9 +4,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use orbit_common::security::release::sha256_hex;
-use serde_json::Value;
+use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
+use orbit_types::workflow::automation::{Delivery, SourceRevision, UNATTRIBUTED_NO_LANDING_TASK};
+use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture::Fixture;
 
@@ -568,6 +573,560 @@ fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
     fs::write(&unrelated, serde_yaml::to_string(&edited).unwrap()).unwrap();
     let minted = fixture.json(&["auto-task", "mint", "security-review", "--json"]);
     assert_eq!(minted["title"], "[auto-task] Operator security title");
+}
+
+const RUN_FAILURE: &str = "run-failure-patterns";
+const DELIVERY_TRIGGER: &str = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
+const UNRELATED_TRIGGER: &str = r#"{"branch":"unrelated-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
+
+/// Job-step admission, a condition fire and a due delivery all hold a stale
+/// run-failure body with the manual mint's error, and mint again once that
+/// body carries the bundled contract. An unrelated definition keeps minting.
+#[test]
+fn stale_run_failure_contract_holds_job_step_and_automation_mints() {
+    const TEST: &str =
+        "auto_task_settings_cli::stale_run_failure_contract_holds_job_step_and_automation_mints";
+    if crate::isolated_test::run_in_child(TEST) {
+        return;
+    }
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let fixture = Fixture::new();
+    // `orbit init` selects a default crew from host CLIs; CI may select one
+    // that is disabled there, preventing the detached worker from reaching
+    // the job-step admission behavior under test.
+    crate::fixture_crew::configure_sol(&fixture.root);
+    write_stale_run_failure_body(&fixture);
+    auto_task_tool(
+        &fixture,
+        json!({
+            "action": "update",
+            "name": RUN_FAILURE,
+            "dedupe": "always",
+            "enabled": true,
+        }),
+    );
+    let shown = show(&fixture, RUN_FAILURE);
+    assert_eq!(shown["enabled"], true, "{shown}");
+    assert_eq!(shown["dedupe"], "always", "{shown}");
+    assert!(shown["layering"]["stale_contract"].is_object(), "{shown}");
+
+    let parked = run_auto_task_step(&fixture, "stale-hold", RUN_FAILURE);
+    assert_stale_hold(&parked, "job step");
+    assert!(tasks_for(&fixture, RUN_FAILURE).is_empty(), "{parked}");
+
+    let subject = add_subject(&fixture, "Stale condition subject");
+    set_condition(&fixture, RUN_FAILURE, "'stale-scan' in task.tags");
+    assert_eq!(show(&fixture, RUN_FAILURE)["enabled"], true);
+    tick_named(&fixture, RUN_FAILURE);
+    assert!(tasks_for(&fixture, RUN_FAILURE).is_empty());
+    tag_task(&fixture, &subject, "stale-scan");
+    tick_named(&fixture, RUN_FAILURE);
+    assert!(
+        tasks_for(&fixture, RUN_FAILURE).is_empty(),
+        "a stale condition fire must not mint"
+    );
+    assert_stale_hold(&fire_details(&fixture, RUN_FAILURE), "condition fire");
+
+    set_deliveries(&fixture, RUN_FAILURE, DELIVERY_TRIGGER);
+    let git = crate::auto_task_lifecycle_cli::git;
+    git(&fixture, &["checkout", "-b", "fixture-delivery"]);
+    commit_file(&fixture, "baseline.txt", "baseline\n");
+    crate::auto_task_lifecycle_cli::publish_origin_if_configured(&fixture);
+    let runtime = open_runtime(&fixture);
+    evaluate_named(&runtime, RUN_FAILURE);
+    land_delivery(
+        &fixture,
+        &runtime,
+        RUN_FAILURE,
+        "fixture-delivery",
+        "landed.txt",
+    );
+    let held = evaluate_named(&runtime, RUN_FAILURE);
+    assert_stale_hold(&held.reason, "delivery");
+    assert!(
+        held.state
+            .as_ref()
+            .and_then(|state| state.active.as_ref())
+            .is_none(),
+        "a stale delivery must not claim a batch: {}",
+        held.reason
+    );
+    assert!(
+        tasks_for(&fixture, RUN_FAILURE).is_empty(),
+        "{}",
+        held.reason
+    );
+
+    fixture.json(&[
+        "auto-task",
+        "update",
+        RUN_FAILURE,
+        "--adopt-bundled-contract",
+        "--json",
+    ]);
+    assert!(
+        show(&fixture, RUN_FAILURE)["layering"]["stale_contract"].is_null(),
+        "adopt must clear the stale contract"
+    );
+    let runtime = open_runtime(&fixture);
+    let minted = evaluate_named(&runtime, RUN_FAILURE);
+    let action_id = minted
+        .state
+        .as_ref()
+        .and_then(|state| state.active.as_ref())
+        .and_then(|active| active.action_id.clone());
+    assert!(
+        action_id.is_some(),
+        "reconciled delivery should mint: reason={} refusals={:?}",
+        minted.reason,
+        minted.refusals
+    );
+    let delivered = tasks_for(&fixture, RUN_FAILURE);
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    assert_contract_present(&fixture, &delivered[0]);
+
+    set_interval(&fixture, RUN_FAILURE);
+    let parked = run_auto_task_step(&fixture, "reconciled-scan", RUN_FAILURE);
+    assert!(
+        parked.contains("minted task"),
+        "reconciled job step should mint: {parked}"
+    );
+    assert!(!parked.contains("is held"), "{parked}");
+    assert_eq!(tasks_for(&fixture, RUN_FAILURE).len(), 2);
+
+    let reconciled_subject = add_subject(&fixture, "Reconciled condition subject");
+    set_condition(&fixture, RUN_FAILURE, "'reconciled-scan' in task.tags");
+    tick_named(&fixture, RUN_FAILURE);
+    assert_eq!(tasks_for(&fixture, RUN_FAILURE).len(), 2);
+    tag_task(&fixture, &reconciled_subject, "reconciled-scan");
+    tick_named(&fixture, RUN_FAILURE);
+    let reconciled = tasks_for(&fixture, RUN_FAILURE);
+    assert_eq!(reconciled.len(), 3, "{reconciled:?}");
+    assert_contract_present(&fixture, reconciled.last().unwrap());
+
+    add_unrelated(&fixture);
+    let parked = run_auto_task_step(&fixture, "unrelated-job", "unrelated-scan");
+    assert!(
+        parked.contains("minted task"),
+        "unrelated job step should mint: {parked}"
+    );
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 1);
+
+    let unrelated_subject = add_subject(&fixture, "Unrelated condition subject");
+    set_condition(&fixture, "unrelated-scan", "'unrelated-edge' in task.tags");
+    tick_named(&fixture, "unrelated-scan");
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 1);
+    tag_task(&fixture, &unrelated_subject, "unrelated-edge");
+    tick_named(&fixture, "unrelated-scan");
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 2);
+
+    set_deliveries(&fixture, "unrelated-scan", UNRELATED_TRIGGER);
+    fixture.json(&["auto-task", "toggle", "unrelated-scan", "on", "--json"]);
+    git(&fixture, &["checkout", "-b", "unrelated-delivery"]);
+    commit_file(&fixture, "unrelated-baseline.txt", "baseline\n");
+    crate::auto_task_lifecycle_cli::publish_origin_if_configured(&fixture);
+    let runtime = open_runtime(&fixture);
+    evaluate_named(&runtime, "unrelated-scan");
+    land_delivery(
+        &fixture,
+        &runtime,
+        "unrelated-scan",
+        "unrelated-delivery",
+        "unrelated-landed.txt",
+    );
+    let minted = evaluate_named(&runtime, "unrelated-scan");
+    assert!(
+        minted
+            .state
+            .as_ref()
+            .and_then(|state| state.active.as_ref())
+            .and_then(|active| active.action_id.as_ref())
+            .is_some(),
+        "unrelated delivery should mint: reason={} refusals={:?}",
+        minted.reason,
+        minted.refusals
+    );
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 3);
+}
+
+fn write_stale_run_failure_body(fixture: &Fixture) {
+    let path = definition_path(fixture, RUN_FAILURE);
+    let dir = path.parent().unwrap().to_path_buf();
+    let bundled = fs::read_to_string(&path).unwrap();
+    let mut custom = orbit_common::protocol::yaml::parse_auto_task_yaml(&bundled).unwrap();
+    custom.template.title = "Operator scan title".to_string();
+    custom.template.description = "Operator custom scan.\n\nDedupe follower settlements by bare \
+         leaf id against this host's history; count the rest."
+        .to_string();
+    custom.template.acceptance_criteria =
+        vec!["Operator criterion: count follower settlements once by leaf id.".to_string()];
+    fs::write(&path, serde_yaml::to_string(&custom).unwrap()).unwrap();
+    set_manifest_digest(&dir, RUN_FAILURE, None);
+}
+
+fn show(fixture: &Fixture, name: &str) -> Value {
+    fixture.json(&["auto-task", "show", name, "--json"])
+}
+
+fn auto_task_tool(fixture: &Fixture, input: Value) -> Value {
+    fixture.json(&[
+        "tool",
+        "run",
+        "orbit.auto_task",
+        "--input",
+        &input.to_string(),
+        "--format",
+        "json",
+    ])
+}
+
+fn set_condition(fixture: &Fixture, name: &str, when: &str) {
+    auto_task_tool(
+        fixture,
+        json!({
+            "action": "update",
+            "name": name,
+            "schedule": {"condition": {"scope": "task", "when": when}},
+        }),
+    );
+}
+
+fn set_interval(fixture: &Fixture, name: &str) {
+    auto_task_tool(
+        fixture,
+        json!({"action": "update", "name": name, "schedule": {"every_minutes": 60}}),
+    );
+}
+
+fn set_deliveries(fixture: &Fixture, name: &str, trigger: &str) {
+    fixture.json(&[
+        "auto-task",
+        "update",
+        name,
+        "--deliveries-landed",
+        trigger,
+        "--json",
+    ]);
+}
+
+fn add_unrelated(fixture: &Fixture) {
+    auto_task_tool(
+        fixture,
+        json!({
+            "action": "add",
+            "name": "unrelated-scan",
+            "description": "unrelated",
+            "schedule": {"every_minutes": 60},
+            "template": {
+                "title": "Unrelated scan",
+                "description": "Unrelated body",
+                "acceptance_criteria": ["Unrelated criterion"],
+            },
+            "dedupe": "always",
+        }),
+    );
+}
+
+fn add_subject(fixture: &Fixture, title: &str) -> String {
+    fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        title,
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Condition subject",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn tag_task(fixture: &Fixture, id: &str, tag: &str) {
+    fixture
+        .command(&["task", "update", id, "--tag", tag, "--json"])
+        .assert()
+        .success();
+}
+
+fn tasks_for(fixture: &Fixture, name: &str) -> Vec<Value> {
+    let listed = fixture.json(&[
+        "task",
+        "list",
+        "--tag",
+        &format!("auto-task:{name}"),
+        "--json",
+    ]);
+    listed.as_array().cloned().unwrap_or_else(|| {
+        listed
+            .get("tasks")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_else(|| panic!("task list: {listed}"))
+    })
+}
+
+fn tick_named(fixture: &Fixture, name: &str) -> Value {
+    let report = fixture.json(&["clock", "tick", "--format", "json"]);
+    report["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("{name} missing from clock tick: {report}"))
+        .clone()
+}
+
+fn fire_details(fixture: &Fixture, name: &str) -> String {
+    let explained = fixture.json(&["automation", "explain", name, "--json"]);
+    let fires = explained["tracking"]["recent_fires"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let text = fires
+        .iter()
+        .filter_map(|fire| fire["detail"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.is_empty(), "no fire detail: {explained}");
+    text
+}
+
+fn assert_stale_hold(text: &str, path: &str) {
+    assert!(
+        text.contains("is held"),
+        "{path} must carry the stale-contract hold: {text}"
+    );
+    assert!(
+        text.contains("--adopt-bundled-contract"),
+        "{path} must name the reconciliation: {text}"
+    );
+}
+
+fn assert_contract_present(fixture: &Fixture, task: &Value) {
+    let id = task["id"].as_str().unwrap();
+    let shown = fixture.json(&["task", "show", id, "--json"]);
+    let body = shown["description"].as_str().unwrap_or("");
+    assert!(
+        body.contains("machine_id") && body.contains("leaf_run_id") && body.contains("task_id"),
+        "minted scan must carry the bundled contract: {body}"
+    );
+}
+
+fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+    use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+
+    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
+        .unwrap_or_else(|error| panic!("resolve roots: {error}"));
+    RegisteredRuntimeFactory::open_resolved_roots(roots)
+        .unwrap_or_else(|error| panic!("runtime: {error}"))
+        .with_actor(orbit_core::ActorIdentity::human("fixture"))
+}
+
+fn runtime_roots(fixture: &Fixture) -> (PathBuf, PathBuf) {
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    (
+        fixture.root.clone(),
+        PathBuf::from(shown["orbit_root"].as_str().unwrap()),
+    )
+}
+
+/// Foreground `run_job_v2_from_yaml` refuses auto-task steps. Submit the job
+/// the way an operator does, and let this process's substitute worker execute
+/// the detached run until the step parks.
+const AUTO_TASK_JOB_WORKER: &str = "auto_task_settings_cli::execute_submitted_auto_task_job";
+
+fn install_auto_task_job_worker(global: &Path, workspace: &Path) {
+    orbit_common::test_env::assert_child_test_exists(AUTO_TASK_JOB_WORKER);
+    let exe = std::env::current_exe().unwrap_or_else(|error| panic!("test exe: {error}"));
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "env".to_string(),
+        format!("ORBIT_TEST_AUTO_TASK_GLOBAL={}", global.display()),
+        format!("ORBIT_TEST_AUTO_TASK_WORKSPACE={}", workspace.display()),
+        format!(
+            "ORBIT_TEST_AUTO_TASK_RUN={}",
+            orbit_core::test_support::RUN_ID_PLACEHOLDER
+        ),
+        exe.to_string_lossy().into_owned(),
+        "--exact".to_string(),
+        AUTO_TASK_JOB_WORKER.to_string(),
+        "--ignored".to_string(),
+        "--nocapture".to_string(),
+    ]);
+}
+
+#[test]
+#[ignore = "entry point for a detached auto-task job step"]
+fn execute_submitted_auto_task_job() {
+    let global = std::env::var_os("ORBIT_TEST_AUTO_TASK_GLOBAL").expect("worker global root");
+    let workspace =
+        std::env::var_os("ORBIT_TEST_AUTO_TASK_WORKSPACE").expect("worker workspace root");
+    let run = std::env::var("ORBIT_TEST_AUTO_TASK_RUN").expect("worker run id");
+    let runtime = orbit_core::OrbitRuntime::from_roots(Path::new(&global), Path::new(&workspace))
+        .unwrap_or_else(|error| panic!("worker runtime: {error}"));
+    runtime
+        .execute_pipeline_run_worker(&run)
+        .unwrap_or_else(|error| panic!("worker {run}: {error}"));
+}
+
+fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
+    let path = fixture.repo.join(format!("{job}.yaml"));
+    fs::write(
+        &path,
+        format!(
+            "schemaVersion: 3\nkind: Job\nmetadata:\n  name: {job}\nspec:\n  state: enabled\n  expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    - id: scan\n      target: auto-task:{auto_task}\n"
+        ),
+    )
+    .unwrap();
+    let (global, workspace) = runtime_roots(fixture);
+    install_auto_task_job_worker(&global, &workspace);
+    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap_or_else(|error| panic!("{job} runtime: {error}"));
+    let submitted = runtime
+        .submit_job_run(
+            path.to_str().unwrap_or_else(|| panic!("{job} path")),
+            json!({}),
+            Some("test"),
+        )
+        .unwrap_or_else(|error| panic!("{job} ({auto_task}) submit: {error}"));
+    await_auto_task_park(&runtime, job, &submitted.run_id)
+}
+
+fn await_auto_task_park(runtime: &orbit_core::OrbitRuntime, job: &str, run_id: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
+            return reason;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    stop_auto_task_job_worker(run_id);
+    let grace = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
+            return reason;
+        }
+        if Instant::now() >= grace {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let run = runtime
+        .show_job_run(run_id)
+        .unwrap_or_else(|error| panic!("{job} show {run_id}: {error}"));
+    panic!(
+        "{job} run {run_id} did not park ({:?}); worker log:\n{}",
+        run.state,
+        worker_log(runtime, run_id)
+    );
+}
+
+/// The park text, once this process has reaped the substitute worker.
+/// A worker that exits without parking fails the test.
+fn parked_after_worker_exit(
+    runtime: &orbit_core::OrbitRuntime,
+    job: &str,
+    run_id: &str,
+) -> Option<String> {
+    let run = runtime
+        .show_job_run(run_id)
+        .unwrap_or_else(|error| panic!("{job} show {run_id}: {error}"));
+    let pid = run.pid?;
+    if !orbit_core::test_support::pipeline_worker_observer_completed(
+        &runtime.paths().repo_root,
+        run_id,
+        pid,
+    ) {
+        return None;
+    }
+    let parked = runtime
+        .read_run_state(run_id)
+        .unwrap_or_else(|error| panic!("{job} state {run_id}: {error}"))
+        .and_then(|state| state.parked_wait().map(|park| park.reason.clone()));
+    Some(parked.unwrap_or_else(|| {
+        panic!(
+            "{job} worker exited without a park ({:?}); worker log:\n{}",
+            run.state,
+            worker_log(runtime, run_id)
+        )
+    }))
+}
+
+fn worker_log(runtime: &orbit_core::OrbitRuntime, run_id: &str) -> String {
+    match runtime.read_pipeline_worker_log(run_id) {
+        Ok(Some(snapshot)) => snapshot
+            .content
+            .unwrap_or_else(|| "(empty worker log)".to_string()),
+        Ok(None) => "(no worker log)".to_string(),
+        Err(error) => format!("worker log unreadable: {error}"),
+    }
+}
+
+fn stop_auto_task_job_worker(run_id: &str) {
+    let needle = format!("ORBIT_TEST_AUTO_TASK_RUN={run_id}");
+    let _ = std::process::Command::new("pkill")
+        .args(["-KILL", "-f", &needle])
+        .status();
+}
+
+fn evaluate_named(
+    runtime: &orbit_core::OrbitRuntime,
+    name: &str,
+) -> orbit_types::workflow::automation::AutomationDiagnostic {
+    let definition = runtime.auto_task_show(name).unwrap().expect(name);
+    evaluate_auto_task(runtime, &definition, false, Utc::now())
+        .unwrap_or_else(|error| panic!("{name}: {error}"))
+}
+
+fn commit_file(fixture: &Fixture, name: &str, content: &str) -> SourceRevision {
+    let git = crate::auto_task_lifecycle_cli::git;
+    fs::write(fixture.repo.join(name), content).unwrap();
+    git(fixture, &["add", name]);
+    git(fixture, &["commit", "-m", name]);
+    SourceRevision {
+        commit: git(fixture, &["rev-parse", "HEAD"]),
+        tree: git(fixture, &["rev-parse", "HEAD^{tree}"]),
+    }
+}
+
+fn land_delivery(
+    fixture: &Fixture,
+    runtime: &orbit_core::OrbitRuntime,
+    name: &str,
+    branch: &str,
+    file: &str,
+) {
+    let consumer = consumer_key(runtime, "auto-task", name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let state = store
+        .automation_state(&consumer)
+        .unwrap()
+        .unwrap_or_else(|| panic!("{name} has no delivery state after baseline"));
+    let landed = commit_file(fixture, file, "landed\n");
+    store
+        .automation_record_delivery_intent(&Delivery {
+            key: format!("direct:{}:{branch}:{}", state.repository, landed.commit),
+            repository: state.repository.clone(),
+            branch: branch.to_string(),
+            before: state.observed.clone(),
+            after: landed.clone(),
+            commits: vec![landed.commit.clone()],
+            task_ids: Vec::new(),
+            unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
+            evidence_reference: format!("run:fixture-run:{}", landed.commit),
+            evidence_digest: "fixture-digest".into(),
+            landed_at: Utc::now(),
+        })
+        .unwrap();
 }
 
 #[test]

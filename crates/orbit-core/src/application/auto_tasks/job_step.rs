@@ -351,7 +351,13 @@ fn admit_step_fenced(
         };
     }
     runtime.validate_required_tools(&definition.template.required_tools)?;
-    let mut params = scheduler::mint_params(runtime, &definition);
+    // The stale-contract refusal is the same error a manual mint returns.
+    // Hold the step with that text so the job parks and creates no task;
+    // failing the step would run recovery instead of holding the mint.
+    let mut params = match scheduler::mint_params(runtime, &definition) {
+        Ok(params) => params,
+        Err(error) => return Ok(AutoTaskAdmission::Held(error.to_string())),
+    };
     if matches!(definition.schedule, AutoTaskSchedule::Condition { .. }) {
         params.title = render_placeholders(&params.title, None);
         params.description = render_placeholders(&params.description, None);

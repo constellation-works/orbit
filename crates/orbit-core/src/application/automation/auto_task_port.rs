@@ -50,9 +50,28 @@ pub(in crate::application) trait AutomationAutoTaskPort {
 
     /// The task parameters `definition`'s template maps to, with its
     /// `auto-task:<name>` provenance tag and no plugin provenance.
-    fn auto_task_template_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams;
+    ///
+    /// A stale bundled contract refuses here, so every mint path holds it
+    /// instead of creating a task from the omitted contract.
+    fn auto_task_template_task_params(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<TaskAddParams, OrbitError>;
 
     /// The template's task parameters plus the seeding plugin's `plugin:<ns>`
     /// provenance tag, as a scheduled mint carries them.
-    fn auto_task_mint_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams;
+    fn auto_task_mint_task_params(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<TaskAddParams, OrbitError>;
+
+    /// Refuse a stale bundled contract before a mint is attempted.
+    ///
+    /// `Ok(())` means the definition may mint. The error is the same one a
+    /// manual mint returns, so a deferral can wait with that text and spend
+    /// no admission attempt.
+    fn auto_task_stale_contract_hold(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<(), OrbitError>;
 }

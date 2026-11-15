@@ -273,12 +273,25 @@ impl AutomationAutoTaskPort for OrbitRuntime {
         open_auto_task_instance(self, definition)
     }
 
-    fn auto_task_template_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams {
+    fn auto_task_template_task_params(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<TaskAddParams, OrbitError> {
         template_params(self, definition)
     }
 
-    fn auto_task_mint_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams {
+    fn auto_task_mint_task_params(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<TaskAddParams, OrbitError> {
         mint_params(self, definition)
+    }
+
+    fn auto_task_stale_contract_hold(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<(), OrbitError> {
+        self.refuse_stale_auto_task_contract(definition)
     }
 }
 
@@ -386,11 +399,7 @@ pub(super) fn mint_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Task, OrbitError> {
-    // A stale bundled contract holds both manual and scheduler mints: the
-    // scheduler reports this as a skipped, unconsumed slot, and a manual
-    // mint refuses, rather than minting a scan that undercounts.
-    runtime.refuse_stale_auto_task_contract(definition)?;
-    let mut params = mint_params(runtime, definition);
+    let mut params = mint_params(runtime, definition)?;
     // A manual mint of a condition auto-task has no subject: its
     // `{{subject.*}}` placeholders render `(none)`.
     if matches!(
@@ -411,8 +420,8 @@ pub(super) fn mint_task(
 pub(crate) fn mint_params(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
-) -> TaskAddParams {
-    let mut params = template_params(runtime, definition);
+) -> Result<TaskAddParams, OrbitError> {
+    let mut params = template_params(runtime, definition)?;
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
     // even after the plugin is removed (design §4.4).
@@ -430,13 +439,20 @@ pub(crate) fn mint_params(
             params.tags.push(tag);
         }
     }
-    params
+    Ok(params)
 }
 
+/// The template's task parameters.
+///
+/// A stale bundled contract refuses here. Manual mint, the scheduler, a job
+/// step, a condition fire and delivery automation all build their tasks from
+/// this mapping, so each of them holds instead of minting a scan that omits
+/// the contract.
 pub(crate) fn template_params(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
-) -> TaskAddParams {
+) -> Result<TaskAddParams, OrbitError> {
+    runtime.refuse_stale_auto_task_contract(definition)?;
     let template = &definition.template;
     let mut tags = orbit_types::task::normalize_task_tags(template.tags.clone());
     tags.push(auto_task_tag(&definition.name));
@@ -452,7 +468,7 @@ pub(crate) fn template_params(
         template.status
     };
 
-    TaskAddParams {
+    Ok(TaskAddParams {
         title: template.title.clone(),
         description: template.description.clone(),
         acceptance_criteria: template.acceptance_criteria.clone(),
@@ -479,5 +495,5 @@ pub(crate) fn template_params(
             .map(str::to_string),
         system_created: true,
         ..TaskAddParams::default()
-    }
+    })
 }
