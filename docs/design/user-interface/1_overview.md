@@ -65,7 +65,7 @@ available. Several `workspaces=` values open **All workspaces** with that filter
 one value opens that workspace's board.
 
 With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**, **Log**. Drain reuses the Auto-drain body, with an
-**Auto-draining** header followed by one drain-target select and phase pill.
+**Auto-draining** header followed by the phase pill and one drain-target select.
 The drain-target select holds one option per workspace-host pair (`workspace · host (role)`),
 grouped by workspace for the selected host's owned workspaces in alphabetical order,
 defaulting to the owner of the first with a live drain on any host, or of the
