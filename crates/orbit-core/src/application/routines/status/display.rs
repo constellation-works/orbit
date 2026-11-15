@@ -34,6 +34,8 @@ pub struct RoutineStatus {
     pub recent_fires: Vec<RoutineFireRecord>,
     /// Latest consecutive failures; success, skips and in-flight fires reset it.
     pub failure_streak: RoutineFailureStreak,
+    /// This host's circuit breaker for the routine, when it has ever tripped.
+    pub breaker: Option<RoutineBreakerRecord>,
     pub automation: Option<serde_json::Value>,
 }
 
@@ -44,6 +46,24 @@ impl RoutineStatus {
         self.routine.definition.enabled && self.paused_at.is_none()
     }
 
+    /// The open circuit breaker holding this routine, if one is.
+    pub fn tripped(&self) -> Option<&RoutineBreakerRecord> {
+        self.breaker
+            .as_ref()
+            .filter(|breaker| breaker.state == RoutineBreakerState::Open)
+    }
+
+    /// When the open breaker next admits a trial fire: now when an operator
+    /// bypass or trial is pending, else its backoff time. A new Orbit build
+    /// admits one earlier.
+    pub fn next_trial_at(&self) -> Option<String> {
+        let breaker = self.tripped()?;
+        if breaker.bypass_requested_at.is_some() || breaker.trial_started_at.is_some() {
+            return Some(breaker.updated_at.clone());
+        }
+        breaker.next_trial_at.clone()
+    }
+
     /// How Operations (and other projections) should label the next slot.
     pub fn schedule_display_state(&self) -> ScheduleDisplayState {
         if !self.routine.definition.enabled {
@@ -51,6 +71,9 @@ impl RoutineStatus {
         }
         if self.paused_at.is_some() {
             return ScheduleDisplayState::Paused;
+        }
+        if self.tripped().is_some() {
+            return ScheduleDisplayState::Tripped;
         }
         if automation_unavailable(self.automation.as_ref()) {
             return ScheduleDisplayState::Unavailable;
@@ -99,9 +122,12 @@ impl RoutineStatus {
             RoutineField::FirstObservedAt => json!(self.first_observed_at),
             RoutineField::LastEvaluatedSlot => json!(self.last_evaluated_slot),
             RoutineField::NextDue => json!(self.next_due),
-            RoutineField::NextEvaluation => self
-                .schedule_display_state()
-                .next_evaluation(self.next_due.clone()),
+            RoutineField::NextEvaluation => match self.schedule_display_state() {
+                ScheduleDisplayState::Tripped => {
+                    ScheduleDisplayState::Tripped.next_evaluation(self.next_trial_at())
+                }
+                state => state.next_evaluation(self.next_due.clone()),
+            },
             RoutineField::State => json!(self.schedule_display_state().as_str()),
             RoutineField::LastFire(columns) => json!(
                 self.last_fire
@@ -114,6 +140,7 @@ impl RoutineStatus {
                     .map(|fire| project_fire(fire, columns))
                     .collect::<Vec<_>>()
             ),
+            RoutineField::Breaker => breaker_json(self),
             RoutineField::FailureStreak => json!({
                 "count": self.failure_streak.count,
                 "since": self.failure_streak.since,
@@ -160,6 +187,30 @@ pub enum RoutineField {
     RecentFires(&'static [(&'static str, FireField)]),
     /// `{count, since, truncated}` of the latest consecutive failures.
     FailureStreak,
+    /// The routine's circuit breaker ([`breaker_json`]), or null when it
+    /// never tripped on this host.
+    Breaker,
+}
+
+/// `{state, tripped, error_class, last_run_id, tripped_at, trips,
+/// next_trial_at, trial_started_at, trial_reason, bypass_requested_at}`:
+/// the routine's circuit breaker on this host, or null when it never tripped.
+pub fn breaker_json(status: &RoutineStatus) -> Value {
+    let Some(breaker) = &status.breaker else {
+        return Value::Null;
+    };
+    json!({
+        "state": breaker.state.as_str(),
+        "tripped": breaker.state == RoutineBreakerState::Open,
+        "error_class": breaker.error_class,
+        "last_run_id": breaker.last_run_id,
+        "tripped_at": breaker.tripped_at,
+        "trips": breaker.trips,
+        "next_trial_at": status.next_trial_at(),
+        "trial_started_at": breaker.trial_started_at,
+        "trial_reason": breaker.trial_reason,
+        "bypass_requested_at": breaker.bypass_requested_at,
+    })
 }
 
 /// One field of the shared fire projection ([`project_fire`]).

@@ -40,7 +40,8 @@
               "friction_untriaged",
               "host_unhealthy",
               "notice_open",
-              "resident_stalled"
+              "resident_stalled",
+              "routine_tripped"
             ]
           },
           "description": "Include kinds (repeatable)."
@@ -62,7 +63,8 @@
               "friction_untriaged",
               "host_unhealthy",
               "notice_open",
-              "resident_stalled"
+              "resident_stalled",
+              "routine_tripped"
             ]
           },
           "description": "Exclude kinds (repeatable)."

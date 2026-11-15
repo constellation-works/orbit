@@ -37,6 +37,7 @@ mod reliability;
 mod residents;
 mod resource_profiles;
 mod routes;
+mod routine_breaker;
 pub(crate) mod routines;
 mod runs;
 mod schedule_edits;

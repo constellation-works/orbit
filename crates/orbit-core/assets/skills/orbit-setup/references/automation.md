@@ -735,12 +735,19 @@ auto-task uses its own kill-switch, `orbit auto-task toggle <name> on|off`
 
 ## "Why didn't it fire?"
 
-Resolve the toggles in this order — `orbit routine list` shows both at once:
+Resolve the toggles in this order — `orbit routine list` shows all three at once:
 
 1. `enabled: false` in this checkout's definition (`orbit routine enable` sets
    it; per-user, gitignored).
 2. A local pause (`orbit routine pause`: this host only, unversioned, durable
    across reboots).
+3. A tripped circuit breaker. After three fires in a row fail with the same
+   error class the sweep stops firing the routine; `orbit routine list` shows
+   it as `tripped` and `orbit routine show <name>` names the error class, last
+   run and next trial time. The sweep retries once after a backoff (15 minutes,
+   doubling to at most 4 hours) and after the host's Orbit build changes; a
+   successful trial closes it. Fix the cause, then `orbit routine breaker reset
+   <name>`, or `orbit routine breaker bypass <name>` to let one fire through.
 
 If neither explains it, check further out: is this checkout registered as an
 owner (`orbit workspace list`), is the clock unit running and not paused

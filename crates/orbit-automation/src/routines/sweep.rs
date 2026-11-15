@@ -1,5 +1,6 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
 
+use super::breaker::{BreakerGate, ObservedFire, breaker_gate};
 use super::due::{
     DueDecision, MISSED_SLOT_SKIP_DETAIL, MissedSlotWalk, due_decision_with_grace,
     missed_slots_through, natural_slot_grace_for_cadence, parse_cron,
@@ -92,6 +93,29 @@ pub trait RoutineDispatch {
     /// marked `interrupted`, which carries no teardown and so is not evidence
     /// that the work stopped.
     fn run_owner_liveness(&self, source_orbit_dir: &Path, run_id: &str) -> RunOwnerLiveness;
+
+    /// Newest runs a state-, delivery- or condition-triggered routine's
+    /// automation admitted, newest first, as the circuit breaker observes
+    /// them. Hosts that cannot list them report none.
+    fn routine_runs(
+        &self,
+        _routine: &LoadedRoutine,
+        _limit: usize,
+    ) -> Result<Vec<ObservedFire>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    /// Error class of a failed run: its failed step's recorded failure code,
+    /// else its terminal state. `None` when the run cannot be read.
+    fn run_failure_class(&self, _source_orbit_dir: &Path, _run_id: &str) -> Option<String> {
+        None
+    }
+
+    /// Identity of the Orbit build running this sweep. A breaker tripped
+    /// under another build admits a trial at once.
+    fn host_orbit_build(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Options for one sweep pass.
@@ -228,6 +252,7 @@ pub fn run_sweep_core(
     };
 
     let pauses = store.routine_pauses()?;
+    let breakers = store.routine_breakers()?;
 
     let mut reports = Vec::new();
     for routine in &collection.routines {
@@ -243,8 +268,24 @@ pub fn run_sweep_core(
             reports.push(failure_report(routine, reason.clone()));
             continue;
         }
-        let report = sweep_routine(store, routine, dispatch, &pauses, options, now_utc)
-            .unwrap_or_else(|error| failure_report(routine, error.to_string()));
+        // [ORB-25103] An open circuit breaker holds every trigger kind,
+        // before any evaluation or retry, except for its one trial pass.
+        let gate = breaker_gate(
+            store,
+            &breakers,
+            routine,
+            dispatch,
+            options.dry_run,
+            now_utc,
+        );
+        let report = match gate {
+            Ok(BreakerGate::Skip(reason)) => skipped(routine, &reason),
+            Ok(BreakerGate::Proceed) => {
+                sweep_routine(store, routine, dispatch, &pauses, options, now_utc)
+                    .unwrap_or_else(|error| failure_report(routine, error.to_string()))
+            }
+            Err(error) => failure_report(routine, error.to_string()),
+        };
         reports.push(report);
     }
 

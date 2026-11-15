@@ -43,6 +43,7 @@ const KINDS: &[EnumValue] = &[
     EnumValue::plain("host_unhealthy"),
     EnumValue::plain("notice_open"),
     EnumValue::plain("resident_stalled"),
+    EnumValue::plain("routine_tripped"),
 ];
 const SEVERITIES: &[EnumValue] = &[
     EnumValue::plain("low"),

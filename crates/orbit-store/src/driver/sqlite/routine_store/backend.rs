@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 
 use super::{
-    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
-    RoutinePauseRecord, RoutineSlotAttempts,
+    RoutineBreakerEvent, RoutineBreakerRecord, RoutineCursor, RoutineFireIntentParams,
+    RoutineFireRecord, RoutineFireState, RoutinePauseRecord, RoutineSlotAttempts,
 };
 use crate::Store;
 
@@ -117,5 +117,33 @@ impl crate::contracts::RoutineStoreBackend for Store {
 
     fn routine_pauses(&self) -> Result<BTreeMap<String, RoutinePauseRecord>, OrbitError> {
         Self::routine_pauses(self)
+    }
+
+    fn routine_breakers(&self) -> Result<BTreeMap<String, RoutineBreakerRecord>, OrbitError> {
+        Self::routine_breakers(self)
+    }
+
+    fn routine_breaker_transition(
+        &self,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<(), OrbitError> {
+        Self::routine_breaker_transition(self, breaker, event)
+    }
+
+    fn routine_breaker_reset(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError> {
+        Self::routine_breaker_reset(self, routine_name, actor)
+    }
+
+    fn routine_breaker_bypass(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError> {
+        Self::routine_breaker_bypass(self, routine_name, actor)
+    }
+
+    fn routine_breaker_events(
+        &self,
+        routine_name: &str,
+        limit: usize,
+    ) -> Result<Vec<RoutineBreakerEvent>, OrbitError> {
+        Self::routine_breaker_events(self, routine_name, limit)
     }
 }

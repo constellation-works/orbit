@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-14
+last_updated: 2026-11-15
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -1005,6 +1005,38 @@ recovery and rollback limits see the
 Toggle resolution, in order: `enabled: false` (this checkout's definition) → local
 pause (this host only). `orbit routine list` shows both columns plus computed
 next-due, so "why didn't this fire?" is one command.
+
+### 4.1 Circuit breaker
+
+A routine that keeps failing the same way stops firing until it is fixed. The
+sweep keeps one breaker per routine in `routine_breakers` (state, error class,
+last run id, trip count, next trial time, the Orbit build it tripped under) and
+logs every transition to `routine_breaker_events` (`tripped`, `trial`,
+`reopened`, `closed`, `reset`, `bypass`, with the actor).
+
+- **Error class.** A fire's class is its failed step's typed failure code, else
+  its run state (`failed`, `timeout`, `interrupted`); a cron fire that never
+  produced a run counts as `dispatch_failed`, `timed_out` or `fire_error`. The
+  message never counts. Cron fires come from `routine_fires`; state, delivery
+  and condition routines from the job runs they triggered.
+- **Trip.** When the newest three fires since the last reset all failed with the
+  same class, the sweep opens the breaker and skips the routine with reason
+  `breaker_open`. One `routine_tripped` attention item per open breaker points
+  at the reset.
+- **Half-open trial.** An open breaker lets one fire through after its backoff
+  (15 minutes, doubling per failed trial, capped at 4 hours), at the first sweep
+  after the host's Orbit version or commit changes, or once after an operator
+  bypass. While that fire runs the routine is skipped as
+  `breaker_trial_in_flight`. A successful trial closes the breaker; a failed
+  one re-opens it with the longer backoff.
+- **Operator controls.** `orbit routine breaker reset <name>` closes the breaker
+  (older failures no longer count); `orbit routine breaker bypass <name>` lets
+  one fire through on the next sweep. The dashboard routine details offer the
+  same two actions through the governed `routine.breaker` operation. Both are
+  recorded as breaker events; the dashboard action is also audited.
+- **Status.** `orbit routine list`, `orbit routine show` and the dashboard show a
+  tripped routine as `tripped` with its error class and next trial time instead
+  of a failure streak; `orbit routine show` lists the breaker events.
 
 ---
 

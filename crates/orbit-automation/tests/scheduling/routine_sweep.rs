@@ -793,3 +793,130 @@ fn temporal_and_same_kind_state_routines_on_one_target_still_skip_as_duplicates(
         }
     }
 }
+
+/// A dispatch whose submissions fail until told otherwise, on a host whose
+/// Orbit build the test can change [ORB-25103].
+#[derive(Default)]
+struct FlakyDispatch {
+    delegate: FakeDispatch,
+    failing: Cell<bool>,
+    build: RefCell<String>,
+    attempts: Cell<u32>,
+}
+
+impl RoutineDispatch for FlakyDispatch {
+    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
+        self.attempts.set(self.attempts.get() + 1);
+        if self.failing.get() {
+            return Err(OrbitError::Execution("worktree mismatch".into()));
+        }
+        self.delegate.submit(dir, job, actor, slot)
+    }
+    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
+        self.delegate.run_state(dir, run_id)
+    }
+    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
+        self.delegate.run_owner_liveness(dir, run_id)
+    }
+    fn host_orbit_build(&self) -> Option<String> {
+        Some(self.build.borrow().clone())
+    }
+}
+
+/// [ORB-25103] resident-cycle-orbit failed at launch on every fire for days
+/// because nothing stopped the sweep. Three identical failures trip the
+/// breaker; it holds through its backoff, a failed trial re-opens it with a
+/// longer backoff, a new Orbit build admits a trial at once, and a
+/// successful trial closes it.
+#[test]
+fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds() {
+    use orbit_automation::routines::breaker::BREAKER_OPEN_REASON;
+    use orbit_store::contracts::RoutineBreakerState;
+
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![routine("job", "forbid")]);
+    let dispatch = FlakyDispatch::default();
+    dispatch.failing.set(true);
+    *dispatch.build.borrow_mut() = "1.0.0".into();
+    // Fire rows are stamped with the real clock; a sweep `now` in their past
+    // keeps a dispatched trial inside its policy timeout.
+    let base = (Utc::now() - Duration::hours(1))
+        .with_second(0)
+        .and_then(|at| at.with_nanosecond(0))
+        .expect("minute boundary");
+    store
+        .routine_record_baseline("job", &base.to_rfc3339())
+        .unwrap();
+    let at = |minutes: i64| base + Duration::minutes(minutes);
+    let sweep = |minutes: i64| {
+        let reports = run_sweep_core(
+            &store,
+            &coll,
+            &dispatch,
+            SweepOptions::default(),
+            at(minutes),
+        )
+        .expect("sweep");
+        reports.into_iter().next().expect("one routine row")
+    };
+    let breaker = || store.routine_breakers().unwrap().remove("job");
+
+    for minute in 1..=3 {
+        assert_eq!(
+            sweep(minute).action,
+            "error",
+            "minute {minute} fires and fails"
+        );
+    }
+    let held = sweep(4);
+    assert_eq!(held.reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    let tripped = breaker().expect("trip recorded");
+    assert_eq!(tripped.state, RoutineBreakerState::Open);
+    assert_eq!(tripped.error_class.as_deref(), Some("dispatch_failed"));
+    assert_eq!(tripped.trips, 1);
+    assert_eq!(sweep(10).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    assert_eq!(dispatch.attempts.get(), 3, "an open breaker fires nothing");
+
+    // The 15-minute backoff admits one trial; it fails and re-opens longer.
+    assert_eq!(sweep(19).action, "error", "trial fire");
+    assert_eq!(sweep(20).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    let reopened = breaker().expect("re-open recorded");
+    assert_eq!(reopened.trips, 2);
+    assert_eq!(
+        reopened.next_trial_at.as_deref(),
+        Some(at(50).to_rfc3339().as_str()),
+        "the second backoff doubles to 30 minutes"
+    );
+    assert_eq!(sweep(21).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    assert_eq!(dispatch.attempts.get(), 4);
+
+    // A deploy admits a trial before the backoff; its success closes it.
+    *dispatch.build.borrow_mut() = "1.0.1".into();
+    dispatch.failing.set(false);
+    let trial = sweep(22);
+    assert_eq!(trial.action, "fired", "version-change trial");
+    let run_id = trial.run_id.expect("trial run");
+    assert_eq!(sweep(23).reason.as_deref(), Some("breaker_trial_in_flight"));
+    dispatch
+        .delegate
+        .states
+        .borrow_mut()
+        .insert(run_id, JobRunState::Success);
+    assert_eq!(sweep(24).action, "fired", "closed breaker fires as usual");
+    assert_eq!(
+        breaker().expect("row kept").state,
+        RoutineBreakerState::Closed
+    );
+    let events: Vec<String> = store
+        .routine_breaker_events("job", 10)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .map(|event| event.event)
+        .collect();
+    assert_eq!(
+        events,
+        ["tripped", "trial", "reopened", "trial", "closed"],
+        "one recorded event per transition, not one per fire"
+    );
+}

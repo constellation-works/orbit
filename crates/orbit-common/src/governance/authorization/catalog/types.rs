@@ -86,6 +86,14 @@ pub const DASHBOARD_ROUTINE_TRIGGER: GovernedOperation = GovernedOperation {
     rationale: "changing a versioned routine trigger changes when unattended execution runs",
 };
 
+/// Routine circuit-breaker reset or one-fire bypass from the dashboard.
+pub const DASHBOARD_ROUTINE_BREAKER: GovernedOperation = GovernedOperation {
+    id: "routine.breaker",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "resetting or bypassing a tripped routine resumes unattended execution",
+};
+
 /// Manual catalog job submission from the dashboard.
 pub const DASHBOARD_JOB_RUN: GovernedOperation = GovernedOperation {
     id: "job.run",

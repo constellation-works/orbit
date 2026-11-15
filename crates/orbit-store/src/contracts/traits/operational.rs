@@ -17,8 +17,8 @@ use crate::contracts::invocation::{
     TaskInvocationMetrics, ToolInvocationMetrics,
 };
 use crate::contracts::routine::{
-    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
-    RoutinePauseRecord, RoutineSlotAttempts,
+    RoutineBreakerEvent, RoutineBreakerRecord, RoutineCursor, RoutineFireIntentParams,
+    RoutineFireRecord, RoutineFireState, RoutinePauseRecord, RoutineSlotAttempts,
 };
 use crate::contracts::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
 use crate::contracts::v2_audit::{
@@ -123,6 +123,25 @@ pub trait RoutineStoreBackend: Send + Sync {
     fn routine_pause(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
     fn routine_resume(&self, routine_name: &str) -> Result<bool, OrbitError>;
     fn routine_pauses(&self) -> Result<BTreeMap<String, RoutinePauseRecord>, OrbitError>;
+    /// Every routine circuit-breaker row on this host, keyed by routine name.
+    fn routine_breakers(&self) -> Result<BTreeMap<String, RoutineBreakerRecord>, OrbitError>;
+    /// Write one breaker row and append its transition event atomically.
+    fn routine_breaker_transition(
+        &self,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<(), OrbitError>;
+    /// Close an open breaker now; `false` when it was not open.
+    fn routine_breaker_reset(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
+    /// Let one fire through an open breaker on the next sweep; `false` when
+    /// it was not open.
+    fn routine_breaker_bypass(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
+    /// Newest breaker events for one routine, newest first.
+    fn routine_breaker_events(
+        &self,
+        routine_name: &str,
+        limit: usize,
+    ) -> Result<Vec<RoutineBreakerEvent>, OrbitError>;
 }
 
 pub trait FrictionStoreBackend: Send + Sync {

@@ -327,6 +327,7 @@ impl Commands {
                     RoutineSubcommand::Pause(_) => ("pause", None, None),
                     RoutineSubcommand::Resume(_) => ("resume", None, None),
                     RoutineSubcommand::Init(_) => ("init", None, None),
+                    RoutineSubcommand::Breaker(args) => ("breaker", Some(args.name()), None),
                     RoutineSubcommand::Enable(args) => {
                         ("enable", Some(args.name.as_str()), Some("enable"))
                     }
@@ -343,6 +344,11 @@ impl Commands {
                 // Carry the requested state like the dashboard toggle's audit row.
                 meta.arguments_json = toggle
                     .map(|verb| serde_json::json!({ "enabled": verb == "enable" }).to_string());
+                // A breaker reset or bypass names its action in the audit row.
+                if let RoutineSubcommand::Breaker(args) = &command.command {
+                    meta.arguments_json =
+                        Some(serde_json::json!({ "action": args.action() }).to_string());
+                }
                 let mut operation =
                     CommandOperation::new(runtime_need, Some(meta), None, dispatch_routine);
                 if let Some(toggle) = toggle {
