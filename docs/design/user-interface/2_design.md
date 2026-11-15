@@ -438,7 +438,8 @@ a dot and words on every view at those widths: `3/5` slots in use,
 `pull`, `winding down`, `· held` while the host holds new tasks, or `2 live` under
 All workspaces. The Tasks view paints it from the drain card's reading and every
 other view from the fleet read. In All workspaces mode Drain shows the same
-Auto-drain body with a header ordered **Auto-draining**, one drain-target select, phase pill.
+Auto-drain body with the **Auto-drain** title at the left, then the phase dot/pill,
+and a right-aligned drain-target select.
 The target select holds one option per workspace-host pair, `workspace · host (role)`,
 grouped by workspace. The groups are the selected host's owned workspaces — replicas are never listed —
 in alphabetical order; the default is the owner of the first of those with a live
@@ -487,14 +488,15 @@ composer or page-only admission-pass, recorded-inputs, pull-status, waits or
 fleet panel. The host-resource detail's **Open Tasks dock** link leads to the Tasks dock.
 
 Both cards project `GET /api/workflows/auto/readiness`. The status header
-carries the phase (Idle, Draining, Winding down, Pull drain or Read-only) and
-the live window's deadline. The live window shows live pilots, recovery agents
-and reviewers from readiness `live_agents` (the row is omitted when that field
-is absent), followed by the per-reason hold breakdown for an approving window.
-Workspace leaf occupancy has a slot meter (continuous past 24, hatched past its
-limit), an
-accessible used/ceiling label, a binding-constraint explanation and the
-per-pipeline split. Throttle, provider, crew and pilot holds remain visible.
+carries the phase (Idle, Draining, Winding down, Pull drain or Read-only). The
+live window shows live pilots, recovery agents and reviewers from readiness
+`live_agents` (the row is omitted when that field is absent). When available,
+its deadline follows the figures in the same row; when counts are absent, the
+deadline can appear on its own. Workspace leaf occupancy has a slot meter
+(continuous past 24, hatched past its limit), an accessible used/ceiling label, a binding-constraint
+explanation and the per-pipeline split. The per-reason approval-hold line shares
+the notices group with the capacity summary below the slot bar. Throttle,
+provider, crew and pilot holds remain visible.
 Forecast peaks use compact meters against admission thresholds; their tooltips
 keep timing, amount and headroom, while the first-hour sparkline is hidden in
 the dock and the meter is shown whether or not a series is recorded. A live
