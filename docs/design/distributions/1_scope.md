@@ -1,8 +1,8 @@
 ---
 title: "Scope: Distributions and workspace presets"
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Implemented
 stage: shipped
 next: "—"
@@ -26,8 +26,9 @@ definitions land disabled and become active only through an operator act. Orbit 
 27 into each workspace. The routines `worktree-gc`, `task-pilot` and
 `crew_memory_dream` are seeded enabled; `crew_memory_dream` does nothing until
 `crew_memory.enabled` is set and a memory experiment is running. Other shipped routines are
-seeded disabled. Among auto-tasks, `host-health` ([ORB-21596]) alone is seeded enabled; other
-shipped auto-tasks are seeded disabled. The routine
+seeded disabled. Among auto-tasks, `host-health` is also seeded disabled
+([ORB-24934], reversing [ORB-21596]); enable it with
+`orbit auto-task toggle host-health on`. The routine
 `crew_performance_refresh` ([ORB-17816]), once seeded enabled,
 was retired in [ORB-22804]. Seeded definitions carry managed
 provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
@@ -220,6 +221,7 @@ These ideas appeared in earlier proposals but are not current behavior or requir
 - [ORB-17816] — added `crew_performance_refresh`, the one default routine seeded enabled.
 - [ORB-22804] — retired `crew_performance_refresh` with crew-performance weighting.
 - [ORB-19186] — implemented the seeding policy, presets and their workspace surfaces.
-- [ORB-21596] — shipped the host-health auto-task enabled by default.
+- [ORB-21596] — shipped the host-health auto-task enabled by default (superseded by ORB-24934).
+- [ORB-24934] — shipped the host-health auto-task disabled by default.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

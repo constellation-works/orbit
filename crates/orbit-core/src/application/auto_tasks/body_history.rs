@@ -80,9 +80,9 @@ fn body_digest(definition: &AutoTaskDefinition, base_branch: &str) -> Result<Str
 }
 
 /// Recognize a previous shipped body plus settings, preserving added comments,
-/// removed body tags, and cleared crew/complexity as body edits. Settings are
-/// compared with today's default so a known older setting never masks an
-/// operator's override when multiple releases shipped the same body.
+/// removed body tags, and cleared crew/complexity as body edits. A setting
+/// still holding its historical shipped value is an upstream default, not an
+/// operator's override, so it never masks today's default on migration.
 pub(super) fn historical_overrides(
     current: &AutoTaskDefinition,
     definition: &AutoTaskDefinition,
@@ -109,6 +109,13 @@ pub(super) fn historical_overrides(
         );
         body_digest(&pre_family, base_branch)?
     };
+    // Several releases can ship the same body with different settings
+    // (host-health shipped that body enabled, then disabled). The version
+    // whose settings the file matches most closely is the one it was copied
+    // from; settings equal to that version's shipped values are upstream
+    // defaults, not operator overrides, so they must not mask today's
+    // default when the body is migrated.
+    let mut best: Option<(usize, AutoTaskOverrides)> = None;
     for version in versions {
         if (version.digest != digest && version.digest != pre_family_digest)
             || raw.lines().map(str::trim).any(|line| {
@@ -129,15 +136,15 @@ pub(super) fn historical_overrides(
             deliveries_landed.branch = base_branch.to_string();
         }
         defaults.apply(&mut historical);
-        historical.template.crew = defaults.crew;
+        historical.template.crew = defaults.crew.clone();
         historical.template.complexity = defaults.complexity;
-        historical.template.tags = defaults.tags;
-        if !split_overrides(&historical, definition)
-            .body_fields
-            .is_empty()
-        {
+        historical.template.tags = defaults.tags.clone();
+        let historical_diff = split_overrides(&historical, definition);
+        if !historical_diff.body_fields.is_empty() {
             continue;
         }
+        let distance =
+            historical_diff.settings.field_names().len() + historical_diff.settings.tags.len();
         let mut effective = definition.clone();
         if let Some(settings) = settings {
             settings.apply(&mut effective);
@@ -146,6 +153,41 @@ pub(super) fn historical_overrides(
         // The historical comparison above proves these differences are all
         // upstream body changes, rather than local edits.
         overrides.body_fields.clear();
+        // A setting that still holds the historical shipped value is an
+        // upstream default that has since changed, not an operator choice:
+        // drop it so the migrated body takes today's default. Settings an
+        // operator changed away from that shipped value differ from it and
+        // are preserved below.
+        if overrides.settings.enabled == defaults.enabled {
+            overrides.settings.enabled = None;
+        }
+        if overrides.settings.schedule == defaults.schedule {
+            overrides.settings.schedule = None;
+        }
+        if overrides.settings.dedupe == defaults.dedupe {
+            overrides.settings.dedupe = None;
+        }
+        if overrides.settings.crew == defaults.crew {
+            overrides.settings.crew = None;
+        }
+        if overrides.settings.priority == defaults.priority {
+            overrides.settings.priority = None;
+        }
+        if overrides.settings.complexity == defaults.complexity {
+            overrides.settings.complexity = None;
+        }
+        overrides
+            .settings
+            .tags
+            .retain(|tag| !defaults.tags.contains(tag));
+        if overrides
+            .settings
+            .granted_tools
+            .as_ref()
+            .is_some_and(|tools| *tools == historical.granted_tools)
+        {
+            overrides.settings.granted_tools = None;
+        }
         // [ORB-15663] Shipped bodies once named the retired `system` crew;
         // that default is an upstream change too, so the template now routes
         // through its complexity pool. A settings-table crew still wins below.
@@ -166,7 +208,15 @@ pub(super) fn historical_overrides(
                 }
             }
         }
-        return Ok(Some(overrides));
+        if best
+            .as_ref()
+            .is_none_or(|(best_distance, _)| distance < *best_distance)
+        {
+            best = Some((distance, overrides));
+        }
+        if distance == 0 {
+            break;
+        }
     }
-    Ok(None)
+    Ok(best.map(|(_, overrides)| overrides))
 }

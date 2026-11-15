@@ -71,8 +71,8 @@ GitHub or perform delivery are shipped disabled until you enable them. When
 selected by the seeding policy, the local `worktree-gc`, `task-pilot` and
 `crew-memory-dream` routines seed enabled (`crew-memory-dream` mints
 nothing while `crew_memory.enabled` is false or no running memory-arm
-experiment applies); the local `host-health`
-auto-task does too. Unattended scheduled runs require the
+experiment applies). The local `host-health`
+auto-task seeds disabled, like the other shipped auto-tasks. Unattended scheduled runs require the
 host's Orbit scheduler clock to be enabled.
 
 ### Task publication (optional)
@@ -95,7 +95,7 @@ published only if you pass `--attachments include`, and even then files such as
   `ORBIT_INSTALL_BASE_URL` if you set it.
 - **`orbit update`** asks the GitHub Releases API for the latest version and
   downloads it, sending an `orbit-cli/<version>` User-Agent. You can run it
-  yourself; the enabled host-health auto-task can also run `orbit update --check`
+  yourself; when enabled, the host-health auto-task can also run `orbit update --check`
   on its schedule.
   `ORBIT_UPDATE_RELEASE_DIR` points it at a local mirror instead.
 

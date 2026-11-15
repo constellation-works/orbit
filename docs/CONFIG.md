@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-11-14
+last_validated: 2026-11-15
 ---
 
 # Orbit Configuration
@@ -64,9 +64,10 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 ## Host-health auto-task
 
 `host-health` reads `orbit doctor --json` and warning/error service logs weekly
-(on Mondays at 07:10 in the scheduler's local timezone). Unlike every other shipped
-definition, it starts enabled in a new workspace. In an existing workspace,
-`orbit workspace sync` or `orbit workspace init` turns on a `host-health`
+(on Mondays at 07:10 in the scheduler's local timezone). Like every other shipped
+definition, it starts disabled in a new workspace; turn it on with
+`orbit auto-task toggle host-health on`. In an existing workspace,
+`orbit workspace sync` or `orbit workspace init` turns off a `host-health`
 definition no operator has configured (its file still holds the bytes Orbit
 wrote and `orbit auto-task toggle` never set its flag). `orbit init` leaves
 existing definitions alone. Once an operator toggles it, or edits the file,

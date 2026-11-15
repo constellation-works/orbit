@@ -414,14 +414,16 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     }
 
     // Every replica-side candidate is switched on, so only the replica rule
-    // can keep the owner work from firing. host-health is seeded enabled.
+    // can keep the owner work from firing. host-health seeds disabled, like
+    // every shipped default, and is switched on here for the replica check.
     let replica_host_health =
         fs::read_to_string(replica_repo.join(".orbit/auto_tasks/host-health.yaml"))
             .expect("replica seeds host-health");
     assert!(
-        replica_host_health.contains("enabled: true"),
-        "the replica's seeded host-health is enabled: {replica_host_health}"
+        replica_host_health.contains("enabled: false"),
+        "the replica's seeded host-health is disabled: {replica_host_health}"
     );
+    enable_auto_task(&replica_repo, "host-health.yaml");
     enable_routine(&replica_repo, "worktree_gc.yaml");
     enable_routine(&replica_repo, "ci_failure_sweep.yaml");
     enable_auto_task(&replica_repo, "qa-sweep.yaml");
@@ -725,7 +727,7 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
         vec!["auto-task", "delete", "doc-duties", "--json"],
         vec!["auto-task", "restore", "friction-curation", "--json"],
         vec!["auto-task", "mint", "qa-sweep", "--json"],
-        // Seeded enabled, yet owner-pinned: a replica never mints it.
+        // Enabled above, yet owner-pinned: a replica never mints it.
         vec!["auto-task", "mint", "host-health", "--json"],
     ] {
         let before = auto_task_state_snapshot(&replica_repo, &home);

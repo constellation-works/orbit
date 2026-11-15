@@ -385,7 +385,8 @@ proposed follow-ups yourself; enabling a sweep does not approve them.
 ## Host-health auto-task
 
 `host-health` reads a machine's health and files tasks for what it finds. It
-ships enabled on the workspace owner, weekly on Monday at 07:10 host-local
+ships disabled; turn it on with `orbit auto-task toggle host-health on`. When
+enabled on the workspace owner, it runs weekly on Monday at 07:10 host-local
 time. It never repairs anything: it restarts no service, changes no config and
 reads no credentials.
 

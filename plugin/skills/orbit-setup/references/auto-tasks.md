@@ -386,7 +386,7 @@ reset before it stays applied, recorded as its own audited reset.
   sweeps from a workspace whose repository holds no code.
 - `orbit auto-task restore <name>` is the way back for a deleted shipped
   default. It writes the shipped content, with the shipped `enabled` value
-  (disabled, except `host-health`, which ships enabled), and clears the
+  (disabled for every default, including `host-health`), and clears the
   opt-out, so later reseeds manage it again. `restore` refuses a name Orbit
   does not ship and a definition that already exists. `auto-task add` under a
   deleted default's name creates your own definition instead; the opt-out
@@ -463,12 +463,12 @@ plugin being removed.
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
 except any you deleted (see [Deleting a definition](#deleting-a-definition)).
-`host-health` is the one exception: it seeds enabled. In an existing
-workspace, `orbit workspace sync` or `orbit workspace init` turns on a
+`host-health` seeds disabled, like every other default. In an existing
+workspace, `orbit workspace sync` or `orbit workspace init` turns off a
 `host-health` no operator has configured (its file still holds the bytes Orbit
 wrote and no `orbit auto-task toggle` set its flag); `orbit init` leaves
 existing files alone. After a toggle or a file edit, that choice decides:
-`orbit auto-task toggle host-health off` keeps it off. Only the workspace
+`orbit auto-task toggle host-health on` keeps it on. Only the workspace
 owner mints it; a replica never does.
 For ongoing selection and reconciliation, follow [Seeding policy](configuration.md#seeding-policy):
 
@@ -633,7 +633,7 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
-- **`host-health`** (`low`) — enabled-by-default weekly review of host-local
+- **`host-health`** (`low`) — disabled-by-default weekly review of host-local
   `orbit doctor --json` findings, Orbit service logs, and a read-only Orbit
   version and migrations check. That check records `orbit --version`, the
   executable path, SHA-256 and any recorded local-candidate source commit,

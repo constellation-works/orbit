@@ -25,7 +25,7 @@ orbit routine disable <name>        # disable a routine; enable reverses it
 orbit routine pause <name>          # this machine only, not in the file; resume clears it
 ```
 
-`orbit workspace init` seeds the shipped definitions. The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines and the `host-health` auto-task start enabled, and the rest start disabled. A seeded routine is named `<stem>-<workspace>`; `orbit routine list` prints the names. `orbit workspace sync` refreshes a seeded file without turning a routine on. It does turn on a `host-health` auto-task that no operator has configured; `orbit auto-task toggle host-health off` keeps it off.
+`orbit workspace init` seeds the shipped definitions. The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines start enabled, and the rest start disabled, including the `host-health` auto-task. A seeded routine is named `<stem>-<workspace>`; `orbit routine list` prints the names. `orbit workspace sync` refreshes a seeded file without turning a routine on. It does turn off a `host-health` auto-task that no operator has configured; `orbit auto-task toggle host-health on` turns it on and keeps it on.
 
 A replica checkout schedules only its worktree-GC and store-GC routines.
 

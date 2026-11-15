@@ -293,10 +293,10 @@ orbit clock repair                   # rewrite a unit naming a missing, moved or
 orbit clock set --cadence-seconds 300
 ```
 
-The `host-health` auto-task is the one shipped auto-task
-enabled by default: once the clock above is installed, it runs a weekly
-host-health pass (`10 7 * * 1`). Every other shipped auto-task is disabled by
-default. The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines
+The `host-health` auto-task ships disabled, like every other shipped
+auto-task: turn it on with `orbit auto-task toggle host-health on`. Once the
+clock above is installed and it is enabled, it runs a weekly
+host-health pass (`10 7 * * 1`). The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines
 seed enabled; every other shipped routine seeds disabled.
 `crew-memory-dream` mints nothing while `crew_memory.enabled` is false or
 no running memory-arm experiment applies.
