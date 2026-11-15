@@ -403,3 +403,229 @@ fn admission_and_mint_rewrite_pre_family_names_they_meet() {
         std::fs::read_to_string(fixture.workspace.join("state").join(MIGRATION_LEDGER)).unwrap();
     assert!(ledger.contains("\"name\":\"perf-review\""), "{ledger}");
 }
+
+const CALLBACK_MANIFEST: &str = "\
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: callback
+  version: 1.0.0
+  description: Callback fixture.
+spec:
+  permissions:
+    # callbacks it makes
+    orbit_tools: [orbit.task.show, orbit.task.artifact.get, orbit.workflow.run.list, orbit.decision.raise]
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: hello
+      description: Say hello.
+      execution_kind: read_only
+      mcp_scope: workspace
+";
+
+fn healed_callback_manifest() -> String {
+    CALLBACK_MANIFEST
+        .replace("orbit.task.artifact.get", "orbit.task.artifact:get")
+        .replace("orbit.workflow.run.list", "orbit.run:list")
+        .replace("orbit.decision.raise", "orbit.decision:raise")
+}
+
+fn install_callback_tree(install: &Path) {
+    std::fs::create_dir_all(install.join("bin")).unwrap();
+    let backend = install.join("bin/backend.sh");
+    std::fs::write(&backend, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(install.join("plugin.yaml"), CALLBACK_MANIFEST).unwrap();
+}
+
+fn record_callback(runtime: &OrbitRuntime, install: &Path, manifest: &str) {
+    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
+    plugins
+        .upsert_plugin(&InstalledPlugin {
+            name: "callback".into(),
+            version: "1.0.0".into(),
+            source: "fixture".into(),
+            install_path: install.to_string_lossy().into_owned(),
+            archive_digest: None,
+            manifest_digest: orbit_tools::plugin::manifest_digest(manifest.as_bytes()),
+            enabled: true,
+            grants: vec!["orbit_tools".into()],
+            first_party: false,
+            certified_orbit_version: None,
+            build: None,
+            installed_at: String::new(),
+            updated_at: String::new(),
+        })
+        .unwrap();
+    // The loader trusts the grant set only when `orbit plugin enable` wrote
+    // this witness. It is not keyed on the manifest digest.
+    orbit_core::runtime::plugin::grants::record_authorized_grants(
+        &runtime.global_root(),
+        "callback",
+        true,
+        &["orbit_tools".to_string()],
+    )
+    .unwrap();
+}
+
+fn callback_plugin(runtime: &OrbitRuntime) -> orbit_core::application::plugin::PluginSummary {
+    runtime
+        .list_plugins()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.name == "callback")
+        .expect("callback is installed")
+}
+
+fn assert_callback_loads(runtime: &OrbitRuntime, manifest: &str) {
+    let plugin = callback_plugin(runtime);
+    let diagnostic = plugin.diagnostic.clone().unwrap_or_default();
+    assert_eq!(
+        plugin.status,
+        orbit_types::plugin::PluginStatus::Active,
+        "callback did not load: {diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("does not match the stored digest"),
+        "digest mismatch refused the plugin: {diagnostic}"
+    );
+    assert_eq!(
+        plugin.manifest_digest,
+        orbit_tools::plugin::manifest_digest(manifest.as_bytes()),
+        "the loaded plugin is not the manifest this open read"
+    );
+}
+
+/// Abort a plugin-row update that changes `manifest_digest`, as a store
+/// error would between the manifest rewrite and its recorded digest.
+struct PluginDigestWriteFault(rusqlite::Connection);
+
+impl PluginDigestWriteFault {
+    fn install(global: &Path) -> Self {
+        let connection = rusqlite::Connection::open(global.join("orbit.db")).unwrap();
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_plugin_manifest_digest \
+                 BEFORE UPDATE OF manifest_digest ON plugins \
+                 WHEN NEW.manifest_digest != OLD.manifest_digest \
+                 BEGIN SELECT RAISE(ABORT, 'injected plugin digest write failure'); END;",
+            )
+            .unwrap();
+        Self(connection)
+    }
+}
+
+impl Drop for PluginDigestWriteFault {
+    fn drop(&mut self) {
+        self.0
+            .execute_batch("DROP TRIGGER IF EXISTS fail_plugin_manifest_digest;")
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_failed_plugin_digest_record_does_not_refuse_the_plugin() {
+    if !super::dispatch_admission::isolated(
+        "pre_family_tool_names::a_failed_plugin_digest_record_does_not_refuse_the_plugin",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // The upgrade pass records its marker only when the state directory
+    // already exists. Create it so the empty first open is remembered and
+    // later opens do not migrate until this test forgets that marker.
+    std::fs::create_dir_all(fixture.global.join("state")).unwrap();
+    std::fs::create_dir_all(fixture.workspace.join("state")).unwrap();
+    drop(fixture.open());
+    let install = fixture.global.join("plugins/callback/1.0.0");
+    install_callback_tree(&install);
+    let healed = healed_callback_manifest();
+    assert_ne!(healed, CALLBACK_MANIFEST);
+
+    // The upgrade marker from the empty first open is still set, so recording
+    // the pre-family install does not migrate it. Plugin load is a snapshot
+    // from open, so the next open is the one that must serve this row.
+    let runtime = fixture.open();
+    record_callback(&runtime, &install, CALLBACK_MANIFEST);
+    drop(runtime);
+    let runtime = fixture.open();
+    assert_callback_loads(&runtime, CALLBACK_MANIFEST);
+    drop(runtime);
+
+    fixture.forget_migration();
+    let fault = PluginDigestWriteFault::install(&fixture.global);
+    // The failing record restores the consented bytes. Plugin load happens
+    // before that pass, so the following open is the one that must still
+    // load the plugin.
+    drop(fixture.open());
+    let runtime = fixture.open();
+    assert_eq!(
+        std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+        CALLBACK_MANIFEST,
+        "a failed digest record must keep the consented manifest"
+    );
+    assert_callback_loads(&runtime, CALLBACK_MANIFEST);
+    assert!(
+        !fixture.global.join("state").join(MIGRATION_MARKER).exists(),
+        "the failed pass must retry on the next open"
+    );
+    drop(runtime);
+    drop(fault);
+
+    drop(fixture.open());
+    let runtime = fixture.open();
+    assert_eq!(
+        std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+        healed,
+        "the retry rewrites the manifest once the digest record can land"
+    );
+    assert_callback_loads(&runtime, &healed);
+
+    // A rewrite that landed on disk without its digest (the restore itself
+    // failed) is finished on the next pass, and the pass after that loads it.
+    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
+    let mut installed = plugins.get_plugin("callback").unwrap().unwrap();
+    installed.manifest_digest = orbit_tools::plugin::manifest_digest(CALLBACK_MANIFEST.as_bytes());
+    plugins.upsert_plugin(&installed).unwrap();
+    drop(plugins);
+    drop(runtime);
+    fixture.forget_migration();
+    drop(fixture.open());
+    let runtime = fixture.open();
+    assert_eq!(
+        std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+        healed,
+        "finishing the digest must not rewrite the healed manifest again"
+    );
+    assert_callback_loads(&runtime, &healed);
+
+    // A competing opener can record the new digest before this opener's
+    // failed update restores the old manifest bytes. The next pass must
+    // recognize the digest of the consented rewrite and finish the file.
+    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
+    let mut installed = plugins.get_plugin("callback").unwrap().unwrap();
+    installed.manifest_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
+    plugins.upsert_plugin(&installed).unwrap();
+    drop(plugins);
+    std::fs::write(install.join("plugin.yaml"), CALLBACK_MANIFEST).unwrap();
+    drop(runtime);
+    fixture.forget_migration();
+    let runtime = fixture.open();
+    assert_eq!(
+        std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+        healed,
+        "a recorded healed digest must finish a restored original manifest"
+    );
+    drop(runtime);
+    let runtime = fixture.open();
+    assert_callback_loads(&runtime, &healed);
+}

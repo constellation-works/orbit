@@ -15,9 +15,11 @@
 //!   definition into a fork;
 //! - task `required_tools` and `granted_tools`, rewritten in the bundle with a
 //!   `tool_names_migrated` history event;
-//! - installed plugin manifests' `permissions.orbit_tools`, rewritten only in
-//!   a manifest whose bytes still carry the digest this host recorded at
-//!   install, which then records the rewritten digest.
+//! - installed plugin manifests' `permissions.orbit_tools`, rewritten only
+//!   when the bytes are still the manifest this host recorded at install.
+//!   The rewritten digest is recorded with that rewrite. A failed record
+//!   restores the consented bytes, and a file left as that rewrite is
+//!   finished on the next pass by recording the digest it already has.
 //!
 //! The mapping is [`orbit_types::tool::family_action_tool_names`]. Every
 //! rewrite runs once on upgrade (the first writable runtime open) and again
@@ -33,7 +35,7 @@ use orbit_common::fs::io::{atomic_write_text, create_private_dir_all, with_exclu
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::Task;
-use orbit_types::tool::{family_action_tool_names, is_tool_family_operation};
+use orbit_types::tool::{family_action_tool_names, is_tool_family_operation, pre_family_tool_name};
 use serde::Serialize;
 
 use crate::OrbitRuntime;
@@ -87,6 +89,18 @@ impl ToolNameRewrite {
 /// verify the parsed result, so a layout this does not recognize is refused
 /// rather than half rewritten.
 fn rewrite_yaml_list_tool_names(raw: &str, key: &str) -> String {
+    rewrite_yaml_keyed_list(raw, key, rewrite_line_tool_names)
+}
+
+/// The inverse of [`rewrite_yaml_list_tool_names`] for the same list: family
+/// actions standing as list items become the operation names they were stored
+/// as. Other bytes stay put, so the result matches the consented manifest
+/// when `raw` is that function's rewrite of it.
+fn reverse_yaml_list_tool_names(raw: &str, key: &str) -> String {
+    rewrite_yaml_keyed_list(raw, key, reverse_line_tool_names)
+}
+
+fn rewrite_yaml_keyed_list(raw: &str, key: &str, rewrite_line: fn(&str) -> String) -> String {
     let mut rewritten = String::with_capacity(raw.len());
     let mut list_indent: Option<usize> = None;
     for line in raw.split_inclusive('\n') {
@@ -109,7 +123,7 @@ fn rewrite_yaml_list_tool_names(raw: &str, key: &str) -> String {
             list_indent = Some(indent);
         }
         if list_indent.is_some() {
-            rewritten.push_str(&rewrite_line_tool_names(line));
+            rewritten.push_str(&rewrite_line(line));
         } else {
             rewritten.push_str(line);
         }
@@ -142,6 +156,51 @@ fn rewrite_line_tool_names(line: &str) -> String {
             .is_none_or(|next| matches!(next, ',' | ']' | '#' | '\n' | '\r'));
         if opened && closed && is_tool_family_operation(token) {
             rewritten.push_str(&orbit_types::tool::tool_requirement_name(token));
+        } else {
+            rewritten.push_str(token);
+        }
+        rest = after;
+    }
+    rewritten.push_str(rest);
+    rewritten
+}
+
+/// Replace each family action on `line` that stands as a whole list item
+/// with the operation name it was stored as. Boundaries match
+/// [`rewrite_line_tool_names`].
+fn reverse_line_tool_names(line: &str) -> String {
+    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.';
+    let is_action_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut rewritten = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find(is_name_char) {
+        let (before, tail) = rest.split_at(start);
+        let name_end = tail.find(|c: char| !is_name_char(c)).unwrap_or(tail.len());
+        let mut end = name_end;
+        if tail[name_end..].starts_with(':') {
+            let action = &tail[name_end + 1..];
+            let action_len = action
+                .find(|c: char| !is_action_char(c))
+                .unwrap_or(action.len());
+            if action_len > 0 {
+                end = name_end + 1 + action_len;
+            }
+        }
+        let (token, after) = tail.split_at(end);
+        rewritten.push_str(before);
+        let opened = rewritten
+            .trim_end()
+            .trim_end_matches(['"', '\''])
+            .trim_end()
+            .ends_with(['-', '[', ',']);
+        let closed = after
+            .trim_start_matches(['"', '\''])
+            .trim_start()
+            .chars()
+            .next()
+            .is_none_or(|next| matches!(next, ',' | ']' | '#' | '\n' | '\r'));
+        if opened && closed {
+            rewritten.push_str(pre_family_tool_name(token));
         } else {
             rewritten.push_str(token);
         }
@@ -472,8 +531,14 @@ impl OrbitRuntime {
     /// Rewrite `permissions.orbit_tools` in each installed plugin manifest
     /// that names a pre-family operation, and record the rewritten digest.
     /// Only a manifest whose bytes still carry the digest recorded at install
-    /// is touched: the rewrite names the same operations, so it keeps the
+    /// is rewritten: the rewrite names the same operations, so it keeps the
     /// operator's consent, while an unconsented edit stays refused.
+    ///
+    /// The digest is recorded after the file rewrite. If that record fails,
+    /// the consented bytes are put back and this pass returns the error, so
+    /// the upgrade retries. A file already holding that rewrite — the record
+    /// failed and the restore did not land — has its digest recorded on the
+    /// next pass without another edit.
     pub(crate) fn migrate_plugin_manifest_tool_names(
         &self,
     ) -> Result<Vec<ToolNameRewrite>, OrbitError> {
@@ -490,53 +555,67 @@ impl OrbitRuntime {
             let Ok(raw) = fs::read_to_string(&path) else {
                 continue;
             };
-            if orbit_tools::plugin::manifest_digest(raw.as_bytes()) != installed.manifest_digest {
+            let file_digest = orbit_tools::plugin::manifest_digest(raw.as_bytes());
+            if file_digest != installed.manifest_digest {
+                // The file is already the consented rewrite and only the
+                // stored digest is behind (the record failed after the
+                // rewrite, and restoring the old bytes did not land).
+                if let Some(rewrite) = consented_plugin_tool_rewrite(
+                    &path,
+                    &installed.name,
+                    &raw,
+                    &installed.manifest_digest,
+                ) {
+                    installed.manifest_digest = file_digest;
+                    self.stores().plugins().upsert_plugin(&installed)?;
+                    rewrites.push(rewrite);
+                    continue;
+                }
+                // Another opener may have recorded the rewritten digest
+                // before this opener's failed upsert restored the old bytes.
+                // Reapply only when the stored digest proves this exact
+                // rewrite is the one already recorded.
+                if let Some((healed, rewrite)) =
+                    plugin_manifest_tool_rewrite(&path, &installed.name, &raw)
+                    && orbit_tools::plugin::manifest_digest(healed.as_bytes())
+                        == installed.manifest_digest
+                {
+                    atomic_write_text(&path, &healed).map_err(|error| {
+                        OrbitError::io_with_context(
+                            &error,
+                            format!("rewrite {}: {error}", path.display()),
+                        )
+                    })?;
+                    rewrites.push(rewrite);
+                }
                 continue;
             }
-            let Ok(manifest) = serde_yaml::from_str::<serde_yaml::Value>(&raw) else {
+            let Some((healed, rewrite)) =
+                plugin_manifest_tool_rewrite(&path, &installed.name, &raw)
+            else {
                 continue;
             };
-            let Some(before) = manifest_orbit_tools(&manifest) else {
-                continue;
-            };
-            let Some(after) = family_action_tool_names(&before) else {
-                continue;
-            };
-            let healed = rewrite_yaml_list_tool_names(&raw, "orbit_tools");
-            let healed_manifest = serde_yaml::from_str::<serde_yaml::Value>(&healed).ok();
-            let mut expected = manifest.clone();
-            set_manifest_orbit_tools(&mut expected, &after);
-            let rewritten_tools = healed_manifest.as_ref().and_then(manifest_orbit_tools);
-            let mut healed_rest = healed_manifest.clone();
-            if let Some(value) = healed_rest.as_mut() {
-                set_manifest_orbit_tools(value, &after);
-            }
-            if rewritten_tools
-                .map(orbit_types::task::normalize_required_tools)
-                .as_ref()
-                != Some(&after)
-                || healed_rest.as_ref() != Some(&expected)
-            {
-                tracing::warn!(
-                    target: "orbit.core.tool_names",
-                    plugin = installed.name.as_str(),
-                    "plugin manifest names pre-family tools in a layout that cannot be \
-                     rewritten in place"
-                );
-                continue;
-            }
             atomic_write_text(&path, &healed).map_err(|error| {
                 OrbitError::io_with_context(&error, format!("rewrite {}: {error}", path.display()))
             })?;
             installed.manifest_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
-            self.stores().plugins().upsert_plugin(&installed)?;
-            rewrites.push(ToolNameRewrite {
-                kind: "plugin",
-                name: installed.name.clone(),
-                path,
-                before,
-                after,
-            });
+            if let Err(error) = self.stores().plugins().upsert_plugin(&installed) {
+                // The manifest and the stored digest have to stay a pair.
+                // Putting the consented bytes back leaves the plugin
+                // loadable; the error keeps the upgrade marker unset so
+                // the next open retries the rewrite.
+                if let Err(restore) = atomic_write_text(&path, &raw) {
+                    tracing::warn!(
+                        target: "orbit.core.tool_names",
+                        plugin = installed.name.as_str(),
+                        %error,
+                        %restore,
+                        "plugin manifest rewrite could not be restored after its digest was not recorded"
+                    );
+                }
+                return Err(error);
+            }
+            rewrites.push(rewrite);
         }
         record_tool_name_rewrites(&global_root.join("state"), &rewrites);
         Ok(rewrites)
@@ -586,6 +665,68 @@ fn run_once(state_dir: &Path, scope: &str, pass: impl FnOnce() -> Result<(), Orb
             "pre-family tool name migration did not complete; it retries on the next open"
         );
     }
+}
+
+/// `raw` is the in-place family-action rewrite of the manifest whose digest
+/// is `stored_digest`. Any other edit is `None`, so an unconsented change
+/// stays refused.
+fn consented_plugin_tool_rewrite(
+    path: &Path,
+    name: &str,
+    raw: &str,
+    stored_digest: &str,
+) -> Option<ToolNameRewrite> {
+    let reversed = reverse_yaml_list_tool_names(raw, "orbit_tools");
+    if reversed == raw || orbit_tools::plugin::manifest_digest(reversed.as_bytes()) != stored_digest
+    {
+        return None;
+    }
+    let (healed, rewrite) = plugin_manifest_tool_rewrite(path, name, &reversed)?;
+    (healed == raw).then_some(rewrite)
+}
+
+/// Return the consent-preserving in-place rewrite of a plugin manifest when
+/// the complete parsed manifest changes only by mapping its tool list.
+fn plugin_manifest_tool_rewrite(
+    path: &Path,
+    name: &str,
+    raw: &str,
+) -> Option<(String, ToolNameRewrite)> {
+    let manifest = serde_yaml::from_str::<serde_yaml::Value>(raw).ok()?;
+    let before = manifest_orbit_tools(&manifest)?;
+    let after = family_action_tool_names(&before)?;
+    let healed = rewrite_yaml_list_tool_names(raw, "orbit_tools");
+    let healed_manifest = serde_yaml::from_str::<serde_yaml::Value>(&healed).ok();
+    let mut expected = manifest;
+    set_manifest_orbit_tools(&mut expected, &after);
+    let rewritten_tools = healed_manifest.as_ref().and_then(manifest_orbit_tools);
+    let mut healed_rest = healed_manifest;
+    if let Some(value) = healed_rest.as_mut() {
+        set_manifest_orbit_tools(value, &after);
+    }
+    if rewritten_tools
+        .map(orbit_types::task::normalize_required_tools)
+        .as_ref()
+        != Some(&after)
+        || healed_rest.as_ref() != Some(&expected)
+    {
+        tracing::warn!(
+            target: "orbit.core.tool_names",
+            plugin = name,
+            "plugin manifest names pre-family tools in a layout that cannot be rewritten in place"
+        );
+        return None;
+    }
+    Some((
+        healed,
+        ToolNameRewrite {
+            kind: "plugin",
+            name: name.to_string(),
+            path: path.to_path_buf(),
+            before,
+            after,
+        },
+    ))
 }
 
 fn manifest_orbit_tools(manifest: &serde_yaml::Value) -> Option<Vec<String>> {
