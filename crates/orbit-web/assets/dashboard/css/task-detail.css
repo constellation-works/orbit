@@ -643,10 +643,19 @@
 .task-delivery-relations.regression { display: block; width: 100%; }
 .regression-list { display: block; }
 .regression-entry { display: inline-flex; align-items: center; vertical-align: top; min-height: 44px; max-width: 100%; }
-.regression-entry:not(:last-of-type)::after { content: ",\00a0"; }
 .regression-entry[hidden] { display: none; }
-.regression-entry:has(+ .regression-entry[hidden])::after { content: ""; }
-.regression-entry .info-hint.info-hint-pinned { margin: 0; }
+/* The ⓘ keeps its 44px target around a 14px circle. The left margin puts the
+   circle 6px after its id (the .info-hint gap). Before a comma, the right margin
+   pulls the comma back onto the circle's edge; the target's extra width then
+   overlaps the comma's gap and a little of the next id. */
+.regression-entry .info-hint.info-hint-pinned { margin: 0 0 0 -9px; }
+.regression-entry:not(:last-of-type) .info-hint.info-hint-pinned { margin-right: -15px; }
+.regression-entry:has(+ .regression-entry[hidden]) .info-hint.info-hint-pinned { margin-right: 0; }
+/* Every relation row separates its ids the same way: a comma right after the
+   id (or its ⓘ), then a gap of about one monospace space before the next id. */
+.regression-entry:not(:last-of-type)::after { content: ","; margin-right: 0.5em; }
+.regression-entry:has(+ .regression-entry[hidden])::after { content: ""; margin-right: 0; }
+.relation-sep { margin-right: 0.5em; }
 .regression-entry .info-hint-text .mono { overflow-wrap: anywhere; }
 /* Other relation rows retain their count-based disclosure. */
 .relation-overflow { display: contents; }
