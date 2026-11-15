@@ -247,7 +247,7 @@ fn a_split_option_files_a_linked_follow_up_and_narrows_the_task() {
                 {
                     "summary": "Split the migration out",
                     "consequence": "A follow-up task owns the migration; this task keeps the API change.",
-                    "rewrite": {"acceptance_criteria": ["Recovered."]},
+                    "rewrite": {"acceptance_criteria": ["The API change stays in this task."]},
                     "action": {
                         "kind": "split",
                         "title": "Migrate the stored totals",
@@ -268,6 +268,11 @@ fn a_split_option_files_a_linked_follow_up_and_narrows_the_task() {
 
     let after = fx.runtime.get_task(&task).unwrap();
     assert_eq!(after.status, TaskStatus::Backlog);
+    assert_eq!(
+        after.acceptance_criteria,
+        ["The API change stays in this task."],
+        "the split option's rewrite narrows the original task"
+    );
     let tasks = fx.runtime.list_tasks().unwrap();
     let follow_up = tasks
         .iter()
