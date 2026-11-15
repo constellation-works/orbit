@@ -96,12 +96,20 @@ pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str>
     }
     match classify_run_owner(run) {
         OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
-        OwnerIdentity::Verified => match owner_process_group_id(pid) {
-            Some(pgid) if pgid as u32 == pid && pgid == unsafe { libc::getpgrp() } => {
-                Some("its worker shares this process's group")
+        OwnerIdentity::Verified => {
+            // SAFETY: `getpgrp` takes no pointer arguments and only reads the
+            // calling process's group id, so it cannot invalidate memory or
+            // deliver a signal. The raw value is compared directly because the
+            // safe `ancestry::current_process_group` helper maps small pgids
+            // to `None`, which would change this equality check.
+            let this_group = unsafe { libc::getpgrp() };
+            match owner_process_group_id(pid) {
+                Some(pgid) if pgid as u32 == pid && pgid == this_group => {
+                    Some("its worker shares this process's group")
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         OwnerIdentity::LegacyLiveUnverified | OwnerIdentity::ProbeUnavailable => {
             Some("its worker's process identity cannot be verified")
         }
@@ -331,6 +339,11 @@ impl TeardownTarget for BoundTarget {
             return self.refuse_live_group_after_leader_exit();
         }
         let pgid = group.filter(|group| *group > 1 && *group as u32 == pid);
+        // SAFETY: `getpgrp` takes no pointer arguments and only reads the
+        // calling process's group id, so it cannot invalidate memory or
+        // deliver a signal. The raw value is compared directly because the
+        // safe `ancestry::current_process_group` helper maps small pgids to
+        // `None`, which would change this equality check.
         if pgid == Some(unsafe { libc::getpgrp() }) {
             return Err(OrbitError::Execution(
                 "owner process group matches current process".into(),
@@ -403,6 +416,10 @@ fn owner_process_group_id(pid: u32) -> Option<libc::pid_t> {
     if pid == 0 || pid > i32::MAX as u32 {
         return None;
     }
+    // SAFETY: `getpgid` takes no pointer arguments and only reads the group
+    // id of `pid`; `pid` was range-checked against `i32::MAX` above, so the
+    // `u32 -> pid_t` conversion cannot truncate. A negative return is handled
+    // below by the `pgid > 0` filter.
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
     (pgid > 0).then_some(pgid)
 }
