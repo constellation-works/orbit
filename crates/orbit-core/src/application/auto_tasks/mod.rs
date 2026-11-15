@@ -75,7 +75,7 @@ pub use scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, ListedAutoTask, SchedulerOptions,
     open_auto_task_instance, run_auto_task_scheduler_at,
 };
-pub use settings::{AutoTaskBody, AutoTaskLayering};
+pub use settings::{AutoTaskBody, AutoTaskLayering, StaleAutoTaskContract};
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
 pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile};
 

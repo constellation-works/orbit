@@ -386,6 +386,10 @@ pub(super) fn mint_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Task, OrbitError> {
+    // A stale bundled contract holds both manual and scheduler mints: the
+    // scheduler reports this as a skipped, unconsumed slot, and a manual
+    // mint refuses, rather than minting a scan that undercounts.
+    runtime.refuse_stale_auto_task_contract(definition)?;
     let mut params = mint_params(runtime, definition);
     // A manual mint of a condition auto-task has no subject: its
     // `{{subject.*}}` placeholders render `(none)`.

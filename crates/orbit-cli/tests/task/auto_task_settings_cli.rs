@@ -423,6 +423,154 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
 }
 
 #[test]
+fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
+    let fixture = Fixture::new();
+    let path = definition_path(&fixture, "run-failure-patterns");
+    let dir = path.parent().unwrap().to_path_buf();
+    let bundled = fs::read_to_string(&path).unwrap();
+
+    // A customized body that dedupes by bare leaf id: the bundled host-aware
+    // rule is omitted, while operator title/crew/criterion edits are intended.
+    let mut custom = orbit_common::protocol::yaml::parse_auto_task_yaml(&bundled).unwrap();
+    custom.template.title = "Operator scan title".to_string();
+    custom.template.crew = Some("opus".to_string());
+    custom.template.description =
+        "Operator custom scan.\n\nDedupe follower settlements by bare leaf id against this host's history; count the rest."
+            .to_string();
+    custom.template.acceptance_criteria =
+        vec!["Operator criterion: count follower settlements once by leaf id.".to_string()];
+    fs::write(&path, serde_yaml::to_string(&custom).unwrap()).unwrap();
+    set_manifest_digest(&dir, "run-failure-patterns", None);
+
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert_eq!(shown["layering"]["body"], "forked");
+    assert!(
+        shown["layering"]["stale_contract"]["contract"]
+            .as_str()
+            .unwrap()
+            .contains("machine_id"),
+        "{shown}"
+    );
+    assert!(
+        shown["layering"]["stale_contract"]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|missing| missing == "task_id"),
+        "{shown}"
+    );
+    let listed = fixture.json(&["auto-task", "list", "--json"]);
+    let row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "run-failure-patterns")
+        .unwrap();
+    assert!(row["stale_contract"].is_object(), "{row}");
+    let doctor = auto_task_doctor_row(&fixture);
+    assert!(
+        doctor["message"]
+            .as_str()
+            .unwrap()
+            .contains("Stale contract"),
+        "{doctor}"
+    );
+
+    // Minting is held, not silently minted as a reconciled scan.
+    fixture
+        .command(&["auto-task", "mint", "run-failure-patterns"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("is held"))
+        .stderr(predicates::str::contains("--adopt-bundled-contract"));
+
+    // Operator-directed reconciliation appends the bundled rule and keeps
+    // every intended customization.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--adopt-bundled-contract",
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert!(shown["layering"]["stale_contract"].is_null(), "{shown}");
+    assert_eq!(shown["template"]["title"], "Operator scan title");
+    assert_eq!(shown["template"]["crew"], "opus");
+    let description = shown["template"]["description"].as_str().unwrap();
+    assert!(
+        description.contains("Operator custom scan."),
+        "{description}"
+    );
+    assert!(description.contains("machine_id"), "{description}");
+    assert!(description.contains("leaf_run_id"), "{description}");
+    let criteria = shown["template"]["acceptance_criteria"].clone();
+    assert!(
+        criteria
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|criterion| criterion.as_str().unwrap().contains("Operator criterion")),
+        "{criteria}"
+    );
+    assert!(
+        criteria
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|criterion| criterion.as_str().unwrap().contains("task_ids")),
+        "{criteria}"
+    );
+
+    // A scan minted after reconciliation carries the triple-match rule, so
+    // two settlements sharing a leaf id on different hosts both count.
+    let minted = fixture.json(&["auto-task", "mint", "run-failure-patterns", "--json"]);
+    assert_eq!(minted["title"], "[auto-task] Operator scan title");
+    let minted_body = minted["description"].as_str().unwrap();
+    assert!(minted_body.contains("machine_id"), "{minted_body}");
+    assert!(minted_body.contains("leaf_run_id"), "{minted_body}");
+    assert!(minted_body.contains("task_id"), "{minted_body}");
+
+    // A customized body that already states the rule in its own wording
+    // remains usable, and an unrelated fork is not held.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--title",
+        "Compliant custom title",
+        "--json",
+    ]);
+    let minted = fixture.json(&["auto-task", "mint", "run-failure-patterns", "--json"]);
+    assert_eq!(minted["title"], "[auto-task] Compliant custom title");
+
+    // The same rule in the operator's own wording is not stale either.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--body",
+        "Count a follower as a duplicate only when host, leaf run id and task id all match; otherwise count it.",
+        "--criterion",
+        "Dedupe only when host, leaf run id and task id all match.",
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert!(shown["layering"]["stale_contract"].is_null(), "{shown}");
+    fixture.json(&["auto-task", "mint", "run-failure-patterns", "--json"]);
+
+    let unrelated = definition_path(&fixture, "security-review");
+    let mut edited = orbit_common::protocol::yaml::parse_auto_task_yaml(
+        &fs::read_to_string(&unrelated).unwrap(),
+    )
+    .unwrap();
+    edited.template.title = "Operator security title".to_string();
+    fs::write(&unrelated, serde_yaml::to_string(&edited).unwrap()).unwrap();
+    let minted = fixture.json(&["auto-task", "mint", "security-review", "--json"]);
+    assert_eq!(minted["title"], "[auto-task] Operator security title");
+}
+
+#[test]
 fn auto_task_settings_and_managed_bodies() {
     for (name, check) in [
         (

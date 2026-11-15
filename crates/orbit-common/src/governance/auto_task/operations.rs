@@ -507,6 +507,13 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
             ParamType::String,
             "Explicit workspace, required with `expected_enabled`",
         ),
+        both(
+            "adopt_bundled_contract",
+            ParamType::Switch,
+            "Append the bundled contract the effective body omits (for run-failure-patterns, the host-aware follower deduplication rule), preserving every other field. Cannot be combined with another edit.",
+            CliArgKind::flag("adopt-bundled-contract"),
+            "Append the bundled contract this body omits, preserving every other field",
+        ),
         preserve_empty(both(
             "granted_tools",
             ParamType::StringList,

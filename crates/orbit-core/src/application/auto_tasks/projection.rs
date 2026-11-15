@@ -73,6 +73,11 @@ impl OrbitRuntime {
                 )?;
                 value["last_fire"] =
                     last_fire_json(self, &row.listed.definition, row.cursor.as_ref())?;
+                if let Some(stale) = self.stale_auto_task_contract(&row.listed.definition) {
+                    value["stale_contract"] = serde_json::to_value(&stale).map_err(|error| {
+                        OrbitError::Io(format!("encode stale contract: {error}"))
+                    })?;
+                }
                 if let Some(condition) = auto_task_condition_document(self, &row.listed.definition)
                 {
                     value["condition"] = condition;
