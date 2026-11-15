@@ -31,7 +31,7 @@ const aggregateDrainScopes = new WeakMap();
 const PULL_OWNER_UNAVAILABLE = "The owner's host and workspace are unavailable. Reload the page before starting a pull window.";
 
 // A card selection is a separate visit from the rail's host/workspace. Polls
-// keep that visit; switching either select retires actions and readbacks.
+// keep that visit; switching the drain-target select retires actions and readbacks.
 function resetAggregateDrainSelection() {
   drainScopeGeneration += 1;
   operationsState.lastAutoDrain = null;
