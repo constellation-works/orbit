@@ -371,7 +371,10 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(
+    clippy::type_complexity,
+    reason = "the decided Result over a boxed (phase, error) tuple scores above clippy's threshold"
+)]
 fn view_created_pr<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
