@@ -35,8 +35,11 @@ pub(super) fn empty_clusters_outcome(
         ..
     } = snapshot;
     // Nothing was complete enough to file. [ORB-15517] When every gap is
-    // a bounded run-scoped collection gap, the sweep defers it to a later one
-    // rather than failing: `deferred` is never a clean
+    // a run-scoped error collection's history bounds — a collection or
+    // investigation error, the `run_view` registration gap for a failed run
+    // with no failed jobs, or the `checkout_evidence` gap for a missing
+    // checkout SHA — the sweep defers them rather than failing: `deferred` is
+    // never a clean
     // `no_current_failure`, and a gap that repeats for three sweeps still
     // degrades or escalates in collection. Any other gap has no such
     // bound, so it stays a retryable error.

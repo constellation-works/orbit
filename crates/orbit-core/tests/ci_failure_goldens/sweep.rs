@@ -621,6 +621,103 @@ fn ci_agent_main_red_for_three_sweeps_always_has_an_open_task() {
     assert_eq!(open_sweep_tasks(&workspace.runtime).len(), 1);
 }
 
+/// A bindable diagnostic whose log contains no checkout SHA reaches
+/// collection's `registration`/`checkout_evidence` gap. That run-scoped gap
+/// is bounded by collection's landing-gap streak, so below the escalation
+/// threshold the sweep is held as `deferred` — never filed against a guessed
+/// checkout and never a clean result — and the third sweep escalates it.
+#[test]
+fn ci_missing_checkout_sha_defers_then_escalates_on_landing_branch() {
+    if !isolated_with_fake_gh(
+        "sweep::ci_missing_checkout_sha_defers_then_escalates_on_landing_branch",
+    ) {
+        return;
+    }
+    let attributed = |payload: &str| {
+        format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {payload}\n")
+    };
+    let log = [
+        "##[group]Run cargo test",
+        "##[endgroup]",
+        "thread 'missing_checkout_regression' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "error: test failed",
+        "##[error]Process completed with exit code 101.",
+    ]
+    .map(attributed)
+    .concat();
+    let mut workspace = Workspace::new();
+    for sweep in 1..=2u64 {
+        workspace.push_red_run(8_300 + sweep, 9_400 + sweep, &log);
+        let (evidence, filed) = workspace.sweep();
+        assert_eq!(
+            evidence["outcome_hint"],
+            json!("retryable_error"),
+            "{evidence:#}"
+        );
+        assert!(
+            evidence["retryable_errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| {
+                    error["stage"] == json!("registration")
+                        && error["operation"] == json!("checkout_evidence")
+                        && error["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("no actual checkout SHA"))
+                }),
+            "the reproduction reaches the registration checkout path: {evidence:#}"
+        );
+        let output = filed.expect("a missing checkout SHA defers instead of failing the sweep");
+        assert_eq!(output["outcome"], json!("deferred"), "{output:#}");
+        assert_ne!(output["outcome"], json!("no_current_failure"), "{output:#}");
+        assert_eq!(output["deferred_count"], json!(1), "{output:#}");
+        assert_eq!(
+            output["deferred"][0]["run_id"],
+            json!(8_300 + sweep),
+            "{output:#}"
+        );
+        assert_eq!(output["filed_count"], json!(0), "{output:#}");
+        assert!(
+            open_sweep_tasks(&workspace.runtime).is_empty(),
+            "{output:#}"
+        );
+    }
+    let incidents = workspace
+        .runtime
+        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .unwrap();
+    assert_eq!(
+        incidents.affected_runs_by_class.get("deferred"),
+        Some(&2),
+        "both deferring sweeps list under Incidents as deferred: {:?}",
+        incidents.incidents
+    );
+
+    workspace.push_red_run(8_303, 9_403, &log);
+    let (evidence, filed) = workspace.sweep();
+    let output = filed.expect("the third sweep escalates instead of deferring again");
+    assert_eq!(
+        evidence["summary"]["landing_evidence_incomplete_run_ids"],
+        json!([8_303]),
+        "{evidence:#}"
+    );
+    assert_eq!(output["outcome"], json!("current_failures"), "{output:#}");
+    assert_eq!(
+        output["evidence_incomplete"][0]["outcome"],
+        json!("filed"),
+        "{output:#}"
+    );
+    let tasks = open_sweep_tasks(&workspace.runtime);
+    assert_eq!(tasks.len(), 1, "{output:#}");
+    assert!(
+        tasks[0].description.contains("checkout_evidence"),
+        "the escalated task names its checkout-evidence gap: {}",
+        tasks[0].description
+    );
+}
+
 /// B4: newer red runs on task branches origin has since deleted outnumber the
 /// agent-main failure and carry more failed jobs than the job-log budget, so a
 /// slot or log read spent on them would starve agent-main.
