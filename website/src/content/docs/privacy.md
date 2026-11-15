@@ -6,7 +6,7 @@ tableOfContents:
   maxHeadingLevel: 2
 ---
 
-**Effective date: 27 October 2026**
+**Effective date: 15 November 2026**
 
 This policy covers the Orbit project maintained by
 [constellation-works](https://github.com/constellation-works):
@@ -94,8 +94,9 @@ published only if you pass `--attachments include`, and even then files such as
 - **`install.sh`** downloads release files from GitHub Releases, or from
   `ORBIT_INSTALL_BASE_URL` if you set it.
 - **`orbit update`** asks the GitHub Releases API for the latest version and
-  downloads it, sending an `orbit-cli/<version>` User-Agent. It runs only when
-  you invoke it; Orbit never checks for updates in the background.
+  downloads it, sending an `orbit-cli/<version>` User-Agent. You can run it
+  yourself; the enabled host-health auto-task can also run `orbit update --check`
+  on its schedule.
   `ORBIT_UPDATE_RELEASE_DIR` points it at a local mirror instead.
 
 GitHub and npm receive the usual request metadata, such as your IP address,
