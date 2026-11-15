@@ -168,11 +168,13 @@ proof that a particular task or run succeeded.
 
 Global search sits in the top bar of the dashboard served by `orbit web serve`,
 on every destination; press `/` or choose the search field. It finds tasks
-across all statuses. Its scope follows the Workspace picker: with **All
-workspaces** it searches across workspaces, and with one workspace selected it
-searches only that workspace. Typing part of a task ID or title lists compact
-matches, and entering an exact task ID or run ID opens the full task page or
-run page. There is nothing to configure. To verify a match, type a known title
+across all statuses. For substring matches its scope follows the Workspace
+picker: with **All workspaces** it searches across workspaces, and with one
+workspace selected it searches only that workspace. Typing part of a task ID or
+title lists compact matches. Entering an exact task ID or run ID with Enter
+opens the full task page or run page; that lookup also resolves across the
+other active workspaces and selects the owning workspace when one holds the ID.
+There is nothing to configure. To verify a match, type a known title
 fragment, choose the suggested entry and confirm the full task page opens; then
 enter a known run ID, press Enter and confirm the full run page opens.
 
