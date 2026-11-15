@@ -9,10 +9,7 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
-use super::super::super::freshness::commit_sha;
-use super::super::super::git::{
-    base_sync_mode_from_input, git_output, resolve_worktree_start_point,
-};
+use super::super::super::git::{self, git_output};
 use super::super::super::landing::checks::{
     CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
@@ -91,22 +88,14 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     let base_name =
         input_string_field(input, "base").ok_or_else(|| "the input names no base".to_string())?;
     let workspace = Path::new(workspace_path);
-    let base_ref = resolve_worktree_start_point(
-        workspace,
-        &base_name,
-        base_sync_mode_from_input(input).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("base '{base_name}' could not be resolved: {error}"))?;
-    let tip = commit_sha(workspace, &base_ref).map_err(|error| error.to_string())?;
-    let base = git_output(workspace, &["merge-base", head, &tip])
-        .map_err(|error| format!("the fork point of {head} could not be read: {error}"))?;
+    let (base, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))?;
     unmoved_red_base(
         host,
         workspace,
         head,
-        base.trim(),
+        base.as_deref().unwrap_or_default(),
         &tip,
-        base_name.strip_prefix("origin/").unwrap_or(&base_name),
+        &branch,
         &failed,
         deadline_ms,
     )
@@ -149,10 +138,8 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         Err(_) => return Ok(CiRerunRecovery::NotEligible),
     };
     let workspace = Path::new(workspace_path);
-    let base_ref =
-        resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
-    let tip = commit_sha(workspace, &base_ref)?;
-    let base = git_output(workspace, &["merge-base", head, &tip])?;
+    let (base, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))
+        .map_err(OrbitError::Execution)?;
     // A repair that made no edit already spent its auto-fix attempt for this
     // head. Rerun its failed checks once on the unchanged head instead of
     // admitting another repair. A recorded rerun send is not itself a rerun
@@ -166,8 +153,8 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
             &auto_fix.task_ids,
             status,
             &failed,
-            base.trim(),
-            base_name.strip_prefix("origin/").unwrap_or(&base_name),
+            base.as_deref().unwrap_or_default(),
+            &branch,
             deadline_ms,
         )? {
             super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
@@ -193,9 +180,9 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         None,
         status,
         &failed,
-        base.trim(),
+        base.as_deref().unwrap_or_default(),
         &tip,
-        base_name.strip_prefix("origin/").unwrap_or(&base_name),
+        &branch,
         deadline_ms,
         None,
         &auto_fix.run_id,
@@ -392,20 +379,14 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
     let Some(base) = input_string_field(input, "base") else {
         return Ok(None);
     };
-    let Ok(sync) = base_sync_mode_from_input(input) else {
-        return Ok(None);
-    };
-    let Ok(base_ref) = resolve_worktree_start_point(workspace, &base, sync) else {
-        return Ok(None);
-    };
-    let Ok(tip) = commit_sha(workspace, &base_ref) else {
+    let Ok((_, branch, tip)) = git::resolve_pr_base(workspace, input, &base, None) else {
         return Ok(None);
     };
     super::super::super::landing::checks::base_tip_check_evidence(
         host,
         workspace,
         head,
-        base.strip_prefix("origin/").unwrap_or(&base),
+        &branch,
         &tip,
         &failed,
         deadline_ms,
