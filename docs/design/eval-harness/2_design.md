@@ -103,7 +103,7 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 ### 3.1 Inputs
 
-`eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort (`<crew><effort>`). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([CONFIG.md](../../CONFIG.md)). Defining crews stays an operator edit.
+`eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort using the shipped crew-reference syntax (`<crew>@<effort>`, as described in the Crew references section of [CONFIG.md](../../CONFIG.md)). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([CONFIG.md](../../CONFIG.md)). Defining crews stays an operator edit.
 
 ### 3.2 Base commit
 
@@ -408,7 +408,7 @@ Two earlier mechanisms covered nearby ground and were removed. This design shoul
 | `eval.set-build` | mut | `name`, `source_workspace`, `query?` {`type`, `landed_after`, `min_lines`, `max_lines`}, `task_ids?`, `quota`, `seed?`, `from_bakeoffs?` | `set` {`name`, `revision`, `digest`}, `admitted[]` {`task_id`, `base`, `reference`, `held_out_command`}, `refused[]` {`task_id`, `reason`} |
 | `eval.set-show` | ro | `name`, `revision?` | the set file, without snapshots unless `full` |
 | `eval.set-export` / `eval.set-import` | ro / mut | `name`, `revision?`, `path` | `path`, `digest` |
-| `eval.replay-start` | mut | `set` (`namerevision`), `arms[]` (crew or `creweffort`), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids) |
+| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the Crew references section of [CONFIG.md](../../CONFIG.md)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids) |
 | `eval.replay-advance` | mut | `replay_id` | `filed[]`, `state` (`running`, `capped`, `complete`), `spent_usd` |
 | `eval.replay-status` | ro | `replay_id?` | per-arm progress, `spent_usd`, `state` |
 | `eval.replay-readout` | ro | `replay_id`, `format?` | the readout (§7) |
