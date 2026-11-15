@@ -58,7 +58,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Concern | Settled in | Rests on |
 |---------|-----------|----------|
 | What is indexed, and where labels come from | [2_design.md §2](./2_design.md#2-what-is-indexed) | [landed.rs](../../../crates/orbit-core/src/application/codebase/landed.rs), [landed_diff_stats.rs](../../../crates/orbit-store/src/contracts/landed_diff_stats.rs), the orbit-graph change extractor |
-| Symbols as the unit, the remainder, file roll-up | [2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit) | The per-side symbol byte spans and changed lines in the orbit-graph history index. Line lengths need a history-schema extension and backfill ([2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit), [§13](./2_design.md#13-build-order)) |
+| Symbols as the unit, the remainder, file roll-up | [2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit) | The per-side symbol byte spans and changed lines in the orbit-graph history index. Its schema extension and backfill add symbol line spans, file line counts and `named_symbol_covered_lines` from the union of all named symbol ranges, so rebuilds can derive the remainder length without re-extraction ([2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit), [§13](./2_design.md#13-build-order)) |
 | Added and modified symbols | [2_design.md §2.5](./2_design.md#25-added-and-modified-symbols) and [§5.5](./2_design.md#55-option-added-versus-modified) | — |
 | Tokeniser and stopwords | [2_design.md §3](./2_design.md#3-tokeniser) | — |
 | Posting and id-table format, storage | [2_design.md §4](./2_design.md#4-format-and-storage) | The plugin standard's state rules ([plugins scope](../plugins/1_scope.md)) |
