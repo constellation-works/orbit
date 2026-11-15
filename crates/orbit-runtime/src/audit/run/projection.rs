@@ -60,6 +60,7 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                     state: None,
                     outcome: None,
                     error_message: None,
+                    error_diagnostic: None,
                 });
             }
             Some("step_finished") | Some("step_skipped") | Some("step_denied") => {
@@ -73,6 +74,11 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                 step.finished_at = event.timestamp;
                 match event.body_kind.as_deref() {
                     Some("step_finished") => {
+                        step.error_diagnostic = event
+                            .raw
+                            .get("error_diagnostic")
+                            .filter(|value| !value.is_null())
+                            .cloned();
                         step.lock_wait_ms = event.raw.get("lock_wait_ms").and_then(Value::as_u64);
                         let outcome = event
                             .raw
@@ -136,6 +142,11 @@ pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<R
                 let start = starts.entry(step_id).or_insert((index, None));
                 let outcome = event.raw.get("outcome").and_then(Value::as_str);
                 attempts.push(RunAuditStep {
+                    error_diagnostic: event
+                        .raw
+                        .get("error_diagnostic")
+                        .filter(|value| !value.is_null())
+                        .cloned(),
                     lock_wait_ms: event.raw.get("lock_wait_ms").and_then(Value::as_u64),
                     step_index: start.0,
                     step_id: step_id.to_string(),

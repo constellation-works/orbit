@@ -201,3 +201,5 @@ mod worker_fixture;
 mod worktree_reclaim;
 
 mod admission_audit;
+
+mod run_failure_diagnostic;

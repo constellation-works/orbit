@@ -2591,8 +2591,8 @@ fn dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree() 
         "ORB-22100: the diagnostic must say the worktree is missing and name its path: {diagnostic}"
     );
     assert!(
-        message.contains(&path),
-        "ORB-22100: the error must name the missing worktree path: {message}"
+        message.contains("worktree is missing") && !message.contains('{'),
+        "ORB-22100: the message names the missing worktree; its path stays in the diagnostic: {message}"
     );
     assert!(
         !message.contains("failed to spawn"),

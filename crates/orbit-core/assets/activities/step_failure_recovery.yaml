@@ -36,6 +36,8 @@ spec:
         type: string
       error_message:
         type: string
+      error_diagnostic:
+        type: object
       attempt:
         type: integer
         minimum: 1

@@ -813,7 +813,7 @@ function buildFailureRoot(root, workspaceId) {
 // failed step's own message stands in when the run carries none.
 function buildRunFailure(run, steps) {
   if (!FAILED_RUN_STATES.has(run.state)) return null;
-  const step = steps.find((candidate) => FAILED_STEP_STATES.has(candidate.state)) || null;
+  const step = steps.slice().reverse().find((candidate) => FAILED_STEP_STATES.has(candidate.state)) || null;
   const pass = run.drain_last_pass || {};
   const code = run.error_code || (step && step.error_code) || pass.last_pass_error_code;
   const message = run.error_message || (step && step.error_message) || pass.last_pass_error || "";
@@ -830,9 +830,17 @@ function buildRunFailure(run, steps) {
   box.setAttribute("aria-label", "Why this run failed");
   const workspaceId = run.workspace_id || getWorkspace();
   if (message) {
-    const pre = el("pre", { class: "run-failure-message mono" });
+    const pre = el("div", { class: "run-failure-message" });
     appendLinkified(pre, message, workspaceId);
     box.appendChild(pre);
+  }
+  const diagnostic = run.error_diagnostic || (step && step.error_diagnostic);
+  if (diagnostic) {
+    const raw = el("details", { class: "run-failure-diagnostic" }, [
+      el("summary", { text: "Diagnostic", title: "Show the structured failure details" }),
+      el("pre", { class: "mono", text: JSON.stringify(diagnostic, null, 2) }),
+    ]);
+    box.appendChild(raw);
   }
   const root = buildFailureRoot(run.failure_root, workspaceId);
   if (root) box.appendChild(root);

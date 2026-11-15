@@ -51,6 +51,8 @@ pub struct RunAuditStep {
     pub state: Option<String>,
     pub outcome: Option<String>,
     pub error_message: Option<String>,
+    /// Structured detail recorded independently of the readable error.
+    pub error_diagnostic: Option<Value>,
 }
 
 /// A bounded, operator-facing recovery attempt reconstructed from the v2 audit
@@ -391,6 +393,8 @@ pub(super) const STEP_LIFECYCLE_KINDS: [&str; 4] = [
 /// evidence `orbit run show` renders, not a live-progress summary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunAuditView {
+    /// Structured terminal failure, including errors before a step starts.
+    pub error_diagnostic: Option<Value>,
     pub steps: Vec<RunAuditStep>,
     pub provider_processes: Vec<RunProviderProcess>,
     /// Every script-step attempt, refusals included, oldest first.
@@ -454,9 +458,17 @@ impl RuntimeKernel {
         let events = self.collect_run_audit_events(run_id)?;
         let steps = audit_steps_from_events(&events);
         let script_executions = super::scripts::script_executions_from_events(run_id, &events);
+        let error_diagnostic = events
+            .iter()
+            .rev()
+            .find(|event| event.body_kind.as_deref() == Some("run_finished"))
+            .and_then(|event| event.raw.get("error_diagnostic"))
+            .filter(|value| !value.is_null())
+            .cloned();
         let provider_processes =
             provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
         Ok(RunAuditView {
+            error_diagnostic,
             steps,
             provider_processes,
             script_executions,

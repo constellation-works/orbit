@@ -33,6 +33,8 @@ pub mod schema_header;
 pub mod script;
 pub mod tool_allowlist;
 pub mod trusted_host;
+mod worktree_failure;
+pub use worktree_failure::{legacy_worktree_failure, worktree_failure_message};
 
 pub use provider_sandbox::CODEX_PROVIDER_SANDBOX_MODES;
 

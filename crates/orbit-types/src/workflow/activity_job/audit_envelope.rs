@@ -65,6 +65,9 @@ pub enum V2AuditEventKind {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+        /// Run-level diagnostic, including failures before a step starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_diagnostic: Option<serde_json::Value>,
     },
     RunCancelled {
         actor: String,
@@ -85,6 +88,10 @@ pub enum V2AuditEventKind {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+        /// Redacted structured failure detail, separate from the human message.
+        /// Absent on historical events and failures without a structured payload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_diagnostic: Option<serde_json::Value>,
     },
     StepSkipped {
         step_id: String,

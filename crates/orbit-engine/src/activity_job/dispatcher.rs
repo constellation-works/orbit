@@ -321,7 +321,7 @@ pub enum DispatchError {
     /// checkout. Ordinary retries must not compound or misattribute the delta.
     /// An explicitly configured recovery activity may inspect the diagnostic
     /// once before the executor's single post-recovery attempt (ORB-10306).
-    #[error("worktree integrity violation `{code}`: {diagnostic}")]
+    #[error("{}", worktree_dispatch_message(code, diagnostic))]
     WorktreeIntegrity {
         code: &'static str,
         diagnostic: String,
@@ -414,7 +414,30 @@ pub enum DispatchError {
     AuditFailed(String),
 }
 
+fn worktree_dispatch_message(code: &str, diagnostic: &str) -> &'static str {
+    let value = serde_json::from_str(diagnostic).unwrap_or(Value::Null);
+    orbit_types::workflow::activity_job::worktree_failure_message(code, &value)
+}
+
 impl DispatchError {
+    /// Structured failure detail, independently redacted before persistence.
+    pub fn error_diagnostic(&self) -> Option<Value> {
+        match self {
+            Self::WorktreeIntegrity { code, diagnostic } => {
+                let mut value = serde_json::from_str::<Value>(diagnostic)
+                    .unwrap_or_else(|_| serde_json::json!({"reason": diagnostic}));
+                if !value.is_object() {
+                    value = serde_json::json!({"reason": value});
+                }
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("code".into(), serde_json::json!(code));
+                }
+                Some(orbit_common::security::redaction::redact_all_json(value))
+            }
+            _ => None,
+        }
+    }
+
     /// A [`DispatchError::DeterministicActionFailed`] for `action`.
     pub fn action_failed(action: &str, message: impl Into<String>) -> Self {
         DispatchError::DeterministicActionFailed {
