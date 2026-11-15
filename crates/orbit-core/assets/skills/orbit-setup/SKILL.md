@@ -104,8 +104,8 @@ Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
 Seeded schedules are disabled until an operator deliberately enables them, except
-the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines and the `host-health` auto-task, which
-seed enabled when the seeding policy selects them. Seeded enabled does not
+the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines, which
+seed enabled when the seeding policy selects them. The `host-health` auto-task seeds disabled. Seeded enabled does not
 turn the experimental crew-memory feature on: `crew-memory-dream` mints
 nothing while `crew_memory.enabled` is false or no running memory-arm
 experiment applies. Configure, inspect and stop crew memory with

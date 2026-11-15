@@ -180,8 +180,8 @@ orbit doctor
 - **Widening reseeds on the next sync.** Add a name to the list or set a key
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
-  from enabling it: shipped auto-tasks start disabled, except `host-health`,
-  which ships enabled. The shipped `worktree-gc`, `task-pilot` and
+  from enabling it: shipped auto-tasks start disabled, including `host-health`.
+  The shipped `worktree-gc`, `task-pilot` and
   `crew-memory-dream` routines seed enabled; other shipped routines seed
   disabled. `crew-memory-dream` mints nothing while `crew_memory.enabled`
   is false or no running memory-arm experiment applies, so its seeded
@@ -192,8 +192,8 @@ orbit doctor
   auto-task delete` survives exclusion and later widening, so sync still leaves
   that default absent. First include it in `seeding.auto_tasks`, then use
   `orbit auto-task restore <name>` to clear the opt-out and restore its shipped
-  content with the shipped `enabled` value: disabled for most defaults, enabled
-  for `host-health`. Restore refuses an excluded name or an existing definition.
+  content with the shipped `enabled` value: disabled for every default,
+  including `host-health`. Restore refuses an excluded name or an existing definition.
   See [Deleting a definition](auto-tasks.md#deleting-a-definition). For routines,
   a name-list policy is the durable per-name opt-out.
 

@@ -1410,8 +1410,8 @@ fn auto_task_settings_and_managed_bodies() {
 }
 
 /// The host-health body this change supersedes is already in body history
-/// (enabled-by-default revision). An install holding those bytes converges,
-/// and a copy an operator edited does not.
+/// (the previously enabled revision). An install holding those bytes
+/// converges to disabled, and a copy an operator edited does not.
 #[test]
 fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
     let sources: Value = serde_json::from_str(include_str!(
@@ -1429,7 +1429,16 @@ fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
         "the shipped body must differ from the recorded previous body"
     );
     let seeded = fixture.json(&["auto-task", "show", "host-health", "--json"]);
-    assert_eq!(seeded["enabled"], true, "host-health still ships enabled");
+    assert_eq!(seeded["enabled"], false, "host-health now ships disabled");
+
+    // The untouched previous body migrates to the disabled shipped body.
+    fs::write(&path, previous).unwrap();
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, "host-health"), "migrated");
+    assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
+    let shown = fixture.json(&["auto-task", "show", "host-health", "--json"]);
+    assert_eq!(shown["layering"]["body"], "managed");
+    assert_eq!(shown["enabled"], false);
 
     let settings_edit = previous.replacen("  priority: medium", "  priority: high", 1);
     assert_ne!(settings_edit, previous, "fixture must change a setting");
@@ -1439,7 +1448,7 @@ fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
     assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
     let shown = fixture.json(&["auto-task", "show", "host-health", "--json"]);
     assert_eq!(shown["layering"]["body"], "managed");
-    assert_eq!(shown["enabled"], true);
+    assert_eq!(shown["enabled"], false);
     assert_eq!(shown["template"]["priority"], "high");
 
     let operator_edit = format!("# operator note: local procedure\n{previous}");

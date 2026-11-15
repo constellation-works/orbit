@@ -116,8 +116,8 @@ deleted.
 to change that selection and reconcile an existing workspace. Every routine default starts disabled
 except `worktree-gc`, `task-pilot` and `crew-memory-dream`, which gates itself on
 `crew_memory.enabled`. A workspace seeded while `worktree-gc` or `task-pilot`
-shipped disabled keeps its `enabled` value. The `host-health` auto-task is the one shipped
-auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of these starts enabled only when
+shipped disabled keeps its `enabled` value. The `host-health` auto-task is seeded disabled,
+like every other shipped auto-task ([Auto-tasks](auto-tasks.md)). Each of these starts enabled only when
 the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot` and `resident-cycle`

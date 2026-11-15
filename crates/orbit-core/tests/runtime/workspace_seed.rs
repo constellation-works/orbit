@@ -992,7 +992,7 @@ fn listed_enabled(runtime: &OrbitRuntime, name: &str) -> bool {
 }
 
 #[test]
-fn fresh_workspace_seeds_only_host_health_enabled() {
+fn fresh_workspace_seeds_no_default_enabled() {
     let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
         .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
@@ -1008,8 +1008,11 @@ fn fresh_workspace_seeds_only_host_health_enabled() {
         let definition = listed
             .get(*name)
             .unwrap_or_else(|| panic!("shipped default `{name}` is seeded: {listed:?}"));
+        assert!(
+            !definition.enabled,
+            "shipped default `{name}` seeds disabled"
+        );
         if *name == "host-health" {
-            assert!(definition.enabled, "host-health seeds enabled");
             assert!(
                 matches!(
                     &definition.schedule,
@@ -1017,11 +1020,6 @@ fn fresh_workspace_seeds_only_host_health_enabled() {
                 ),
                 "host-health keeps its shipped schedule: {:?}",
                 definition.schedule
-            );
-        } else {
-            assert!(
-                !definition.enabled,
-                "shipped default `{name}` seeds disabled"
             );
         }
     }
@@ -1034,10 +1032,10 @@ fn reinit_and_sync_preserve_an_operator_edited_host_health_definition() {
     let (global, workspace) = seeded_host(dir.path());
     let path = workspace.join("auto_tasks/host-health.yaml");
     let edited = format!(
-        "{}\n# operator note: keep this off on this host\n",
+        "{}\n# operator note: keep this on on this host\n",
         std::fs::read_to_string(&path)
             .expect("read host-health")
-            .replacen("enabled: true", "enabled: false", 1)
+            .replacen("enabled: false", "enabled: true", 1)
     );
     std::fs::write(&path, &edited).expect("operator edit");
 
@@ -1053,7 +1051,7 @@ fn reinit_and_sync_preserve_an_operator_edited_host_health_definition() {
         "an operator-edited host-health definition keeps its exact bytes"
     );
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
-    assert!(!listed_enabled(&runtime, "host-health"));
+    assert!(listed_enabled(&runtime, "host-health"));
 }
 
 #[test]
@@ -1131,16 +1129,16 @@ fn sync_moves_unconfigured_host_health_to_weekly_and_keeps_operator_schedule() {
 }
 
 #[test]
-fn sync_enables_an_unconfigured_earlier_host_health_copy_and_a_toggle_decides_after() {
+fn sync_disables_an_unconfigured_earlier_host_health_copy_and_a_toggle_decides_after() {
     let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
         .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let catalog = workspace.join("auto_tasks");
     let path = catalog.join("host-health.yaml");
-    // The copy an earlier release wrote and recorded: the same body, disabled.
+    // The copy an earlier release wrote and recorded: the same body, enabled.
     let earlier = std::fs::read_to_string(&path)
         .expect("read host-health")
-        .replacen("enabled: true", "enabled: false", 1);
+        .replacen("enabled: false", "enabled: true", 1);
     record_unedited_retired_default(&catalog, "host-health", &earlier);
 
     // `orbit init` only creates absent defaults, so it leaves the copy alone.
@@ -1148,21 +1146,21 @@ fn sync_enables_an_unconfigured_earlier_host_health_copy_and_a_toggle_decides_af
         .expect("create-only seed");
     assert_eq!(std::fs::read_to_string(&path).expect("read"), earlier);
 
-    // No operator configured it, so convergence turns it on.
+    // No operator configured it, so convergence turns it off.
     reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
         .expect("full sync");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
-    assert!(listed_enabled(&runtime, "host-health"));
+    assert!(!listed_enabled(&runtime, "host-health"));
 
     // Once an operator sets the flag, that flag decides across sync and re-init.
     runtime
-        .auto_task_toggle("host-health", false)
-        .expect("toggle host-health off");
+        .auto_task_toggle("host-health", true)
+        .expect("toggle host-health on");
     reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
         .expect("full sync");
     reinit_workspace(&global, &workspace);
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
-    assert!(!listed_enabled(&runtime, "host-health"));
+    assert!(listed_enabled(&runtime, "host-health"));
 }
 
 /// A fresh managed skill install writes every file under `assets/skills`, and

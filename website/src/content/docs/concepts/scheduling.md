@@ -110,7 +110,7 @@ a task from every enabled definition that is due.
 - **Seeded mostly disabled.** The built-in catalog covers QA sweeps, code and
   security reviews, friction curation, doc duties, run-failure patterns, and
   sweeps for code health, architecture and dependency freshness. All are off
-  until you enable them, except `host-health`.
+  until you enable them, including `host-health`.
 
 ## Scheduled tasks
 

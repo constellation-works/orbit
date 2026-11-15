@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-11-10
-last_validated: 2026-11-10
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Implemented
 stage: shipped
 next: "—"
@@ -100,9 +100,9 @@ becomes just the first definition.
   (ORB-10439, ORB-13432).
 - **Default catalog** — Orbit embeds a small catalog of workspace definitions.
   Initialization materializes a missing catalog file under `.orbit/auto_tasks/`.
-  Every default is `enabled: false` except `host-health`, the one default that
-  ships enabled ([Enabled by default](#enabled-by-default-host-health)). Seeding
-  never mints a task; an operator must explicitly enable any other definition
+  Every default is `enabled: false`, including `host-health`
+  ([Disabled by default: host-health](#disabled-by-default-host-health)). Seeding
+  never mints a task; an operator must explicitly enable a definition
   or use the existing manual-mint surface. Re-initialization preserves an
   operator-edited or workspace-authored definition byte-for-byte, including
   with workspace reconciliation `--force`; destructive lower-level
@@ -130,11 +130,11 @@ registered in `DEFAULT_AUTO_TASK_FILES`. The directory also holds the retired
 `blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead.
 A definition joins this catalog only on proven yield
 ([promotion](#promotion-to-the-shipped-defaults)). `orbit workspace init` materializes a
-missing file as `enabled: false`, except `host-health`, which it writes enabled;
+missing file as `enabled: false`, including `host-health`;
 re-init does not overwrite a workspace-authored definition of the same name.
 
 - `qa-sweep` — hands-on validation of recent changes (ORB-10148, embedded by ORB-10550).
-- `host-health` — enabled-by-default weekly review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps.
+- `host-health` — disabled-by-default weekly review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps. Enable it with `orbit auto-task toggle host-health on`.
 - `friction-curation` — disabled-by-default daily evidence-first pass that deduplicates open
   friction records, re-verifies survivors against current behavior, resolves
   records that no longer reproduce, and files non-duplicate fix tasks for
@@ -552,14 +552,16 @@ In Orbit's own workspace, the workspace-authored `default-auto-task-audit`
 definition checks each newly shipped default against this rule and files a
 demotion proposal when the evidence is missing.
 
-### Enabled by default: host-health
+### Disabled by default: host-health
 
-`host-health` is the one shipped default whose bundled body is `enabled: true`
-(Daniel's direction on ORB-21401, delivered by ORB-21596).
+`host-health` ships disabled, like every other shipped default: its bundled
+body is `enabled: false` (Daniel's direction of 2026-11-14, reversing the
+earlier ORB-21401 direction delivered by ORB-21596).
 `ENABLED_BY_DEFAULT_AUTO_TASKS` in `crates/orbit-core/src/application/auto_tasks/mod.rs`
-names it, and workspace sync refuses a bundled body whose `enabled` disagrees
-with that list, so every other default still ships disabled. Its yield evidence
-is the `ws_orbit` `auto-task-yield.json` of ORB-20991 (30 days to
+is empty, and workspace sync refuses a bundled body whose `enabled` disagrees
+with that list, so no default ships enabled. Turn it on in a workspace with
+`orbit auto-task toggle host-health on`. Its earlier yield evidence is the
+`ws_orbit` `auto-task-yield.json` of ORB-20991 (30 days to
 2026-11-01): 2 runs, no no-op runs, 4 filed tasks that all landed, and no
 duplicate or invalid rejections.
 
@@ -568,8 +570,8 @@ Existing workspaces follow the "no operator has configured it" rule:
 - `orbit init`, which only creates absent defaults in registered workspaces,
   leaves an existing `host-health.yaml` alone.
 - `orbit workspace sync` and `orbit workspace init` refresh a managed body that
-  still holds the bytes an earlier release wrote, so a never-edited, disabled
-  `host-health` becomes enabled there.
+  still holds the bytes an earlier release wrote, so a never-edited, enabled
+  `host-health` becomes disabled there.
 - Once an operator has set the flag with `orbit auto-task toggle`, the
   settings-table value decides, across sync and re-init. A body an operator
   edited is a fork and keeps its bytes, and its own `enabled` value.
@@ -742,7 +744,8 @@ encode this repository's branches and gates. Re-init preserves them:
 - [ORB-21401] — recorded Daniel's direction to make host-health a default
   auto-task (on-call, 2026-11-02).
 - [ORB-21596] — shipped host-health enabled by default, through
-  `ENABLED_BY_DEFAULT_AUTO_TASKS`.
+  `ENABLED_BY_DEFAULT_AUTO_TASKS` (superseded by ORB-24934).
+- [ORB-24934] — shipped the host-health auto-task disabled by default.
 - [ORB-21840] — separated follower review-decision holds from failure
   accounting, with a separate `held_7d` counter.
 - [ORB-23301] — Shipped the disabled weekly `recovery-fault-audit` default
