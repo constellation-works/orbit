@@ -89,6 +89,14 @@ lists every status. Over a pipe, `--header` labels the plain columns.
 orbit friction tags      # the vocabulary this workspace actually accepts
 ```
 
+Every tag on a friction add or update must come from that vocabulary.
+`orbit friction add --tag <tag>` (repeatable), `orbit.friction` action `add`, and
+`orbit.friction` action `update` with `tags` refuse a tag outside the workspace
+taxonomy. The refusal names each unknown tag and lists the valid tags, and nothing
+is recorded. Run `orbit friction tags` to see the accepted vocabulary before filing.
+Re-homing is the exception: a tag the owning taxonomy does not define is dropped,
+not refused (see [Re-homing](#re-homing-a-friction-to-its-owning-workspace)).
+
 The seeded defaults:
 
 | Tag | Use for |
@@ -209,10 +217,11 @@ edits in the same call apply first, then the move runs as one transaction:
   body gives the new ID.
 
 Tags the owning taxonomy does not define are dropped and listed in
-`dropped_tags`. The move is refused when the record is already resolved, when
-the same call also sets `status: resolved`, when the target is the current
-workspace or is not registered, or when either checkout is a replica that
-refuses coordination writes. A refused move writes nothing.
+`dropped_tags`; the move itself is not refused for them, so the add and update
+refusal above does not apply to a re-home. The move is refused when the record
+is already resolved, when the same call also sets `status: resolved`, when the
+target is the current workspace or is not registered, or when either checkout is
+a replica that refuses coordination writes. A refused move writes nothing.
 
 **Record the owner.** When you know which workspace owns the fix but it is not
 registered here, add `"move": false`. That records only the `rehome_required`
