@@ -214,12 +214,14 @@ impl OrbitRuntime {
         // Completion can safely re-observe the PR after a failed-job log
         // became unreadable. The typed refusal also covers throttled reads;
         // a fresh completion still enforces its head and evidence checks.
+        // Finalization records the refusal on a Job diagnostic, whose target
+        // is the job id rather than the completion activity or step id.
         let check_evidence_held = source.state == JobRunState::Held
-            && source.steps.last().is_some_and(|step| {
-                step.target_id == "pr_complete"
-                    && step.error_code.as_deref()
-                        == Some(DeliveryRefusal::CheckEvidenceInconclusive.error_code())
-            });
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::CheckEvidenceInconclusive.error_code());
         // A moving-base yield is resumable through the same certified
         // checkpoints; recovery attempts are scoped to the new run.
         let base_chase_held = source.state == JobRunState::Held

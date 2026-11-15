@@ -434,14 +434,8 @@ impl OrbitRuntime {
                 if held
                     .as_ref()
                     .and_then(|run| run.steps.last())
-                    .is_some_and(|step| {
-                        step.target_id == "pr_complete"
-                            && step.error_code.as_deref()
-                                == Some(
-                                    workflow::DeliveryRefusal::CheckEvidenceInconclusive
-                                        .error_code(),
-                                )
-                    })
+                    .and_then(|step| step.error_code.as_deref())
+                    == Some(workflow::DeliveryRefusal::CheckEvidenceInconclusive.error_code())
                 {
                     return Err(refuse(format!(
                         "newer execution makes publication association ambiguous; completion run '{}' is held on inconclusive check evidence; resume it with `orbit job resume {}`",
