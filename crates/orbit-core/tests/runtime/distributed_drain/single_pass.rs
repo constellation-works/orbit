@@ -570,7 +570,6 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
         .unwrap();
     let replayed = replay.run_id;
     assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
-    assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
     let replayed_pass = follower
         .run_deterministic(
             "pull_refill",

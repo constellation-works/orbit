@@ -514,6 +514,16 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
     // The leaf ran, its final recovery decided, and the run failed.
     pair.leaf_fails_with(&leaf, "implement failed");
     let before = pair.owner_task(&task);
+    // The owner's task as the settlement arrives: everything the follower
+    // did during its pass, before the owner applied the decision.
+    let owner = pair.wire.owner.clone();
+    let task_id = task.clone();
+    let at_settlement = Arc::new(Mutex::new(None));
+    let seen = at_settlement.clone();
+    *pair.wire.before_settle.lock().unwrap() = Some(Box::new(move || {
+        let task = owner.run_tool("orbit.task.show", json!({"id": task_id}));
+        *seen.lock().unwrap() = Some(task.expect("owner task at settlement"));
+    }));
 
     let settled = pair.pass(&drain);
     assert!(
@@ -529,9 +539,14 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
         settles[0]["settlement"]["Fail"]["failure"]["class"], "task_input",
         "a rejected task is the task's own failure: {settles:?}"
     );
-    assert_ne!(
-        before["status"], "rejected",
-        "the follower wrote nothing to the owner's task"
+    let at_settlement = at_settlement
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the settlement reached the owner");
+    assert_eq!(
+        at_settlement, before,
+        "the follower wrote nothing to the owner's task before the owner settled"
     );
 
     assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");

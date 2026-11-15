@@ -237,12 +237,14 @@ fn the_owner_counts_a_tasks_busy_releases_past_its_allowance_against_the_budget(
 
 /// The owner honours the busy-owner mark only on a `transient` release. A
 /// release of another class that carries it is an ordinary release of that
-/// class: an `owner_route` one still holds the task from the drain that
-/// released it, where a `transient` busy one does not.
+/// class: a budgeted `provider` one, which does not need an operator, still
+/// withholds the task from the drain that released it, where a `transient`
+/// busy one does not. (An operator-blocking class such as `owner_route`
+/// blocks the task whatever the mark says, so it cannot show the guard.)
 fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
     for (class, held) in [
         (ClaimFailureClass::Transient, false),
-        (ClaimFailureClass::OwnerRoute, true),
+        (ClaimFailureClass::Provider, true),
     ] {
         let class_name = class.as_str();
         let pair = Pair::with_crews(&[Some("sol")]);
@@ -272,25 +274,11 @@ fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
             )
             .unwrap_or_else(|error| panic!("{class_name}: {error}"));
         let class = class_name;
-        assert_eq!(
-            pair.owner_status(&claim.task_id),
-            if held { "blocked" } else { "backlog" },
-            "{class}"
-        );
+        assert_eq!(pair.owner_status(&claim.task_id), "backlog", "{class}");
 
         let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
         request["request_id"] = json!(format!("after-the-{class}-release"));
         let answer = pair.wire.call("", "orbit.task.pull", request).unwrap();
-        let held_from_drain = answer["receipt"]["crew_unavailable"]
-            .as_array()
-            .is_some_and(|held| {
-                held.iter()
-                    .any(|entry| entry["task_id"] == claim.task_id.as_str())
-            });
-        assert!(
-            !held_from_drain,
-            "blocked tasks are omitted from backlog admission: {class}: {answer:#}"
-        );
         assert_eq!(
             answer["receipt"]["claim"]["task_id"].is_string(),
             !held,
