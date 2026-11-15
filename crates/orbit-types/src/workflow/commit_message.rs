@@ -625,7 +625,9 @@ pub fn collect_trailers(message: &str) -> Vec<Trailer> {
 /// is a trailer block of registered keys only; `None` otherwise.
 pub fn trailer_block_start(text: &str) -> Option<usize> {
     let trimmed = text.trim_end();
-    let start = trimmed.rfind("\n\n").map(|index| index + 2)?;
+    // A text that is solely a trailer block has no preceding blank line;
+    // its block starts at offset 0.
+    let start = trimmed.rfind("\n\n").map(|index| index + 2).unwrap_or(0);
     let block = &trimmed[start..];
     let start = start + (block.len() - block.trim_start_matches('\n').len());
     let block = block.trim_start_matches('\n');
