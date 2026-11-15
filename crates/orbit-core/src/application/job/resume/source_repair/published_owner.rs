@@ -426,6 +426,29 @@ impl OrbitRuntime {
             ..Default::default()
         })?;
         if newest.first().is_none_or(|run| run.run_id != source_id) {
+            if let Some(run) = newest.first().filter(|run| {
+                run.state == JobRunState::Held
+                    && run.retry_source_run_id.as_deref() == Some(source_id)
+            }) {
+                let held = self.get_job_run_backend(&run.run_id)?;
+                if held
+                    .as_ref()
+                    .and_then(|run| run.steps.last())
+                    .is_some_and(|step| {
+                        step.target_id == "pr_complete"
+                            && step.error_code.as_deref()
+                                == Some(
+                                    workflow::DeliveryRefusal::CheckEvidenceInconclusive
+                                        .error_code(),
+                                )
+                    })
+                {
+                    return Err(refuse(format!(
+                        "newer execution makes publication association ambiguous; completion run '{}' is held on inconclusive check evidence; resume it with `orbit job resume {}`",
+                        run.run_id, run.run_id
+                    )));
+                }
+            }
             return Err(refuse(
                 "newer execution makes publication association ambiguous",
             ));
