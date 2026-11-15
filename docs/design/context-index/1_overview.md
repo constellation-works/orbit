@@ -12,12 +12,12 @@ type: design
 summary: "An inverted index, built in the orbit-graph plugin, from the words of landed tasks to the symbols and files their merged diffs changed, queried with a new task's wording to predict its context_files, and shipped only if a time-split evaluation beats BM25 over code"
 tags: [context-index, plugins, evaluation, task-pilot, context-files]
 related_features: [plugins, task-pilot, agent-scorecards, symbol-risk-index, routines, path-leases]
-related_artifacts: [ORB-24844, ORB-24851, ORB-24861]
+related_artifacts: [ORB-24844, ORB-24851, ORB-24861, ORB-24864]
 ---
 
 # Context Index — Overview
 
-The context index is a proposed inverted index built from task history alone. Each word that appeared in a landed task's title, description or acceptance criteria points at the symbols that task's merged diff changed, and through them at their files, with a count of how many tasks made that link. Given the wording of a new task, the index returns a ranked list of files and symbols the work will probably touch, so a `context_files` footprint can be proposed before any agent explores the code. Nothing here is built. [2_design.md](./2_design.md) is the design, written for [ORB-24844] and revised by [ORB-24851] and [ORB-24861]; it ends with the build order, the decisions Daniel has made, the questions still open and one deferred idea.
+The context index is a proposed inverted index built from task history alone. Each word that appeared in a landed task's title, description or acceptance criteria points at the symbols that task's merged diff changed, and through them at their files, with a count of how many tasks made that link. Given the wording of a new task, the index returns a ranked list of files and symbols the work will probably touch, so a `context_files` footprint can be proposed before any agent explores the code. Nothing here is built. [2_design.md](./2_design.md) is the design, written for [ORB-24844], revised by [ORB-24851] and [ORB-24861] and corrected by [ORB-24864]; it ends with the build order, the decisions Daniel has made, the questions still open and one deferred idea.
 
 Daniel has decided (2026-11-14) that the index is built in the orbit-graph plugin, as its `word_index` ranking variant, and that the dataset and the offline evaluation are built inside that plugin's `recommend` and `evaluate`. Two ideas of his are specified as options of the variant, and the offline evaluation chooses between their settings: how much a task counts for each symbol it changed, and whether symbols a task *added* count like symbols it modified.
 
@@ -58,7 +58,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Concern | Settled in | Rests on |
 |---------|-----------|----------|
 | What is indexed, and where labels come from | [2_design.md §2](./2_design.md#2-what-is-indexed) | [landed.rs](../../../crates/orbit-core/src/application/codebase/landed.rs), [landed_diff_stats.rs](../../../crates/orbit-store/src/contracts/landed_diff_stats.rs), the orbit-graph change extractor |
-| Symbols as the unit, the remainder, file roll-up | [2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit) | The per-side symbol spans and changed lines in the orbit-graph history index |
+| Symbols as the unit, the remainder, file roll-up | [2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit) | The per-side symbol byte spans and changed lines in the orbit-graph history index. Line lengths need a history-schema extension and backfill ([2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit), [§13](./2_design.md#13-build-order)) |
 | Added and modified symbols | [2_design.md §2.5](./2_design.md#25-added-and-modified-symbols) and [§5.5](./2_design.md#55-option-added-versus-modified) | — |
 | Tokeniser and stopwords | [2_design.md §3](./2_design.md#3-tokeniser) | — |
 | Posting and id-table format, storage | [2_design.md §4](./2_design.md#4-format-and-storage) | The plugin standard's state rules ([plugins scope](../plugins/1_scope.md)) |
@@ -78,6 +78,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 
 - [ORB-24844] — wrote this overview and the design
 - [ORB-24851] — recorded the orbit-graph decision and added the posting-weight and added-versus-modified options
+- [ORB-24864] — found that the history index holds byte spans, not line lengths, and corrected the design's line-length claims and build scope
 - [ORB-24861] — recorded the decision to leave tags and task type out of the first version
 - [ORB-24839] — designed the eval-harness plugin whose replay job the downstream evaluation uses
 
