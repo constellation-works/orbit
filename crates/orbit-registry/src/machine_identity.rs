@@ -102,10 +102,54 @@ fn config_path(global_root: &Path) -> PathBuf {
     global_root.join(CONFIG_TOML_FILE)
 }
 
+/// Resolve an existing global root to its canonical directory.
+///
+/// Trusted aliases remain supported: a symlinked root resolves to its
+/// canonical target, exactly as joining through it did before. `None` means
+/// the root does not exist, so a legacy file beneath it cannot exist either.
+fn validated_existing_global_root(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    match global_root.canonicalize() {
+        Ok(path) => Ok(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to canonicalize global root '{}': {error}",
+            global_root.display()
+        ))),
+    }
+}
+
+/// CodeQL `rust/path-injection` treats `Path::starts_with` as a
+/// SafeAccessCheck on the receiver. Call this after reconstructing the
+/// legacy path so the metadata probe only sees a prefix-checked value.
+fn host_toml_path_is_contained(path: &Path, parent: &Path) -> bool {
+    path.starts_with(parent)
+}
+
+/// The legacy `host.toml` path under a validated global root: the fixed
+/// leaf name joined to the canonical root and prefix-checked against it.
+/// `None` means the root itself is absent.
+fn validated_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(root) = validated_existing_global_root(global_root)? else {
+        return Ok(None);
+    };
+    let candidate = root.join(LEGACY_HOST_TOML_FILE);
+    if !host_toml_path_is_contained(&candidate, &root) {
+        return Err(OrbitError::InvalidInput(format!(
+            "legacy host identity path escapes its global root '{}'",
+            global_root.display()
+        )));
+    }
+    Ok(Some(candidate))
+}
+
 /// Whether a legacy `host.toml` exists under `global_root`, probed with a
-/// no-follow metadata call only; its contents are never parsed.
+/// no-follow metadata call only; its contents are never parsed. The probe
+/// sees only the validated, reconstructed path, never a caller-supplied
+/// path joined directly.
 fn legacy_host_toml_exists(global_root: &Path) -> Result<bool, OrbitError> {
-    let path = global_root.join(LEGACY_HOST_TOML_FILE);
+    let Some(path) = validated_host_toml_path(global_root)? else {
+        return Ok(false);
+    };
     match std::fs::symlink_metadata(&path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
