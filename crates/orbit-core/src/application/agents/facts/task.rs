@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
@@ -13,9 +13,10 @@ use super::super::records::{
 };
 use super::super::roles::pilot_warnings::settle;
 use super::attempts::{
-    assigned_runner, execution_mode, final_attempt, landed_at, opened_by_claim, runner,
+    PulledClaimRunners, assigned_runner, execution_mode, final_attempt, landed_at, opened_by_claim,
+    runner,
 };
-use super::model::{Attempt, FiledFinding, Problem, Record, RunRecord, Runner, TaskFacts};
+use super::model::{Attempt, FiledFinding, Problem, Record, RunRecord, TaskFacts};
 use super::review;
 use crate::application::task::{is_review_finding, latest_verification};
 
@@ -26,7 +27,7 @@ pub(in crate::application::agents) fn task_facts(
     history: &[TaskHistoryEntry],
     comments: &[TaskComment],
     runs: &[RunRecord],
-    pulled: &HashMap<&str, Runner>,
+    pulled: &PulledClaimRunners<'_>,
     classify: &dyn Fn(&TaskHistoryEntry) -> Cause,
     now: DateTime<Utc>,
 ) -> TaskFacts {

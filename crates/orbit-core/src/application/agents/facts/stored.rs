@@ -7,8 +7,9 @@
 //! task's history stamp (its event and comment logs' length, modification time
 //! and file identity, taken without reading them) plus a digest of the task's
 //! other per-task inputs (its envelope fields, failed claim settlements,
-//! delivery runs and pulled claims). A new history event, a comment, an
-//! envelope edit, a new run or a claim settlement therefore recomputes that
+//! delivery runs, pulled claims and the crews' known models). A new history
+//! event, a comment, an envelope edit, a new run or a claim settlement
+//! therefore recomputes that
 //! task, and a format change recomputes every row instead of misreading it.
 //! Non-terminal tasks, tasks with an open span, and tasks the store cannot
 //! stamp or whose history or comments read failed are computed at every scan
@@ -31,6 +32,7 @@ use orbit_store::contracts::{AgentFactsStoreBackend, AgentTaskFactsRow};
 use orbit_types::task::{Task, TaskHistoryEntry};
 
 use super::super::records::block_cause;
+use super::attempts::PulledClaimRunners;
 use super::model::{RunRecord, Runner, TaskFacts};
 use super::task::task_facts;
 use crate::OrbitRuntime;
@@ -41,8 +43,11 @@ use crate::application::codebase::SettledFailure;
 /// wrote a pulled attempt's `Some(None)` provider-default report as JSON
 /// `null` and read it back as no report [ORB-24640]; version 2 keeps the
 /// three states, and version-1 rows are recomputed from their settlement
-/// and history inputs instead of being reused.
-pub(super) const FACTS_FORMAT_VERSION: u32 = 2;
+/// and history inputs instead of being reused. Version 3 stops keying a
+/// pulled attempt to a history crew whose known models exclude the model its
+/// crew-less late report names [ORB-24967]; version-2 rows hold that pairing
+/// and are recomputed.
+pub(super) const FACTS_FORMAT_VERSION: u32 = 3;
 
 /// One task's facts during a scan, and whether they need writing back.
 pub(super) struct Entry {
@@ -65,7 +70,7 @@ pub(super) struct StoredFacts {
 }
 
 impl StoredFacts {
-    pub(super) fn load(runtime: &OrbitRuntime, pulled: &HashMap<&str, Runner>) -> Self {
+    pub(super) fn load(runtime: &OrbitRuntime, pulled: &PulledClaimRunners<'_>) -> Self {
         let loaded = runtime.workspace_id().and_then(|workspace_id| {
             let rows = runtime.sqlite_store()?.agent_task_facts(&workspace_id)?;
             Ok((workspace_id, rows))
@@ -97,7 +102,7 @@ impl StoredFacts {
         task: &Task,
         settlements: &[SettledFailure],
         runs: &[RunRecord],
-        pulled: &HashMap<&str, Runner>,
+        pulled: &PulledClaimRunners<'_>,
         computed_at: DateTime<Utc>,
     ) -> Entry {
         let id = task.id.as_str();
@@ -205,13 +210,16 @@ fn has_no_open_span(facts: &TaskFacts) -> bool {
     facts.attempts.iter().all(|attempt| attempt.end.is_some())
 }
 
-fn pulled_digest(pulled: &HashMap<&str, Runner>) -> String {
-    if pulled.is_empty() {
+/// A value that changes with any pulled claim's runner and with the crews'
+/// known models, which decide a pulled attempt's crew with them.
+fn pulled_digest(pulled: &PulledClaimRunners<'_>) -> String {
+    if pulled.by_claim.is_empty() {
         return String::new();
     }
-    let mut entries: Vec<(&str, &Runner)> = pulled.iter().map(|(id, r)| (*id, r)).collect();
+    let mut entries: Vec<(&str, &Runner)> =
+        pulled.by_claim.iter().map(|(id, r)| (*id, r)).collect();
     entries.sort_by_key(|(id, _)| *id);
-    sha256_hex(format!("{entries:?}").as_bytes())
+    sha256_hex(format!("{entries:?}|{:?}", pulled.crew_models).as_bytes())
 }
 
 /// The non-history inputs to [`task_facts`], as one value that changes with

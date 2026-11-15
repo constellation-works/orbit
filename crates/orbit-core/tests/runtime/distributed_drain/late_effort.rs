@@ -703,6 +703,116 @@ fn a_re_crewed_task_keys_each_late_attempt_to_its_reported_crew() {
     );
 }
 
+/// Settle the next claim `drain` pulls without a settlement record, as an
+/// owner that predates settlement records kept it, and return its leaf and
+/// claim.
+fn settle_next_claim_without_a_record(pair: &Pair, drain: &str) -> (String, String) {
+    let leaf = pair.running_leaf(drain, 1);
+    let (leaf, claim) = cancel_without_effort(pair, leaf);
+    forget_owner_settlement(pair, &claim, None);
+    (leaf, claim)
+}
+
+/// A follower's late report of `model` for `claim`, naming `crew` when the
+/// follower is new enough to report one.
+fn late_report(pair: &Pair, claim: &str, leaf: &str, crew: Option<&str>, model: &str) {
+    let mut report = json!({
+        "claim_id": claim,
+        "run_id": leaf,
+        "reasoning_effort": "high",
+        "crew_model": model,
+    });
+    if let Some(crew) = crew {
+        report["crew"] = json!(crew);
+    }
+    pair.wire
+        .call("", "orbit.drain.claim.effort", report)
+        .expect("the late report is accepted");
+}
+
+/// The crews the owner's live model ranking lists under `model`.
+fn owner_rank_crews(pair: &Pair, model: &str) -> Vec<Value> {
+    let query =
+        orbit_core::application::agents::RankQuery::parse(None, None, None, None, true).unwrap();
+    let rank = pair.wire.owner.agent_rank(&query).expect("owner rank");
+    rank["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["model"] == json!(model))
+        .flat_map(|row| row["crews"].as_array().unwrap().clone())
+        .map(|crew| crew["crew"].clone())
+        .collect()
+}
+
+/// [ORB-24967] A task crewed `sol` whose pulled claim kept no settlement
+/// record, and whose late report names the model `opus` runs but no crew, as
+/// a follower that predates the crew field sends it. The task is then
+/// re-crewed to `opus`. Once the records show `sol` running another model
+/// and `opus` running the reported one, the attempt counts as `opus`, the
+/// task's one crew recorded running that model, and never as `sol` on a
+/// model `sol` did not run.
+fn a_crewless_late_report_is_not_keyed_to_a_history_crew_of_another_model() {
+    let pair = Pair::with_crews(&[Some("sol"), Some("sol")]);
+    let re_crewed = pair.tasks[0].clone();
+
+    let (leaf, claim) = settle_next_claim_without_a_record(&pair, &pair.run_drain());
+    assert_eq!(pair.claimed_task(&leaf), re_crewed);
+    late_report(&pair, &claim, &leaf, None, "model-opus");
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &re_crewed,
+            orbit_core::application::task::TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("operator crew update");
+
+    // What records `opus` running `model-opus`: the re-crewed task's next
+    // claim, reported by a follower that names its crew.
+    let (leaf, claim) = settle_next_claim_without_a_record(&pair, &pair.run_drain());
+    assert_eq!(pair.claimed_task(&leaf), re_crewed);
+    late_report(&pair, &claim, &leaf, Some("opus"), "model-opus");
+
+    // What records `sol` running `model-sol`: the other task's claim, pulled
+    // by a drain that admits only `sol`.
+    let sol_drain = pair
+        .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": ["sol"]}));
+    let (leaf, claim) = settle_next_claim_without_a_record(&pair, &sol_drain);
+    assert_eq!(pair.claimed_task(&leaf), pair.tasks[1]);
+    late_report(&pair, &claim, &leaf, Some("sol"), "model-sol");
+
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    let mut rows: Vec<(Value, Value)> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["model"].clone(), row["crews"].clone()))
+        .collect();
+    rows.sort_by_key(|(model, _)| model.to_string());
+    assert_eq!(
+        rows,
+        [
+            (json!("model-opus"), json!(["opus"])),
+            (json!("model-sol"), json!(["sol"])),
+        ],
+        "the crew-less report counts under the task's one crew recorded running its model"
+    );
+    assert_eq!(
+        owner_rank_crews(&pair, "model-opus"),
+        [json!("opus")],
+        "the ranking lists sol under no model it did not run"
+    );
+    assert_eq!(owner_rank_crews(&pair, "model-sol"), [json!("sol")]);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     late_effort_report_scenarios,
@@ -717,4 +827,5 @@ crate::scenario_table!(
     a_late_model_report_fills_an_absent_model_and_never_overwrites_one,
     a_replayed_crewless_report_can_be_enriched_with_its_crew,
     a_re_crewed_task_keys_each_late_attempt_to_its_reported_crew,
+    a_crewless_late_report_is_not_keyed_to_a_history_crew_of_another_model,
 );

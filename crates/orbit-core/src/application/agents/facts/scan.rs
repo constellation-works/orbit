@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -8,7 +8,7 @@ use orbit_types::task::TaskRelationType;
 use super::super::attribution;
 use super::super::candidates::Candidates;
 use super::super::roles::pilots::grade_all;
-use super::attempts::implementation_runs;
+use super::attempts::{PulledClaimRunners, implementation_runs};
 use super::implementer::mark_implementer_less_attempts;
 use super::invocations::AgentInvocationFacts;
 use super::launches::AgentLaunchFacts;
@@ -53,7 +53,8 @@ pub(in crate::application::agents) fn scan(
         (Vec::new(), Vec::new())
     });
     let settlements = failed_claim_settlements_of(&leaves);
-    let pulled: HashMap<&str, Runner> = leaves
+    let mut pulled = PulledClaimRunners::default();
+    for (claim_id, runner) in leaves
         .iter()
         .map(|leaf| {
             let runner = Runner {
@@ -73,7 +74,13 @@ pub(in crate::application::agents) fn scan(
             };
             (late.claim_id.as_str(), runner)
         }))
-        .collect();
+    {
+        pulled.crew_models.note_recorded_pair(&runner);
+        pulled.by_claim.insert(claim_id, runner);
+    }
+    for run in runs.values().flatten() {
+        pulled.crew_models.note_recorded_pair(&run.runner);
+    }
     let candidates = Candidates::open(runtime);
     let mut stored = StoredFacts::load(runtime, &pulled);
     let mut facts = Vec::new();
