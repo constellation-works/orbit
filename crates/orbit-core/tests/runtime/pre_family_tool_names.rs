@@ -445,10 +445,14 @@ fn install_callback_tree(install: &Path) {
 }
 
 fn record_callback(runtime: &OrbitRuntime, install: &Path, manifest: &str) {
+    record_plugin(runtime, "callback", install, manifest);
+}
+
+fn record_plugin(runtime: &OrbitRuntime, name: &str, install: &Path, manifest: &str) {
     let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
     plugins
         .upsert_plugin(&InstalledPlugin {
-            name: "callback".into(),
+            name: name.into(),
             version: "1.0.0".into(),
             source: "fixture".into(),
             install_path: install.to_string_lossy().into_owned(),
@@ -467,7 +471,7 @@ fn record_callback(runtime: &OrbitRuntime, install: &Path, manifest: &str) {
     // this witness. It is not keyed on the manifest digest.
     orbit_core::runtime::plugin::grants::record_authorized_grants(
         &runtime.global_root(),
-        "callback",
+        name,
         true,
         &["orbit_tools".to_string()],
     )
@@ -628,4 +632,110 @@ fn a_failed_plugin_digest_record_does_not_refuse_the_plugin() {
     drop(runtime);
     let runtime = fixture.open();
     assert_callback_loads(&runtime, &healed);
+}
+
+fn edited_recorded_manifest() -> String {
+    CALLBACK_MANIFEST
+        .replace("name: callback", "name: edited")
+        .replace(
+            "description: Callback fixture.",
+            "description: Edited fixture.",
+        )
+}
+
+fn edited_unconsented_manifest() -> String {
+    edited_recorded_manifest().replace(
+        "description: Edited fixture.",
+        "description: Operator edited this manifest.",
+    )
+}
+
+/// Overlapping opens: one pass finishes the plugin rewrite and its marker,
+/// the other pass's digest record then fails. The later open must load the
+/// plugin without anyone deleting that marker, and an unconsented edit in
+/// the same pass must stay refused.
+#[test]
+fn a_competing_plugin_migration_survives_a_failed_digest_write() {
+    if !super::dispatch_admission::isolated(
+        "pre_family_tool_names::a_competing_plugin_migration_survives_a_failed_digest_write",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // The marker is recorded only when the state directory already exists.
+    std::fs::create_dir_all(fixture.global.join("state")).unwrap();
+    std::fs::create_dir_all(fixture.workspace.join("state")).unwrap();
+    drop(fixture.open());
+
+    let callback_install = fixture.global.join("plugins/callback/1.0.0");
+    install_callback_tree(&callback_install);
+    let edited_install = fixture.global.join("plugins/edited/1.0.0");
+    let edited_recorded = edited_recorded_manifest();
+    let edited_on_disk = edited_unconsented_manifest();
+    assert_ne!(edited_recorded, edited_on_disk);
+    install_callback_tree(&edited_install);
+    std::fs::write(edited_install.join("plugin.yaml"), &edited_recorded).unwrap();
+
+    // Record both rows while the empty open's marker suppresses migration,
+    // then plant the unconsented edit before the marker is forgotten.
+    let runtime = fixture.open();
+    record_callback(&runtime, &callback_install, CALLBACK_MANIFEST);
+    record_plugin(&runtime, "edited", &edited_install, &edited_recorded);
+    drop(runtime);
+    std::fs::write(edited_install.join("plugin.yaml"), &edited_on_disk).unwrap();
+    fixture.forget_migration();
+
+    let healed = healed_callback_manifest();
+    let global = fixture.global.clone();
+    let workspace = fixture.workspace.clone();
+    orbit_core::test_support::with_plugin_manifest_publish_hook(
+        move || {
+            // The competing opener reads the consented manifest, records the
+            // healed digest and publishes the completion marker before this
+            // opener writes the file.
+            OrbitRuntime::from_roots(&global, &workspace).unwrap();
+            orbit_core::test_support::fail_next_plugin_digest_upsert();
+        },
+        || drop(fixture.open()),
+    );
+
+    let marker = fixture.global.join("state").join(MIGRATION_MARKER);
+    assert!(
+        marker.is_file(),
+        "the completed competing pass keeps the marker"
+    );
+    assert_eq!(
+        std::fs::read_to_string(callback_install.join("plugin.yaml")).unwrap(),
+        healed,
+        "a failed digest write must not restore a rewrite the competing pass recorded"
+    );
+    assert_eq!(
+        std::fs::read_to_string(edited_install.join("plugin.yaml")).unwrap(),
+        edited_on_disk,
+        "an unconsented manifest edit is not rewritten"
+    );
+
+    let runtime = fixture.open();
+    assert_callback_loads(&runtime, &healed);
+    let edited = runtime
+        .list_plugins()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.name == "edited")
+        .expect("edited is installed");
+    assert_eq!(
+        edited.status,
+        orbit_types::plugin::PluginStatus::Inactive,
+        "an unconsented manifest stays refused: {}",
+        edited.diagnostic.clone().unwrap_or_default()
+    );
+    let diagnostic = edited.diagnostic.unwrap_or_default();
+    assert!(
+        diagnostic.contains("does not match the stored digest"),
+        "digest mismatch refused the unconsented manifest: {diagnostic}"
+    );
+    assert!(
+        marker.is_file(),
+        "the later open loads the plugin without deleting the marker"
+    );
 }

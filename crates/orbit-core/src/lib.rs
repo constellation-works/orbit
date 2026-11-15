@@ -124,6 +124,10 @@ pub mod test_support {
         with_decision_answer_checkpoint, with_decision_dkim_resolver,
         with_decision_raise_checkpoint,
     };
+    /// Fail this thread's next plugin-manifest digest record as a store error.
+    pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::fail_next_plugin_digest_upsert;
+    /// Run a competing plugin migration before this thread publishes a manifest.
+    pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::with_plugin_manifest_publish_hook;
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
     pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
