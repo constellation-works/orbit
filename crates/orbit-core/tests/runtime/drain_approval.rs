@@ -943,22 +943,18 @@ fn a_legacy_note_only_undecided_pilot_still_holds_with_its_run() {
         "task-pilot run jrun-legacy-undecided left no decision",
     );
 }
-fn a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration() {
+fn a_task_independent_pilot_failure_does_not_hold_the_task() {
     let ws = Workspace::new();
     let ordinary = ws.readme_task("ordinary");
     let drain = ws.drain();
     let selection = ws.select(&drain);
     assert_task_ids(&selection, &[&ordinary]);
     let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
-    let now = Utc::now();
-    ws.jobs().complete_job_run_step(&pilot, &JobRunStepParams {
-        lock_wait_ms: None, step_index: 0, target_type: JobTargetType::Activity,
-        target_id: "prepare_task_pilot".into(), started_at: now, finished_at: now,
-        duration_ms: Some(0), exit_code: None, agent_response_json: None,
-        state: JobRunState::Failed, error_code: None,
-        error_message: Some("job executor: invalid input: inspection_crew_unavailable: no inspection-capable crew is configured".into()),
-    }).unwrap();
-    ws.finish(&pilot, JobRunState::Failed);
+    fail_pilot_prepare_step(
+        &ws,
+        &pilot,
+        "job executor: invalid input: inspection_crew_unavailable: no inspection-capable crew is configured",
+    );
     ws.record(&drain);
     let history = ws.history(&ordinary);
     assert!(
@@ -967,13 +963,53 @@ fn a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration
             .any(|entry| entry.event == "task_pilot_unresolved")
     );
     append_unresolved_pilot_entry(&ws, &ordinary, &pilot);
-    let mut executor: ExecutorResource =
-        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
-    executor.spec.inspection_args = Some(Vec::new());
-    let def = ExecutorDef::from_resource_spec(executor.metadata.name, executor.spec, None, None);
-    ws.runtime.upsert_executor_def(&def).unwrap();
+    // The failure is task-independent, so the hold releases with no
+    // executor or crew configuration change.
     let later = ws.drain();
     assert_task_ids(&ws.select(&later), &[&ordinary]);
+
+    // Contrast: an ordinary pilot failure with no independent cause keeps
+    // its task held after the same drain cycle.
+    let ws = Workspace::new();
+    let ordinary = ws.readme_task("ordinary");
+    let drain = ws.drain();
+    let selection = ws.select(&drain);
+    assert_task_ids(&selection, &[&ordinary]);
+    let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
+    fail_pilot_prepare_step(
+        &ws,
+        &pilot,
+        "job executor: invalid input: task pilot returned no usable assessment",
+    );
+    ws.record(&drain);
+    let later = ws.drain();
+    assert_held(&ws.select(&later), &ordinary, "pilot_unresolved");
+}
+
+/// Finishes `pilot`'s prepare step as failed with `error_message`, the way the
+/// executor reports a failed pilot.
+fn fail_pilot_prepare_step(ws: &Workspace, pilot: &str, error_message: &str) {
+    let now = Utc::now();
+    ws.jobs()
+        .complete_job_run_step(
+            pilot,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "prepare_task_pilot".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: Some(0),
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Failed,
+                error_code: None,
+                error_message: Some(error_message.into()),
+            },
+        )
+        .unwrap();
+    ws.finish(pilot, JobRunState::Failed);
 }
 fn selected(selection: &Value, task: &Task) -> bool {
     selection["task_ids"]
@@ -1502,7 +1538,7 @@ crate::scenario_table!(
     an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change,
     an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_changes,
     a_legacy_note_only_undecided_pilot_still_holds_with_its_run,
-    a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration,
+    a_task_independent_pilot_failure_does_not_hold_the_task,
     proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred,
     candidates_with_no_crew_are_never_bundled_with_crewed_candidates,
     verified_no_diff_merge_proof_uses_only_the_first_parent_change,

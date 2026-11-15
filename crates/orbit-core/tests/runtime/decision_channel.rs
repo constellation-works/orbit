@@ -356,7 +356,7 @@ impl Fixture {
             .submit_decision_via_channel(plugin_submission(request, answer, token))
     }
 
-    /// Submits answer `1` for `b` with the token minted for it.
+    /// Submits `answer` for `b` with the token minted for it.
     fn submit_blocked(&self, b: &Blocked, answer: &str) -> Result<DecisionRequest, OrbitError> {
         self.submit(&b.request, answer, &b.token)
     }
@@ -633,9 +633,15 @@ fn a_registered_channel_applies_an_answer_as_the_human_with_provenance() {
     assert_eq!(channels[0].human, HUMAN);
     assert_eq!(channels[0].plugin, PLUGIN);
     // The key is mirrored to the bound plugin's secret store at
-    // registration, without the store file ever naming it in listings.
+    // registration; the channel listing carries only the key's fingerprint.
     let secrets = fx.plugin_secrets();
     assert!(secrets.to_string().contains("channel_key"), "{secrets}");
+    let key_hex = secrets["secrets"]["channel_key"]["value"].as_str().unwrap();
+    let listing = serde_json::to_string(&channels).unwrap();
+    assert!(
+        !listing.contains(key_hex),
+        "the channel listing leaked the channel key: {listing}"
+    );
 
     let b = fx.blocked();
     assert_eq!(b.request.state, DecisionRequestState::Open);
