@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-12
+last_updated: 2026-11-15
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -54,8 +54,9 @@ cadence ([§11.4](#114-the-manager-digest)).
 
 A resident owns **coordination only**. When the workspace `HEAD` can be checked out, its
 reviewer-profile agent receives a disposable, read-only managed checkout for the live cycle, passed
-as `workspace_path`. This is a cycle inspection checkout, not a leaf implementation worktree: the
-resident acts through Orbit tools rather than editing source files, and checkout changes are not
+as matching `workspace_path` and `repo_root` declarations. This is a cycle inspection checkout,
+not a leaf implementation worktree: the resident acts through Orbit tools rather than editing
+source files, and checkout changes are not
 committed or delivered. The resident has no pinned drain slot or admission path of its own; leaf
 tasks it dispatches run on the normal pipeline under the normal footprint rule. The
 epic-is-a-tag decision of [ORB-12488] stands
@@ -220,7 +221,7 @@ manager surfaces it in the next digest and `orbit attention` lists the review as
 
 ## 5. The cycle
 
-A cycle is one run of `resident_cycle_pipeline`, a catalog job with three steps:
+A cycle is one run of `resident_cycle_pipeline`, a catalog job with three phases:
 
 1. **`resident_observe`** (deterministic). Takes the cycle lease (a fenced lease keyed by the
    mandate; a held lease defers the fire). Loads the mandate, effective authority, the last *K*
@@ -229,8 +230,10 @@ A cycle is one run of `resident_cycle_pipeline`, a catalog job with three steps:
    ([§3](#3-authority)), narrowed to observe-only when a maintenance notice is open
    ([§7](#7-notices)). If the previous cycle has no checkpoint, it marks this cycle a **recovery
    cycle** and adds the dead cycle's audit rows (actions taken under its action keys) to the brief.
-2. **one `agent_loop`** (the crew from the mandate). Does one bounded cycle of work: check, recover,
-   dispatch, promote, merge within the grant; escalate what it must not decide; record costs; and
+2. **one `agent_loop`** (the crew from the mandate). The mutually exclusive `cycle` and
+   `cycle_fallback` steps select the managed checkout or the registered-checkout fallback.
+   The agent does one bounded cycle of work: check, recover, dispatch, promote, merge within
+   the grant; escalate what it must not decide; record costs; and
    write its checkpoint with `orbit.resident.checkpoint`. The loop has a turn and wall-time budget
    (default 30 min); it is coordination, so it should rarely need it.
 3. **`resident_finalize`** (deterministic). If the agent wrote no valid checkpoint, writes a
@@ -341,11 +344,12 @@ checkpoints, open requests, comments since the last cycle, the wake, the notices
 `untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
 reference arrive with [ORB-21250]. Observe also makes a detached managed checkout of the registered
 workspace's current `HEAD` for this cycle and includes its path in the brief; the job forwards that
-path to the cycle activity as `workspace_path`. A resumed run that already holds its cycle reuses
+path to the cycle activity as both `workspace_path` and `repo_root`, so the agent-launch integrity
+check can validate the distinct checkout. A resumed run that already holds its cycle reuses
 that checkout, including its scratch. If the workspace has no checkoutable `HEAD` or checkout
-creation fails, observe logs a warning and leaves `workspace_path` null, so the activity falls back
-to the registered checkout; a direct launch there can still be refused when the sandbox cannot
-enforce its filesystem policy.
+creation fails, observe logs a warning and leaves `workspace_path` null. The `cycle_fallback` step
+omits both path declarations and launches in the registered checkout; a direct launch there can
+still be refused when the sandbox cannot enforce its filesystem policy.
 
 **Finalize.** `resident_finalize` writes the synthesized `incomplete` checkpoint when the agent wrote
 none (its `actions[]` from the ledger rows under the cycle's keys), clears the live cycle and
