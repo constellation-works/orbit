@@ -70,12 +70,12 @@ pub use light_delivery::{
     run_review_skip_guard,
 };
 pub(crate) use owed_criteria::accept_implementer_owed_criteria;
-pub use pr::PullRequestStatus;
 pub(crate) use pr::forge_observation_hold_message;
 pub(crate) use pr::{
     AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
     provider_authenticated_published_head, recovery_published_head,
 };
+pub use pr::{CheckState, PullRequestStatus, classify_rollup_context};
 pub(crate) use pr::{CompletionRecoveryChecks, completion_recovery_checks};
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;

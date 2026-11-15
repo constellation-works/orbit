@@ -207,10 +207,14 @@ pub(crate) struct StatusCheck {
     pub(crate) owed_state: Option<CheckState>,
 }
 
+/// Branch-protection classification of one status-check rollup context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CheckState {
+pub enum CheckState {
+    /// The check has not finished.
     Pending,
+    /// The check passed, was skipped, or ended neutral.
     Passed,
+    /// The check failed.
     Failed,
 }
 
@@ -269,6 +273,15 @@ impl StatusCheck {
             other => other,
         }
     }
+}
+
+/// Classify one status-check rollup context for branch protection.
+///
+/// This is the single spelling of the state/status/conclusion → pass/fail/
+/// pending mapping. `None` means the value is not recognized; callers that
+/// must bucket every context treat `None` as pending.
+pub fn classify_rollup_context(check: &Value) -> Option<CheckState> {
+    StatusCheck::classify(check)
 }
 
 /// One pull request as `pr.list` reports it.
