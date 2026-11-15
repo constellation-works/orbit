@@ -623,7 +623,7 @@ fn settle_deferred_bubblewrap_candidate(
 /// candidate that changes only test sources neither naming that test nor
 /// touching a sandbox, settles passed instead of holding for host evidence
 /// the host can never produce. Whether or not the reviewer named the narrow
-/// run, the test is not owed; the pull request's required checks still run it.
+/// run, the test is not owed because the candidate does not reach it.
 fn an_unreached_bubblewrap_deferral_is_not_owed_as_host_evidence() {
     for named in [false, true] {
         let (fixture, settled) = settle_deferred_bubblewrap_candidate(

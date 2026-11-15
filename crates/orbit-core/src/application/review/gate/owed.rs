@@ -177,8 +177,9 @@ const SANDBOX_MARKERS: [&str; 3] = ["sandbox", "bwrap", "bubblewrap"];
 
 /// [ORB-25096] Which deferred Bubblewrap tests a candidate's change can
 /// reach. A test the candidate cannot reach is not owed as host evidence:
-/// a host whose kernel refuses user namespaces would never produce it, and
-/// the pull request's required checks still run it before landing.
+/// a host whose kernel refuses user namespaces would never produce it. The
+/// review does not count on a later pull request run executing it, because CI
+/// scope selection may leave the test out of that run.
 ///
 /// The rule is conservative. The candidate reaches every deferred test when
 /// it changes any path other than Markdown and Rust sources under a `tests`
@@ -510,7 +511,7 @@ impl Judgement {
                 &format!(
                     "deferred Bubblewrap test `{test}` is not owed as host evidence: the \
                      candidate changes only tests and docs that neither name it nor touch a \
-                     sandbox, and the pull request's required checks still run it"
+                     sandbox, so the candidate does not reach the test"
                 ),
             );
         }
