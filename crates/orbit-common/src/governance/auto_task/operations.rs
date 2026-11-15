@@ -510,7 +510,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         both(
             "adopt_bundled_contract",
             ParamType::Switch,
-            "Append the bundled contract the effective body omits (for run-failure-patterns, the host-aware follower deduplication rule), preserving every other field. Cannot be combined with another edit.",
+            "Append the bundled contract the effective body omits, keeping every other field. Cannot be combined with another edit.",
             CliArgKind::flag("adopt-bundled-contract"),
             "Append the bundled contract this body omits, preserving every other field",
         ),

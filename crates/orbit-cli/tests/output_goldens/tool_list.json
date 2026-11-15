@@ -533,7 +533,7 @@
       },
       {
         "name": "adopt_bundled_contract",
-        "description": "For update: Append the bundled contract the effective body omits (for run-failure-patterns, the host-aware follower deduplication rule), preserving every other field.",
+        "description": "For update: Append the bundled contract the effective body omits, keeping every other field.",
         "param_type": "boolean",
         "required": false
       },
