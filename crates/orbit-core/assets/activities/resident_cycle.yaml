@@ -90,7 +90,7 @@ spec:
   instruction: |
     You are a resident orchestrator running one bounded cycle for the mandate
     in `brief.task_id`. Your memory is the brief: the mandate, your grant
-    (`brief.authority`), your last checkpoints (newest first), open requests,
+    (`brief.authority`), your latest checkpoint in full and up to four earlier summaries, open requests,
     comments since your last cycle, why you woke and the notices in scope.
     Nothing else carries over between cycles.
 
@@ -131,7 +131,7 @@ spec:
     "observe_only":<brief.authority.observe_only>,
     "narrowed_by":<brief.authority.narrowed_by or null>},
     "actions":[...],"decisions":[...],"requests":[...],"costs":[...],
-    "notes":"<what the next cycle must know, at most 2000 characters>",
+    "notes":"<cycle delta: what changed and what is next, at most 600 characters>",
     "next_wake":{"reason":"heartbeat","not_before":"<RFC 3339 time>"},
     "continuity":"<brief.continuity>","conversation_ref":<brief.conversation_ref>,
     "outcome":"progress|idle|waiting|handoff|ended",
@@ -140,9 +140,12 @@ spec:
     value, `null` when the brief carries none): it is the provider
     conversation the next cycle resumes, and omitting it breaks the
     continuity chain so the next cycle rebuilds instead of resuming.
+    Keep standing state in `requests[]` and `decisions[]`, carried forward
+    without retelling it in notes. Put operator asks in `requests[]` and
+    notices when supported, never in a "FOR DANIEL" notes paragraph.
     Use `outcome: idle` when you woke and had nothing to do; when
     `brief.status_request` is true the manager asked for status, so say in
-    `notes` where the mandate stands. When the exit
+    the structured fields where the mandate stands and keep `notes` delta-only. When the exit
     criteria hold, write the assignment's execution summary and checkpoint
     `handoff`; finalize moves the assignment to `review`, and a status write
     of your own is refused.

@@ -8,8 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskHistoryEntry};
 use orbit_types::workflow::{
-    RESIDENT_BRIEF_CHECKPOINTS, RESIDENT_CYCLE_GRANTED_EVENT, RESIDENT_CYCLE_JOB,
-    ResidentCheckpoint, ResidentCheckpointAction, ResidentCheckpointAuthority,
+    RESIDENT_BRIEF_CHECKPOINTS, RESIDENT_CHECKPOINT_NOTES_MAX_CHARS, RESIDENT_CYCLE_GRANTED_EVENT,
+    RESIDENT_CYCLE_JOB, ResidentCheckpoint, ResidentCheckpointAction, ResidentCheckpointAuthority,
     ResidentCheckpointWake, ResidentComment, ResidentCycleGrant, ResidentLiveCycle,
     ResidentNextWake,
 };
@@ -353,18 +353,25 @@ impl OrbitRuntime {
         let recent: Vec<ResidentCheckpoint> = all
             .iter()
             .rev()
-            .take(RESIDENT_BRIEF_CHECKPOINTS)
+            .take(1)
             .cloned()
             .map(|mut checkpoint| {
                 checkpoint.conversation_ref = None;
                 checkpoint
             })
             .collect();
-        let older_checkpoint_notes: Vec<Value> = all
+        let earlier_checkpoint_summaries: Vec<Value> = all
             .iter()
             .rev()
-            .skip(RESIDENT_BRIEF_CHECKPOINTS)
-            .map(|checkpoint| json!({"cycle": checkpoint.cycle, "notes": checkpoint.notes}))
+            .skip(1)
+            .take(RESIDENT_BRIEF_CHECKPOINTS - 1)
+            .map(|checkpoint| {
+                json!({
+                    "cycle": checkpoint.cycle,
+                    "outcome": checkpoint.outcome,
+                    "notes": checkpoint.notes.chars().take(RESIDENT_CHECKPOINT_NOTES_MAX_CHARS).collect::<String>(),
+                })
+            })
             .collect();
         let messages: Vec<Value> = comments
             .iter()
@@ -425,7 +432,7 @@ impl OrbitRuntime {
             },
             "authority": grant,
             "checkpoints": recent,
-            "older_checkpoint_notes": older_checkpoint_notes,
+            "earlier_checkpoint_summaries": earlier_checkpoint_summaries,
             "open_requests": open_requests,
             "comments_since_last_cycle": messages,
             "wake": {"reasons": grant.reasons, "digest": grant.digest},
