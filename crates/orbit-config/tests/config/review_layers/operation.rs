@@ -283,6 +283,18 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
     );
 
     assert_eq!(rules.value[0].hosted_check, None);
+    assert!(rules.value[0].tags.is_empty());
+
+    review_layers_write_config(
+        workspace.path(),
+        &format!("{CODEQL_RULE}tags = [\" Security \", \"security-review\"]\n"),
+    );
+    let tagged = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
+        .expect("a rule may list task tags");
+    assert_eq!(
+        tagged.operation.review_host_evidence.value[0].tags,
+        vec!["security".to_string(), "security-review".to_string()]
+    );
 
     review_layers_write_config(
         workspace.path(),
@@ -355,6 +367,9 @@ fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
         ),
         format!("{CODEQL_RULE}timeout = 5\n"),
         format!("{CODEQL_RULE}hosted_check = \" \"\n"),
+        // [ORB-24940] A blank tag names no task.
+        format!("{CODEQL_RULE}tags = [\"security\", \" \"]\n"),
+        format!("{CODEQL_RULE}tags = [\"\"]\n"),
         format!(
             "{}hosted_check = \"CI\"\n",
             rule(

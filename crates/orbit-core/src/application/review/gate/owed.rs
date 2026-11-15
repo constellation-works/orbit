@@ -1,11 +1,12 @@
 //! Evidence a workspace rule owes for a claimed leaf's candidate, derived by
 //! Orbit rather than read from the reviewer's report.
 //!
-//! A `[[review.host_evidence]]` rule names a check, the paths that owe it and
-//! the OS it runs on. When a claimed leaf's candidate changes a matching path
-//! on a host that cannot run the check in its agent lane — a `codeql` rule on
-//! a host of another OS, a `host_sandbox_test` rule on a host of its own OS —
-//! the requirement is owed:
+//! A `[[review.host_evidence]]` rule names a check, the paths (and,
+//! optionally, the task tags) that owe it and the OS it runs on. When a
+//! claimed leaf's candidate changes a matching path, or its task carries a
+//! listed tag, on a host that cannot run the check in its agent lane — a
+//! `codeql` rule on a host of another OS, a `host_sandbox_test` rule on a
+//! host of its own OS — the requirement is owed:
 //!
 //! - admission hands it to the reviewer in the manifest, as owner-fulfilled
 //!   evidence it must record `not_run` and never attempt;
@@ -60,8 +61,9 @@ use crate::OrbitRuntime;
 use super::context::GateContext;
 use super::judgement::Judgement;
 
-/// What the run's captured host-evidence rules owe for `commits` on this
-/// host. Only a claimed leaf owes evidence: a local run's host is the owner.
+/// What the run's captured host-evidence rules owe for `commits` and the
+/// run's task tags on this host. Only a claimed leaf owes evidence: a local
+/// run's host is the owner.
 pub(super) fn owed_evidence<'a>(
     runtime: &OrbitRuntime,
     context: &GateContext,
@@ -77,9 +79,15 @@ pub(super) fn owed_evidence<'a>(
     for commit in commits {
         changed.extend(committed_paths(&context.workspace_path, &commit.commit)?);
     }
+    let tags: Vec<String> = context
+        .tasks
+        .iter()
+        .flat_map(|task| task.tags.iter().cloned())
+        .collect();
     Ok(owed_requirements(
         rules,
         &changed,
+        &tags,
         EvidenceHostOs::of_host(runtime.host_os()),
     ))
 }

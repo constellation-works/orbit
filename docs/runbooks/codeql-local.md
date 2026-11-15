@@ -425,18 +425,22 @@ declares a workspace rule that a Rust change owes it:
 kind = "codeql"
 name = "Linux CodeQL (rust)"
 paths = ["**/*.rs"]
+tags = ["security", "security-review"]
 os = "linux"
 command = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls"
 artifact = "evidence/codeql-rust-linux.json"
 ```
 
-On a non-Linux follower, a candidate that changes a matching path owes this
-requirement. The reviewer's manifest names it in `owed_external_evidence`. It records the
+On a non-Linux follower, a candidate that changes a matching path, or a task
+tagged `security` or `security-review` whatever it changed (such as an
+npm-only dependency update), owes this requirement. The implementer records
+the command `not_run` with the exit-3 refusal and hands off; it does not fail
+for the missing Linux run. The reviewer's manifest names it in `owed_external_evidence`. It records the
 command `not_run` and never attempts it. Settlement adds the requirement
 whatever the report says, so the review holds for the owner's run. It neither
 blocks on an `incomplete` verdict whose only gap this is, nor ships a pass the
 host could not have run. A Linux follower, or a candidate that changes no
-matching path, owes nothing
+matching path on a task carrying no listed tag, owes nothing
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 This repository declares no `hosted_check`: its hosted CodeQL emits no pull
 request check, so a before-landing review that owes this requirement holds for
