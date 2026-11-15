@@ -375,6 +375,150 @@ mod grok {
     }
 }
 
+mod muse {
+    use orbit_agent::{muse_terminal_failure_diagnostic, project_cli_response};
+    use orbit_types::workflow::activity_job::Provider;
+
+    fn diagnostic(stdout: &str) -> Option<String> {
+        muse_terminal_failure_diagnostic(Provider::Muse, stdout.as_bytes())
+    }
+
+    fn projected(stdout: &str) -> String {
+        String::from_utf8(project_cli_response(Provider::Muse, stdout.as_bytes()).into_owned())
+            .expect("utf8 projected response")
+    }
+
+    /// [ORB-24935] A `run.terminal.failed` record with empty `text` but a
+    /// populated `reason` (F2026-11-293) must surface the reason instead of
+    /// the no-failure-text fallback.
+    #[test]
+    fn failed_terminal_with_empty_text_reports_payload_reason() {
+        let reason =
+            "workflow launch failed: workflow resume needs the active parent session log path";
+        let stdout = serde_json::json!({
+            "payload_type": "run.terminal.failed",
+            "payload": {
+                "kind": "run_terminal",
+                "terminal": "failed",
+                "text": "",
+                "reason": reason,
+            },
+        })
+        .to_string();
+
+        assert_eq!(
+            diagnostic(&stdout).as_deref(),
+            Some(format!("Muse terminal failed: {reason}").as_str()),
+            "empty text must fall through to reason"
+        );
+
+        let whitespace = serde_json::json!({
+            "payload_type": "run.terminal.failed",
+            "payload": {"terminal": "failed", "text": "   ", "reason": reason},
+        })
+        .to_string();
+        assert_eq!(
+            diagnostic(&whitespace).as_deref(),
+            Some(format!("Muse terminal failed: {reason}").as_str()),
+            "whitespace-only text must fall through to reason"
+        );
+
+        // The existing bound still applies to the reason prose.
+        let long_reason = "r".repeat(500);
+        let long_stdout = serde_json::json!({
+            "payload_type": "run.terminal.failed",
+            "payload": {"terminal": "failed", "text": "", "reason": long_reason},
+        })
+        .to_string();
+        let long_diagnostic = diagnostic(&long_stdout).expect("long reason diagnostic");
+        assert!(
+            long_diagnostic.ends_with('…'),
+            "long reason must be truncated: {long_diagnostic}"
+        );
+        assert!(
+            long_diagnostic.chars().count() <= 401,
+            "diagnostic stays bounded: {} chars",
+            long_diagnostic.chars().count()
+        );
+    }
+
+    /// [ORB-24935] `reason` never supplies a completed answer, and the
+    /// ORB-16597 `message`/`error` fallbacks keep precedence over it.
+    #[test]
+    fn completed_terminal_never_answers_from_reason_and_message_error_win() {
+        for stdout in [
+            serde_json::json!({
+                "payload_type": "run.terminal.completed",
+                "payload": {"terminal": "completed", "reason": "some reason"},
+            })
+            .to_string(),
+            serde_json::json!({
+                "payload_type": "run.terminal.completed",
+                "payload": {"terminal": "completed", "text": 42, "reason": "some reason"},
+            })
+            .to_string(),
+        ] {
+            assert!(
+                projected(&stdout).is_empty(),
+                "completed terminal without string text has no answer: {stdout}"
+            );
+            assert_eq!(
+                diagnostic(&stdout),
+                None,
+                "completed terminals yield no failure diagnostic: {stdout}"
+            );
+        }
+
+        let reason = "fallback reason";
+        let cases: [(&str, serde_json::Value, &str); 4] = [
+            (
+                "text wins over reason",
+                serde_json::json!({
+                    "payload_type": "run.terminal.failed",
+                    "payload": {"terminal": "failed", "text": "boom", "reason": reason},
+                }),
+                "Muse terminal failed: boom",
+            ),
+            (
+                "message wins over reason",
+                serde_json::json!({
+                    "payload_type": "run.terminal.failed",
+                    "payload": {"terminal": "failed", "text": "", "message": "m", "reason": reason},
+                }),
+                "Muse terminal failed: m",
+            ),
+            (
+                "string error wins over reason",
+                serde_json::json!({
+                    "payload_type": "run.terminal.failed",
+                    "payload": {"terminal": "failed", "text": "", "error": "e", "reason": reason},
+                }),
+                "Muse terminal failed: e",
+            ),
+            (
+                "error.message wins over reason",
+                serde_json::json!({
+                    "payload_type": "run.terminal.failed",
+                    "payload": {
+                        "terminal": "failed",
+                        "text": "",
+                        "error": {"message": "em"},
+                        "reason": reason,
+                    },
+                }),
+                "Muse terminal failed: em",
+            ),
+        ];
+        for (case, stdout, expected) in cases {
+            assert_eq!(
+                diagnostic(&stdout.to_string()).as_deref(),
+                Some(expected),
+                "{case}"
+            );
+        }
+    }
+}
+
 use orbit_agent::latest_assistant_message;
 
 #[test]
