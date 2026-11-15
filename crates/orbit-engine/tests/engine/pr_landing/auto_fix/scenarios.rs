@@ -4373,6 +4373,18 @@ fn auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline
     );
 }
 
+/// A legacy deferral without a not-before is a hold, even beside a newer
+/// deferral whose not-before has already passed: the legacy record governs,
+/// so the poll holds instead of reading the log again [ORB-25026].
+#[test]
+fn auto_fix_legacy_read_deferral_beside_an_expired_one_still_holds() {
+    auto_fix_table(
+        "auto_fix::auto_fix_legacy_read_deferral_beside_an_expired_one_still_holds",
+        "legacy_beside_expired",
+        throttled_log_case,
+    );
+}
+
 /// The first rerun diagnosis uses the remaining original completion
 /// deadline for its real adapter read, before any repair can be admitted.
 #[test]
@@ -4517,6 +4529,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000))
         }
         "resumed" | "typed_resume" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
+        "legacy_beside_expired" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000)),
         "persistent" => (RATE_LIMITED_LOG.to_string(), None),
         "beyond_deadline" => (format!("{RATE_LIMITED_LOG}\nRetry-After: 900"), None),
         "forbidden" => (
@@ -4549,6 +4562,33 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
     fs::write(ci.join("log-fault"), stderr).unwrap();
     if let Some(until) = until {
         fs::write(ci.join("log-fault-until"), until.to_string()).unwrap();
+    }
+    if case == "legacy_beside_expired" {
+        // A legacy note with no not-before beside a newer note whose
+        // not-before has already passed, for the same head.
+        seed_auto_fix_history_decision(
+            &host,
+            "pr_auto_fix_read_deferred",
+            &json!({
+                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                "attempt": 1, "observed_at_ms": START_MS - 120_000,
+                "reset": "unknown", "diagnostic": "legacy throttled log read",
+            }),
+            None,
+        );
+        seed_auto_fix_history_decision(
+            &host,
+            "pr_auto_fix_read_deferred",
+            &json!({
+                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                "attempt": 2, "observed_at_ms": START_MS - 60_000,
+                "not_before_ms": START_MS - 60_000, "reset": "unknown",
+                "diagnostic": "expired throttled log read",
+            }),
+            None,
+        );
     }
     if case == "resumed" || case == "typed_resume" || case == "unrelated_decision" {
         // An earlier process of this run recorded the wait and was
@@ -4686,6 +4726,34 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         .collect();
     let polls = fx.status_reads() - reads_before;
     match case {
+        "legacy_beside_expired" => {
+            let error = result.expect_err(case);
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal, .. } if *refusal == orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive),
+                "{case}: the legacy deferral holds, not a failure: {error}"
+            );
+            let error = error.to_string();
+            assert!(
+                error.contains("legacy throttled log read")
+                    && error.contains("the recorded read wait does not end before"),
+                "{case}: the legacy record governs the hold: {error}"
+            );
+            assert!(!is_check_repair(&error), "{case}: no repair: {error}");
+            assert!(waits.is_empty(), "{case}: no wait is taken: {calls:?}");
+            assert!(
+                !calls.iter().any(|call| call == "run view"),
+                "{case}: the log is not read again past the legacy hold: {calls:?}"
+            );
+            assert_eq!(
+                deferral_entries.len(),
+                2,
+                "{case}: no new deferral is recorded"
+            );
+            assert!(
+                repair_attempts(&host).is_empty(),
+                "{case}: no attempt is spent"
+            );
+        }
         "nested_base" => {
             assert!(result.is_err(), "an inherited red base remains held");
             assert_eq!(

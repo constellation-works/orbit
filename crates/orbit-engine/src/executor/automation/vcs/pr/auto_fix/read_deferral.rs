@@ -130,7 +130,7 @@ pub(in crate::executor::automation::vcs::pr) fn owed_read_wait<H: RuntimeHost + 
 ) -> Result<Option<u64>, OrbitError> {
     let Some(record) = recorded(host, auto_fix, pr_number, head)?
         .into_iter()
-        .max_by_key(|record| record.not_before_ms)
+        .max_by_key(PrAutoFixReadDeferral::effective_not_before_ms)
     else {
         return Ok(None);
     };
