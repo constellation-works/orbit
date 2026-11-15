@@ -361,8 +361,10 @@ fn requeue_names_the_held_completion_resume() {
             &newer.run_id,
             &orbit_store::contracts::JobRunStepParams {
                 step_index: 9,
-                target_type: orbit_types::workflow::JobTargetType::Activity,
-                target_id: "pr_complete".into(),
+                // Match the finalizer's appended Job diagnostic, rather than
+                // the completion activity's audit row.
+                target_type: orbit_types::workflow::JobTargetType::Job,
+                target_id: newer.job_id.clone(),
                 state: JobRunState::Held,
                 started_at: now,
                 finished_at: now,
