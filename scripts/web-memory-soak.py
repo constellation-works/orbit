@@ -597,10 +597,52 @@ def arena_like_mappings(pid: int) -> int:
 
 
 class Server:
+    def _leader_exit_without_reaping(self) -> int | None:
+        """Return the leader's exit status if it exited, else ``None``.
+
+        Uses ``WNOWAIT`` so an exited leader stays an unreaped zombie. That
+        zombie pins its process-group id until the final group signal in
+        `stop`, so the numeric id cannot be reused by an unrelated group
+        in between (STD-03 §R14).
+        """
+        try:
+            info = os.waitid(
+                os.P_PID,
+                self.process.pid,
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except (ChildProcessError, ProcessLookupError, OSError):
+            # Not waitable here (already handled elsewhere or a substituted
+            # process in a test): fall back to the cached status only. Never
+            # call poll()/wait() to find out, as those reap the leader.
+            self._leader_wait_unavailable = True
+            return getattr(self.process, "returncode", None)
+        if info is None:
+            return None
+        if info.si_code == os.CLD_EXITED:
+            return info.si_status
+        if info.si_code in (os.CLD_KILLED, os.CLD_DUMPED):
+            return -info.si_status
+        return None
+
+    def _wait_leader_without_reaping(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._leader_exit_without_reaping() is not None:
+                return
+            if getattr(self, "_leader_wait_unavailable", False):
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
+
     def __init__(self, fixture: Fixture, extra_env: dict[str, str] | None = None,
                  startup_timeout: float = 30.0):
         env = dict(fixture.env)
         env.update(extra_env or {})
+        self._stopped = False
+        self._leader_wait_unavailable = False
         self.process = subprocess.Popen(
             [
                 str(fixture.binary), "--root", str(fixture.root), "web", "serve",
@@ -644,8 +686,9 @@ class Server:
                         raise RuntimeError("dashboard did not announce its address: stdout closed")
                     if len(pending) >= 64 * 1024:
                         raise RuntimeError("dashboard did not announce its address: announcement exceeds 64 KiB")
-                if self.process.poll() is not None:
-                    raise RuntimeError(f"dashboard did not announce its address: exited {self.process.returncode}")
+                exited = self._leader_exit_without_reaping()
+                if exited is not None:
+                    raise RuntimeError(f"dashboard did not announce its address: exited {exited}")
 
     def get(self, path: str) -> dict:
         started = time.monotonic()
@@ -659,25 +702,34 @@ class Server:
 
     def stop(self) -> None:
         # The dedicated group belongs to this Server, including children that
-        # outlive its leader. Reap the leader and close the pipe on every path.
+        # outlive its leader. Signal it only while the leader is unreaped:
+        # an exited-but-unreaped leader pins the group id, so no signal here
+        # can land on a reused id (STD-03 §R14). Reap last, on every path.
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
         try:
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+                try:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                # Bounded grace, observed without reaping the leader.
+                self._wait_leader_without_reaping(timeout=5)
+            finally:
+                # Final signal: the leader is still unreaped, so the group
+                # id is still the one this Server spawned.
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         finally:
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             try:
                 self.process.wait(timeout=5)
             finally:
-                self.process.stdout.close()
+                stdout = getattr(self.process, "stdout", None)
+                if stdout is not None:
+                    stdout.close()
 
 
 def settle() -> None:

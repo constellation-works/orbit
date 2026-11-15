@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CLI edges of the dashboard memory soak that must fail before any measurement."""
 
+import importlib.util
 import json
 import os
 import signal
@@ -9,10 +10,35 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
 SOAK = ROOT / "scripts" / "web-memory-soak.py"
+
+
+def proc_identity(pid: int):
+    """Return ``(pgrp, start_time)`` for *pid* from /proc, or ``None``.
+
+    The start time is the STD-03 §R14 start identity that distinguishes a
+    live process from a later process reusing the same numeric pid.
+    """
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text()
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return None
+    try:
+        fields = text.rsplit(")", 1)[1].split()
+        return int(fields[2]), int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def load_soak():
+    spec = importlib.util.spec_from_file_location("web_memory_soak", SOAK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class WebMemorySoakCliTests(unittest.TestCase):
@@ -82,7 +108,9 @@ class WebMemorySoakCliTests(unittest.TestCase):
                     "    os.waitpid(child, 0)\n"
                     "    os._exit(0)\n"
                     "signal.signal(signal.SIGTERM, stop)\n"
-                    f"Path({str(record)!r}).write_text(json.dumps([os.getpid(), child]))\n"
+                    "def start_time(pid):\n"
+                    "    return int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19])\n"
+                    f"Path({str(record)!r}).write_text(json.dumps({{'pids': [os.getpid(), child], 'start_times': [start_time(os.getpid()), start_time(child)]}}))\n"
                     + ("os.write(1, b'http://127.0.0.1:')\n" if mode == "partial" else "")
                     + ("os.write(1, b'not an announcement\\n')\n" if mode == "invalid" else "")
                     + ("stop()\n" if mode == "exited" else "signal.pause()\n")
@@ -98,7 +126,7 @@ class WebMemorySoakCliTests(unittest.TestCase):
                 try:
                     stdout, stderr = process.communicate(timeout=10)
                     self.assertTrue(record.exists(), stdout + stderr)
-                    pids = json.loads(record.read_text())
+                    pids = json.loads(record.read_text())["pids"]
                     self.assertEqual(process.returncode, 1, stdout + stderr)
                     self.assertIn("did not announce its address", stderr)
                     if mode in ("silent", "partial"):
@@ -109,15 +137,133 @@ class WebMemorySoakCliTests(unittest.TestCase):
                     self.assertNotIn("Soak:", stdout)
                 finally:
                     # A failing candidate must not leak either the harness or
-                    # its backend (which owns a separate process group).
+                    # its backend (which owns a separate process group). The
+                    # backend group is signalled only while its recorded
+                    # start identity still matches: after the pids above are
+                    # verified absent (or the id was reused) there is nothing
+                    # owned left to signal (STD-03 §R14).
                     if record.exists():
                         try:
-                            os.killpg(json.loads(record.read_text())[0], signal.SIGTERM)
-                        except ProcessLookupError:
+                            data = json.loads(record.read_text())
+                            leader = data["pids"][0]
+                            identity = proc_identity(leader)
+                            if identity is not None and identity == (leader, data["start_times"][0]):
+                                os.killpg(leader, signal.SIGTERM)
+                        except (ProcessLookupError, KeyError, TypeError, ValueError):
                             pass
                     if process.poll() is None:
                         os.killpg(process.pid, signal.SIGKILL)
                     process.communicate(timeout=5)
+
+
+class _RecordingStdout:
+    def __init__(self, events):
+        self.events = events
+
+    def close(self):
+        self.events.append("stdout-close")
+
+
+class _FakeProcess:
+    """Leader whose exit (returncode set) is decoupled from reaping.
+
+    ``wait``/``poll`` are the reaping operations, as on ``Popen``; a
+    recording ``killpg`` sets the exit status on SIGTERM without reaping,
+    mirroring a leader that died but is still an unreaped zombie.
+    """
+
+    def __init__(self, events, pid=987_654, stdout=None):
+        self.events = events
+        self.pid = pid
+        self.returncode = None
+        self.reaped = False
+        self.stdout = stdout if stdout is not None else _RecordingStdout(events)
+
+    def wait(self, timeout=None):
+        self.events.append("wait")
+        self.reaped = True
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def poll(self):
+        self.events.append("poll")
+        self.reaped = True
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+class ServerOwnershipTests(unittest.TestCase):
+    """Deterministic signal/reap ordering through the Server boundary.
+
+    No real process is signalled and no pid churn or load is used: a fake
+    leader records whether it had been reaped at each group signal.
+    """
+
+    def make_server(self, soak, fake):
+        server = object.__new__(soak.Server)
+        server.process = fake
+        server._stopped = False
+        server._leader_wait_unavailable = False
+        return server
+
+    def recording_killpg(self, fake, events):
+        def killpg(pgid, sig):
+            events.append((sig, fake.reaped))
+            if sig == signal.SIGTERM and fake.returncode is None:
+                fake.returncode = 0
+
+        return killpg
+
+    def test_stop_signals_group_before_reaping_leader(self):
+        soak = load_soak()
+        events = []
+        fake = _FakeProcess(events)
+        server = self.make_server(soak, fake)
+        with mock.patch("os.killpg", self.recording_killpg(fake, events)):
+            server.stop()
+            server.stop()
+        signals = [entry for entry in events if isinstance(entry, tuple)]
+        self.assertEqual(
+            signals,
+            [(signal.SIGTERM, False), (signal.SIGKILL, False)],
+            f"every group signal must precede reaping: {events}",
+        )
+        self.assertNotIn("poll", events)
+        self.assertEqual(events.count("wait"), 1, events)
+        self.assertLess(events.index("wait"), events.index("stdout-close"))
+        self.assertTrue(fake.reaped)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "announcement uses /proc-era waitid")
+    def test_announcement_does_not_reap_before_constructor_cleanup(self):
+        soak = load_soak()
+        events = []
+        read_fd, write_fd = os.pipe()
+        fake = _FakeProcess(events, stdout=os.fdopen(read_fd, "rb"))
+        fake.returncode = 7
+        server = self.make_server(soak, fake)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "exited 7"):
+                server.announcement(timeout=5)
+            self.assertFalse(fake.reaped, events)
+            self.assertNotIn("poll", events)
+            self.assertNotIn("wait", events)
+            with mock.patch("os.killpg", self.recording_killpg(fake, events)):
+                server.stop()
+        finally:
+            os.close(write_fd)
+            if not fake.reaped:
+                try:
+                    fake.stdout.close()
+                except Exception:
+                    pass
+        signals = [entry for entry in events if isinstance(entry, tuple)]
+        self.assertEqual(
+            signals,
+            [(signal.SIGTERM, False), (signal.SIGKILL, False)],
+            f"constructor cleanup must signal before reaping: {events}",
+        )
 
 
 if __name__ == "__main__":
