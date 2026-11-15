@@ -336,8 +336,9 @@ function liveAgentStats(live) {
 }
 
 // The live window: pilots, recovery and reviewers running now. A payload
-// without those counts shows no figures. The approval line under them stays.
-// Empty when no auto window is live.
+// without those counts shows no figures. The approval line under them stays
+// for holds the figures do not already count. Empty when no auto window is
+// live.
 function autoDrainWindow(payload) {
   const { phase, pulling } = autoDrainPhase(payload);
   if (pulling || phase === "idle") return null;
@@ -504,10 +505,13 @@ function autoDrainQueuedCancel(payload, runId) {
 
 // Whether the live window was started with approve-proposed, and what its
 // passes have done so far. The payload's `approvals` reports the status
-// drain's own input; findings live on each task.
+// drain's own input; findings live on each task. The `pilot_running` hold is
+// left out: the live-agent figures above already count running pilots, so
+// listing it again would duplicate that row from a different count source.
 function autoDrainApprovals(approvals) {
   if (!approvals || approvals.enabled !== true) return null;
-  const reasons = Object.entries(approvals.held_by_reason || {});
+  const reasons = Object.entries(approvals.held_by_reason || {})
+    .filter(([reason]) => reason !== "pilot_running");
   return {
     reasons,
   };
