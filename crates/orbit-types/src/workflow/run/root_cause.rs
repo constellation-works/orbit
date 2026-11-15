@@ -29,8 +29,9 @@ use super::agent_blocker::{TASK_BLOCKED_BY_AGENT_ERROR_CODE, is_task_blocked_by_
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
 use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
 use super::state::{
-    OWNER_SIGNOFF_REQUIRED_ERROR_CODE, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE,
-    PROVIDER_UNAVAILABLE_ERROR_CODE, is_owner_signoff_required, is_provider_limit,
+    FOOTPRINT_UNAVAILABLE_ERROR_CODE, OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
+    PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE, PROVIDER_UNAVAILABLE_ERROR_CODE,
+    is_footprint_unavailable, is_owner_signoff_required, is_provider_limit,
 };
 use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 
@@ -107,6 +108,11 @@ pub enum HeldFailure {
     OwnerSignoffRequired,
     /// A typed fail-closed delivery decision left its candidate parked.
     DeliveryRefused(DeliveryRefusal),
+    /// A resumed published delivery's deferred footprint was still held by
+    /// another task when its wait expired. No editor started and the
+    /// published candidate was not judged; the task returns to admission
+    /// and a later run retries once the locks clear.
+    FootprintUnavailable,
 }
 
 impl HeldFailure {
@@ -131,7 +137,12 @@ impl HeldFailure {
         }
         // [ORB-23956] Recorded owner approval is still missing. The run holds
         // and the declared message stays the reason.
-        is_owner_signoff_required(error_code, message).then_some(Self::OwnerSignoffRequired)
+        if is_owner_signoff_required(error_code, message) {
+            return Some(Self::OwnerSignoffRequired);
+        }
+        // Keyed on the typed code alone: the run-stopped refusal from the
+        // same footprint wait shares its message prefix and is not a hold.
+        is_footprint_unavailable(error_code, message).then_some(Self::FootprintUnavailable)
     }
 
     /// [`Self::of`] for an owner-local run, where capacity, usage limits and
@@ -170,6 +181,7 @@ impl HeldFailure {
             Self::ProviderCapacity => PROVIDER_CAPACITY_ERROR_CODE,
             Self::ProviderUnavailable => PROVIDER_UNAVAILABLE_ERROR_CODE,
             Self::DeliveryRefused(refusal) => refusal.error_code(),
+            Self::FootprintUnavailable => FOOTPRINT_UNAVAILABLE_ERROR_CODE,
         }
     }
 

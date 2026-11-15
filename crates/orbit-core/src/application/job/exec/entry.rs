@@ -365,6 +365,11 @@ impl OrbitRuntime {
                     refusal @ orbit_engine::DispatchError::DeliveryRefused { .. } => {
                         dispatch_error_to_orbit(refusal)
                     }
+                    // Keep the typed footprint code so finalization holds
+                    // the run instead of failing it.
+                    hold @ orbit_engine::DispatchError::FootprintUnavailable(_) => {
+                        dispatch_error_to_orbit(hold)
+                    }
                     other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
                 });
 

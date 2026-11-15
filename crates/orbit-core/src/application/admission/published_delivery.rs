@@ -179,7 +179,10 @@ impl OrbitRuntime {
             };
             let elapsed = started.elapsed();
             if elapsed >= wait {
-                return Err(OrbitError::Execution(format!(
+                // Typed so finalization holds the run for a later admission
+                // instead of failing it; the run-stopped refusal below stays
+                // an ordinary execution failure.
+                return Err(OrbitError::FootprintUnavailable(format!(
                     "footprint_unavailable: `{activity_name}` may edit the resumed published \
                      delivery only once its context locks are free, and after {}s they are \
                      still held: {}",

@@ -34,6 +34,9 @@ pub(in crate::activity_job::job_executor) enum UnrepairableFailure {
     BlockedByAgent,
     /// An Orbit upgrade refused the step's agent.
     UpgradePending,
+    /// A resumed published delivery's deferred footprint stayed held past
+    /// its wait; no editor started.
+    FootprintUnavailable,
 }
 
 /// The unrepairable class a step failure carries, if any.
@@ -75,6 +78,8 @@ pub(in crate::activity_job::job_executor) fn unrepairable_failure(
         Some(UnrepairableFailure::OwnerRouteUnavailable)
     } else if orbit_types::workflow::is_owner_signoff_required(error_code, message) {
         Some(UnrepairableFailure::OwnerSignoffRequired)
+    } else if orbit_types::workflow::is_footprint_unavailable(error_code, message) {
+        Some(UnrepairableFailure::FootprintUnavailable)
     } else {
         None
     }

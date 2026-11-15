@@ -79,8 +79,9 @@ pub(super) fn run_admitted_step(
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
         Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
         Err(
-            error
-            @ (DispatchError::ForgeUnavailableHold(_) | DispatchError::DeliveryRefused { .. }),
+            error @ (DispatchError::ForgeUnavailableHold(_)
+            | DispatchError::DeliveryRefused { .. }
+            | DispatchError::FootprintUnavailable(_)),
         ) => ("held", Some(error.to_string())),
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))

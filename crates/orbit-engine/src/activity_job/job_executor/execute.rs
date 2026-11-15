@@ -338,6 +338,11 @@ pub fn execute_job_with_resume(
             // A parked delivery already recorded its stop. Neither repair nor
             // failure handoff may change its task or candidate on this run.
             Err((error @ DispatchError::DeliveryRefused { .. }, _, _)) => return Err(error),
+            // The deferred footprint stayed held past its wait and no editor
+            // started: the published candidate is exactly as adopted, so
+            // neither final recovery nor the failure handoff may touch it.
+            // Finalization holds the run for a later admission.
+            Err((error @ DispatchError::FootprintUnavailable(_), _, _)) => return Err(error),
             Err((error, unsuccessful, failure_code)) => {
                 let verdict = attempt_final_recovery(
                     job,

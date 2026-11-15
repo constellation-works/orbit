@@ -88,6 +88,8 @@ mod final_recovery_cards;
 mod final_recovery_mechanical;
 mod fixture_template;
 mod flaky_validation;
+#[cfg(unix)]
+mod footprint_hold;
 mod forecast_accuracy;
 mod forge_hold_resume;
 mod friction_stats_observation;

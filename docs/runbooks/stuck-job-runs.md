@@ -1293,6 +1293,13 @@ repairing a conflicting re-application, a reviewer fix, and step, conflict or
 check repair. Read-only reviewers and the final-recovery decision do not wait.
 If the locks stay held for the gate's wait (`max_wait_seconds`, default one
 hour), the agent is refused with `footprint_unavailable`, naming the holders.
+That refusal is a hold, not a failure: no editor started, so the run ends
+`held` under the `footprint_unavailable` code, the published branch and pull
+request are untouched, and the task returns to the backlog
+(`footprint_unavailable_requeued`) for a later admission once the holders
+release. Nothing needs an operator unless the same holders keep the locks
+across admissions. A run that stops while it waits is different: its refusal
+(`run stopped while … waited`) carries no code and still fails.
 Another resumed run that still waits for its own footprint holds no file and is
 no holder, so two overlapping resumed runs take the footprint one after the
 other instead of refusing each other; the run that took it excludes the other
