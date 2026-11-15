@@ -317,6 +317,39 @@ An already registered source identity cannot be changed through `workspace init 
 If the checkout's origin names a different repository, use the explicit audited rebind
 workflow below. No workspace removal is needed for first binding or a repository move.
 
+### Move a local checkout directory
+
+Stop the workspace's runs, settle execution and pulled claims, release workspace
+claims and path reservations, and remove retained Orbit-managed worktrees before
+moving a registered checkout. Then move the entire repository, including `.git`
+and `.orbit`, and rebind this host from any directory:
+
+```bash
+mv /old/checkout /new/checkout
+orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --dry-run --json
+orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --json
+cd /new/checkout
+orbit workspace show --json
+orbit tool run orbit.task.list --input '{}'
+```
+
+The command supports owner and replica checkouts, retaining their role and owner.
+It validates the primary Git root, registered origin (equivalent SSH and HTTPS URLs
+are accepted), and the existing `.orbit/config.yaml` task-store identity. It
+refuses targets claimed by another workspace and leaves the registry unchanged on
+validation failures. It never moves files or changes the source remote. External
+Orbit data roots are refused; this workflow moves a checkout-local `.orbit`.
+
+Only this host's checkout paths and the corresponding task-registry checkout
+projection change. Logical workspace records, task bundles, publication settings,
+and other hosts stay as they were. Both catalog paths are saved together under
+the registry lock. A durable rebind decision precedes the catalog, task checkout,
+and audit writes. If interrupted, runtime opens refuse until the same rebind
+command finishes recovery. Completed decisions are retained under the selected
+host root's `workspace-rebinds/` directory, and successful rebinds appear in
+`orbit audit list --json`. Finish recovery before issuing another rebind. A dry
+run performs validation without writing the decision or either registry.
+
 ### Rebind the source remote after a repository move
 
 Use the source-remote command when a Git repository moves to a different owner, name, or

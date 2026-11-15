@@ -44,6 +44,7 @@ impl Commands {
                 let (subcommand, runtime_need, governed) = match &command.command {
                     WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden, false),
+                    WorkspaceSubcommand::Rebind(_) => ("rebind", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::HostReadOnly, false),
                     WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::HostReadOnly, false),
                     WorkspaceSubcommand::SourceRemote(command) => match &command.command {

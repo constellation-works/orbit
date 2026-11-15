@@ -1,0 +1,26 @@
+Rebind this host to a checkout directory the operator already moved
+
+Usage: orbit workspace rebind [OPTIONS] --path <DIR>
+
+Options:
+      --path <DIR>
+          Existing Git checkout directory after the operator moved it
+
+      --dry-run
+          Validate and report the binding without writing anything (default: apply)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Stop workspace runs and release claims before moving the directory. Remove retained Orbit-managed worktrees first. This command never moves files, changes the source remote, or changes another host. It requires the registered Git origin and .orbit identity. Repeat the same command to finish an interrupted rebind.
+
+Examples:
+  orbit --workspace <name> workspace rebind --path /new/checkout --dry-run --json
+  orbit --workspace <name> workspace rebind --path /new/checkout --json
