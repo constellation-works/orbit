@@ -261,9 +261,10 @@ impl RunDisplaySteps {
 /// persists its audit-derived steps only once the run ends, so a running run
 /// reads its trail.
 ///
-/// A detail read also consults the audit for failed recorded activities: the
-/// store keeps their readable message while the audit retains structured
-/// diagnostics. Successful recorded activities need no additional read.
+/// A run with a failed recorded activity also reads the audit, for the
+/// structured diagnostic the store does not keep; successful recorded
+/// activities need no read. Callers that list many runs (delivery attention,
+/// why-stuck) therefore read one trail per failed run they show.
 pub fn run_display_steps(
     run: &JobRun,
     audit_steps: impl FnOnce() -> Vec<RunAuditStep>,

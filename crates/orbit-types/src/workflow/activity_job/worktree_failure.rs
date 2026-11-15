@@ -13,11 +13,9 @@ pub fn worktree_failure_message(code: &str, diagnostic: &Value) -> &'static str 
         "worktree_mismatch" if reason.contains("worktree is missing") => {
             "Run failed because its worktree is missing. Restore the worktree or start a new run."
         }
-        "worktree_mismatch"
-            if diagnostic
-                .get("requested_repo_root")
-                .is_none_or(|root| root.is_null() || root.as_str() == Some("")) =>
-        {
+        // Only the no-pair refusal means the root was undeclared; other
+        // mismatches with a null repo root name their own cause below.
+        "worktree_mismatch" if reason.contains("distinct checkouts require a declared") => {
             "Run failed because no repo root was declared for its worktree. Declare matching workspace and repo roots, then retry."
         }
         "worktree_mismatch" if reason.contains("different Git checkouts") => {

@@ -40,3 +40,34 @@ fn worktree_failure_keeps_json_out_of_the_message() {
     assert_eq!(event["error_diagnostic"]["automatic_reconciliation"], false);
     assert!(!event["error_message"].as_str().unwrap().contains('{'));
 }
+
+#[test]
+fn undeclared_pair_failures_do_not_claim_a_missing_repo_root() {
+    // Without a declared pair every mismatch carries a null requested_repo_root;
+    // only the no-pair "distinct checkouts" refusal means the root was undeclared.
+    let host = StubHost {
+        calls: Mutex::new(Vec::new()),
+        respond: |_: &str, _: &Value| {
+            Err(DispatchError::WorktreeIntegrity {
+                code: "worktree_mismatch",
+                diagnostic: json!({
+                    "code": "worktree_mismatch",
+                    "reason": "registered primary root '/work/primary' is not a directory",
+                    "requested_workspace_path": "/work/candidate",
+                    "requested_repo_root": null,
+                    "automatic_reconciliation": false,
+                })
+                .to_string(),
+            })
+        },
+    };
+    let job = job_asset(json!([{"id": "implement", "spec": {
+        "type": "deterministic", "action": "missing_root", "config": {}
+    }}]));
+    let (result, _events) = run_job_resume(&job, json!({}), "undeclared-pair", &host, None);
+    let message = result.unwrap_err().to_string();
+    assert!(
+        !message.contains('{') && !message.contains('\n') && !message.contains("no repo root"),
+        "a failure whose cause is not the undeclared root must not say one was missing: {message}"
+    );
+}
