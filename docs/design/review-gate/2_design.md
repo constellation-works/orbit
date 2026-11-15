@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-11-08
+last_updated: 2026-11-15
 last_validated: 2026-11-14
 status: Implemented
 feature: review-gate
@@ -853,6 +853,23 @@ disjoint suffixed locator (`...-<suffix>.json`) so that canonical requirement
 reservation succeeds without collision. A Bubblewrap notice no such command can name
 stays on its record and keeps blocking, as does an `incomplete` report's
 uncovered deferral.
+
+Synthesis owes the run only for a deferred test the candidate can reach
+[ORB-25096] (`BubblewrapReach`). The rule is conservative: the candidate
+reaches every deferred test when it changes any path other than Markdown and
+Rust sources under a `tests` directory, or a test source whose path mentions
+a sandbox; it reaches a test when a changed test source, at the reviewed base
+or the final candidate, names the test or mentions `sandbox`, `bwrap` or
+`bubblewrap`. For an unreached test the notice is cleared with a `not owed`
+note, a reviewer-named Linux requirement that covers only that notice leaves
+`external_evidence` and its required `not_run` record becomes `excluded`, and
+no hold is raised. A workspace `host_evidence` rule owing the same check
+keeps it owed. The chosen option was (b) of ORB-25096 — not owing what the
+diff cannot reach — rather than reading hosted check runs into settlement or
+routing the delivery to a capable host: a host without user namespaces can
+never fulfil the hold, and the pull request's required checks still run the
+test on the candidate before landing, while a diff that touches sandbox code
+keeps requiring real execution evidence.
 
 A broader required run can defer the very tests the reviewer names [ORB-17043].
 `cargo test -p <crate> --test <target> <module>` passes with a

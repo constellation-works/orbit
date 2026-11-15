@@ -345,6 +345,38 @@ pub fn path_blob_at(
     }))
 }
 
+/// [ORB-25096] The content of the repository-relative `path` in `commit`,
+/// decoded lossily as UTF-8, or `None` when `commit` holds no file there.
+/// `path` is a literal pathspec, never a pattern.
+pub fn path_text_at(
+    workspace_path: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(blob) = path_blob_at(workspace_path, commit, path)? else {
+        return Ok(None);
+    };
+    let args = ["cat-file", "blob", blob.as_str()];
+    let outcome = git_run_bytes(workspace_path, &args, None)?;
+    if outcome.timed_out {
+        return Err(git_timeout_error(
+            workspace_path,
+            &args,
+            outcome.timeout_ms,
+            &outcome.stderr,
+        ));
+    }
+    if !outcome.success {
+        return Err(git_failure_error(
+            workspace_path,
+            &args,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
+    }
+    Ok(Some(String::from_utf8_lossy(&outcome.stdout).into_owned()))
+}
+
 /// What a managed landing looks like against the reviewed candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedFacts {
