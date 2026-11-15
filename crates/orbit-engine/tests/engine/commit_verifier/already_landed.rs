@@ -245,11 +245,12 @@ fn claimed_commit_accepts_required_checks_with_controls_and_diagnostics() {
 
 fn claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence() {
     type Mutation = fn(&mut Value, &mut Vec<(&'static str, Value)>);
+    // Omitting a command the workspace does not require, and labelling a
+    // passing check `diagnostic`, are accepted: the agent's
+    // `required_commands` list is not the requirement. A command the
+    // workspace does require is covered in
+    // `commit_verifier_derives_already_landed_requirements_from_the_workspace`.
     let cases: &[(&str, Mutation)] = &[
-        ("missing required command", |r, l| {
-            r["validation"].as_array_mut().unwrap().remove(0);
-            l.remove(0);
-        }),
         ("duplicated required command", |r, _| {
             let check = r["validation"][0].clone();
             r["validation"].as_array_mut().unwrap().push(check);
@@ -278,9 +279,6 @@ fn claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence() {
         ("unexpected required command", |r, _| {
             r["validation"][2]["role"] = json!("required");
             r["validation"][2]["outcome"] = json!("passed");
-        }),
-        ("diagnostic cannot replace required", |r, _| {
-            r["validation"][0]["role"] = json!("diagnostic");
         }),
         ("control exited zero", |_, l| {
             l[1].1["exit_code"] = json!(0);

@@ -34,6 +34,8 @@ struct VerifierHost {
     bulk_reads: Mutex<usize>,
     pr_config: Mutex<orbit_engine::PrConfig>,
     rejected_findings: Mutex<Vec<orbit_types::workflow::handoff::FindingInvalidReport>>,
+    // `workflow.required_validation_commands`. Empty unless a case sets it.
+    required_commands: Mutex<Vec<String>>,
 }
 
 impl VerifierHost {
@@ -49,7 +51,15 @@ impl VerifierHost {
             bulk_reads: Mutex::default(),
             pr_config: Mutex::default(),
             rejected_findings: Mutex::default(),
+            required_commands: Mutex::default(),
         }
+    }
+
+    fn set_required_commands(&self, commands: &[&str]) {
+        *self.required_commands.lock().unwrap() = commands
+            .iter()
+            .map(|command| (*command).to_string())
+            .collect();
     }
 
     fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
@@ -223,6 +233,10 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
     ) -> Result<(), OrbitError> {
         self.rejected_findings.lock().unwrap().push(report.clone());
         Ok(())
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.required_commands.lock().unwrap().clone()
     }
 }
 
@@ -1916,13 +1930,165 @@ fn commit_evidence_contracts_3() {
     });
 }
 
+/// The command F2026-11-309 captured under a diagnostic label.
+const VISUAL_FIXTURE_CHECK: &str = "node --check scripts/visual-fixture-front.mjs";
+
+const LIST_EVERY_CHECK: &str =
+    "list every required workspace/task check and concrete evidence for every acceptance criterion";
+
+fn already_landed_with_checks(
+    head: &str,
+    required_commands: &[&str],
+    checks: &[(&str, &str, &str, &str, i64)],
+) -> Vec<TaskArtifact> {
+    let report = json!({
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "covering_commit": head,
+        "covering_task_id": TASK_ID,
+        "scope": {
+            "title": "Test Task",
+            "description": "",
+            "acceptance_criteria": ["Criterion 1"],
+            "plan": "",
+            "context_files": ["file:README.md"],
+            "tags": [],
+            "relations": [],
+            "required_tools": [],
+            "type": "bug",
+            "comments": []
+        },
+        "required_commands": required_commands,
+        "validation": checks.iter().map(|(command, role, outcome, path, _)| json!({
+            "command": command,
+            "role": role,
+            "outcome": outcome,
+            "log_artifact": path,
+        })).collect::<Vec<_>>(),
+        "criteria_evidence": ["The covering commit already contains the change, and the captured check passed."],
+    });
+    let mut artifacts = vec![artifact("already-landed.json", report)];
+    for (command, _, _, path, exit_code) in checks {
+        artifacts.push(artifact(
+            path,
+            json!({
+                "run_id": RUN_ID,
+                "tested_head": head,
+                "command": command,
+                "exit_code": exit_code,
+                "output": "captured output",
+            }),
+        ));
+    }
+    artifacts
+}
+
+/// F2026-11-309: the commit step refused already-landed evidence whose
+/// `required_commands` was empty, even when the workspace required nothing
+/// and the passing checks were labelled diagnostic. Requirements now come
+/// from the host. A passing log covers a required command under either
+/// label, and a missing one is refused by name.
+fn commit_verifier_derives_already_landed_requirements_from_the_workspace() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+    let input = commit_input(temp.path(), &head);
+
+    host.set_required_commands(&[]);
+    host.set_artifacts(
+        TASK_ID,
+        already_landed_with_checks(
+            &head,
+            &[],
+            &[(VISUAL_FIXTURE_CHECK, "diagnostic", "passed", "node.json", 0)],
+        ),
+    );
+    let accepted = action(&host, &input).expect(
+        "empty required_commands must be accepted when the workspace requires nothing [F2026-11-309]",
+    );
+    assert_eq!(accepted["decision"], "verified_already_landed");
+    assert_eq!(accepted["committed"], false);
+    assert_eq!(git_head(temp.path()), head);
+
+    for role in ["diagnostic", "required"] {
+        host.set_required_commands(&[VISUAL_FIXTURE_CHECK]);
+        host.set_artifacts(
+            TASK_ID,
+            already_landed_with_checks(
+                &head,
+                &[],
+                &[(VISUAL_FIXTURE_CHECK, role, "passed", "node.json", 0)],
+            ),
+        );
+        let accepted = action(&host, &input).unwrap_or_else(|error| {
+            panic!("a passed exit-0 `{role}` log must cover the workspace command, got: {error}")
+        });
+        assert_eq!(accepted["decision"], "verified_already_landed", "{role}");
+        assert!(
+            !accepted.to_string().contains(LIST_EVERY_CHECK),
+            "{role} acceptance must not be the generic list-every-check refusal"
+        );
+    }
+
+    host.set_required_commands(&[VISUAL_FIXTURE_CHECK, "make test"]);
+    host.set_artifacts(
+        TASK_ID,
+        already_landed_with_checks(
+            &head,
+            &[],
+            &[(VISUAL_FIXTURE_CHECK, "diagnostic", "passed", "node.json", 0)],
+        ),
+    );
+    let message = action(&host, &input)
+        .expect_err("a workspace command with no passing evidence must be refused")
+        .to_string();
+    assert!(
+        message.contains("already_landed_unverified")
+            && message.contains("missing required command `make test`")
+            && !message.contains(LIST_EVERY_CHECK)
+            && !message.contains(VISUAL_FIXTURE_CHECK),
+        "the refusal must name only the missing command, got: {message}"
+    );
+
+    host.set_required_commands(&[VISUAL_FIXTURE_CHECK]);
+    host.set_artifacts(
+        TASK_ID,
+        already_landed_with_checks(
+            &head,
+            &[],
+            &[(VISUAL_FIXTURE_CHECK, "diagnostic", "failed", "node.json", 1)],
+        ),
+    );
+    let message = action(&host, &input)
+        .expect_err("a failed diagnostic must not cover a required command")
+        .to_string();
+    assert!(
+        message.contains("already_landed_unverified")
+            && message.contains(&format!(
+                "missing required command `{VISUAL_FIXTURE_CHECK}`"
+            ))
+            && !message.contains(LIST_EVERY_CHECK),
+        "the refusal must name the missing command, got: {message}"
+    );
+    assert_eq!(git_head(temp.path()), head);
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn commit_evidence_contracts_4() {
     crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_4", || {
-        crate::git_fixture::run_scenarios(&[(
-            "owner_delivery_refuses_nested_repos_and_never_runs_their_filters",
-            owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
-        )]);
+        crate::git_fixture::run_scenarios(&[
+            (
+                "owner_delivery_refuses_nested_repos_and_never_runs_their_filters",
+                owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
+            ),
+            (
+                "commit_verifier_derives_already_landed_requirements_from_the_workspace",
+                commit_verifier_derives_already_landed_requirements_from_the_workspace,
+            ),
+        ]);
     });
 }
