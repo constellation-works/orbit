@@ -634,7 +634,8 @@ export function renderTasks(tasks, context) {
   }
   // Under All workspaces each status section reads workspace by workspace,
   // in picker order. The sort is stable, so one workspace's rows keep their
-  // order; /api/tasks/all already cuts pages in this order.
+  // order. /api/tasks/all still cuts its pages in /api/workspaces order; this
+  // sort only regroups the rows it returned.
   if (aggregate) {
     for (const group of groups.values()) {
       group.sort((a, b) => workspacePickerIndex(a.workspace_id) - workspacePickerIndex(b.workspace_id));

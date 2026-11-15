@@ -1,9 +1,9 @@
 // Host switcher [ORB-14680]: show another registered host's dashboard through
 // the serving host's `/api/on/<host>/…` forward.
 //
-// The picker sits above the workspace picker and lists the serving host first,
-// then the remotes of its host file (`/api/hosts?probe=false`, so opening it
-// never probes). `?host=` names the selection; with none, the last choice this
+// The picker sits above the workspace picker and lists every host alphabetically
+// by name, the serving host among them, from `/api/hosts?probe=false` (so opening
+// it never probes). `?host=` names the selection; with none, the last choice this
 // browser made is used while that host is still registered. The selected
 // host's state is read from `/api/hosts/<host>/connection` when it is selected
 // and on each refresh. A host that cannot be shown replaces every panel with
@@ -11,6 +11,8 @@
 // common.js owns the selection and rewrites every API path for it.
 
 import {
+  compareDisplayNames,
+  compareIds,
   el,
   fetchJson,
   findRegisteredHost,
@@ -150,18 +152,20 @@ function buildPicker() {
   // share a prefix and suffix (STD-07 §R32). The native select stays
   // compact when closed because its rail-constrained width clips the
   // selected text (STD-07 §R37); the option value is the same full name.
-  const servingOption = el("option", { text: servingName });
-  servingOption.value = "";
-  select.appendChild(servingOption);
+  // Every host, the serving host included, is listed alphabetically by name.
+  // The serving host's option keeps the empty value.
+  const choices = [{ name: servingName, value: "" }];
   for (const row of getRegisteredHosts()) {
     if (row.local) continue;
-    const option = el("option", { text: row.name });
-    option.value = row.name;
-    select.appendChild(option);
+    choices.push({ name: row.name, value: row.name });
   }
   if (current && !findRegisteredHost(current)) {
-    const option = el("option", { text: `${current} (not registered)` });
-    option.value = current;
+    choices.push({ name: current, value: current, text: `${current} (not registered)` });
+  }
+  choices.sort((left, right) => compareDisplayNames(left.name, right.name) || compareIds(left.value, right.value));
+  for (const choice of choices) {
+    const option = el("option", { text: choice.text || choice.name });
+    option.value = choice.value;
     select.appendChild(option);
   }
   select.value = current || "";

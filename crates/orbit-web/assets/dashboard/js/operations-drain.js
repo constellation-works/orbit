@@ -1,4 +1,4 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
+import { captureWorkspaceVisit, compareWorkspacePickerOrder, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
@@ -109,9 +109,9 @@ function chooseBoardHost(workspaceId, host) {
 function boardHostName() {
   return getHost() || getServingHost()?.name || "";
 }
-// The selected host's owned workspaces, in alphabetical order. All workspaces
-// is the whole aggregate board, so the Tasks chip filter does not narrow this
-// select. Replicas are never in the catalog.
+// The selected host's owned workspaces, in picker order (alphabetical by the
+// name shown). All workspaces is the whole aggregate board, so the Tasks chip
+// filter does not narrow this select. Replicas are never in the catalog.
 function aggregateWorkspaceOptions(fleet) {
   const names = new Map();
   for (const row of fleet?.items || []) {
@@ -120,7 +120,7 @@ function aggregateWorkspaceOptions(fleet) {
   return workspaceCatalogEntries()
     .filter(workspace => workspace.status === "active" && workspace.id)
     .map(workspace => ({ id: workspace.id, name: names.get(workspace.id) || workspaceDisplayName(workspace.id) || workspace.id }))
-    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    .sort(compareWorkspacePickerOrder);
 }
 // The hosts that can show this workspace's drain, each with its role: the
 // owner first, then the follower hosts holding a replica of it. A fleet row
