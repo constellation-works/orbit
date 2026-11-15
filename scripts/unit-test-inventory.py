@@ -179,9 +179,10 @@ def over_baseline(current, baseline_crates):
             comparison = "above" if counts["test_functions"] > len(admitted) else "with tests outside"
             failures.append(
                 f"unit-test ratchet: {name} has {counts['test_functions']} unit-test functions "
-                f"under crates/{name}/src, {comparison} its baseline of {len(admitted)}. Admit the new tests "
-                "under docs/design-patterns/test_strategy.md, then raise the baseline in the same "
-                "change: scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json\n"
+                f"under crates/{name}/src, {comparison} its baseline of {len(admitted)}. New unit tests "
+                "must satisfy the workspace guide's test rules (regression checks at a public CLI/API "
+                "boundary; no private-function tests) before the baseline is raised: "
+                "scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json\n"
                 + "\n".join(f"  unadmitted: {identity}" for identity in sorted(unadmitted.elements()))
             )
     return failures

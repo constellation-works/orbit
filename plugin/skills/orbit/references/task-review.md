@@ -43,6 +43,8 @@ For a diff that changes something a user sees (dashboard, web pages, docs site, 
 
 **Stage 2 — quality**, only once stage 1 passes: maintainability, patterns, performance, test-coverage gaps, risks, edge cases, security.
 
+A diff that raises a unit-test identity baseline must show each new test exercises a public boundary under the repository's guide; check every baseline-admitted new unit test against the repository guide's test rules (regression checks at a public CLI/API boundary; no private-function tests), and report a private-seam test as a finding.
+
 ## Record findings
 
 One finding per distinct issue, citing `path:line` when location-specific:
