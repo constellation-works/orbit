@@ -3,8 +3,8 @@ summary: "Lexical task search using SQLite FTS5 BM25."
 type: design
 title: "Task Search — Overview"
 owner: codex
-last_updated: 2026-11-04
-last_validated: 2026-11-11
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Implemented
 stage: shipped
 next: "—"
@@ -30,7 +30,7 @@ and a rebuild restores search coverage after an import or restore.
 
 `orbit-search` owns a regenerable SQLite index of task text. Task mutations
 synchronously replace the title, description, acceptance criteria, plan, and
-execution summary chunks. That includes claim-backed evidence writes: a
+execution summary chunks. That includes claim-backed evidence writes ([ORB-24482]): a
 committed claim mutation (a worker update, an evidence or settlement write, an
 accepted handoff, and any deferred branch observation it lands in the same
 commit) re-indexes its task from the settled row before returning, so the
@@ -40,7 +40,7 @@ nothing and leaves the index untouched, and tasks whose text did not change
 retain the indexed fast path with no bundle-document reads. A write that cannot
 read the settled row indexes task fields only and records that coverage even when
 its chunks are unchanged, so the fast path falls back to bundle reads until a
-sidecar-aware write covers the task again. Paragraph-first word chunks are bounded to 256 words;
+sidecar-aware write covers the task again ([ORB-24636]). Paragraph-first word chunks are bounded to 256 words;
 long paragraphs overlap by 32 words. SQLite triggers maintain the external-content
 `corpus_fts` table over `chunks`. Each task replacement and a complete task rebuild
 are transactional. Failed incidental writes leave the task authoritative and
@@ -80,7 +80,7 @@ All rows describe landed behavior at the current integration checkout.
 
 | Concern | Current source | Task |
 |---------|----------------|------|
-| Lexical index, transactional replacement/rebuild, chunking and legacy-schema migration | [lexical/](../../../crates/orbit-search/src/lexical/) | [ORB-12742] removed the semantic stack and retained lexical search |
+| Lexical index, transactional replacement/rebuild, chunking and legacy-schema migration | [lexical/](../../../crates/orbit-search/src/lexical/) | [ORB-12742] removed the semantic stack and retained lexical search; [ORB-24482] kept search current after claim-transaction evidence writes; [ORB-24636] recorded sidecar coverage on unchanged-text writes |
 | Ranked task candidates, bundle supplementation and partial-match labels | [search/candidates.rs](../../../crates/orbit-core/src/application/search/candidates.rs) | [ORB-14596] added partial matches; [ORB-14790] bounded their scan |
 | Workspace-scoped fan-out and interleaving | [search/federated.rs](../../../crates/orbit-core/src/application/search/federated.rs) | [ORB-11027] delivered federated search |
 | Reindex and unified task/friction search entry points | [search/runtime.rs](../../../crates/orbit-core/src/application/search/runtime.rs) | [ORB-12742] retained the lexical query and rebuild surfaces |
@@ -93,5 +93,7 @@ All rows describe landed behavior at the current integration checkout.
 - [ORB-14596] — added partial task matches and accurate per-kind query notes.
 - [ORB-14790] — bounded the partial-match scan without changing full-match priority.
 - [ORB-15942] — derived the search CLI and tool surfaces from the operation registry.
+- [ORB-24482] — kept task search current after claim-transaction evidence writes.
+- [ORB-24636] — recorded sidecar coverage on unchanged-text writes so the indexed fast path stays sound.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

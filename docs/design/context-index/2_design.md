@@ -1,8 +1,8 @@
 ---
 title: "Context Index — Design"
 owner: claude
-last_updated: 2026-11-14
-last_validated: 2026-11-14
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Draft
 feature: context-index
 doc_role: design
@@ -15,7 +15,7 @@ related_artifacts: [ORB-24844, ORB-24851, ORB-24861, ORB-24864]
 
 # Context Index — Design
 
-This document specifies the context index introduced in [1_overview.md](./1_overview.md): what it indexes, how it scores, where it lives, who reads it, and how it is evaluated before anything is wired. Nothing here is built, and this document files no task. It was written for [ORB-24844], revised by [ORB-24851] and [ORB-24861], and corrected by [ORB-24864] where it said the history index holds line lengths. Sections 1 to 8 are the design; §9 answers the eight recommendations of [ORB-24844] one by one; §10 and §11 are the two evaluations; §13 and §14 are the build order, the decisions Daniel has made and the questions still open; §15 holds one idea that is deferred and is not part of what is built.
+This document specifies the context index introduced in [1_overview.md](./1_overview.md): what it indexes, how it scores, where it lives, who reads it, and how it is evaluated before anything is wired. Nothing here is built, and this document files no task. It was written for [ORB-24844], revised by [ORB-24851] and [ORB-24861], and corrected by [ORB-24864] and [ORB-24867] where it said the history index holds line lengths. Sections 1 to 8 are the design; §9 answers the eight recommendations of [ORB-24844] one by one; §10 and §11 are the two evaluations; §13 and §14 are the build order, the decisions Daniel has made and the questions still open; §15 holds one idea that is deferred and is not part of what is built.
 
 The revisions record two decisions and specify two options. The decisions: the index is built in the orbit-graph plugin (§1.1, §14), and its first version is built from words only (§14.1). The options, each built as an option of the plugin's `word_index` ranking variant:
 
@@ -503,7 +503,7 @@ What replay does not measure: the pilot (replay starts after it) and collisions 
 
 ## 12. Concerns & Honest Limitations
 
-- **It may not work.** No measurement yet shows that task wording predicts files in this repository. The plugin's recorded recommendation cohort is small and claims nothing. That is why tasks 2 to 5 of §13 build only what the evaluation needs.
+- **It may not work.** A throwaway offline measurement, [ORB-24866], now shows task wording predicting files only weakly in this repository: the best word-index variant reached recall@10 0.217, against 0.415 for paths written in the task text, and [ORB-24898] recovered only part of the candidate-pool headroom with an LLM reranker. That measurement was not the plugin evaluation of §10, so gates G1 to G4 are still unread. That is why tasks 2 to 5 of §13 build only what the evaluation needs.
 - **Symbol evidence is thin.** In one recorded orbit-graph evaluation case, 92 of 98 changed symbols were added by the delivery and did not exist beforehand. Symbols that exist and are edited repeatedly are the minority, so symbol granularity, the posting weights and the symbol boost may all show no effect. `presence` with `b = 1` is an acceptable outcome, and §10.1 measures the added share over the whole dataset before anything is concluded from one case.
 - **Line counts are a rough measure of change.** A reformatting, a moved block or a renamed variable changes many lines and little meaning, and both line-based weights read it as a large change. A symbol the commit renamed or moved to another file is recorded as one deleted symbol and one added one (§2.4), so at `added_weight` 0 its new name starts with no history. Neither is corrected; `presence` is immune to the first and is the comparison.
 - **The options multiply what is fitted.** Two options and their parameters are chosen on eight weeks of one workspace. G4 keeps a setting only on held-out evidence and returns to the baseline otherwise.
@@ -650,6 +650,9 @@ The first version's evaluation (§10). Daniel's instruction is to see how the si
 - [ORB-24851] — recorded the orbit-graph decision and specified the posting-weight and added-versus-modified options, and the type-and-tag option that §15 now defers
 - [ORB-24861] — recorded the decision to leave tags and task type out of the first version and moved that material to §15
 - [ORB-24864] — corrected the claim that the history index holds line lengths (§1.1, §2.4) and added the schema extension and backfill to task 2 (§13)
+- [ORB-24867] — corrected the remainder length to derive from `named_symbol_covered_lines` in the extended history index (§1.1, §2.4, §5.4, §6, §13)
+- [ORB-24866] — measured the word index offline in throwaway scripts, finding it weak against paths written in the task text (§12)
+- [ORB-24898] — trialled an LLM reranker over the [ORB-24866] candidate pool (§12)
 - [ORB-24839] — designed the eval-harness plugin and its replay job, which §11 uses and extends with selector conditions
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

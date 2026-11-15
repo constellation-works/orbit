@@ -1,8 +1,8 @@
 ---
 title: "Eval Harness — Design"
 owner: claude
-last_updated: 2026-11-14
-last_validated: 2026-11-14
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Draft
 feature: eval-harness
 doc_role: design
@@ -15,7 +15,7 @@ related_artifacts: [ORB-24839]
 
 # Eval Harness — Design
 
-This document designs the `eval` plugin described in [1_overview.md](./1_overview.md). Nothing in it is built: every "the plugin does" below is a proposal, and every statement about existing behaviour cites the code it was read from at commit `35df669d0`. It follows the eight points of [ORB-24839] and says where it departs from the orchestrator's starting view. The build order (§13) and the open questions for Daniel (§14) close the document; no implementation task has been filed.
+This document designs the `eval` plugin described in [1_overview.md](./1_overview.md). Nothing in it is built: every "the plugin does" below is a proposal, and every statement about existing behaviour cites the code it was read from at commit `35df669d0`. It follows the eight points of [ORB-24839] and says where it departs from the orchestrator's starting view. It was corrected by [ORB-24885], [ORB-24886], [ORB-24896] and [ORB-24887]. The build order (§13) and the open questions for Daniel (§14) close the document; no implementation task has been filed.
 
 **Departures from the starting view, in one place:**
 
@@ -534,6 +534,9 @@ Not filed. Each line is one implementation task: outcome, then what it depends o
 ## Task References
 
 - [ORB-24839] — wrote this design; it changes no code or configuration and files no implementation task.
+- [ORB-24885] — corrected the replay job so it does not end with `task_complete` for a candidate never marked review (§4, §8)
+- [ORB-24886] — restored the separator in arm and eval-set placeholder syntax (§2, §11)
+- [ORB-24896] — corrected completion authorization so a job defaulting `completion: done` cannot grant it to replay runs (§5.1, §8)
 - [ORB-24887] — corrected the OS rule for candidate construction, so a candidate carries exactly `os:linux` and never a copied `os:` tag from another host (§1.3, §3.1, §3.3, §4, §6.1, §8.1, §8.2, §9).
 - [ORB-20006] — implemented the since-removed delivery-quality grader and, with it, the dispatch-time task scope blob in the run audit, the snapshot source in §3.3.
 
