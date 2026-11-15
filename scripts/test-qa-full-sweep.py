@@ -35,8 +35,13 @@ validate_npm_evidence = runpy.run_path(
 # group, start time and working directory without a subprocess, so it works
 # where `ps` is denied. The same source runs in the supervisor and in this
 # module (see _DARWIN_PROC), so both read one identity.
-_DARWIN_PROC_TABLE = r"""import ctypes, ctypes.util, errno, os, struct
+_DARWIN_PROC_TABLE = r"""import ctypes, ctypes.util, errno, os, struct, time
 _libproc = None
+# A refusal of a process that is not provably unrelated is read again this
+# many times, this far apart, before it counts: a process that is starting,
+# exiting or being replaced can refuse one read and then be gone or readable.
+DARWIN_REFUSAL_ATTEMPTS = 4
+DARWIN_REFUSAL_RETRY_SECONDS = 0.025
 # Reasons a read was refused rather than finding the process gone. A caller
 # clears it before a read and treats any entry as an unknown observation.
 DARWIN_DENIED = []
@@ -154,6 +159,18 @@ def darwin_identity(pid, with_cmdline=True):
             "state": "Z" if status == 5 else "R", "cwd": cwd,
             "cmdline": darwin_cmdline(pid) if with_cmdline else ""}
 
+def darwin_identity_settled(pid, with_cmdline=True):
+    # darwin_identity, but a refusal is read again before it stands. A read
+    # that then finds the process gone records nothing; a refusal that
+    # persists through every attempt stays recorded, so unknown stays unknown.
+    for attempt in range(DARWIN_REFUSAL_ATTEMPTS):
+        denied_before = len(DARWIN_DENIED)
+        info = darwin_identity(pid, with_cmdline)
+        if len(DARWIN_DENIED) == denied_before or attempt + 1 == DARWIN_REFUSAL_ATTEMPTS:
+            return info
+        del DARWIN_DENIED[denied_before:]
+        time.sleep(DARWIN_REFUSAL_RETRY_SECONDS)
+
 def darwin_snapshot(with_cmdline=True):
     lib = _libproc_handle()
     if lib is None:
@@ -181,11 +198,17 @@ def darwin_snapshot(with_cmdline=True):
                 # root, findable only by its unreadable identity) keeps
                 # the denial: unknown stays unknown.
                 short = _darwin_short_info(pid)
-                if (darwin_is_descendant(pid) is False
-                        and isinstance(short, dict)
-                        and short["uid"] != os.geteuid()):
+                if short is None or (darwin_is_descendant(pid) is False
+                                     and isinstance(short, dict)
+                                     and short["uid"] != os.geteuid()):
+                    # Gone between the two reads, or provably unrelated.
                     del DARWIN_DENIED[denied_before:]
                     continue
+            if len(DARWIN_DENIED) > denied_before:
+                # Not provably unrelated: read it again before the refusal
+                # makes the whole table unknown.
+                del DARWIN_DENIED[denied_before:]
+                info = darwin_identity_settled(pid, with_cmdline)
             if info is not None:
                 found[pid] = info
     return found
@@ -290,7 +313,7 @@ def identity(pid):
     # None only when the process is gone; Unreadable when the read failed.
     if sys.platform == "darwin" and not os.path.isdir("/proc"):
         DARWIN_DENIED.clear()
-        info = darwin_identity(pid)
+        info = darwin_identity_settled(pid)
         if DARWIN_DENIED:
             raise Unreadable(DARWIN_DENIED[0])
         return info
@@ -729,7 +752,7 @@ def _proc_identity(pid):
         if _DARWIN_PROC and _DARWIN_PROC["_libproc_handle"]() is not None:
             denied = _DARWIN_PROC["DARWIN_DENIED"]
             denied.clear()
-            info = _DARWIN_PROC["darwin_identity"](pid)
+            info = _DARWIN_PROC["darwin_identity_settled"](pid)
             if denied:
                 raise ProcessObservationUnavailable(f"process {pid} is unreadable: {denied[0]}")
             return info
