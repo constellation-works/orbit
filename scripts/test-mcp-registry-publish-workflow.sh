@@ -96,8 +96,7 @@ run_extracted() {
   extract_step "$step_name" "$script" || return 2
   local status=0
   (
-    # shellcheck disable=SC2164
-    cd "$workdir"
+    cd "$workdir" || exit
     env -i LANG=C LC_ALL=C HOME="$temporary_directory" TMPDIR="$temporary_directory" \
       "$@" bash "$script"
   ) >"$output_file" 2>&1 || status=$?

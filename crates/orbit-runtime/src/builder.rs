@@ -29,7 +29,7 @@ use crate::context::{
     ActorIdentity, OrbitExecutionAssets, OrbitHostStore, OrbitPolicyContext, OrbitRuntimeSettings,
     OrbitStores,
 };
-use crate::{HostLifetime, WorkspaceRuntimeBinding};
+use crate::{HostLifetime, OrbitRuntimeRoots, WorkspaceRuntimeBinding};
 use orbit_store::skill_store::SkillCatalog;
 
 /// Job-run partition used when an explicit `--root` data directory is opened
@@ -64,17 +64,17 @@ pub(crate) enum StateAccess {
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
 /// state. Local root is carried for per-worktree artifact phases.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_context_from_roots(
-    global_root: &Path,
-    workspace_root: &Path,
-    local_root: &Path,
+    roots: &OrbitRuntimeRoots,
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
     _host_lifetime: HostLifetime,
     access: StateAccess,
     task_prefix: Option<&str>,
 ) -> Result<OrbitContext, OrbitError> {
+    let global_root = roots.global_root.as_path();
+    let workspace_root = roots.shared_root.as_path();
+    let local_root = roots.local_root.as_path();
     let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
 

@@ -27,6 +27,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Shared inputs for sources that inspect one workspace in an attention query.
+pub(super) struct AttentionSourceContext<'a> {
+    pub(super) runtime: &'a OrbitRuntime,
+    pub(super) workspace: &'a AttentionWorkspace,
+    pub(super) host: &'a AttentionHost,
+    pub(super) filter: &'a AttentionFilter,
+    pub(super) now: DateTime<Utc>,
+}
+
 pub(super) struct AttentionCandidates {
     pub items: Vec<AttentionItem>,
     pub degraded: Vec<AttentionDegraded>,

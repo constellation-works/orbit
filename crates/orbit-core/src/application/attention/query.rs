@@ -220,6 +220,13 @@ pub(crate) fn attention_query(
         // One open-task listing shared by every task-backed source for
         // this workspace, loaded lazily by whichever source needs it first.
         let open_tasks = sources::SharedOpenTasks::default();
+        let source_context = sources::AttentionSourceContext {
+            runtime: selected,
+            workspace: &workspace,
+            host: &host,
+            filter: &filter,
+            now,
+        };
         let mut candidates = match sources::read_attention_sources(
             selected,
             &workspace,
@@ -249,21 +256,13 @@ pub(crate) fn attention_query(
             }
         };
         runtime_sources::read_runtime_attention(
-            selected,
-            &workspace,
-            &host,
-            &filter,
-            now,
+            &source_context,
             operator,
             &mut candidates,
             &open_tasks,
         );
         provider_sources::read_ci_attention(
-            selected,
-            &workspace,
-            &host,
-            &filter,
-            now,
+            &source_context,
             session_context,
             &mut candidates,
             &open_tasks,

@@ -67,9 +67,7 @@ impl RuntimeKernel {
         };
         Self::finish_from_context(
             builder::build_context_from_roots(
-                &roots.global_root,
-                &roots.shared_root,
-                &roots.local_root,
+                roots,
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
@@ -95,9 +93,7 @@ impl RuntimeKernel {
     ) -> Result<Self, OrbitError> {
         let mut runtime = Self::finish_from_context(
             builder::build_context_from_roots(
-                &roots.global_root,
-                &roots.shared_root,
-                &roots.local_root,
+                roots,
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
@@ -198,10 +194,13 @@ impl RuntimeKernel {
             ship_mode: ShipMode::Local,
             base_branch: None,
         };
+        let roots = OrbitRuntimeRoots {
+            global_root: data_root.to_path_buf(),
+            shared_root: workspace_root.to_path_buf(),
+            local_root: workspace_root.to_path_buf(),
+        };
         let context = builder::build_context_from_roots(
-            data_root,
-            workspace_root,
-            workspace_root,
+            &roots,
             Some(&binding),
             runtime_config,
             HostLifetime::ShortLived,
