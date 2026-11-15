@@ -163,7 +163,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     workflow-entry check
     `ensure_task_can_enter_workflow_honouring_schedule`
     (`application/task/transitions/`), which is shared by explicit ship
-    (`application/job/pipeline/submit.rs`), the gate's dispatch re-check
+    (`application/job/pipeline/submit/ship.rs`), the gate's dispatch re-check
     (`application/job/pipeline_actions/gate/admission.rs`) and worktree
     admission (`admit_task_for_workflow_as_system`, reached from
     `adapter/engine_host/runtime_host/claims.rs`). So a resumed or

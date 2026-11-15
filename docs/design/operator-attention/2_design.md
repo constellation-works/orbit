@@ -133,7 +133,7 @@ default; the keys load with a deprecation warning and are ignored until 2026-12-
 | `fanout_budget_seconds` | `20` | Outer deadline for a cross-host call |
 | `per_workspace_item_cap` | `200` | Items kept per workspace |
 
-The eight former keys are now fixed constants in code (for example `ATTENTION_CURSOR_TTL_HOURS` in `crates/orbit-common/src/governance/attention/cursor.rs` and the `ATTENTION_*` constants in `crates/orbit-core/src/application/attention/mod.rs`); [ORB-22808] left each key loading with a deprecation warning and ignored until 2026-12-08. No setting is changed by querying attention, and there is no supported `attention.<key>` readback of an effective value.
+The eight former keys are now fixed constants in code (for example `ATTENTION_CURSOR_TTL_HOURS` in `crates/orbit-common/src/governance/attention/cursor.rs` and the `ATTENTION_*` constants in `crates/orbit-core/src/application/attention/query.rs`); [ORB-22808] left each key loading with a deprecation warning and ignored until 2026-12-08. No setting is changed by querying attention, and there is no supported `attention.<key>` readback of an effective value.
 
 Slice 1 consumed cursor TTL, severity thresholds and item caps from the former settings; slices 2–4 consume the remaining fixed values for runtime, provider and fan-out behaviour.
 

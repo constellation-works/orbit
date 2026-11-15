@@ -790,7 +790,7 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
 ## Held delivery leaves are handed back to the auto-fix drain pass
 
 **Recorded:** 2026-11-09 · [ORB-23809]
-**Code anchors:** `crates/orbit-core/src/application/job/pr_repair/held.rs::handed_back_hold`, `crates/orbit-core/src/application/job/pr_repair/adoption.rs::OrbitRuntime::repair_verdict`, `crates/orbit-core/src/application/job/resume/plan.rs`
+**Code anchors:** `crates/orbit-core/src/application/job/pr_repair/held.rs::handed_back_hold`, `crates/orbit-core/src/application/job/pr_repair/adoption/verdict.rs::OrbitRuntime::repair_verdict`, `crates/orbit-core/src/application/job/resume/plan.rs`
 
 ### Context
 
