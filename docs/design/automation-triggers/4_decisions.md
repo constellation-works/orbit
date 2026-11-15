@@ -77,7 +77,7 @@ An operator adds the `readiness-waived` tag, from Readiness (**Waive readiness**
 
 ### Consequences
 
-- A tag carries the waiver, as `no-pilot` carries the pilot skip, so no task field or store migration is needed and every admission path (drain, discovery ship, readiness, forecast) reads the same predicate, `footprint_rule_applies`.
+- A tag carries the waiver, as `no-pilot` carries the pilot skip, so no task field or store migration is needed. The unknown-footprint rule in the drain and in forecast reads one predicate, `footprint_rule_applies`; the complexity gate and the readiness readout read `readiness_gaps`, which applies the same waiver.
 - Cost: a waived task with no context files can edit files another running task edits; the drain no longer protects against that conflict.
 
 ## Task References

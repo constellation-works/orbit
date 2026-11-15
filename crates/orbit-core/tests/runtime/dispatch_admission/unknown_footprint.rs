@@ -447,10 +447,9 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
             "orbit.task.update",
             json!({"id": empty_task, "model": "codex", "tags": ["readiness-waived"]}),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
     assert!(
-        refused.contains("only an operator can add `readiness-waived`"),
+        matches!(refused, orbit_core::OrbitError::CapabilityDenied(_)),
         "{refused}"
     );
     assert!(runtime.get_task(&empty_task).unwrap().tags.is_empty());
@@ -459,7 +458,10 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
         tags: vec!["readiness-waived".into()],
         ..Default::default()
     });
-    assert!(filed.is_err(), "{filed:?}");
+    assert!(
+        matches!(filed, Err(orbit_core::OrbitError::InvalidInput(_))),
+        "{filed:?}"
+    );
 
     // The operator's waiver: both are admitted with the editing task.
     for task in [&empty_task, &unassessed] {
