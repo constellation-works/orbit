@@ -88,15 +88,20 @@
 #dock-pane-fleet .panel > header { padding: 14px 18px; border-bottom: 1px solid var(--hair); }
 #fleet-drains-body { min-height: 0; overflow: auto; padding: 16px 18px 18px; }
 
-/* Keep the shared tab strip on one line even when Fleet and counts appear.
-   The log's full state and drain status remain in their accessible names and
-   tooltips when the dock only has room for a short state. */
-@container (max-width: 440px) {
-  .dock-seg { font-size: 12px; }
-  .dock-seg .dock-seg-count:not(:empty) { padding: 1px 4px; font-size: 11px; }
-  .dock-log-state { overflow: hidden; text-overflow: ellipsis; }
-  .dock-drain-state { display: none; }
-}
+/* Keep the shared tab strip on one line even when Fleet and counts appear
+   (STD-07 R39). The strip keeps its full size wherever it fits: log-tail.js
+   measures the strip's natural width against the dock head and adds
+   `dock-tabs-compact` only when the full-size strip would overflow, then
+   `dock-tabs-tight` when the shrunken strip still would. A fixed width
+   breakpoint cannot do this, because the dock's usual width fits the
+   full-size strip. The log's full state and drain status remain in their
+   accessible names and tooltips when the dock only has room for less. */
+.dock-head.dock-tabs-compact .dock-seg { font-size: 12px; }
+.dock-head.dock-tabs-compact .dock-seg .dock-seg-count:not(:empty) { padding: 1px 4px; font-size: 11px; }
+.dock-head.dock-tabs-tight .dock-seg-group { gap: 6px; }
+.dock-head.dock-tabs-tight .dock-seg { overflow: hidden; }
+.dock-head.dock-tabs-tight .dock-log-state { overflow: hidden; text-overflow: ellipsis; max-width: 64px; }
+.dock-head.dock-tabs-tight .dock-drain-state { display: none; }
 
 /* Residents dock: a toolbar (cycle routine, start), a modal start flow,
    one row per mandate with its detail under the selected row, and ended

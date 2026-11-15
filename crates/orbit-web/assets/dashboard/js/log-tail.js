@@ -167,6 +167,50 @@ function applyDockMode() {
   // CSS keeps every tab's first card at the same depth below the shared
   // chrome. Reassert alignment without anchoring it to drain-only notices.
   alignTasksDock();
+  fitDockTabs();
+}
+
+// The tab strip keeps its full size wherever it fits (STD-07 R39): shrink
+// only when the full-size strip would overflow, then drop secondary state
+// only when the shrunken strip still would. A fixed width breakpoint
+// cannot tell fitting from overflowing layouts — the same dock width fits
+// without Fleet or counts and overflows with them — so the trigger is
+// measured: the visible tabs' natural widths against the head's width.
+let dockTabFitWired = false;
+
+function dockTabStripNaturalWidth(group) {
+  const tabs = [...group.querySelectorAll(".dock-seg")].filter((tab) => !tab.hidden);
+  const gap = parseFloat(getComputedStyle(group).columnGap) || 0;
+  let width = gap * Math.max(0, tabs.length - 1);
+  for (const tab of tabs) width += tab.scrollWidth;
+  return width;
+}
+
+function fitDockTabs() {
+  const head = document.querySelector("#side-dock > .dock-head");
+  const group = $("dock-mode-toggle");
+  if (!head || !group || !group.clientWidth) return;
+  head.classList.remove("dock-tabs-compact", "dock-tabs-tight");
+  if (dockTabStripNaturalWidth(group) <= group.clientWidth) return;
+  head.classList.add("dock-tabs-compact");
+  if (dockTabStripNaturalWidth(group) <= group.clientWidth) return;
+  head.classList.add("dock-tabs-tight");
+}
+
+function wireDockTabFit() {
+  if (dockTabFitWired) return;
+  const head = document.querySelector("#side-dock > .dock-head");
+  const group = $("dock-mode-toggle");
+  if (!head || !group) return;
+  dockTabFitWired = true;
+  new ResizeObserver(fitDockTabs).observe(head);
+  // Badge and state text (counts, the log's worst level, Fleet appearing)
+  // changes the natural width without resizing the head.
+  new MutationObserver(fitDockTabs).observe(group, {
+    childList: true, subtree: true, characterData: true,
+    attributes: true, attributeFilter: ["hidden"],
+  });
+  document.fonts?.ready.then(fitDockTabs);
 }
 
 function dockModes() {
@@ -688,6 +732,7 @@ export function initLogTail() {
   wireLogPanelPreferences();
   wireLogWrapToggle();
   wireDockAlignment();
+  wireDockTabFit();
   fitLogPanelToViewport();
   syncLogFilterPills();
   loadLogSnapshot();
