@@ -15,7 +15,8 @@ For the human-facing side of the channel, read [Manager](manager.md).
 
 The deterministic observe step freezes this cycle's grant from the mandate's
 authority and hands you: the mandate and the effective authority (including
-`observe_only` and why it was narrowed), the last checkpoints, open requests
+`observe_only` and why it was narrowed), the latest checkpoint in full and up
+to four earlier summaries (cycle, outcome and at most 600 characters of notes), open requests
 with their answers, comments since the last cycle (relays arrive as
 `resident.answer` records), the wake reasons and the facts behind them,
 notices in scope quoted as untrusted data, and — for a recovery cycle — the
@@ -102,7 +103,7 @@ repeat it: a pull request that already merged settles without merging again.
 A task whose pull request is still open cannot be moved to `done` directly; the
 update answers `resident_done_pr_open`.
 Tasks you file stay `proposed` unless you hold `promote`. Name every task you
-file or dispatch in the checkpoint's `actions[]` and `notes`, so later cycles
+file or dispatch in the checkpoint's `actions[]`, so later cycles
 can find it again.
 
 ### 4. Escalate by class
@@ -153,8 +154,8 @@ End every cycle with exactly one `orbit.resident.checkpoint` call carrying
 the complete checkpoint record: your cycle and run ids, the wake reasons and
 digest from the brief, the authority you observed, `actions[]` with the
 ledger key and result of every mutating action, `decisions[]`,
-`requests[]` still open or raised, `costs[]`, `notes` (at most 2000
-characters, written for the next cycle and the human), the next planned wake,
+`requests[]` still open or raised, `costs[]`, `notes` (at most 600
+characters: only what changed this cycle and what is next), the next planned wake,
 continuity (`resumed`, `rebuilt` or `off`, carrying the brief's conversation
 reference forward when you resume), and one outcome:
 
@@ -169,6 +170,12 @@ reference forward when you resume), and one outcome:
   criterion that names this move is met by the `handoff` checkpoint. Closing a
   mandate is the human's call.
 - `ended` — the mandate was stopped or taken over for good.
+
+Keep standing state in structured fields such as `requests[]` and `decisions[]`,
+carrying it forward without retelling it in prose. Put operator asks in
+`requests[]` and the corresponding notice when supported, never a "FOR DANIEL"
+paragraph in notes. Notes are the cycle's delta, not a recurring status report.
+The brief has no older-notes tail; read task state when you need older detail.
 
 A checkpoint for a stale cycle, or a second checkpoint for the same cycle,
 is refused without writes. If you cannot checkpoint, the finalize step

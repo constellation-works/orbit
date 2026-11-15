@@ -19,7 +19,8 @@ pub const RESIDENT_CONTINUITY_REBUILT_EVENT: &str = "resident_continuity_rebuilt
 pub const RESIDENT_ACTION_EVENT: &str = "resident_action";
 /// The job a resident cycle runs as.
 pub const RESIDENT_CYCLE_JOB: &str = "resident_cycle_pipeline";
-/// Checkpoints a cycle's brief carries, newest first.
+/// Maximum checkpoint history entries in a cycle's brief: the latest in full,
+/// followed by summaries of earlier checkpoints, newest first.
 pub const RESIDENT_BRIEF_CHECKPOINTS: usize = 5;
 
 /// What the observer granted one cycle: the effective authority, narrowed to

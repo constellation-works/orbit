@@ -224,8 +224,8 @@ manager surfaces it in the next digest and `orbit attention` lists the review as
 A cycle is one run of `resident_cycle_pipeline`, a catalog job with three phases:
 
 1. **`resident_observe`** (deterministic). Takes the cycle lease (a fenced lease keyed by the
-   mandate; a held lease defers the fire). Loads the mandate, effective authority, the last *K*
-   checkpoints (default 5), open requests and their answers, the wake reasons and their facts, the
+   mandate; a held lease defers the fire). Loads the mandate, effective authority, the latest full checkpoint
+   and up to four earlier summaries, open requests and their answers, the wake reasons and their facts, the
    notices in scope, and the workspace's standing goals. Computes the cycle's tool grant
    ([§3](#3-authority)), narrowed to observe-only when a maintenance notice is open
    ([§7](#7-notices)). If the previous cycle has no checkpoint, it marks this cycle a **recovery
@@ -281,9 +281,9 @@ bounded by one floor interval. Recovery cost is measured ([§9](#9-metrics-that-
 
 **Checkpoint and resume contract.** The checkpoint carries the cycle id, the wake reasons and digest,
 actions with keys and results, decisions taken with their class and reversibility, open requests,
-cost events, a short `notes` for the next cycle, the next planned wake, and the outcome. The
+cost events, delta-only `notes` of at most 600 characters for the next cycle, the next planned wake, and the outcome. The
 `resident.request` and `resident.answer` shapes cover escalated questions and manager relays. An
-expired provider conversation reconstructs from the mandate, the authority, the last *K* checkpoints,
+expired provider conversation reconstructs from the mandate, the authority, the latest full checkpoint and bounded earlier summaries,
 open requests with answers, wake events and notices: the same brief every cycle gets. Continuity, a
 resumed conversation, is an adapter that adds context and never changes correctness. Full schemas:
 [specs/checkpoint-contract.md](./specs/checkpoint-contract.md).
@@ -339,8 +339,7 @@ publishes the live cycle and records a `resident_cycle_granted` history entry: t
 (`rights`, `workspaces`, `observe_only`, `narrowed_by`, `recovery_of`, `digest`, `reasons`). An open
 maintenance notice in a covered workspace (or the global scope) empties the rights with
 `narrowed_by: notice:<id>`; a passed deadline does the same with `narrowed_by: deadline`. An
-unreadable notice store narrows too. The brief carries the mandate, the grant, the last 5
-checkpoints, open requests, comments since the last cycle, the wake, the notices (title and body as
+unreadable notice store narrows too. The brief carries the mandate, the grant, the latest full checkpoint and up to four earlier summaries, open requests, comments since the last cycle, the wake, the notices (title and body as
 `untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
 reference arrive with [ORB-21250]. Observe also makes a detached managed checkout of the registered
 workspace's current `HEAD` for this cycle and includes its path in the brief; the job forwards that
@@ -810,7 +809,7 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
   heartbeat. Ten residents at a 2 h heartbeat cost at least 120 runs a day, before change-driven
   cycles. The cadence floor and observe-only cycles bound it, and the cost is visible in the metrics.
 - **Checkpoint comments grow the assignment's history.** A long mandate accumulates hundreds of
-  checkpoints. The brief reads only the last *K*, and the reader parses the newest ones, but the
+  checkpoints. The brief includes only the latest full checkpoint and four summaries, but the
   dashboard's comment view gets noisy. A collapsed rendering is a dashboard follow-up.
 
 ## Task References

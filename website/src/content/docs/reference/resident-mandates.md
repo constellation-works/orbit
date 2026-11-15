@@ -313,9 +313,15 @@ comment, for a cycle that is already live. It does not start a cycle.
   checkpoint for the same cycle is refused.
 - The record's `authority` field reports what the cycle observed. It grants
   nothing.
-- A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000
-  characters of notes. Action keys have the form
+- A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 600
+  characters of notes. Notes describe only what changed this cycle and what is
+  next. Keep standing state in `requests[]` and `decisions[]`, and operator asks
+  in `requests[]`/notices. Action keys have the form
   `resident:<mandate>:<cycle>:<n>`, with `<n>` a positive integer.
+
+Each cycle reads the latest checkpoint in full and up to four earlier summaries
+(cycle, outcome and at most 600 characters of notes), with no older-notes tail.
+Historical checkpoints with longer notes remain readable.
 
 ## Evolution ledger
 
