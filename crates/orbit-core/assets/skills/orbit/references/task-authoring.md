@@ -182,8 +182,10 @@ composes the subject as `<type>: <title> [<ID>]` and cuts the title at a word
 boundary, never with an ellipsis, to keep the whole subject within 72 characters
 (when cut, the full title leads the commit body). Keep titles to at most 55
 characters for a bug, 54 for a feature, 53 for a chore and 50 for a refactor,
-which is 72 minus the type's prefix and the 12-character ` [<ID>]` marker. Put
-the detail in the description, not the title.
+which is 72 minus the type's prefix and the ` [<ID>]` marker (12 characters for
+an `ORB-` id with five digits). A longer id, or the ` (#<PR>)` a squash appends,
+takes more room, so a title at the limit may still be cut at a word boundary.
+Put the detail in the description, not the title.
 
 Assign `crew` to the actual intended implementer. If you will implement the task
 personally, use your own configured crew rather than the crew you would have
