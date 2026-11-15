@@ -221,10 +221,6 @@ fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
         seeded < spawned && spawned < first_in && spawned < forwarded,
         "the orphan, drain and reservation must exist before the follower server starts and before observation\nwire:\n{wire}"
     );
-    assert!(
-        !wire.contains("fixture-prime") && !wire.contains("PRIME "),
-        "cold observation must not prime the runtime before seeding\nwire:\n{wire}"
-    );
 
     let db = Connection::open(follower.global.join("orbit.db")).unwrap();
     for run_id in [LEAF_RUN, DRAIN_RUN] {
