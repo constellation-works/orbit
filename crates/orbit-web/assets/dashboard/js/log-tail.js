@@ -6,7 +6,7 @@
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain, Fleet, Log, Notices or Residents view.
+// and `setDockMode` for the router to select the Drain, Fleet, Notices, Residents or Log view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
@@ -51,7 +51,9 @@ let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "fleet", "log", "notices", "residents"];
+// Visual order of the Tasks dock tabs. The arrow, Home and End keys walk this
+// list (wireDockModeToggle), so it must match the tablist's order in index.html.
+const DOCK_MODES = ["drain", "fleet", "notices", "residents", "log"];
 
 function loadLogPanelPrefs() {
   try {
