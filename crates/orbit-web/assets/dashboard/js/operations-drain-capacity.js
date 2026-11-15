@@ -126,7 +126,7 @@ export function autoDrainPhase(payload) {
   return { live, capacity, phase, running, label, pulling, pullLabel };
 }
 
-export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = {}) {
+export function autoDrainCapacity(capacity, counts, blocked, { pull = false, approvalSummary = null } = {}) {
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
   const free = autoDrainNumber(capacity.free_slots);
@@ -194,10 +194,12 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = 
   breakdown.classList.add("drain-capacity-hint");
   breakdown.prepend(bar);
   const result = el("div", { class: "drain-capacity" }, [breakdown]);
+  const notices = el("div", { class: "drain-notices" }, approvalSummary ? [approvalSummary] : []);
   if (summary) {
     const message = el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary });
-    result.appendChild(el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]));
+    notices.appendChild(el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]));
   }
+  if (notices.childElementCount) result.appendChild(notices);
   // One pipeline holding every slot is already in the bar's breakdown; a mix
   // is worth a visible line.
   if (pipelines.length > 1) {
