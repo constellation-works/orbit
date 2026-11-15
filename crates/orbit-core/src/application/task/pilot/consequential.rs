@@ -516,11 +516,17 @@ fn usable_subject(subject: &str) -> bool {
 /// that opens after plain text still end a sentence [ORB-25039].
 fn sentences(description: &str) -> Vec<String> {
     let lines: Vec<Line<'_>> = description.lines().map(Line::from_text).collect();
+    let table_rows = markdown_table_rows(&lines);
     let mut sentences = Vec::new();
     let mut current = String::new();
     for (index, line) in lines.iter().enumerate() {
         if index > 0 {
-            if block_boundary(&lines[index - 1], line) {
+            if block_boundary(
+                &lines[index - 1],
+                line,
+                table_rows[index - 1],
+                table_rows[index],
+            ) {
                 push_sentence(&mut current, &mut sentences);
             } else {
                 current.push(' ');
@@ -561,12 +567,56 @@ impl<'a> Line<'a> {
 
 /// Whether a line break between two lines ends the sentence. A soft break
 /// inside a paragraph, list item or blockquote does not.
-fn block_boundary(previous: &Line<'_>, next: &Line<'_>) -> bool {
+fn block_boundary(
+    previous: &Line<'_>,
+    next: &Line<'_>,
+    previous_is_table_row: bool,
+    next_is_table_row: bool,
+) -> bool {
     previous.content.is_empty()
         || next.content.is_empty()
-        || previous.content.starts_with(['|', '#'])
+        || previous_is_table_row
+        || next_is_table_row
+        || previous.content.starts_with('#')
         || opens_block(next.content)
         || (next.quoted && !previous.quoted)
+}
+
+/// Mark rows in a Markdown table whose delimiter row establishes the table.
+/// This handles both table styles with and without leading or trailing pipes.
+fn markdown_table_rows(lines: &[Line<'_>]) -> Vec<bool> {
+    let mut rows = vec![false; lines.len()];
+    for (index, line) in lines.iter().enumerate() {
+        if !is_table_delimiter_row(line.content) || index == 0 {
+            continue;
+        }
+        let header = &lines[index - 1];
+        if header.content.is_empty() || !header.content.contains('|') {
+            continue;
+        }
+        rows[index - 1] = true;
+        rows[index] = true;
+        for (row, line) in lines.iter().enumerate().skip(index + 1) {
+            if line.content.is_empty() || !line.content.contains('|') {
+                break;
+            }
+            rows[row] = true;
+        }
+    }
+    rows
+}
+
+fn is_table_delimiter_row(content: &str) -> bool {
+    let cells: Vec<_> = content
+        .split('|')
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    cells.len() >= 2
+        && cells.iter().all(|cell| {
+            let alignment = cell.trim_matches(':');
+            !alignment.is_empty() && alignment.chars().all(|character| character == '-')
+        })
 }
 
 /// A line that begins its own block: a table row, a heading or a list item.

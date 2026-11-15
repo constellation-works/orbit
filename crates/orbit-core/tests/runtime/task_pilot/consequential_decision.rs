@@ -350,6 +350,25 @@ fn omitted_subject_stops_at_table_cell_separator() {
     assert_public_hold(&workspace, &table_row, "bounded description text");
 }
 
+#[test]
+fn unprefixed_markdown_table_rows_do_not_share_resolution_cues() {
+    let workspace = Workspace::new();
+
+    let table_row = filed(
+        &workspace,
+        "Stop on any surface difference the difference table does not enumerate.\n\n\
+         Difference | Detail\n\
+         --- | ---\n\
+         The difference table omits bounded description text | unchanged\n\
+         Retry | The retry timeout retains current behavior",
+    );
+    assert_holds(
+        &assess(&workspace, &table_row, json!([])),
+        "bounded description text",
+        "separate markdown table rows must not share an unrelated resolution cue",
+    );
+}
+
 fn filed(workspace: &Workspace, description: &str) -> Task {
     workspace
         .runtime
