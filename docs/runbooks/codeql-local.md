@@ -23,13 +23,14 @@ a clean query against that database is invalid evidence.
 
 ## Prerequisites
 
-Use an existing CodeQL bundle (CLI plus Rust query packs), `rustup`, Cargo
-proxies on `PATH`, and a working Bubblewrap installation that can create its
-Linux namespaces. The owner-side fulfilment runs candidate-controlled scripts
-inside Bubblewrap, with the detached evidence checkout as the only writable
-task-controlled path. The script does not install CodeQL or global toolchains.
-Rust downloads and any Cargo dependency fetches use only the executor's granted
-network access. Start in the checkout being validated.
+For a local run, use an existing CodeQL bundle (CLI plus Rust query packs),
+`rustup`, and Cargo proxies on `PATH`. Owner-side fulfilment also requires a
+working Bubblewrap installation that can create its Linux namespaces; see
+[Owner fulfilment](#owner-fulfilment). That run executes candidate-controlled
+scripts inside Bubblewrap, with the detached evidence checkout as the only
+writable task-controlled path. The script does not install CodeQL or global
+toolchains. Rust downloads and any Cargo dependency fetches use only the
+executor's granted network access. Start in the checkout being validated.
 
 When validating a hosted alert, use the same CodeQL bundle version as the
 hosted analysis when possible. Record the local version from `codeql version`
