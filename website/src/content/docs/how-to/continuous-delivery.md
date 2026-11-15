@@ -81,7 +81,8 @@ task details under the dashboard's [Tasks view](/how-to/dashboard/#tasks).
 After you add the evidence or rewrite the criterion, run
 `orbit task repilot "$TASK_ID"`. To clear the hold from the dashboard, see
 [Clear a pilot admission hold](/how-to/dashboard/#clear-a-pilot-admission-hold).
-An operator can skip pilot admission with the `no-pilot` tag; see
+An operator can skip an ordinary pilot-admission hold with the `no-pilot`
+tag; a current host-operational hold stays. See
 [Skip pilot in Readiness](/how-to/dashboard/#skip-pilot-in-readiness).
 
 ## 2. Authorize the backlog
@@ -155,6 +156,7 @@ whose `context_files` overlap cannot run at once;
 | `pilot_assessment_stale` | The description or criteria changed after the last assessment. | [Repilot the task](#if-you-edit-a-piloted-task). |
 | `pilot_duplicate`, `pilot_already_landed` | The latest pilot assessment found duplicate or already-landed work. | Read the finding in the task comments, then repilot or [record a decision](#override-a-pilot-admission-hold). |
 | `native_os_required` | The criteria need native-host evidence this host cannot produce. | Route the task to a capable host, re-scope the criteria, or [record a decision](#override-a-pilot-admission-hold). |
+| `host_operational_handoff` | The latest pilot disposition is host-operational, and the work still matches that assessment. | Re-scope the acceptance criteria, or [record a decision](#override-a-pilot-admission-hold). Adding `no-pilot` does not release this hold. |
 | `crew_not_allowed` | A [crew restriction](#restrict-a-window-to-some-crews) excludes the task's crew. | Change the task's crew or widen the restriction. |
 | `human_crew` | The task is assigned to a [human crew](/reference/config/#human-crews), so no drain admits it. | Reassign it to an agent crew. |
 | `no_drain_tag` | The task carries `no-drain`: it ships only when you ship it explicitly, and a drain does not auto-approve it. | Remove the tag. |

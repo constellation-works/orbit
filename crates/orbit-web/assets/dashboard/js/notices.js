@@ -85,13 +85,33 @@ function noticeLink(notice) {
   return link;
 }
 
-// The Log tab's state pill: a count only while it is above zero, so an empty
-// span drops the pill. The rail button that used to carry this count is gone.
-function setDockNoticeCount(count) {
+// The Notices tab's state pill. A count only while notices are open, so an
+// empty span drops the pill. An incomplete read with nothing open says
+// "partial" instead of looking like a confirmed empty fleet.
+function setDockNoticeCount(count, reasons = []) {
   const state = $("dock-notices-state");
   if (!state) return;
   const open = Number.isFinite(count) ? count : 0;
-  state.textContent = open > 0 ? `${open} open` : "";
+  const degraded = reasons.filter(Boolean);
+  state.removeAttribute("title");
+  state.removeAttribute("aria-label");
+  if (open > 0) {
+    state.textContent = `${open} open`;
+    if (degraded.length) {
+      const detail = `${open} open in the workspaces that were read. Coverage is incomplete: ${degraded.join("; ")}`;
+      state.title = detail;
+      state.setAttribute("aria-label", detail);
+    }
+    return;
+  }
+  if (degraded.length) {
+    state.textContent = "partial";
+    const detail = `Coverage is incomplete: ${degraded.join("; ")}`;
+    state.title = detail;
+    state.setAttribute("aria-label", detail);
+    return;
+  }
+  state.textContent = "";
 }
 
 function hideNoticeBanner() {
@@ -112,9 +132,11 @@ onWorkspaceChange(() => {
 export function renderNoticeBanner(payload) {
   const banner = $("notice-banner");
   if (!banner) return;
-  setDockNoticeCount(Array.isArray(payload?.open) ? payload.open.length : 0);
+  const reasons = degradedReasons(payload);
+  const openCount = Array.isArray(payload?.open) ? payload.open.length : 0;
+  setDockNoticeCount(openCount, reasons);
   const notices = Array.isArray(payload?.banner) ? payload.banner : [];
-  if (!notices.length) {
+  if (!notices.length && !reasons.length) {
     hideNoticeBanner();
     return;
   }
@@ -130,6 +152,7 @@ export function renderNoticeBanner(payload) {
     row.dataset.hash = JSON.stringify([notice.revision, text(notice.kind), text(notice.title), text(notice.scope), ageLabel(notice, now), expiryLabel(notice, now)]);
     return row;
   });
+  if (reasons.length) rows.unshift(coverageBannerRow(reasons, notices.length > 0));
   banner.hidden = false;
   syncNodes(banner, rows);
 }
@@ -177,6 +200,45 @@ onWorkspaceChange(() => {
 
 const noticesOf = (payload, list) => (Array.isArray(payload?.[list]) ? payload[list] : []);
 const canWriteNotices = (payload) => payload?.can_write === true && !isAggregateView();
+
+// Reasons the server could not read every workspace. Only a non-empty list
+// means the payload is partial; a missing or empty array is a complete read.
+function degradedReasons(payload) {
+  if (!Array.isArray(payload?.degraded)) return [];
+  return payload.degraded.map((reason) => text(reason).trim()).filter(Boolean);
+}
+
+function coverageLead(hasNotices) {
+  return hasNotices
+    ? "Coverage is incomplete. The notices shown are only those that could be read."
+    : "Coverage is incomplete. Unread workspaces may still have notices.";
+}
+
+function coverageBannerRow(reasons, hasNotices) {
+  const lead = coverageLead(hasNotices);
+  const link = el("a", { class: "notice-banner-link", text: "Notices" });
+  link.href = "#notices";
+  const row = el("div", { class: "notice-banner-row notice-coverage-banner", role: "status" }, [
+    chip("partial", "notice-kind-partial"),
+    el("span", { class: "notice-banner-title", text: lead }),
+    el("span", { class: "notice-banner-meta", text: reasons.join(" · ") }),
+    link,
+  ]);
+  row.dataset.key = "banner-coverage";
+  row.dataset.hash = JSON.stringify([lead, ...reasons]);
+  return row;
+}
+
+function coverageNote(reasons, hasNotices) {
+  const lead = coverageLead(hasNotices);
+  const node = el("div", { class: "notice-coverage", role: "status" }, [
+    el("p", { class: "notice-coverage-lead", text: lead }),
+    ...reasons.map((reason) => el("p", { class: "notice-coverage-reason", text: reason })),
+  ]);
+  node.dataset.key = "notices-coverage";
+  node.dataset.hash = JSON.stringify([lead, ...reasons]);
+  return node;
+}
 
 // Incidents first in either list; within a severity the server's order stands.
 function severityRank(notice) {
@@ -415,17 +477,24 @@ function paintNoticeList(payload) {
   const now = Date.now();
   const open = bySeverity(noticesOf(payload, "open"));
   const recent = bySeverity(noticesOf(payload, "recent"));
-  const nodes = open.map((notice) => noticeRow(notice, canWrite, now));
+  const reasons = degradedReasons(payload);
+  const degraded = reasons.length > 0;
+  const nodes = [];
+  if (degraded) nodes.push(coverageNote(reasons, open.length + recent.length > 0));
+  nodes.push(...open.map((notice) => noticeRow(notice, canWrite, now)));
   if (!open.length) {
-    if (!recent.length) {
+    if (!recent.length && !degraded) {
       const note = el("div", { class: "panel-placeholder", text: "No notices." });
       note.dataset.key = "notices-empty";
       note.dataset.hash = "empty";
       nodes.push(note);
-    } else {
-      const note = el("div", { class: "notice-open-empty", text: "No open notices." });
+    } else if (recent.length) {
+      const copy = degraded
+        ? "No open notices in the workspaces that were read."
+        : "No open notices.";
+      const note = el("div", { class: "notice-open-empty", text: copy });
       note.dataset.key = "notices-empty-open";
-      note.dataset.hash = "empty-open";
+      note.dataset.hash = degraded ? "empty-open-partial" : "empty-open";
       nodes.push(note);
     }
   }

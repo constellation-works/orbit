@@ -131,7 +131,10 @@ that holds crews back.
 fleet notices in the selected workspaces, then those closed or expired in
 the last 24 hours. The tab shows how many are open when that number is above
 zero. `#notices` opens Tasks with this tab selected. A banner shows open
-incident and maintenance notices, and its link lands on the same tab. With
+incident and maintenance notices, and its link lands on the same tab. When a
+workspace could not be read, the dock, the tab count and the banner say the
+coverage is incomplete and keep the notices that were read. They do not
+present that partial read as an empty fleet. With
 an [operator session](#authorization) and one workspace selected, **Post**
 opens a form for a new notice and **Close** on a row asks for a reason. For
 the rules, see [Post and retire fleet notices](/how-to/fleet-notices/).
@@ -239,11 +242,18 @@ orbit task settle-merged "$TASK_ID"
 
 ### Skip pilot in Readiness
 
-A backlog task held by its pilot assessment, including a stale assessment or
-a pilot finding, shows **Skip pilot** in Readiness. Confirm it to add the
-`no-pilot` tag and proceed without a new assessment. Adding the tag after a
+A backlog task held by a stale pilot assessment, or by an ordinary pilot
+finding such as operator validation, a native-host requirement, a duplicate
+or already-landed work, shows **Skip pilot** in Readiness. Confirm it to add
+the `no-pilot` tag and proceed without a new assessment. Adding the tag after a
 pilot receipt, or while a pilot is pending, requires an operator. Remove
-`no-pilot` to restore the pilot gate.
+`no-pilot` to restore the pilot gate for those holds.
+
+A host-operational hold is not one of those findings. **Skip pilot** is not
+offered for it, and adding `no-pilot` does not release it or let dispatch
+proceed. Readiness offers **Re-scope criteria** (the acceptance-criteria
+editor) and, when an operator decision can clear the hold, **Clear hold** and
+**Approve anyway**. See [Clear a pilot admission hold](#clear-a-pilot-admission-hold).
 
 From the CLI, `--tag` replaces the whole tag list, so read the tags first and
 include every tag you want to keep. If `docs` is the only existing tag:
@@ -262,7 +272,8 @@ and unverified review findings. To refresh an assessment instead, see
 ### Clear a pilot admission hold
 
 A backlog task that a pilot assessment held from admission shows a **Pilot
-admission hold** callout in its detail, with two actions:
+admission hold** callout in its detail, with two actions. A host-operational
+hold shows the same actions on the Readiness card instead of this callout:
 
 - **Clear hold** records that the held requirement is satisfied, and asks for
   evidence.

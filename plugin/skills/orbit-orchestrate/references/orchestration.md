@@ -552,14 +552,20 @@ also explicitly requests one pilot; it needs no material rewrite. Existing
 requirements, admission's `pilot_assessment_stale` hold need not wait for a new
 assessment: adding `no-pilot` (the dashboard Readiness card's "Skip pilot", or
 `orbit task update <id> --tag <current tags>,no-pilot`, since `--tag` replaces
-the list) makes drain, `orbit run ship` and pull admission ignore pilot
-assessment state. Readiness gaps, context locks,
+the list) makes drain, `orbit run ship` and pull admission ignore a stale
+assessment and an ordinary receipt hold (operator validation, native OS,
+duplicate, already landed). A current host-operational hold is the exception:
+the tag does not release it, Skip pilot is not offered for
+`host_operational_handoff`, and dispatch does not proceed while that hold
+remains. Re-scope the acceptance criteria, or record an operator decision
+(`task-pilot-admission: evaluated`, `clear` or `approve-anyway`, with the
+evidence on the following lines). Readiness gaps, context locks,
 dependencies and delivery holds still apply; removing the tag restores the
-gate. On a task with a pilot receipt or a pending pilot this is operator
+gate for the holds the tag releases. On a task with a pilot receipt or a pending pilot this is operator
 authority: a managed agent's `orbit.task.update` adding the tag is refused, and
 the operator's write records `pilot_skipped` in history with the requirements
-digest it dispatched without assessment. Never add it from a managed run to get
-past your own gate.
+digest the write leaves. Never add it from a managed run to get
+past your own gate. Do not add it to get past a host-operational hold.
 
 **Re-check and full modes.** An explicit re-pilot of a task whose latest
 assessment holds promotion runs as a *re-check*. The pilot receives the prior
