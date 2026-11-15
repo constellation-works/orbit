@@ -13,7 +13,7 @@ Before ORB-22100, dispatch failed with `snapshot Git state in '<worktree>': exec
 
 ## Mechanism
 
-The run's worktree directory did not exist when dispatch took its Git snapshot. Git is spawned with the worktree as its current directory, so a missing directory returns ENOENT, which reads as a missing `git` binary (`crates/orbit-engine/src/activity_job/workspace/fingerprint.rs`, `git_run_bytes` in `crates/orbit-engine/src/executor/automation/vcs/git.rs`). Final recovery's declared-pair guard names the same condition correctly (`declared_pair.rs`). Why the directory was absent is **not established**: the three runs began at `workflow admission: worktree_setup` and failed within 22 seconds, on dk-server-2 and mac-mini-1 within five minutes. Hourly `worktree-gc-orbit` runs start at minute :01, outside that window, so garbage collection is not shown to be the cause.
+The run's worktree directory did not exist when dispatch took its Git snapshot. Git is spawned with the worktree as its current directory, so a missing directory returns ENOENT, which reads as a missing `git` binary (`crates/orbit-engine/src/activity_job/workspace/fingerprint.rs`, `git_run_bytes` in `crates/orbit-engine/src/executor/automation/vcs/git/command.rs`). Final recovery's declared-pair guard names the same condition correctly (`declared_pair.rs`). Why the directory was absent is **not established**: the three runs began at `workflow admission: worktree_setup` and failed within 22 seconds, on dk-server-2 and mac-mini-1 within five minutes. Hourly `worktree-gc-orbit` runs start at minute :01, outside that window, so garbage collection is not shown to be the cause.
 
 ## Resolution
 
