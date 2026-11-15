@@ -458,21 +458,41 @@ class VisualFixtureServerTest(unittest.TestCase):
 
     def test_absent_api_route_refuses_readiness(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
-            repo = self._mini_checkout(Path(tmp) / "repo")
-            wrapper, record = self._stale_backend(Path(tmp), "absent", fixture_cli=True)
-            env = self._fixture_env(tmp, wrapper, record, "absent")
-            result = subprocess.run(
-                [str(repo / "scripts/visual-fixture-server.sh"), "experiments:empty"],
-                cwd=repo,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertIn("source/API compatibility not established", result.stderr)
-            self.assertNotIn("ORBIT_VISUAL_URL=", result.stdout)
+        probe = "orbit-fixture-probe"
+        paths = ["/api/tasks", f"/api/runs/{probe}", f"/api/on/{probe}/tasks"]
+        paths += [f"/api/tasks/{probe}{suffix}" for suffix in (
+            "", "/comments", "/archive", "/approve", "/reject", "/pilot", "/triage",
+            "/requeue", "/settle-merged", "/auto-fix", "/pilot-admission", "/post-deploy",
+            f"/artifacts/{probe}",
+        )]
+        unused = f"/api/tasks/{probe}/backend-only"
+        paths.append(unused)
+        for missing in paths:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                repo = self._mini_checkout(Path(tmp) / "repo")
+                mode = "absent:" + missing
+                wrapper, record = self._stale_backend(Path(tmp), mode, fixture_cli=True)
+                server, output, diagnostics = self._start(
+                    repo / "scripts/visual-fixture-server.sh", ["experiments:empty"], repo,
+                    self._fixture_env(tmp, wrapper, record, mode))
+                try:
+                    if missing == unused:
+                        self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                        protocol = self._protocol(output)
+                        provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                        discovered = provenance["api_compatibility"]["paths"]
+                        self.assertTrue(set(paths[:-1]).issubset(discovered), discovered)
+                        self.assertNotIn(unused, discovered)
+                        self.assertNotIn("OPTIONS " + unused + "\n", record.read_text())
+                        continue
+                    self.assertNotIn("ORBIT_VISUAL_URL=", output, missing)
+                    self.assertIsNotNone(server.poll(), diagnostics)
+                    self.assertNotEqual(server.returncode, 0, diagnostics)
+                    self.assertIn("source/API compatibility not established", diagnostics)
+                    self.assertIn(missing + " (404)", diagnostics)
+                    self.assertIn("OPTIONS " + missing + "\n", record.read_text())
+                finally:
+                    self._stop(server)
 
     def test_front_rejects_untrusted_authority_before_all_routes(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -735,6 +755,40 @@ class VisualFixtureServerTest(unittest.TestCase):
             'fetch("/api/tasks");\n'
             'globalThis.CANDIDATE_JS = "CANDIDATE-JS-MARKER";\n'
         )
+        # Miniature source/route inventory mirrors every task helper shape.
+        # These files are discovery inputs, never loaded as a UI or DOM stub.
+        js_dir = asset_dir / "js"
+        js_dir.mkdir()
+        sources = {
+            "request-paths.js": 'fetch(`/api/runs/${encodeURIComponent(run.id)}`);\n'
+                                'fetch(`/api/on/${encodeURIComponent(host)}/tasks`);\n',
+            "task-shared.js": 'export function taskMutationPath(task, suffix = "") {\n'
+                              '  return taskWorkspacePath(task, `/api/tasks/${encodeURIComponent(task.id)}${suffix}`);\n}\n',
+            "task-actions.js": 'taskMutationPath(task, "/comments"); taskMutationPath(task, "/archive");\n'
+                               'taskMutationPath(task, `/${kind}`); runAction(task, "approve"); runAction(task, "reject");\n',
+            "task-agent-actions.js": 'taskMutationPath(task, "/pilot"); taskMutationPath(task, "/triage");\n'
+                                     'let suffix; if (settled) suffix = "/settle-merged"; else suffix = "/requeue";\n'
+                                     'taskMutationPath(task, suffix); taskMutationPath(task, "/auto-fix");\n',
+            "task-evidence.js": 'taskShared.taskMutationPath(task, `/artifacts/${encodedPath}`);\n',
+            "task-readiness.js": 'let suffix; if (pilot) suffix = "/pilot-admission"; else suffix = "/post-deploy";\n'
+                                 'taskShared.taskMutationPath(task, suffix); taskShared.taskMutationPath(current);\n',
+            "task-quick-actions.js": 'visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));\n',
+            "task-data.js": 'fetchJson(taskMutationPath(task));\n',
+            "task-nav.js": 'fetchJson(taskMutationPath(previous));\n',
+            "task-fields.js": 'visit.path(taskMutationPath(currentTask));\n',
+            "task-status-controls.js": 'visit.path(taskMutationPath(task));\n',
+        }
+        for name, source in sources.items():
+            (js_dir / name).write_text(source)
+        task_suffixes = ("", "/comments", "/archive", "/approve", "/reject", "/pilot", "/triage",
+                         "/requeue", "/settle-merged", "/auto-fix", "/pilot-admission", "/post-deploy",
+                         "/artifacts/{*path}")
+        routes = ["/tasks", "/runs/{id}", "/on/{host}/{*path}", "/workflows/ship"]
+        routes += ["/tasks/{id}" + suffix for suffix in task_suffixes]
+        # A backend-only route is deliberately not a candidate request.
+        routes.append("/tasks/{id}/backend-only")
+        (repo / "crates/orbit-web/src/routes.rs").write_text(
+            "\n".join(f'.route("{route}", handler)' for route in routes))
         shutil.copy(REMOTE_SEED, fixture_dir / "remote-host-workspaces.json")
         (fixture_dir / "experiments.json").write_text(json.dumps({
             "tasks": [{"title": "Fixture experiment task", "complexity": "low", "status": "proposed"}],
@@ -761,7 +815,7 @@ class VisualFixtureServerTest(unittest.TestCase):
             "http.createServer((req, res) => {\n"
             "  fs.appendFileSync(record, req.method + ' ' + req.url + '\\n');\n"
             "  if (req.method === 'OPTIONS') {\n"
-            "    const status = mode === 'absent' ? 404 : 405;\n"
+            "    const status = mode === 'absent' || mode === 'absent:' + req.url ? 404 : 405;\n"
             "    res.writeHead(status, {'content-type': 'text/plain', 'allow': 'GET'});\n"
             "    res.end(status === 404 ? 'missing' : 'method');\n"
             "    return;\n"
