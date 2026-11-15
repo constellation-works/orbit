@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-14
+last_validated: 2026-11-15
 ---
 # Boundary-First Testing
 
@@ -884,6 +884,61 @@ skipped, retried or weakened, and job names, `NEXTEST_PARTITIONS` and the
 ruleset are unchanged. The hosted after column (per-job durations, runner
 minutes and wall time against this baseline) is owed by the pull request's own
 run and the following PR runs.
+
+### Test jobs extract the transfer directly (2026-11-15)
+
+ORB-24987 follows the 2026-11-15 watch (ORB-24986). Re-measured with
+`scripts/ci-p90.py` logic over the latest 20 completed PR `ci.yml` runs
+(43700415794 back to 43673874744): 15 executed the Check job, 5 skipped it and
+none was cancelled. The executed durations were 209, 274, 276, 281, 306, 346,
+360, 394, 419, 454, 456, 463, 478, 494 and 495 s: nearest-rank p90 rank 14/15 =
+494 s, median 394 s. Queue wait sat outside the elapsed time: the Check job
+started 18–30 s after its run was created, the build and guardrails jobs
+started with it, and every test job started 1–3 s after `Test build`
+completed.
+
+The binding path in 14 runs was `Test build`, then the slowest test job; in
+the fifteenth (43683986725, an `agent-main` promotion) `CI guardrails` ended
+last. In the six runs over 450 s, read from their step logs:
+
+| Phase | Seconds |
+|---|---|
+| `Test build` setup (checkout, toolchain, caches) | 40–51 |
+| Folded workspace build (`workflow-test-list-build`) | 175–233 |
+| Archive, pack (`-T0`), four uploads, partition proof | 7–9, 11.7–14.0, about 7, 7–11 |
+| Slowest test job, from the build's completion | 170–184 |
+| of which setup (Bubblewrap 10–12) | 30–35 |
+| of which download, unpack, nextest extraction | 4–16, 9.5–12.5, 6–7 |
+| of which nextest Summary | 97–118 |
+
+Each test job re-encoded the decoded transfer at level 1 for nextest's
+decoder (`unpack`), and nextest then decoded and extracted it again. Now
+`ci-repack-nextest.py extract` decodes the parts once and writes the tar
+members under the checkout's `target/`, admitting only regular files and
+directories under `target/` through tarfile's `data` filter, and the shard runs
+nextest from the extraction's metadata, as the partition guard and shard 1's
+sandbox gates already list it. On a local 795 MB workspace archive (601 MB
+transfer, 362 members) the old path took 3.1 s to unpack plus 2.5 s for
+nextest's extraction, the new one 2.1 s, with byte-identical files; a count
+partition selected the same 355 tests either way. Scaled to the hosted
+16–19 s, this saves about 10–12 s per test job on the critical path,
+projecting p90 about 484 s. That is a projection, not a measurement.
+
+**The budget is not restored by this pass.** The remaining time is the folded
+build, which is CPU-bound on the 4-vCPU runner whenever a change reaches
+`orbit-core`. Measured locally at `-j4` against a touched `orbit-core`: the
+folded Clippy lint costs about 5% (85.6 s against 80.9 s mean), and removing
+`orbit-core`'s self dev-dependency lets its unit-test harness start beside
+its library (start 0.2 s instead of 32.4 s) but saves only about 4.6 s (74.7
+and 74.3 s against 66.9 and 72.9 s, alternating arms), because the four slots
+stay saturated, as the twelfth pass found. The remaining levers are
+operator decisions: a larger `Test build` runner, or overlapping the test
+jobs' 30–35 s setup with the build again, which ORB-24733 gave up for about
+45 runner-minutes per PR. Count partitions also stay uneven (116–172 s in
+run 43685213958). No test was retired, skipped, retried or weakened; job
+names, `NEXTEST_PARTITIONS`, the partition proof and the ruleset are
+unchanged. The hosted after column is the operator's `scripts/ci-p90.py` run
+once the latest 20 completed PR runs carry this workflow.
 
 ## Why
 

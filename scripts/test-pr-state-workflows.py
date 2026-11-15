@@ -887,9 +887,9 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 self.assertNotIn("strategy", job, "Orbit's rerun certification needs literal shard jobs")
                 self.assertEqual(job["steps"], shard_jobs["test-1"]["steps"], "every shard runs the same steps")
                 [nextest] = self.run_step(job, "Run nextest shard")
-                [unpack] = self.run_step(job, "Restore native nextest archive")
-                self.assertEqual(unpack[:2], [pack[0], "unpack"])
-                self.assertEqual(unpack[2:], [pack[3], pack[2], "--parts", str(parts)])
+                [extract] = self.run_step(job, "Extract nextest archive")
+                self.assertEqual(extract[:2], [pack[0], "extract"])
+                self.assertEqual(extract[2:], [pack[3], str(self.root), "--parts", str(parts)])
                 downloads = [step for step in job["steps"]
                              if str(step.get("name", "")).startswith("Download nextest archive")]
                 self.assertEqual(
@@ -947,8 +947,15 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     self.assertEqual((completed.returncode, completed.stdout, completed.stderr),
                                      (status, "", stderr))
                 self.assertLess(step_names.index("Download nextest archive attempt 3"),
-                                step_names.index("Restore native nextest archive"))
-                self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
+                                step_names.index("Extract nextest archive"))
+                # nextest runs the tests the extraction wrote, from its metadata.
+                self.assertNotIn("--archive-file", nextest)
+                self.assertEqual(nextest[nextest.index("--binaries-metadata") + 1],
+                                 "target/nextest/binaries-metadata.json")
+                self.assertEqual(nextest[nextest.index("--cargo-metadata") + 1],
+                                 "target/nextest/cargo-metadata.json")
+                self.assertEqual(nextest[nextest.index("--target-dir-remap") + 1], f"{extract[3]}/target")
+                self.assertEqual(nextest[nextest.index("--workspace-remap") + 1], extract[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)
                 self.assertNotIn("--run-ignored", nextest)
@@ -978,7 +985,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
                           ("test-partition-2", "Run nextest shard"),
-                          ("test-1", "Restore native nextest archive"),
+                          ("test-1", "Extract nextest archive"),
                           ("test-1", "Run nextest shard")):
             with self.subTest(step=step):
                 self.run_step(self.document["jobs"][job], step, expected_status=7)
