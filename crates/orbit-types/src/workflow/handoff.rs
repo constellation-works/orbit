@@ -610,7 +610,9 @@ impl AlreadyResolved {
     /// Maximum host test executions one already-resolved declaration may request.
     pub const MAX_SELECTORS: usize = 16;
 
-    /// Enforce the same execution bound at admission and immediately before replay.
+    /// Admission refuses a declaration that names no selectors, and every
+    /// declaration above the cap; replay enforces only the cap, since replay
+    /// with no declaration is an empty list.
     pub fn check_selector_count(count: usize) -> Result<(), String> {
         if count == 0 {
             return Err(format!(
@@ -618,6 +620,11 @@ impl AlreadyResolved {
                  base resolves the task"
             ));
         }
+        Self::check_selector_cap(count)
+    }
+
+    /// Refuse more than [`Self::MAX_SELECTORS`] selectors before anything runs.
+    pub fn check_selector_cap(count: usize) -> Result<(), String> {
         if count > Self::MAX_SELECTORS {
             return Err(format!(
                 "`{ALREADY_RESOLVED_FIELD}` names {count} test selectors; at most {} are allowed",
