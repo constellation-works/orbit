@@ -637,20 +637,17 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                 (
                     "a certified checkpoint for another run",
                     |prepared, host| {
-                        let mut foreign = certified(host);
-                        foreign["run_id"] = json!("jrun-other");
-                        host.checkpoint_rebase_recovery(&prepared.run_id, "sync_base", &foreign)
-                            .unwrap();
+                        let foreign = certify_as(host, "jrun-other", "sync_base", certified(host));
+                        host.leaf_writes_recovery(&prepared.run_id, "sync_base", foreign);
                     },
                     "stale_checkpoint",
                 ),
                 (
                     "a certified checkpoint for another step",
                     |prepared, host| {
-                        let mut foreign = certified(host);
-                        foreign["step_id"] = json!("complete_pr");
-                        host.checkpoint_rebase_recovery(&prepared.run_id, "sync_base", &foreign)
-                            .unwrap();
+                        let foreign =
+                            certify_as(host, &prepared.run_id, "complete_pr", certified(host));
+                        host.leaf_writes_recovery(&prepared.run_id, "sync_base", foreign);
                     },
                     "stale_checkpoint",
                 ),
@@ -659,8 +656,7 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                     |prepared, host| {
                         let mut foreign = certified(host);
                         foreign["task_ids"] = json!(["T-OTHER"]);
-                        host.checkpoint_rebase_recovery(&prepared.run_id, "sync_base", &foreign)
-                            .unwrap();
+                        certify_as(host, &prepared.run_id, "sync_base", foreign);
                     },
                     "stale_checkpoint",
                 ),
@@ -724,9 +720,6 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                     &["reset", "--hard", &prepared.target],
                 );
                 let host = seed.with_provider(seed.provider.as_deref().unwrap());
-                *host.checkpoints.lock().unwrap() = seed.checkpoints();
-                *host.recovery_attempts.lock().unwrap() = seed.recovery_attempts();
-                *host.run_states.lock().unwrap() = seed.run_states.lock().unwrap().clone();
                 stub_pipeline_steps(&host, &prepared);
                 host.stubs.lock().unwrap().insert(
                     "sync_base_absorbed".into(),
@@ -776,6 +769,29 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
 }
 
 /// The newest checkpoint the host certified.
+/// Certify `payload` under `run_id` / `step_id` the way the host does for a
+/// recovery of that run and step: reserve the next attempt for the payload's
+/// own scope, stamp it, and issue it. The recovery authority refuses a
+/// payload certified under any other identity, so a neighbour case reaches a
+/// foreign certificate only by having that identity's own recovery issue it.
+fn certify_as(host: &LifecycleHost, run_id: &str, step_id: &str, mut payload: Value) -> Value {
+    host.start_run(run_id);
+    let scope = RebaseRecoveryAttemptScope {
+        workspace_path: payload["workspace_path"].as_str().unwrap().to_string(),
+        head_sha_before: payload["head_sha_before"].as_str().unwrap().to_string(),
+        target_base_sha: payload["target_base_sha"].as_str().unwrap().to_string(),
+    };
+    let attempt = host
+        .begin_rebase_recovery_attempt(run_id, step_id, &scope)
+        .unwrap();
+    payload["run_id"] = json!(run_id);
+    payload["step_id"] = json!(step_id);
+    payload["recovery_attempt"] = json!(attempt);
+    host.checkpoint_rebase_recovery(run_id, step_id, &payload)
+        .unwrap();
+    payload
+}
+
 fn certified(host: &LifecycleHost) -> Value {
     host.checkpoints()
         .last()
@@ -830,6 +846,7 @@ impl PreparedRebase {
         let host = LifecycleHost {
             tasks: Mutex::new(self.host.tasks.lock().unwrap().clone()),
             runs: Mutex::new(self.host.runs.lock().unwrap().clone()),
+            run_states: Mutex::new(self.host.run_states.lock().unwrap().clone()),
             ..LifecycleHost::new(&repo)
         };
         let mut common = self.common.clone();

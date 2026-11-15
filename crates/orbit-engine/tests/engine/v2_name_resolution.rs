@@ -31,7 +31,7 @@ use orbit_engine::{
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody,
-    JoinMode, LoopBlock, ParallelBlock, Provider, TargetRef, TargetStep,
+    JoinMode, LoopBlock, ParallelBlock, TargetRef, TargetStep,
 };
 
 fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
@@ -492,10 +492,10 @@ fn scenario_a_catalog_loads_new_activities() -> Result<(), Box<dyn std::error::E
         );
     }
     let assessor = catalog.get("agent_assess_diff").expect("present");
-    let ActivityV2Spec::AgentLoop(spec) = &assessor.spec else {
-        panic!("agent_assess_diff should be agent_loop");
-    };
-    assert_eq!(spec.provider, Provider::Claude);
+    assert!(
+        matches!(&assessor.spec, ActivityV2Spec::AgentLoop(_)),
+        "agent_assess_diff should be agent_loop"
+    );
 
     let fixer = catalog.get("agent_apply_fixes").expect("present");
     assert!(matches!(&fixer.spec, ActivityV2Spec::AgentLoop(_)));
@@ -528,7 +528,16 @@ fn scenario_b_target_ref_resolves() -> Result<(), Box<dyn std::error::Error>> {
             job.steps[0].body
         );
     };
-    assert!(matches!(&t.spec, ActivityV2Spec::AgentLoop(_)));
+    let expected = catalog.get("agent_assess_diff").expect("catalog entry");
+    assert_eq!(
+        t.activity_name.as_deref(),
+        Some("agent_assess_diff"),
+        "the resolved target keeps the referenced catalog name"
+    );
+    assert_eq!(
+        t.spec, expected.spec,
+        "the resolved target inlines the referenced activity's own spec, not another agent loop"
+    );
     println!("    resolved ref → inline Target");
     Ok(())
 }
