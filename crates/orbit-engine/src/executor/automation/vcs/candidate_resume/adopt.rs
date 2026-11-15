@@ -80,7 +80,13 @@ pub(super) fn adopt_published_branch(
             workspace_path,
             &["rev-parse", "--verify", &format!("{local_ref}^{{commit}}")],
         )?;
-        if tip.trim() != candidate.head_sha {
+        // [ORB-24993] A footprint-held resume recommits the published patch on
+        // its adopted branch: the retained tip may be a different commit with
+        // the identical tree (same content, different timestamp). That is not
+        // a divergence; the next adoption re-applies the published head.
+        if tip.trim() != candidate.head_sha
+            && !same_tree(workspace_path, tip.trim(), &candidate.head_sha)?
+        {
             return Ok(Adoption::Refused(format!(
                 "this host's branch '{branch}' is at {}, not the candidate head {}",
                 tip.trim(),
@@ -103,6 +109,23 @@ pub(super) fn adopt_published_branch(
             None => Adoption::Adopted,
         },
     )
+}
+
+/// Whether two commits name the identical tree (same content). A recommitted
+/// patch (same parent, same tree, same message, different timestamp) names a
+/// different commit with the same tree; that is not a divergence. Any Git
+/// failure answers `false` so the caller keeps its original refusal.
+fn same_tree(workspace_path: &Path, a: &str, b: &str) -> Result<bool, OrbitError> {
+    let tree = |sha: &str| {
+        git_output(
+            workspace_path,
+            &["rev-parse", "--verify", &format!("{sha}^{{tree}}")],
+        )
+    };
+    Ok(match (tree(a), tree(b)) {
+        (Ok(ta), Ok(tb)) => !ta.trim().is_empty() && ta.trim() == tb.trim(),
+        _ => false,
+    })
 }
 
 /// Whether a registered worktree has `local_ref` checked out.

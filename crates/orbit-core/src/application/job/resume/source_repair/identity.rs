@@ -38,19 +38,44 @@ impl OrbitRuntime {
             }
         }
         let local_ref = format!("refs/heads/{branch}");
-        let candidate_head = match git2::Repository::open(repo)
+        let raw_tip = git2::Repository::open(repo)
             .and_then(|r| r.find_reference(&local_ref).map(|r| r.target()))
-        {
-            Ok(Some(oid)) if oid.to_string() == head => None,
-            // The published head P stays the remote and PR identity below;
-            // the local tip T is adopted only as the end of the source's
-            // certified chase chain from P, and only while it still contains
-            // the base the last chase landed it on.
-            Ok(Some(oid)) if certified_tip.is_some_and(|tip| oid.to_string() == tip.head) => {
-                certified_tip
+            .ok()
+            .flatten()
+            .map(|oid| oid.to_string());
+        let held_same_tree_tip = raw_tip
+            .filter(|tip| tip != head)
+            .filter(|tip| same_tree(repo, tip, head))
+            .is_some_and(|tip| {
+                self.held_commit_explains_tip(&task.id, &source.run_id, &tip)
+                    .unwrap_or(false)
+            });
+        // [ORB-24993] A footprint-held resume recommits the published patch on
+        // its adopted branch: the retained tip may be a different commit with
+        // the identical tree (same content, different timestamp) created by
+        // that held run. That is not a move when a held run that adopted this
+        // source proves the tip with its own `commit` checkpoint; the remote
+        // and PR stay bound to P below. Anything else keeps the refusal, so an
+        // empty or divergent commit still refuses.
+        let candidate_head = if held_same_tree_tip {
+            None
+        } else {
+            match git2::Repository::open(repo)
+                .and_then(|r| r.find_reference(&local_ref).map(|r| r.target()))
+            {
+                Ok(Some(oid)) if oid.to_string() == head => None,
+                // The published head P stays the remote and PR identity below;
+                // the local tip T is adopted only as the end of the source's
+                // certified chase chain from P, and only while it still contains
+                // the base the last chase landed it on.
+                Ok(Some(oid)) if certified_tip.is_some_and(|tip| oid.to_string() == tip.head) => {
+                    certified_tip
+                }
+                Err(error) if allow_missing_branch && error.code() == git2::ErrorCode::NotFound => {
+                    None
+                }
+                _ => return Err(refuse("retained local branch moved")),
             }
-            Err(error) if allow_missing_branch && error.code() == git2::ErrorCode::NotFound => None,
-            _ => return Err(refuse("retained local branch moved")),
         };
         if let Some(tip) = candidate_head
             && (!observation::resolves_to_commit(repo, &tip.head)?
@@ -125,5 +150,71 @@ impl OrbitRuntime {
             candidate_head_sha: candidate_head.map(|tip| tip.head.clone()),
         };
         Ok((source, task, binding))
+    }
+}
+
+impl OrbitRuntime {
+    /// Whether a footprint-held run that adopted `source_id` proves `tip` with
+    /// its own `commit` checkpoint: the held resume recommitted the published
+    /// patch, so the retained branch names a different commit with the same
+    /// content. Anything else (an empty or divergent manual commit, another
+    /// run's work) answers `false` and keeps the ordinary refusal.
+    fn held_commit_explains_tip(
+        &self,
+        task_id: &str,
+        source_id: &str,
+        tip: &str,
+    ) -> Result<bool, OrbitError> {
+        let runs =
+            self.stores()
+                .jobs()
+                .list_job_runs_filtered(&orbit_store::contracts::JobRunQuery {
+                    job_id: Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB.into()),
+                    task_id: Some(task_id.into()),
+                    limit: Some(super::successor::SUCCESSOR_CHAIN_WINDOW),
+                    include_steps: false,
+                    ..Default::default()
+                })?;
+        for listed in runs {
+            // The filtered list omits steps; `footprint_held` judges them, so
+            // reload the full run exactly as `predecessor()` does.
+            let Some(run) = self.get_job_run_backend(&listed.run_id)? else {
+                continue;
+            };
+            if !super::published_owner::footprint_held(&run) {
+                continue;
+            }
+            if self.footprint_held_adopted_source(&run)?.as_deref() != Some(source_id) {
+                continue;
+            }
+            let Ok(Some(state)) = self.read_run_state(&run.run_id) else {
+                continue;
+            };
+            if state
+                .pipeline
+                .get("commit")
+                .and_then(|c| c.get("commit_sha"))
+                .and_then(|v| v.as_str())
+                == Some(tip)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Whether two commits name the identical tree (same content). A recommitted
+/// patch (same parent, same tree, same message, different timestamp) names a
+/// different commit with the same tree; that is not a branch move. Any Git
+/// failure answers `false` so the caller keeps its original refusal.
+fn same_tree(repo: &std::path::Path, a: &str, b: &str) -> bool {
+    let tree = |sha: &str| {
+        observation::read_git_observation(repo, &["rev-parse", &format!("{sha}^{{tree}}")], false)
+            .ok()
+    };
+    match (tree(a), tree(b)) {
+        (Some(ta), Some(tb)) => !ta.is_empty() && ta == tb,
+        _ => false,
     }
 }
