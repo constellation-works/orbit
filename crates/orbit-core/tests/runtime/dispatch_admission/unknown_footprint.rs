@@ -358,10 +358,170 @@ fn comment_hygiene_is_prepared_before_admission() {
     );
 }
 
+fn set_tags(runtime: &OrbitRuntime, task: &str, tags: &[&str]) {
+    runtime
+        .update_task_as_human(
+            task,
+            TaskUpdateParams {
+                tags: Some(tags.iter().map(ToString::to_string).collect()),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+}
+
+/// The newest history entry `event` recorded on `task`, with its note.
+fn last_event(runtime: &OrbitRuntime, task: &str, event: &str) -> (String, Value) {
+    let entry = runtime
+        .get_task_history(task)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|entry| entry.event == event)
+        .unwrap_or_else(|| panic!("{task} records no {event}"));
+    let note = serde_json::from_str(entry.note.as_deref().unwrap_or("null")).unwrap();
+    (entry.by, note)
+}
+
+/// [ORB-25084] An operator's `readiness-waived` tag waives a backlog task's
+/// readiness gaps: the empty-context task no longer goes alone, an
+/// unassessed one is no longer withheld, and both are admitted beside other
+/// editing work. Only an operator adds it, history names who and what was
+/// waived, a host-OS wait stays, and removing it restores the rule.
+fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
+    let (_root, runtime, _repo) = runtime();
+    let empty_task = empty(&runtime, "restyle cards");
+    let editing = seed(&runtime, Seed::default()).id;
+    let unassessed = runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "unsized".into(),
+            description: "Fixture task: unsized".into(),
+            acceptance_criteria: vec!["Fixture task is observable.".into()],
+            plan: "Fixture plan.".into(),
+            context_files: Vec::new(),
+            complexity: orbit_core::TaskComplexity::Unassessed,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let other_os = if cfg!(target_os = "linux") {
+        "os:macos"
+    } else {
+        "os:linux"
+    };
+    let elsewhere = seed(
+        &runtime,
+        Seed {
+            title: "other host",
+            context_files: Some(&[]),
+            tags: &[other_os],
+            ..Seed::default()
+        },
+    )
+    .id;
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    // Unwaived: the empty-context task goes alone and the unsized one is
+    // withheld.
+    let wave = classify_with(&runtime, &drain, 4);
+    assert_eq!(wave["loose_task_ids"], json!([empty_task]), "{wave:#}");
+    let discovery = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(
+        super::excluded_entry(&discovery, &unassessed)["reason"],
+        "unassessed_complexity",
+        "{discovery:#}"
+    );
+    let shown = as_operator(&runtime, "orbit.task.show", json!({"id": empty_task}));
+    assert_eq!(
+        shown["readiness"]["waivable"],
+        json!(["missing_context_files"]),
+        "{shown:#}"
+    );
+
+    // Neither an agent nor a filing sets the waiver.
+    let refused = runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": empty_task, "model": "codex", "tags": ["readiness-waived"]}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("only an operator can add `readiness-waived`"),
+        "{refused}"
+    );
+    assert!(runtime.get_task(&empty_task).unwrap().tags.is_empty());
+    let filed = runtime.add_task(orbit_core::application::task::TaskAddParams {
+        title: "filed waived".into(),
+        tags: vec!["readiness-waived".into()],
+        ..Default::default()
+    });
+    assert!(filed.is_err(), "{filed:?}");
+
+    // The operator's waiver: both are admitted with the editing task.
+    for task in [&empty_task, &unassessed] {
+        set_tags(&runtime, task, &["readiness-waived"]);
+    }
+    set_tags(&runtime, &elsewhere, &[other_os, "readiness-waived"]);
+    let waived = classify_with(&runtime, &drain, 4);
+    let mut loose: Vec<String> = serde_json::from_value(waived["loose_task_ids"].clone()).unwrap();
+    loose.sort();
+    let mut expected = vec![empty_task.clone(), editing.clone(), unassessed.clone()];
+    expected.sort();
+    assert_eq!(loose, expected, "{waived:#}");
+    let readiness = runtime
+        .workspace_auto_readiness(&[], Some(4), 50, &[])
+        .unwrap();
+    for task in [&empty_task, &unassessed] {
+        assert_eq!(readiness_task(&readiness, task)["eligible"], true);
+    }
+    let (by, note) = last_event(&runtime, &empty_task, "readiness_waived");
+    assert_eq!(by, "fixture operator");
+    assert_eq!(note["waived"], json!(["missing_context_files"]), "{note}");
+    let (_, note) = last_event(&runtime, &unassessed, "readiness_waived");
+    assert_eq!(
+        note["waived"],
+        json!(["missing_context_files", "unassessed_complexity"]),
+        "{note}"
+    );
+    let shown = as_operator(&runtime, "orbit.task.show", json!({"id": empty_task}));
+    assert_eq!(shown["readiness"]["gaps"][0]["waived"], true, "{shown:#}");
+    assert!(shown["readiness"].get("waivable").is_none(), "{shown:#}");
+
+    // A host-capability exclusion is not a readiness gap.
+    let discovery = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(
+        super::excluded_entry(&discovery, &elsewhere)["reason"],
+        "host_os_mismatch",
+        "{discovery:#}"
+    );
+
+    // Removed: the rule applies again.
+    set_tags(&runtime, &empty_task, &[]);
+    let restored = classify_with(&runtime, &drain, 4);
+    assert_eq!(
+        restored["loose_task_ids"],
+        json!([empty_task]),
+        "{restored:#}"
+    );
+    assert_eq!(
+        deferred(&restored, &editing)["blocking_task_ids"],
+        json!([empty_task]),
+        "{restored:#}"
+    );
+    let (by, note) = last_event(&runtime, &empty_task, "readiness_waiver_removed");
+    assert_eq!(by, "fixture operator");
+    assert_eq!(note["restored"], json!(["missing_context_files"]), "{note}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work_scenarios,
     a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work,
     without_a_pilot_empty_context_work_is_admitted_only_alone,
-    comment_hygiene_is_prepared_before_admission
+    comment_hygiene_is_prepared_before_admission,
+    an_operator_waiver_admits_unprepared_work_like_ready_work
 );

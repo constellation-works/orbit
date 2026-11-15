@@ -16,14 +16,19 @@
 //! - While it runs, it holds the tree: no other editing work is admitted.
 //!
 //! Work tagged `no-diff-expected` edits nothing, so it neither waits nor is
-//! held. A single-slot run cannot race itself and an explicitly selected
+//! held. An operator's `readiness-waived` tag [ORB-25084] waives the rule: the
+//! task waits for no pilot or exclusive slot, reserves nothing and holds no
+//! whole tree while it runs. It still holds no file lock, so it is admitted
+//! like ordinary editing work that locks nothing: it respects whatever holds
+//! the tree and counts as editing work in its wave, but other work may run
+//! beside it. A single-slot run cannot race itself and an explicitly selected
 //! ship names its own work, so neither applies the rule.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, declares_no_footprint};
+use orbit_types::task::{Task, declares_no_footprint, footprint_rule_applies};
 
 use crate::OrbitRuntime;
 use crate::application::automation::preparation::FootprintPilots;
@@ -79,7 +84,7 @@ pub(crate) fn footprint_waits<'a>(
     let mut pilots: Option<FootprintPilots> = None;
     let mut waits = BTreeMap::new();
     for task in tasks {
-        if !declares_no_footprint(&task.tags, &task.context_files) {
+        if !footprint_rule_applies(&task.tags, &task.context_files) {
             continue;
         }
         let pilots = pilots.get_or_insert_with(|| FootprintPilots::load(runtime));
@@ -104,6 +109,13 @@ pub(crate) fn footprint_waits<'a>(
     Ok(waits)
 }
 
+/// A task with no footprint whose rule an operator waived: it locks nothing,
+/// but it may edit anything, so the wave treats it as editing work.
+fn waived_without_footprint(task: &Task) -> bool {
+    declares_no_footprint(&task.tags, &task.context_files)
+        && !footprint_rule_applies(&task.tags, &task.context_files)
+}
+
 /// What one wave knows about unknown footprints before it selects anything.
 pub(crate) struct FootprintGuard<'a> {
     /// Off for a single-slot run, which applies none of this.
@@ -124,7 +136,7 @@ pub(crate) fn whole_tree_holder(
     live_task_ids
         .iter()
         .filter_map(|task_id| task_lookup.get(task_id))
-        .find(|task| declares_no_footprint(&task.tags, &task.context_files))
+        .find(|task| footprint_rule_applies(&task.tags, &task.context_files))
         .map(|task| task.id.clone())
 }
 
@@ -230,6 +242,7 @@ impl<'a> FootprintWave<'a> {
         if !self.guard.enabled {
             return None;
         }
+        let edits = edits || waived_without_footprint(task);
         let wait = self.guard.waits.get(&task.id);
         if (edits || wait.is_some()) && self.whole_tree.is_some() {
             return Some(FootprintDeferral::WholeTree);
@@ -256,7 +269,7 @@ impl<'a> FootprintWave<'a> {
         if self.guard.waits.contains_key(&task.id) {
             self.whole_tree = Some((task.id.clone(), ConflictProvenance::SameWave));
             self.busy = true;
-        } else if edits {
+        } else if edits || waived_without_footprint(task) {
             self.busy = true;
         }
     }

@@ -10,9 +10,11 @@ import { el, getWorkspace, onWorkspaceChange } from './common.js';
 import { taskDispatchIdentity } from './task-shared.js';
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
-// grouped member, a reserved surface, a same-wave deferral, a live child's claim, or a task with no
-// footprint waiting for the other leaves to finish so it can run alone.
-export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "surface_reserved", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
+// grouped member, a reserved surface, a same-wave deferral or a live child's claim.
+// A task with no footprint waiting for its pilot (`awaiting_footprint`) or for
+// an exclusive slot (`awaiting_exclusive_slot`) has no lock holder, so it
+// waits in "other" under its own words.
+export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "surface_reserved", "conflict_deferred", "claimed_by_live_child"]);
 
 // Readiness reasons that mean "waiting on slots or host pressure": a full
 // workspace, a throttle, a scheduled shutdown or stopped admissions.
@@ -63,6 +65,10 @@ const WAIT_LABELS = {
   active_pilot_preparation: "pilot preparing",
   task_pilot_preparation_required: "needs pilot",
   unmet_dependency: "waits on deps",
+  // No context files: the drain waits for the pilot to prepare a footprint,
+  // or for no other leaf to be in flight so it runs alone.
+  awaiting_footprint: "awaiting footprint",
+  awaiting_exclusive_slot: "awaiting exclusive slot",
   follower_admission_pending: "waiting for follower admission",
   baseline_red_hold: "base red",
   // A `ui` task on a host without a verified browser kit; the badge's title

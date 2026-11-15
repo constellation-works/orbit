@@ -40,7 +40,7 @@ export function isNotReady(task) {
 export function readinessSignature(task) {
   const readiness = readinessOf(task);
   if (!readiness) return "";
-  const gaps = readinessGaps(readiness).map((gap) => `${gap.code}/${gap.severity}`).join(",");
+  const gaps = readinessGaps(readiness).map((gap) => `${gap.code}/${gap.severity}${gap.waived ? "/waived" : ""}`).join(",");
   return `${readiness.ready}:${readiness.preparing ? "p" : ""}:${gaps}`;
 }
 
@@ -563,12 +563,30 @@ function openAcceptanceCriteriaEditor(button) {
 }
 
 async function runSkipPilot(task, button, context) {
+  await runTagWrite(task, button, context, {
+    tag: NO_PILOT_TAG,
+    add: true,
+    confirm: `Skip the pilot for ${task.id}? It is dispatched without a new pilot assessment: this adds the no-pilot tag and records the skip in its history with your name. Remove the tag to restore the pilot gate.`,
+    refusalCode: "skip_pilot_refused",
+    notice: () => {
+      const current = drainReadinessEntry(task);
+      const stillHeld = current && drainReason(current) === HOST_OPERATIONAL_REASON;
+      return stillHeld
+        ? `${task.id}: pilot skipped. The host-operational hold remains, so dispatch does not proceed.`
+        : `${task.id}: pilot skipped; dispatch proceeds without a new assessment`;
+    },
+  });
+}
+
+// One operator tag write from the Readiness card (Skip pilot, waive or
+// restore readiness): confirm, add or remove `tag` through the ordinary
+// guarded task update, which records the operator in history, then re-read
+// the task's drain readiness so the card names whatever still holds it.
+async function runTagWrite(task, button, context, request) {
   const visit = captureWorkspaceVisit();
   const key = taskShared.taskDispatchIdentity(task);
   if (button.disabled || !taskShared.canMutateTask(task)) return;
-  if (typeof window.confirm !== "function" || !window.confirm(
-    `Skip the pilot for ${task.id}? It is dispatched without a new pilot assessment: this adds the no-pilot tag and records the skip in its history with your name. Remove the tag to restore the pilot gate.`,
-  )) return;
+  if (typeof window.confirm !== "function" || !window.confirm(request.confirm)) return;
   taskShared.taskState.operatorRecordRefusals.delete(key);
   button.disabled = true;
   let updated;
@@ -578,13 +596,14 @@ async function runSkipPilot(task, button, context) {
     // removed) since the detail was built are silently reverted.
     const current = currentTaskRecord(task, context) || task;
     const tags = taskTags(current);
-    updated = await patchJson(visit.path(taskShared.taskMutationPath(current)), {
-      tags: tags.includes(NO_PILOT_TAG) ? tags : [...tags, NO_PILOT_TAG],
-    });
+    const next = request.add
+      ? (tags.includes(request.tag) ? tags : [...tags, request.tag])
+      : tags.filter((tag) => tag !== request.tag);
+    updated = await patchJson(visit.path(taskShared.taskMutationPath(current)), { tags: next });
   } catch (error) {
     button.disabled = false;
     if (!visit.isCurrent()) return;
-    const code = error && error.code ? error.code : "skip_pilot_refused";
+    const code = error && error.code ? error.code : request.refusalCode;
     const message = `[${code}] ${error.message || String(error)}`;
     taskShared.taskState.operatorRecordRefusals.set(key, message);
     taskShared.rerender(context);
@@ -602,12 +621,88 @@ async function runSkipPilot(task, button, context) {
     console.error(error);
   }
   if (!visit.isCurrent()) return;
-  const current = drainReadinessEntry(task);
-  const stillHeld = current && drainReason(current) === HOST_OPERATIONAL_REASON;
-  taskShared.taskState.taskActionNotice = stillHeld
-    ? `${task.id}: pilot skipped. The host-operational hold remains, so dispatch does not proceed.`
-    : `${task.id}: pilot skipped; dispatch proceeds without a new assessment`;
+  taskShared.taskState.taskActionNotice = request.notice();
   await taskShared.refreshTasks(context);
+}
+
+// [ORB-25084] The operator's readiness waiver: the `readiness-waived` tag
+// waives a backlog task's readiness gaps (the server lists them as
+// `readiness.waivable`), so the drain admits it like ready work. Host,
+// browser-kit and human-crew waits are not readiness gaps and stay.
+const READINESS_WAIVED_TAG = "readiness-waived";
+const WAIVE_EFFECT = "the drain admits it like ready work and may run it beside other work, though it holds no file lock";
+
+function waivableGaps(readiness) {
+  return Array.isArray(readiness && readiness.waivable) ? readiness.waivable.filter(Boolean) : [];
+}
+
+// The Readiness card's waiver row on a backlog task: "Waive readiness" while
+// a gap can be waived, or who waived it and "Remove waiver" once the tag is
+// on. Nothing for any other task.
+function buildReadinessWaiver(task, readiness, context) {
+  if (!task || task.status !== "backlog") return null;
+  const waived = taskTags(task).includes(READINESS_WAIVED_TAG);
+  const codes = waivableGaps(readiness);
+  if (!waived && codes.length === 0) return null;
+  const mutable = taskShared.canMutateTask(task);
+  const wrap = el("div", { class: "readiness-waiver" });
+  if (waived) {
+    const history = Array.isArray(task.history) ? task.history : [];
+    const record = [...history].reverse().find((item) => item && item.event === "readiness_waived");
+    const by = record && record.by ? ` by ${record.by}` : "";
+    wrap.appendChild(el("span", {
+      class: "readiness-fix",
+      text: `Readiness waived${by}: ${WAIVE_EFFECT}.`,
+    }));
+    const remove = el("button", {
+      type: "button",
+      class: "attention-action readiness-waiver-remove",
+      text: "Remove waiver",
+      title: mutable
+        ? "Remove the readiness-waived tag, recorded in history with your name; the drain holds the task on its readiness gaps again"
+        : taskShared.aggregateRefusalTitle("Remove waiver", "restore the readiness gates"),
+    });
+    remove.disabled = !mutable;
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runTagWrite(task, remove, context, {
+        tag: READINESS_WAIVED_TAG,
+        add: false,
+        confirm: `Remove the readiness waiver on ${task.id}? Its readiness gaps hold it from the drain again; the removal is recorded in its history with your name.`,
+        refusalCode: "readiness_waiver_refused",
+        notice: () => `${task.id}: readiness waiver removed; its readiness gaps apply again`,
+      });
+    });
+    wrap.appendChild(remove);
+  } else {
+    const names = codes.map((code) => String(code).replaceAll("_", " ")).join(", ");
+    const waive = el("button", {
+      type: "button",
+      class: "attention-action readiness-waive",
+      text: "Waive readiness",
+      title: mutable
+        ? `Waive ${names}: adds the readiness-waived tag, recorded in history with your name; ${WAIVE_EFFECT}. Host, browser-kit and human-crew waits still apply.`
+        : taskShared.aggregateRefusalTitle("Waive readiness", "waive readiness gaps"),
+    });
+    waive.disabled = !mutable;
+    waive.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runTagWrite(task, waive, context, {
+        tag: READINESS_WAIVED_TAG,
+        add: true,
+        confirm: `Waive the readiness gaps of ${task.id} (${names})? The drain then admits it like ready work and may run it beside other work, though it holds no file lock. This adds the readiness-waived tag and records the waiver in its history with your name. Remove the waiver to restore the gates.`,
+        refusalCode: "readiness_waiver_refused",
+        notice: () => `${task.id}: readiness waived; the drain admits it like ready work`,
+      });
+    });
+    wrap.appendChild(waive);
+    wrap.appendChild(el("span", { class: "readiness-fix", text: `Waive ${names} so any drain can take it` }));
+  }
+  // A kept draft repaints this refusal in place, as Skip pilot's does.
+  wrap.dataset.operatorRecordFeedback = "true";
+  const refusal = operatorRecordRefusalNode(task);
+  if (refusal) wrap.appendChild(refusal);
+  return wrap;
 }
 
 // The Readiness card leads with the pool, then links every reported blocker.
@@ -701,21 +796,24 @@ export function buildReadinessBlock(readiness, drain, workspace, task = null, co
     }));
   }
   const gaps = readinessGaps(readiness);
+  const waiver = buildReadinessWaiver(task, readiness, context);
   if (gaps.length === 0) {
     const eligible = drain && drain.entry && drain.entry.eligible === true;
     wrap.appendChild(el("div", { class: "readiness-note", text: eligible ? "Ready: nothing is missing." : "No preparation gaps." }));
+    if (waiver) wrap.appendChild(waiver);
     return wrap;
   }
   wrap.appendChild(el("span", { class: "readiness-gap-count", text: `${gaps.length} ${gaps.length === 1 ? "gap" : "gaps"}` }));
   for (const gap of gaps) {
-    const severity = gap.severity === "blocking" ? "blocking" : "advisory";
+    const severity = gap.waived === true ? "waived" : gap.severity === "blocking" ? "blocking" : "advisory";
     wrap.appendChild(el("div", { class: "readiness-gap" }, [
-      el("span", { class: `readiness-badge readiness-${severity} mono`, text: severity }),
+      el("span", { class: `readiness-badge readiness-${severity === "waived" ? "advisory" : severity} mono`, text: severity }),
       el("div", { class: "readiness-gap-body" }, [
         el("div", { class: "readiness-message", text: gap.message || gap.code }),
         ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),
       ]),
     ]));
   }
+  if (waiver) wrap.appendChild(waiver);
   return wrap;
 }
