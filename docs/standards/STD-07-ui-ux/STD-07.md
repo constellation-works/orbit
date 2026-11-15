@@ -4,10 +4,10 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 6
+version: 8
 created: 2026-11-09
-updated: 2026-11-14
-last_validated: 2026-11-14
+updated: 2026-11-15
+last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
 
@@ -78,6 +78,13 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   primary label, aligned with that label, in a muted style. Aliases, crews, IDs and counts
   do not run inline after the label. A badge that qualifies the label itself (such as
   "single tier") stays beside it. An item with no metadata has no empty second line.
+- **R40.** Items in an inline list (ids, links, tags) MUST be separated the same way
+  everywhere: the separator sits directly after the preceding item, or after that item's
+  trailing icon, with no space before it, and a clearly visible gap follows it before the
+  next item. The gap does not depend on a space in a different font from the items. A
+  small icon beside an item (an info ⓘ, a status dot) sits close to it, no wider apart than
+  the standard icon gap. An enlarged tap or hover target may overlap the space around it
+  but MUST NOT add visible space.
 
 ### Typography
 
@@ -179,12 +186,15 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   them: where the row would wrap inside its own column, it extends into that space instead.
   Where the row fits its column it stays there, and takes no row of its own above the
   neighbouring column.
-- **R39.** A panel's header row and a row of summary figures MUST stay on one line at every
-  supported width. When the row does not fit, its members shrink first: a shorter label, a
-  smaller figure, a pill reduced to its dot. If it still does not fit, members are removed,
-  least important first, and a removed value stays in the row's tooltip and accessible name.
-  The row never wraps and never scrolls sideways. A row of controls (chips, filters,
-  buttons) follows R38 instead.
+- **R39.** A panel's header row, a row of summary figures and a strip of tabs MUST stay on
+  one line at every supported width. Wherever the row fits at full size, its members keep
+  their full size and content. Only where it would not fit do members shrink: a shorter
+  label, a smaller figure, a pill reduced to its dot. If it still does not fit, members are
+  removed, least important first, and a removed value stays in the row's tooltip and
+  accessible name. Shrinking starts at the width where the full-size row stops fitting,
+  measured from its content or derived from its real full-size width, never at a fixed
+  breakpoint that also catches widths where it fits. The row never wraps and never scrolls
+  sideways. A row of controls (chips, filters, buttons) follows R38 instead.
 
 ### Process
 

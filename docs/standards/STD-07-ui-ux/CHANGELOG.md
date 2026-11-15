@@ -26,3 +26,12 @@ removed or changed in meaning.
 - **v6 (2026-11-14):** adds R39 (a panel's header row and a row of summary figures stay on
   one line: members shrink first, then the least important are removed). From the owner's
   drain-card correction in session f09993e5 (ORB-24812, F2026-11-296).
+- **v7 (2026-11-15):** R39 keeps members at full size wherever the row fits and starts
+  shrinking only at the width where the full-size row stops fitting, never at a fixed
+  breakpoint that also catches fitting widths. It also covers tab strips. From the owner's
+  Tasks-dock tab correction in session f09993e5 (ORB-25032, F2026-11-302).
+- **v8 (2026-11-15):** adds R40 (an inline list's separator sits directly after the
+  preceding item or its icon and is followed by a clear gap, the same everywhere; a small
+  icon sits close to its item, and an enlarged tap target adds no visible space). From the
+  owner's task-detail relation-row corrections in session f09993e5 (ORB-25033,
+  F2026-11-303).
