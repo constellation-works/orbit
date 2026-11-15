@@ -864,6 +864,15 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   /* Stacked: the bar, then the list (or the dock on the dock route), each
      content-sized as before; the bar's own padding keeps the 12px gap. */
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  /* These rows are auto tracks in a grid with a definite height (the 100%
+     rule at the top of this file). `align-content: normal` stretches auto
+     tracks with spare height, so a short list left the chip row and the list
+     each grown, with a band of empty space between them (139px at 600px,
+     265px at 900px). Start-aligned, each track keeps its content height, and
+     a long list still takes the rest of the pane through its own track. The
+     dock route keeps the stretch: it bounds the Drain pane for its own
+     scroll. The task page keeps it for its single pane. */
+  main.tasks-layout:not(.dock-route):not(.task-page-mode) { align-content: start; }
   .tasks-dock { display: contents; }
   .tasks-dock > #side-dock { display: none; }
   /* An explicit dock route (`dock=` in the hash) shows the
