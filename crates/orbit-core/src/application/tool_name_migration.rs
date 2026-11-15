@@ -18,8 +18,11 @@
 //! - installed plugin manifests' `permissions.orbit_tools`, rewritten only
 //!   when the bytes are still the manifest this host recorded at install.
 //!   The rewritten digest is recorded with that rewrite. A failed record
-//!   restores the consented bytes, and a file left as that rewrite is
-//!   finished on the next pass by recording the digest it already has.
+//!   restores the consented bytes, unless a competing pass already recorded
+//!   this rewrite, in which case the healed file stays. The read, rewrite,
+//!   record, rollback and completion marker share one advisory lock. A file
+//!   left as that rewrite is finished on the next pass by recording the
+//!   digest it already has.
 //!
 //! The mapping is [`orbit_types::tool::family_action_tool_names`]. Every
 //! rewrite runs once on upgrade (the first writable runtime open) and again
@@ -534,11 +537,14 @@ impl OrbitRuntime {
     /// is rewritten: the rewrite names the same operations, so it keeps the
     /// operator's consent, while an unconsented edit stays refused.
     ///
-    /// The digest is recorded after the file rewrite. If that record fails,
-    /// the consented bytes are put back and this pass returns the error, so
-    /// the upgrade retries. A file already holding that rewrite — the record
+    /// The digest is recorded after the file rewrite. If that record fails
+    /// and the row still names the bytes this pass read, those bytes are put
+    /// back and this pass returns the error, so the upgrade retries. If the
+    /// row already names this rewrite, a competing pass finished it and the
+    /// healed file is kept. A file already holding that rewrite — the record
     /// failed and the restore did not land — has its digest recorded on the
-    /// next pass without another edit.
+    /// next pass without another edit. The caller holds the pass's advisory
+    /// lock across this work and the completion marker.
     pub(crate) fn migrate_plugin_manifest_tool_names(
         &self,
     ) -> Result<Vec<ToolNameRewrite>, OrbitError> {
@@ -595,30 +601,119 @@ impl OrbitRuntime {
             else {
                 continue;
             };
+            let healed_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
+            let consented_digest = installed.manifest_digest.clone();
+            // Before this pass publishes, so a competing opener still reads
+            // the consented bytes and can finish the rewrite itself.
+            #[cfg(any(test, feature = "test-support"))]
+            plugin_manifest_publish_hook::before_publish();
             atomic_write_text(&path, &healed).map_err(|error| {
                 OrbitError::io_with_context(&error, format!("rewrite {}: {error}", path.display()))
             })?;
-            installed.manifest_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
-            if let Err(error) = self.stores().plugins().upsert_plugin(&installed) {
+            installed.manifest_digest = healed_digest.clone();
+            #[cfg(any(test, feature = "test-support"))]
+            let recorded = if plugin_manifest_publish_hook::take_digest_upsert_failure() {
+                Err(OrbitError::Store(
+                    "injected plugin digest write failure".to_string(),
+                ))
+            } else {
+                self.stores().plugins().upsert_plugin(&installed)
+            };
+            #[cfg(not(any(test, feature = "test-support")))]
+            let recorded = self.stores().plugins().upsert_plugin(&installed);
+            if let Err(error) = recorded {
                 // The manifest and the stored digest have to stay a pair.
-                // Putting the consented bytes back leaves the plugin
-                // loadable; the error keeps the upgrade marker unset so
-                // the next open retries the rewrite.
-                if let Err(restore) = atomic_write_text(&path, &raw) {
-                    tracing::warn!(
-                        target: "orbit.core.tool_names",
-                        plugin = installed.name.as_str(),
-                        %error,
-                        %restore,
-                        "plugin manifest rewrite could not be restored after its digest was not recorded"
-                    );
-                }
-                return Err(error);
+                // Restoring the consented bytes leaves the plugin loadable
+                // when the row is still those bytes. A competing pass that
+                // already recorded this rewrite must keep the healed file:
+                // the completion marker would otherwise suppress the repair.
+                self.settle_failed_plugin_digest_record(FailedPluginDigestRecord {
+                    path: &path,
+                    consented: &raw,
+                    healed: &healed,
+                    plugin_name: &installed.name,
+                    healed_digest: &healed_digest,
+                    consented_digest: &consented_digest,
+                    error,
+                })?;
+                rewrites.push(rewrite);
+                continue;
             }
             rewrites.push(rewrite);
         }
         record_tool_name_rewrites(&global_root.join("state"), &rewrites);
         Ok(rewrites)
+    }
+
+    /// Decide the file side of a digest record that did not land.
+    ///
+    /// `Ok` means a competing pass already recorded this exact rewrite, and
+    /// the healed bytes are the manifest on disk. `Err` stops the pass: the
+    /// consented bytes are back when the row still names them, and the file
+    /// is left alone when the row moved somewhere else or could not be read.
+    fn settle_failed_plugin_digest_record(
+        &self,
+        record: FailedPluginDigestRecord<'_>,
+    ) -> Result<(), OrbitError> {
+        let FailedPluginDigestRecord {
+            path,
+            consented,
+            healed,
+            plugin_name,
+            healed_digest,
+            consented_digest,
+            error,
+        } = record;
+        let recorded = match self.stores().plugins().get_plugin(plugin_name) {
+            Ok(plugin) => plugin.map(|plugin| plugin.manifest_digest),
+            Err(read_error) => {
+                tracing::warn!(
+                    target: "orbit.core.tool_names",
+                    plugin = plugin_name,
+                    %error,
+                    %read_error,
+                    "left the rewritten plugin manifest in place because its stored digest could not be re-read"
+                );
+                return Err(error);
+            }
+        };
+        if recorded.as_deref() == Some(healed_digest) {
+            let on_disk_matches = fs::read(path)
+                .is_ok_and(|bytes| orbit_tools::plugin::manifest_digest(&bytes) == healed_digest);
+            if !on_disk_matches {
+                atomic_write_text(path, healed).map_err(|io_error| {
+                    OrbitError::io_with_context(
+                        &io_error,
+                        format!("keep rewritten {}: {io_error}", path.display()),
+                    )
+                })?;
+            }
+            tracing::debug!(
+                target: "orbit.core.tool_names",
+                plugin = plugin_name,
+                "kept a plugin manifest rewrite a competing pass already recorded"
+            );
+            return Ok(());
+        }
+        if recorded.as_deref() == Some(consented_digest) {
+            if let Err(restore) = atomic_write_text(path, consented) {
+                tracing::warn!(
+                    target: "orbit.core.tool_names",
+                    plugin = plugin_name,
+                    %error,
+                    %restore,
+                    "plugin manifest rewrite could not be restored after its digest was not recorded"
+                );
+            }
+            return Err(error);
+        }
+        tracing::warn!(
+            target: "orbit.core.tool_names",
+            plugin = plugin_name,
+            %error,
+            "left the rewritten plugin manifest in place because its stored digest changed"
+        );
+        Err(error)
     }
 
     /// The upgrade pass, once per root: on the first writable open after an
@@ -629,7 +724,7 @@ impl OrbitRuntime {
     /// old names.
     pub(crate) fn migrate_pre_family_tool_names_on_open(&self) {
         let global_state = self.global_root().join("state");
-        run_once(&global_state, "plugin manifests", || {
+        run_plugin_manifest_migration_once(&global_state, || {
             self.migrate_plugin_manifest_tool_names().map(|_| ())
         });
         let workspace_state = self.paths().state_dir.clone();
@@ -640,6 +735,56 @@ impl OrbitRuntime {
             }
             Ok(())
         });
+    }
+}
+
+/// The file and the row a failed plugin-manifest digest record has to reconcile.
+struct FailedPluginDigestRecord<'a> {
+    path: &'a Path,
+    consented: &'a str,
+    healed: &'a str,
+    plugin_name: &'a str,
+    healed_digest: &'a str,
+    consented_digest: &'a str,
+    error: OrbitError,
+}
+
+/// One plugin-manifest upgrade pass, serialized with its completion marker.
+///
+/// The lock covers the marker check, the rewrite, the digest record, a
+/// rollback and the marker publication. Another process cannot finish the
+/// pass, or publish the marker, between this pass's read and its rollback.
+/// The state directory is not created here: a root without one still has
+/// nothing durable to mark, matching [`run_once`].
+fn run_plugin_manifest_migration_once(
+    state_dir: &Path,
+    pass: impl FnOnce() -> Result<(), OrbitError>,
+) {
+    const SCOPE: &str = "plugin manifests";
+    if !std::fs::symlink_metadata(state_dir).is_ok_and(|meta| meta.is_dir()) {
+        run_once(state_dir, SCOPE, pass);
+        return;
+    }
+    let marker = state_dir.join(TOOL_NAME_MIGRATION_MARKER);
+    // Published under this lock, so a marker that is already present is a
+    // finished pair. The check is repeated inside the lock.
+    if marker.exists() {
+        return;
+    }
+    if let Err(error) = with_exclusive_file_lock(
+        &marker,
+        "plugin manifest tool-name migration",
+        || -> std::io::Result<()> {
+            run_once(state_dir, SCOPE, pass);
+            Ok(())
+        },
+    ) {
+        tracing::warn!(
+            target: "orbit.core.tool_names",
+            scope = SCOPE,
+            %error,
+            "pre-family plugin manifest migration could not take its lock; it retries on the next open"
+        );
     }
 }
 
@@ -755,5 +900,68 @@ fn set_manifest_orbit_tools(manifest: &mut serde_yaml::Value, tools: &[String]) 
                 .map(|tool| serde_yaml::Value::String(tool.clone()))
                 .collect(),
         );
+    }
+}
+
+/// Same-thread rendezvous for the plugin-manifest publish race.
+///
+/// A nested runtime open on this thread re-enters the migration lock, which
+/// is what lets a test finish the competing pass after this pass has read
+/// the consented manifest and before it publishes. Cross-process opens wait
+/// on the lock instead.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod plugin_manifest_publish_hook {
+    use std::cell::{Cell, RefCell};
+
+    type PublishHook = Box<dyn FnOnce()>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<PublishHook>> = const { RefCell::new(None) };
+        static FAIL_DIGEST_UPSERT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    struct RestoreHook(Option<PublishHook>);
+
+    impl Drop for RestoreHook {
+        fn drop(&mut self) {
+            HOOK.with(|slot| {
+                *slot.borrow_mut() = self.0.take();
+            });
+            FAIL_DIGEST_UPSERT.with(|flag| flag.set(false));
+        }
+    }
+
+    /// Run `operation` with a one-shot callback immediately before the first
+    /// consented plugin-manifest publish of a tool-name migration on this
+    /// thread.
+    #[cfg(feature = "test-support")]
+    pub fn with_plugin_manifest_publish_hook<T>(
+        hook: impl FnOnce() + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        let previous = HOOK.with(|slot| slot.replace(Some(Box::new(hook))));
+        let _restore = RestoreHook(previous);
+        operation()
+    }
+
+    /// Fail the next plugin-manifest digest record on this thread as a store
+    /// error, without writing the row.
+    ///
+    /// A digest-change trigger cannot inject this once a competing pass has
+    /// already stored the same digest: the update no longer changes the column.
+    #[cfg(feature = "test-support")]
+    pub fn fail_next_plugin_digest_upsert() {
+        FAIL_DIGEST_UPSERT.with(|flag| flag.set(true));
+    }
+
+    pub(super) fn before_publish() {
+        let hook = HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(super) fn take_digest_upsert_failure() -> bool {
+        FAIL_DIGEST_UPSERT.with(|flag| flag.replace(false))
     }
 }
