@@ -381,6 +381,7 @@ impl crate::OrbitRuntime {
                     && (claim.late_leaf_effort.is_some() || claim.late_leaf_model.is_some())
             })
             .map(|claim| LateClaimAttribution {
+                task_id: claim.claim.task_id.clone(),
                 claim_id: claim.claim.claim_id.clone(),
                 crew: claim
                     .late_leaf_effort
@@ -406,6 +407,7 @@ impl crate::OrbitRuntime {
 /// A settled claim's model and effort as only its follower's late reports
 /// give them: the claim settled before the owner kept settlement records.
 pub(crate) struct LateClaimAttribution {
+    pub(crate) task_id: String,
     pub(crate) claim_id: String,
     /// The crew the late report named, which keys the attempt with its model
     /// [ORB-24206].

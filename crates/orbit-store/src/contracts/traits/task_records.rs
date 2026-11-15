@@ -20,9 +20,15 @@ pub trait TaskDocumentStoreBackend: Send + Sync {
 pub trait TaskHistoryStoreBackend: Send + Sync {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError>;
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError>;
-    /// Evidence that a task's history and comments are unchanged.
-    fn task_history_stamp(&self, _id: &str) -> Result<Option<String>, OrbitError>;
-    /// History stamps for each listed task, in one pass.
+    /// Evidence that one task's history and comments are unchanged. Kept as
+    /// a compatibility wrapper over the batch operation; aggregate readers
+    /// should use [`Self::task_history_stamps`] to avoid a check per task.
+    fn task_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        let ids = [id.to_string()];
+        Ok(self.task_history_stamps(&ids)?.remove(id))
+    }
+    /// Evidence that a task's history and comments are unchanged, for each
+    /// listed task, in one pass.
     fn task_history_stamps(
         &self,
         _ids: &[String],

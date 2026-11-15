@@ -213,7 +213,19 @@ impl OrbitRuntime {
     /// and pilot receipts use task-history receipts only, without delivery
     /// observation.
     pub fn codebase_scan(&self) -> Result<CodebaseFacts, OrbitError> {
-        facts::scan(self, None, true)
+        facts::scan(self, None, true, None)
+    }
+
+    /// [`Self::codebase_scan`] over a task list and history stamps a
+    /// preceding scan of the same workspace already took (the agent
+    /// scorecards list and stamp every task for their own facts first),
+    /// so the combined scan lists and stamps once, not twice.
+    pub(crate) fn codebase_scan_with_tasks(
+        &self,
+        tasks: Vec<orbit_types::task::Task>,
+        stamps: std::collections::BTreeMap<String, String>,
+    ) -> Result<CodebaseFacts, OrbitError> {
+        facts::scan(self, None, true, Some((tasks, stamps)))
     }
 
     /// Scan facts for related-file queries in this window. Delivery fallback
@@ -223,7 +235,7 @@ impl OrbitRuntime {
         &self,
         query: &CodebaseQuery,
     ) -> Result<CodebaseFacts, OrbitError> {
-        facts::scan(self, Some(&query.params()), true)
+        facts::scan(self, Some(&query.params()), true, None)
     }
 
     /// Scan, then rank for `query`. For callers that keep no scan, so the

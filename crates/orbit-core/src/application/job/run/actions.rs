@@ -630,6 +630,21 @@ impl OrbitRuntime {
         self.stores().jobs().read_run_state(run_id)
     }
 
+    /// The run's serialized pipeline state, unparsed, for a reader that
+    /// needs only a projection of it (pilot attribution reads a crew draw
+    /// and two fields per applied task from thousands of runs per scan).
+    pub(crate) fn read_run_state_json(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.stores().jobs().read_run_state_json(run_id)
+    }
+
+    /// [`Self::read_run_state_json`] for many runs in one store call.
+    pub(crate) fn read_run_state_jsons(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
+        self.stores().jobs().read_run_state_jsons(run_ids)
+    }
+
     /// Pipeline state for a list page in one store round-trip, not one per run.
     pub fn read_run_states(
         &self,

@@ -14,61 +14,87 @@ use crate::OrbitRuntime;
 const PULLED_BY_EVENT: &str = "pulled_by";
 
 /// The implementation job runs active since `horizon`, by the task their
-/// input names, oldest first. Read without their steps.
+/// input names, oldest first. Read without their steps, one query per
+/// delivery leaf on its own thread: each leaf's history is an independent
+/// read through the store's pooled readers, and a scan reads all four.
 pub(super) fn implementation_runs(
     runtime: &OrbitRuntime,
     horizon: DateTime<Utc>,
 ) -> BTreeMap<String, Vec<RunRecord>> {
-    let mut by_task: BTreeMap<String, Vec<RunRecord>> = BTreeMap::new();
     // The jobs whose runs implement a task: the PR and local delivery
     // leaves, owned or claimed.
-    for job in orbit_types::workflow::DELIVERY_LEAF_JOBS {
-        let runs = runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some((*job).to_string()),
-                recency_since: Some(horizon),
-                include_steps: false,
-                ..Default::default()
-            })
-            .unwrap_or_else(|error| {
-                tracing::warn!(job, %error, "agent scorecards: implementation runs unreadable");
-                Vec::new()
-            });
-        for run in runs {
-            let Some(input) = run.input.as_ref() else {
-                continue;
-            };
-            let named: BTreeSet<&str> = input
-                .get("task_ids")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .chain(input.get("task_id").and_then(Value::as_str))
-                .collect();
-            for task_id in named {
-                by_task
-                    .entry(task_id.to_string())
-                    .or_default()
-                    .push(RunRecord {
-                        started_at: run.started_at.unwrap_or(run.created_at),
-                        finished_at: run.finished_at,
-                        runner: Runner {
-                            crew: run.resolved_crew.clone(),
-                            model: run.crew_model.clone(),
-                            run_id: Some(run.run_id.to_string()),
-                            reported_effort: None,
-                        },
-                    });
-            }
-        }
+    let per_job: Vec<Vec<(String, RunRecord)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = orbit_types::workflow::DELIVERY_LEAF_JOBS
+            .iter()
+            .map(|job| scope.spawn(move || delivery_leaf_runs(runtime, job, horizon)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap_or_default())
+            .collect()
+    });
+    let mut by_task: BTreeMap<String, Vec<RunRecord>> = BTreeMap::new();
+    for (task_id, record) in per_job.into_iter().flatten() {
+        by_task.entry(task_id).or_default().push(record);
     }
     for runs in by_task.values_mut() {
         runs.sort_by_key(|run| run.started_at);
     }
     by_task
+}
+
+/// One delivery leaf's runs since `horizon`, as (task, record) pairs in
+/// the order the store listed the runs.
+fn delivery_leaf_runs(
+    runtime: &OrbitRuntime,
+    job: &str,
+    horizon: DateTime<Utc>,
+) -> Vec<(String, RunRecord)> {
+    let runs = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(job.to_string()),
+            recency_since: Some(horizon),
+            include_steps: false,
+            // Only the task links are read from each run's input.
+            input_keys: Some(&["task_id", "task_ids"]),
+            ..Default::default()
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(job, %error, "agent scorecards: implementation runs unreadable");
+            Vec::new()
+        });
+    let mut records = Vec::new();
+    for run in runs {
+        let Some(input) = run.input.as_ref() else {
+            continue;
+        };
+        let named: BTreeSet<&str> = input
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .chain(input.get("task_id").and_then(Value::as_str))
+            .collect();
+        for task_id in named {
+            records.push((
+                task_id.to_string(),
+                RunRecord {
+                    started_at: run.started_at.unwrap_or(run.created_at),
+                    finished_at: run.finished_at,
+                    runner: Runner {
+                        crew: run.resolved_crew.clone(),
+                        model: run.crew_model.clone(),
+                        run_id: Some(run.run_id.to_string()),
+                        reported_effort: None,
+                    },
+                },
+            ));
+        }
+    }
+    records
 }
 
 /// The job run that worked an attempt starting at `start`: the latest run
@@ -95,6 +121,9 @@ pub(super) fn runner(
 pub(in crate::application::agents) struct PulledClaimRunners<'a> {
     /// The crew, model and reported effort of each settled claim, by claim.
     pub(super) by_claim: HashMap<&'a str, Runner>,
+    /// Each task's settled claims, so a stored row's freshness depends on
+    /// the claims its own task was pulled under, not every claim's.
+    pub(super) by_task: HashMap<&'a str, Vec<&'a str>>,
     /// The models each crew is known to have run.
     pub(super) crew_models: KnownCrewModels,
 }

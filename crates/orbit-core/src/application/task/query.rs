@@ -203,24 +203,9 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
     }
 
-    /// Evidence that a task's history and comments are unchanged since an
-    /// earlier stamp, taken without reading them; `None` when nothing can
-    /// vouch for them. A worker reads through its owner, so it has none.
-    pub(crate) fn task_history_stamp(&self, id: &str) -> Option<String> {
-        if self.worker_invocation().is_some() {
-            return None;
-        }
-        self.stores()
-            .task_history()
-            .task_history_stamp(id)
-            .unwrap_or_else(|error| {
-                tracing::debug!(task_id = %id, %error, "task history stamp unavailable");
-                None
-            })
-    }
-
-    /// [`Self::task_history_stamp`] for each listed task, in one pass; a
-    /// task is absent when nothing can vouch for its logs. A worker reads
+    /// Evidence that each listed task's history and comments are unchanged
+    /// since an earlier stamp, taken without reading them and in one pass;
+    /// a task is absent when nothing can vouch for its logs. A worker reads
     /// through its owner, so it has none.
     pub(crate) fn task_history_stamps(&self, ids: &[String]) -> BTreeMap<String, String> {
         if self.worker_invocation().is_some() {

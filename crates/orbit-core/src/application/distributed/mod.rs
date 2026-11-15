@@ -64,6 +64,7 @@ mod task_port;
 mod work_fit;
 
 pub(in crate::application) use admission_port::DistributedAdmissionPort;
+pub(crate) use auth_failures::pilot_run_crew_from_draws;
 pub use contract::{
     DeclaredCallerContract, OWNER_COMPLETION_POLICY, ensure_distributed_mutation_available,
     owner_binary_version,
@@ -79,6 +80,7 @@ pub use leaf_hydration::{
     DEFAULT_LEAF_HYDRATION_LIMIT, FollowerRunObserver, LeafHydrationOutcome, LeafHydrationReport,
     LeafHydrationRequest, LeafHydrationRow, MAX_LEAF_HYDRATION_LIMIT,
 };
+pub(crate) use leaf_settlements::LateClaimAttribution;
 pub use leaf_settlements::{
     LeafRunEvidenceView, LeafSettlement, SettlementAccounting, SettlementOutcome,
 };
