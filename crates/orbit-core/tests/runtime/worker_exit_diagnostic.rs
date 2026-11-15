@@ -349,3 +349,181 @@ fn a_terminated_run_names_who_sent_the_signal() {
     assert_eq!(exit["signal_sender"]["uid"], uid, "{exit}");
     assert_eq!(exit["signal_sender"]["command"], command, "{exit}");
 }
+
+/// The submitting process need not survive a detached worker. Reconcile a
+/// real worker reaped outside Orbit, after its scope and supervisor evidence
+/// are unavailable, using the worker's own durable lifecycle and signal log.
+#[cfg(target_os = "linux")]
+#[test]
+fn reconciliation_keeps_worker_provenance_without_a_supervisor_exit_row() {
+    if !isolated(
+        "worker_exit_diagnostic::reconciliation_keeps_worker_provenance_without_a_supervisor_exit_row",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let run_id = fixture
+        .jobs
+        .insert_job_run(JOB, 1, Utc::now(), Some(json!({})), None)
+        .unwrap()
+        .run_id;
+    std::fs::create_dir_all(&fixture.runtime.paths().logs_dir).unwrap();
+    let log = std::fs::OpenOptions::new()
+        .create_new(true)
+        .append(true)
+        .open(
+            fixture
+                .runtime
+                .paths()
+                .logs_dir
+                .join(format!("{run_id}.worker.log")),
+        )
+        .unwrap();
+    use std::os::unix::process::CommandExt;
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "worker_exit_diagnostic::signalled_worker",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(SIGNALLED_WORKER_ROOT, fixture.root.path())
+        .env(SIGNALLED_WORKER_RUN, &run_id)
+        .process_group(0)
+        .stdout(log.try_clone().unwrap())
+        .stderr(log)
+        .spawn()
+        .unwrap();
+    let mut worker = orbit_common::process::OwnedChild::from_spawned(child);
+    let pid = fixture.running_pid(&run_id);
+    assert_eq!(worker.pid(), pid);
+    // The entry record should not be lost behind a large log either.
+    use std::io::Write;
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(
+            fixture
+                .runtime
+                .paths()
+                .logs_dir
+                .join(format!("{run_id}.worker.log")),
+        )
+        .unwrap();
+    log.write_all(&vec![b' '; 32 * 1024]).unwrap();
+    log.write_all(b"\n").unwrap();
+    worker.signal_group(libc::SIGTERM).unwrap();
+    let status = wait_for("the unobserved worker's exit", || {
+        worker.child_mut().try_wait().unwrap()
+    });
+    assert!(!status.success());
+    worker.mark_reaped();
+    let run = wait_for("orphan reconciliation after startup grace", || {
+        let run = fixture.runtime.show_job_run(&run_id).unwrap();
+        run.state.is_terminal().then_some(run)
+    });
+    assert_eq!(run.state, JobRunState::Interrupted);
+    let diagnostic = fixture.diagnostic(&run);
+    assert!(
+        diagnostic.contains("no supervisor observed or recorded its exit status"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains(&format!("worker pid {pid} entered at")),
+        "worker lifetime must survive loss of its reaper: {diagnostic}"
+    );
+    assert!(
+        diagnostic.contains(&format!("parent pid {}", std::process::id())),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains(&format!(
+            "signal=15 worker_pid={pid} sender_pid={}",
+            std::process::id()
+        )),
+        "captured signal provenance must reach the run failure: {diagnostic}"
+    );
+    assert_eq!(
+        run.steps.iter().find_map(|step| step.error_code.as_deref()),
+        Some("worker_terminated")
+    );
+}
+
+/// An exit audit is best-effort during a store outage. Remove the isolated
+/// fixture's audit after the reap, before reconciliation, to reproduce the
+/// same missing-row boundary without creating host load or lock contention.
+#[cfg(target_os = "linux")]
+#[test]
+fn reconciliation_recovers_a_reaped_status_when_the_exit_audit_is_missing() {
+    if !isolated(
+        "worker_exit_diagnostic::reconciliation_recovers_a_reaped_status_when_the_exit_audit_is_missing",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    install_substitute_pipeline_worker([
+        "/usr/bin/env".to_string(),
+        format!("{SIGNALLED_WORKER_ROOT}={}", fixture.root.path().display()),
+        format!(
+            "{SIGNALLED_WORKER_RUN}={}",
+            orbit_core::test_support::RUN_ID_PLACEHOLDER
+        ),
+        std::env::current_exe().unwrap().display().to_string(),
+        "--exact".to_string(),
+        "worker_exit_diagnostic::signalled_worker".to_string(),
+        "--nocapture".to_string(),
+        "--test-threads=1".to_string(),
+    ]);
+    let (at_reap, reaped) = mpsc::sync_channel(1);
+    let (resume, continue_observer) = mpsc::sync_channel(1);
+    install_worker_reap_hook(WorkerReapPhase::AfterExitRecorded, move |_| {
+        at_reap.send(()).unwrap();
+        let _ = continue_observer.recv_timeout(DEADLINE);
+    });
+    let run_id = fixture
+        .runtime
+        .submit_job_run(JOB, json!({}), None)
+        .unwrap()
+        .run_id;
+    let pid = fixture.running_pid(&run_id);
+    kill(pid);
+    reaped.recv_timeout(DEADLINE).unwrap();
+    assert!(
+        fixture
+            .runtime
+            .sqlite_store()
+            .unwrap()
+            .prune_audit_events(&(Utc::now() + chrono::Duration::seconds(1)))
+            .unwrap()
+            > 0
+    );
+    let reconciled = wait_for("reconciliation with a missing exit audit", || {
+        let run = fixture.runtime.show_job_run(&run_id).unwrap();
+        run.state.is_terminal().then_some(run)
+    });
+    resume.send(()).unwrap();
+    wait_for("the supervisor's settlement", || {
+        pipeline_worker_observer_completed(&fixture.runtime.paths().repo_root, &run_id, pid)
+            .then_some(())
+    });
+    let diagnostic = fixture.diagnostic(&reconciled);
+    assert!(
+        diagnostic.contains("recovered from worker log; exit audit unavailable"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains(&format!("reaped pid {pid} at")) && diagnostic.contains("SIGKILL"),
+        "{diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("no supervisor observed or recorded its exit status"),
+        "{diagnostic}"
+    );
+    assert_eq!(reconciled.state, JobRunState::Interrupted);
+    assert_eq!(
+        reconciled
+            .steps
+            .iter()
+            .find_map(|step| step.error_code.as_deref()),
+        Some("worker_terminated")
+    );
+}

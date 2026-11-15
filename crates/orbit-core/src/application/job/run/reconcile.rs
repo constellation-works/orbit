@@ -309,7 +309,11 @@ impl OrbitRuntime {
         // evidence now: enriching only the later step cannot amend the outbox.
         let settlement_message = append_run_clauses(
             &message,
-            reconciled_worker_exit_clause(self.stores().audit_events(), &current),
+            reconciled_worker_exit_clause(
+                self.stores().audit_events(),
+                &current,
+                &self.paths().logs_dir,
+            ),
             rescue_clause.as_deref(),
         );
         let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
@@ -335,7 +339,11 @@ impl OrbitRuntime {
         // exit the worker's supervisor recorded meanwhile is still named.
         let message = append_run_clauses(
             &message,
-            reconciled_worker_exit_clause(self.stores().audit_events(), &current),
+            reconciled_worker_exit_clause(
+                self.stores().audit_events(),
+                &current,
+                &self.paths().logs_dir,
+            ),
             rescue_clause.as_deref(),
         );
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);

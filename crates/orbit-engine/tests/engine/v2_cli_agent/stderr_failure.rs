@@ -48,6 +48,65 @@ fn incident_class(message: &str) -> orbit_store::FailureClass {
 }
 
 #[test]
+fn codex_terminal_error_survives_a_startup_only_stderr_tail() {
+    for cause in [
+        "failed to record rollout items: thread fixture-thread not found",
+        "stream disconnected before completion: connection closed",
+        "[owner_busy] [baseline_red] permission denied; unsupported; invalid input",
+        "Authorization: Bearer fixture-provider-secret",
+    ] {
+        let frames = serde_json::json!({"type":"turn.failed", "error":{"message":cause}});
+        let fake = fake_cli("codex", &format!(
+            "#!/bin/sh\ncat > /dev/null\necho 'Reading prompt from stdin...' >&2\ncat <<'PAYLOAD'\n{frames}\nPAYLOAD\nexit 1\n"
+        )).unwrap();
+        let host = ScriptHost::new(fake.cli_path());
+        let mut spec = cli_agent_loop_spec(Some(Provider::Codex));
+        spec.model = None;
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "codex_terminal_fixture",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({"prompt":"test"}),
+            audit: Arc::new(V2AuditWriter::new(
+                "codex-terminal",
+                "fixture",
+                Arc::new(orbit_agent::loop_engine::audit::NullSink),
+            )),
+            run_id: "codex-terminal",
+            host: Some(&host),
+        })
+        .unwrap();
+        assert!(!outcome.success);
+        let message = outcome.message.unwrap();
+        let expected = if cause.starts_with("Authorization:") {
+            "[REDACTED_AUTH]"
+        } else {
+            cause
+        };
+        assert!(
+            message.contains(expected),
+            "provider terminal cause must survive: {message}"
+        );
+        assert!(!message.contains("fixture-provider-secret"), "{message}");
+        assert!(
+            message.contains("Reading prompt from stdin..."),
+            "{message}"
+        );
+        assert_eq!(
+            incident_class(&message),
+            orbit_store::FailureClass::Unexpected,
+            "diagnostic context must not change failure accounting: {message}"
+        );
+        assert_eq!(
+            ClaimFailureClass::of_step_failure(None, Some(&message)),
+            None,
+            "{message}"
+        );
+        assert_eq!(HeldFailure::of(None, Some(&message)), None, "{message}");
+    }
+}
+
+#[test]
 fn generic_exit_surfaces_only_the_last_nonempty_stderr_lines() {
     let message = failed_provider_message(
         "old context\nline 2\nline 3\nline 4\n\n  \nboom: credentials missing\n\n",
