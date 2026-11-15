@@ -142,6 +142,13 @@ A rule is here only when its correction recurred.
   those that gets truncated" and "excess space in the hover-over container" (7995d040,
   ORB-24124). Every progress-strip step had a tooltip, and each bubble was a fixed 280px
   wide.
+- **R41 (every button says what it does on hover).** "let's add another ux convention - on
+  every buttons, there should be a short hover-over help message on what it does"
+  (f09993e5, F2026-11-304). The dashboard Residents tab's buttons (Start, Turn off, Wake for
+  status, Pause…, Takeover…, Relay…, Stop…) gave no hint of their effect: whether Wake runs
+  a cycle now, what Takeover hands over, or whether Stop can be undone. R32 limited
+  tooltips to what the screen does not already show, which read as discouraging them on
+  buttons. A button's effect is exactly that kind of off-screen detail.
 
 ## Data display
 
