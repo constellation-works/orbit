@@ -6,6 +6,7 @@ use crate::command::{CommandOut, Execute};
 use super::init::WorkspaceInitArgs;
 use super::list::WorkspaceListArgs;
 use super::publication::WorkspacePublicationCommand;
+use super::rebind::WorkspaceRebindArgs;
 use super::remove::WorkspaceRemoveArgs;
 use super::role::WorkspaceRoleArgs;
 use super::ship_mode::WorkspaceShipModeArgs;
@@ -27,6 +28,8 @@ pub enum WorkspaceSubcommand {
     Init(WorkspaceInitArgs),
     /// Converge managed artifacts on the defaults shipped by this Orbit binary
     Sync(WorkspaceSyncArgs),
+    /// Rebind this host to a checkout directory the operator already moved
+    Rebind(WorkspaceRebindArgs),
     /// List all registered workspaces
     List(WorkspaceListArgs),
     /// Show the current workspace
@@ -55,6 +58,9 @@ impl Execute for WorkspaceCommand {
             WorkspaceSubcommand::Sync(_) => {
                 unreachable!("workspace sync should be handled before runtime initialization")
             }
+            WorkspaceSubcommand::Rebind(_) => Err(orbit_core::OrbitError::Execution(
+                "workspace rebind requires runtime-free dispatch".into(),
+            )),
             WorkspaceSubcommand::List(args) => args.execute(runtime),
             WorkspaceSubcommand::Show(args) => args.execute(runtime),
             WorkspaceSubcommand::SourceRemote(command) => command.execute(runtime),

@@ -372,6 +372,12 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Sync(args),
         }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
+        Commands::Workspace(WorkspaceCommand {
+            command: WorkspaceSubcommand::Rebind(args),
+        }) => args.execute_workspace_rebind_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+        ),
         Commands::Workspace(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Workspace"),
     }

@@ -410,6 +410,13 @@ pub enum OrbitError {
     JobRunControlConflict(String),
     #[error("workspace error: {0}")]
     WorkspaceError(String),
+    /// Checkout relocation cannot inspect activity or append its audit without
+    /// an initialized host store. Reporting this prerequisite never creates it.
+    #[error(
+        "checkout rebind requires the missing host store '{}'; initialize it by running a runtime Orbit command such as `orbit tool run orbit.task.list --input '{{}}'` from a registered checkout before moving it, then retry",
+        path.display()
+    )]
+    WorkspaceRebindHostStoreRequired { path: std::path::PathBuf },
     #[error("io error: {0}")]
     Io(String),
     #[error("schema migration failed: {0}")]
