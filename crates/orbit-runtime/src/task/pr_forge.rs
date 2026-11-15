@@ -17,6 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
+use orbit_engine::{CheckState, classify_rollup_context};
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
 use serde_json::Value;
 
@@ -736,12 +737,10 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
                 .and_then(Value::as_str)
                 .unwrap_or("unnamed check")
                 .to_string();
-            if required_context_failed(context) {
-                failed_required_checks.push(name);
-            } else if required_context_passed(context) {
-                passed_required_checks.push(name);
-            } else {
-                pending_required_checks.push(name);
+            match classify_rollup_context(context) {
+                Some(CheckState::Failed) => failed_required_checks.push(name),
+                Some(CheckState::Passed) => passed_required_checks.push(name),
+                Some(CheckState::Pending) | None => pending_required_checks.push(name),
             }
         }
     }
@@ -762,39 +761,4 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         pending_required_checks,
         passed_required_checks,
     })
-}
-
-/// Whether a required status context failed, as completion's watcher
-/// classifies it: a status `FAILURE` or `ERROR`, or a completed check run
-/// that did not succeed, skip or end neutral.
-fn required_context_failed(context: &Value) -> bool {
-    if let Some(state) = context.get("state").and_then(Value::as_str) {
-        return matches!(state, "FAILURE" | "ERROR");
-    }
-    context.get("status").and_then(Value::as_str) == Some("COMPLETED")
-        && matches!(
-            context.get("conclusion").and_then(Value::as_str),
-            Some(
-                "FAILURE"
-                    | "CANCELLED"
-                    | "TIMED_OUT"
-                    | "ACTION_REQUIRED"
-                    | "STARTUP_FAILURE"
-                    | "STALE"
-            )
-        )
-}
-
-/// Whether a required status context passed: a status `SUCCESS`, or a
-/// completed check run that succeeded, skipped or ended neutral. A context
-/// neither failed nor passed has not finished.
-fn required_context_passed(context: &Value) -> bool {
-    if let Some(state) = context.get("state").and_then(Value::as_str) {
-        return state == "SUCCESS";
-    }
-    context.get("status").and_then(Value::as_str) == Some("COMPLETED")
-        && matches!(
-            context.get("conclusion").and_then(Value::as_str),
-            Some("SUCCESS" | "SKIPPED" | "NEUTRAL")
-        )
 }
