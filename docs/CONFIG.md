@@ -2803,7 +2803,7 @@ Every message Orbit writes comes from one composer and follows one standard. Tha
 
 **Subject.** `<type>: <summary> [<ID>]… (#<PR>)`:
 
-- `type` comes from the task type alone, never from the kind of commit: `feature` → `feat`, `bug` → `fix`, `refactor` → `refactor`, `chore` → `chore`. A bundle takes the first of `feat`, `fix`, `refactor`, `chore` that one of its tasks has. A `commit.subject_template` subject may also use `docs`.
+- `type` comes from the task type alone, never from the kind of commit: `feature` → `feat`, `bug` → `fix`, `refactor` → `refactor`, `chore` → `chore`. A bundle takes the first of `feat`, `fix`, `refactor`, `chore` that one of its tasks has. A `commit.subject_template` writes its own type word, so it may also name `docs`; Orbit checks only the grammar of the rendered subject.
 - Each task id sits in its own brackets: `[ORB-1] [ORB-2]`, never `[ORB-1, ORB-2]`. A non-`github-pr` external ref is bracketed as `[<SYSTEM>-<id>]`.
 - `(#<PR>)` is added only to a squash message.
 - The whole subject is at most 72 characters before account-mention protection. The summary is cut at a word boundary (trailing `:`, `;`, `,`, `-`, `(` and `[` dropped), never with an ellipsis. When it is cut, the full title leads the body. A bundle whose ids would leave the summary under 16 characters drops ids from the end of the subject; its `Orbit-Task` trailers still name every task.

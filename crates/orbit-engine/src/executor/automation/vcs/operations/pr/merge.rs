@@ -191,7 +191,8 @@ fn merge_message(input: &Value, strategy: &str) -> Result<Option<MergeMessage>, 
             body: body.to_string(),
         })),
         _ => Err(OrbitError::InvalidInput(format!(
-            "a {strategy} merge requires the Orbit-composed commit_title and commit_message;              the forge default message is never used"
+            "a {strategy} merge requires the Orbit-composed commit_title and commit_message; \
+             the forge default message is never used"
         ))),
     }
 }

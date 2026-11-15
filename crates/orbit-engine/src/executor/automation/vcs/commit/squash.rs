@@ -36,8 +36,8 @@ pub fn compose_squash_merge_message(
         .unwrap_or_default();
     let message = MergeMessage::from(&squash_merge_message(tasks, pr_config, pr_number, &inner));
     MergeMessage {
-        title: forge_text::neutralize_mentions(&message.title),
-        body: forge_text::neutralize_mentions(&message.body),
+        title: forge_text::neutralize_commit_message(&message.title),
+        body: forge_text::neutralize_commit_message(&message.body),
     }
 }
 

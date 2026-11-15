@@ -22,7 +22,10 @@ pub(super) fn git_commit_with_identity(
     let mut args = vec!["commit".to_string()];
     args.push("--author".to_string());
     args.push(author.spec());
-    args.extend(["-m".to_string(), forge_text::neutralize_mentions(message)]);
+    args.extend([
+        "-m".to_string(),
+        forge_text::neutralize_commit_message(message),
+    ]);
     git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
 }
 
@@ -44,7 +47,7 @@ pub(super) fn git_commit_paths_with_identity(
         "--author".to_string(),
         author.spec(),
         "-m".to_string(),
-        forge_text::neutralize_mentions(message),
+        forge_text::neutralize_commit_message(message),
         "--".to_string(),
     ];
     args.extend(paths.iter().map(|path| literal_pathspec(path)));
@@ -63,7 +66,7 @@ pub(super) fn git_commit_as(
         "--author".to_string(),
         author.spec(),
         "-m".to_string(),
-        forge_text::neutralize_mentions(message),
+        forge_text::neutralize_commit_message(message),
     ];
     git_success_dynamic_with_identity(workspace_path, &args, author, &committer)
 }
