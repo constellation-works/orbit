@@ -595,6 +595,10 @@ fn stale_run_failure_contract_holds_job_step_and_automation_mints() {
             .copied(),
     );
     let fixture = Fixture::new();
+    // `orbit init` selects a default crew from host CLIs; CI may select one
+    // that is disabled there, preventing the detached worker from reaching
+    // the job-step admission behavior under test.
+    crate::fixture_crew::configure_sol(&fixture.root);
     write_stale_run_failure_body(&fixture);
     auto_task_tool(
         &fixture,
