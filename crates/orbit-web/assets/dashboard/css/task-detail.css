@@ -277,6 +277,31 @@
 .detail-tab-count:empty { display: none; }
 .detail-tabpanel { min-width: 0; }
 .detail-tabpanel[hidden] { display: none; }
+.task-detail-pane .task-detail > .detail-tabpanel[data-tab-panel="comments"]:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.comments-tab-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-tab-content > .comments-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-panel:not(.collapsed) .comment-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.comments-panel:not(.collapsed) .comment-thread > .comment-card:last-child {
+  flex-grow: 1;
+}
 
 .history-list { min-width: 0; }
 
@@ -1794,6 +1819,8 @@ input.field-editor-input {
 .task-action-footer:has(> .field-actions:empty) { display: none; }
 .task-detail-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
 .task-action-footer .reject-form { animation: none; }
+/* Let the comments region meet its pinned composer across the task-detail gap. */
+.task-action-footer[data-footer-tab="comments"] { margin-top: -16px; }
 @container task-pane (max-width: 440px) {
   .task-action-footer { margin: auto -16px -16px; padding-inline: 16px; }
 }
