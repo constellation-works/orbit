@@ -89,6 +89,56 @@ pub(super) fn runner(
         .map(|run| run.runner.clone())
 }
 
+/// What the claims other machines pulled record of who ran them, read once
+/// per scan.
+#[derive(Debug, Default)]
+pub(in crate::application::agents) struct PulledClaimRunners<'a> {
+    /// The crew, model and reported effort of each settled claim, by claim.
+    pub(super) by_claim: HashMap<&'a str, Runner>,
+    /// The models each crew is known to have run.
+    pub(super) crew_models: KnownCrewModels,
+}
+
+/// The models each crew is known to have run: every crew and model one record
+/// names together, which is a local implementation run, a claim settlement or
+/// a follower's late report that names its crew. The crew and the model of
+/// such a record describe one leaf, so the pair is what actually ran.
+///
+/// The crew definitions are not used. They say what a crew resolves to on
+/// this host now, and a follower's configuration, or an earlier one of this
+/// host, can resolve the same crew to another model; the records keep what
+/// each crew ran when it ran. A crew no record pairs with a model has no
+/// known model.
+#[derive(Debug, Default)]
+pub(in crate::application::agents) struct KnownCrewModels(BTreeMap<String, BTreeSet<String>>);
+
+impl KnownCrewModels {
+    /// Note the pair a record names, when it names both.
+    pub(super) fn note_recorded_pair(&mut self, runner: &Runner) {
+        if let (Some(crew), Some(model)) = (&runner.crew, &runner.model) {
+            self.0
+                .entry(crew.clone())
+                .or_default()
+                .insert(model.clone());
+        }
+    }
+
+    /// Whether a record shows `crew` running `model`.
+    fn ran(&self, crew: &str, model: &str) -> bool {
+        self.0
+            .get(crew)
+            .is_some_and(|models| models.contains(model))
+    }
+
+    /// Whether the records show `crew` running models and `model` is none of
+    /// them. False for a crew with no known model.
+    fn contradicts(&self, crew: &str, model: &str) -> bool {
+        self.0
+            .get(crew)
+            .is_some_and(|models| !models.contains(model))
+    }
+}
+
 /// Who worked an attempt with no local job run, as a pull from another
 /// machine is: the crew and model of the claim the `pulled_by` note names,
 /// from `pulled` by claim, and the pulling run that note names. That record is
@@ -98,13 +148,19 @@ pub(super) fn runner(
 /// predates the crew field), the crew falls back to the one task history had
 /// assigned by the attempt's start (else the task's crew when history records
 /// no assignment), and the record's model still counts as the record gave it.
+/// That fallback pairs a crew and a model from two records, so it is dropped
+/// when they contradict each other [ORB-24967]: when the history crew is
+/// known to run models ([`KnownCrewModels`]) and the record's model is none
+/// of them, the attempt is keyed to the one crew the task's crew assignments
+/// name that is known to run that model, else to no crew. A history crew with
+/// no known model, or one known to run the record's model, stands.
 /// Without a record the model stays unknown. The record's
 /// reported reasoning effort rides along for the effort lookup's fallback; it
 /// is never derived from this owner's crew configuration.
 pub(super) fn assigned_runner(
     task: &Task,
     history: &[TaskHistoryEntry],
-    pulled: &HashMap<&str, Runner>,
+    pulled: &PulledClaimRunners<'_>,
     start: DateTime<Utc>,
 ) -> Runner {
     let note = history
@@ -118,20 +174,46 @@ pub(super) fn assigned_runner(
             .and_then(Value::as_str)
             .map(str::to_string)
     };
-    let settled = field("/claim_id").and_then(|claim| pulled.get(claim.as_str()));
-    let assignments = || {
-        history.iter().filter_map(|entry| {
+    let settled = field("/claim_id").and_then(|claim| pulled.by_claim.get(claim.as_str()));
+    let assignments: Vec<(DateTime<Utc>, RecordedCrewAssignment)> = history
+        .iter()
+        .filter_map(|entry| {
             RecordedCrewAssignment::from_entry(entry).map(|assignment| (entry.at, assignment))
         })
-    };
-    let crew = match assignments().rfind(|(at, _)| *at <= start) {
+        .collect();
+    let history_crew = match assignments.iter().rfind(|(at, _)| *at <= start) {
         Some((_, assignment)) => assignment.known_after_crew().map(str::to_string),
-        None if assignments().next().is_none() => task.crew.clone(),
+        None if assignments.is_empty() => task.crew.clone(),
         None => None,
     };
+    let model = settled.and_then(|runner| runner.model.clone());
+    let crew = match settled.and_then(|runner| runner.crew.clone()) {
+        Some(recorded) => Some(recorded),
+        None => match (history_crew, model.as_deref()) {
+            (Some(crew), Some(model)) if pulled.crew_models.contradicts(&crew, model) => {
+                let mut running: BTreeSet<&str> = assignments
+                    .iter()
+                    .flat_map(|(_, assignment)| {
+                        [
+                            assignment.known_before_crew(),
+                            assignment.known_after_crew(),
+                        ]
+                    })
+                    .flatten()
+                    .chain(task.crew.as_deref())
+                    .filter(|crew| pulled.crew_models.ran(crew, model))
+                    .collect();
+                match (running.pop_first(), running.is_empty()) {
+                    (Some(only), true) => Some(only.to_string()),
+                    _ => None,
+                }
+            }
+            (crew, _) => crew,
+        },
+    };
     Runner {
-        crew: settled.and_then(|runner| runner.crew.clone()).or(crew),
-        model: settled.and_then(|runner| runner.model.clone()),
+        crew,
+        model,
         run_id: field("/run_context/run_id"),
         reported_effort: settled.and_then(|runner| runner.reported_effort.clone()),
     }
