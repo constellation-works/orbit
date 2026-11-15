@@ -402,6 +402,7 @@ impl OrbitRuntime {
                 || params.template.is_some()
                 || params.enabled.is_some()
                 || params.granted_tools.is_some()
+                || params.adopt_bundled_contract
             {
                 return Err(OrbitError::InvalidInput(
                     "waive_batch cannot be combined with a definition edit".into(),
