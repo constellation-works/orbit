@@ -2015,6 +2015,41 @@ def darwin_process_observation_self_test(harness, scratch):
         assert os.getpid() in table, "snapshot lost this process"
         darwin["darwin_identity"] = original_identity
 
+        # A refusal that clears on a re-read is transient: a process that
+        # is gone by the second read, or readable on it, does not poison the
+        # table or the per-pid state.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            refusals = {"left": 2}
+
+            def refuse_then_read(candidate, with_cmdline=True):
+                if candidate == child.pid and refusals["left"] > 0:
+                    refusals["left"] -= 1
+                    darwin["DARWIN_DENIED"].append(
+                        f"process info for process {candidate} failed: Operation not permitted")
+                    return None
+                return original_identity(candidate, with_cmdline)
+            darwin["darwin_identity"] = refuse_then_read
+            assert child.pid in qa["_proc_snapshot"](), "a transient refusal poisoned the snapshot"
+            assert refusals["left"] == 0, "the refused descendant was not read again"
+            refusals["left"] = 2
+            seen = qa["_proc_identity"](child.pid)
+            assert seen is not None and seen["pid"] == child.pid, "a transient refusal hid the descendant"
+        finally:
+            darwin["darwin_identity"] = original_identity
+            child.kill()
+            child.wait(timeout=5)
+
+        # A refused process that exits before its short info is read is gone.
+        original_short = darwin["_darwin_short_info"]
+        try:
+            deny_only(1)
+            darwin["_darwin_short_info"] = lambda pid: None
+            qa["_proc_snapshot"]()
+        finally:
+            darwin["_darwin_short_info"] = original_short
+            darwin["darwin_identity"] = original_identity
+
         # A live descendant that becomes unreadable is unknown, never gone.
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         try:
