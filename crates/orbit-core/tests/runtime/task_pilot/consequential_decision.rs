@@ -300,6 +300,75 @@ fn unrelated_resolution_cue_does_not_clear_surface_hold() {
     assert_public_hold(&workspace, &unrelated, "bounded description text");
 }
 
+#[test]
+fn wrapped_stop_and_report_convention_does_not_hold() {
+    let workspace = Workspace::new();
+
+    // ORB-25020: the code-health-sweep convention wrapped over two `>` lines
+    // is one sentence. Its resolution cue must clear the omitted-surface hold
+    // that the stop rule and the "omits" phrase would otherwise raise.
+    let wrapped = filed(
+        &workspace,
+        "Stop on any surface difference the difference table does not enumerate.\n\n\
+         > - A behavioural difference between copies that this task does not list is\n\
+         >   a stop-and-report, not a judgement call.\n\n\
+         The difference table omits bounded description text.",
+    );
+    assert_no_consequential_hold(
+        &assess(&workspace, &wrapped, json!([])),
+        "ORB-25020: a stop-and-report wrapped across blockquote lines must not hold",
+    );
+    assert_public_clear(&workspace, &wrapped);
+}
+
+#[test]
+fn omitted_subject_stops_at_table_cell_separator() {
+    let workspace = Workspace::new();
+
+    // ORB-25039: the omission subject is the table cell that holds the
+    // phrase. It must not run across the `|` separator into the next cell.
+    let table_row = filed(
+        &workspace,
+        "Stop on any surface difference the difference table does not enumerate.\n\n\
+         | Difference | Kept unchanged |\n\
+         |---|---|\n\
+         | Retry | the table omits bounded description text | the caller keeps its own copy |",
+    );
+    let audit = assess(&workspace, &table_row, json!([]));
+    assert_holds(
+        &audit,
+        "bounded description text",
+        "ORB-25039: an unenumerated surface in a table row must hold promotion",
+    );
+    let text = audit["assessment"]["utility_warnings"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("hold finding has no text: {audit}"));
+    assert!(
+        !text.contains('|') && !text.contains("caller keeps"),
+        "ORB-25039: the omission subject must end at its table cell: {text}"
+    );
+    assert_public_hold(&workspace, &table_row, "bounded description text");
+}
+
+#[test]
+fn unprefixed_markdown_table_rows_do_not_share_resolution_cues() {
+    let workspace = Workspace::new();
+
+    let table_row = filed(
+        &workspace,
+        "Stop on any surface difference the difference table does not enumerate.\n\n\
+         Difference | Detail\n\
+         --- | ---\n\
+         The difference table omits bounded description text | unchanged\n\
+         Retry | The retry timeout retains current behavior",
+    );
+    assert_holds(
+        &assess(&workspace, &table_row, json!([])),
+        "bounded description text",
+        "separate markdown table rows must not share an unrelated resolution cue",
+    );
+}
+
 fn filed(workspace: &Workspace, description: &str) -> Task {
     workspace
         .runtime

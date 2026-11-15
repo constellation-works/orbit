@@ -390,14 +390,15 @@ fn rank(name: &str) -> u8 {
 /// A stop rule that reaches an unlisted surface, plus a concrete omission,
 /// and no sentence that already resolves unnamed differences.
 fn surface_subject(description: &str) -> Option<String> {
-    let lower = description.to_ascii_lowercase();
-    if surface_resolved(&lower) {
+    let split = sentences(description);
+    if surface_resolved(&split) {
         return None;
     }
-    if !stop_rule_reaches_unlisted_surface(&lower) {
+    let flat = split.join(" ").to_ascii_lowercase();
+    if !stop_rule_reaches_unlisted_surface(&flat) {
         return None;
     }
-    let subject = first_omission(description)?;
+    let subject = first_omission(&split)?;
     usable_subject(&subject).then_some(subject)
 }
 
@@ -405,12 +406,13 @@ fn surface_subject(description: &str) -> Option<String> {
 /// names the unlisted surface. "Any field the table does not name keeps its
 /// current behavior" does; "The retry timeout retains current behavior" is
 /// about something else and leaves the omitted surface open [ORB-23275].
-fn surface_resolved(lower: &str) -> bool {
-    sentences(lower).into_iter().any(|sentence| {
-        RESOLUTION_CUES.iter().any(|cue| sentence.contains(cue))
-            && (sentence.contains("unnamed")
-                || SURFACE_CUES.iter().any(|cue| sentence.contains(cue))
-                || UNLISTED_CUES.iter().any(|cue| sentence.contains(cue)))
+fn surface_resolved(sentences: &[String]) -> bool {
+    sentences.iter().any(|sentence| {
+        let lower = sentence.to_ascii_lowercase();
+        RESOLUTION_CUES.iter().any(|cue| lower.contains(cue))
+            && (lower.contains("unnamed")
+                || SURFACE_CUES.iter().any(|cue| lower.contains(cue))
+                || UNLISTED_CUES.iter().any(|cue| lower.contains(cue)))
     })
 }
 
@@ -437,8 +439,19 @@ fn stop_rule_reaches_unlisted_surface(lower: &str) -> bool {
     false
 }
 
-fn first_omission(description: &str) -> Option<String> {
-    let lower = description.to_ascii_lowercase();
+/// The subject of the first omission phrase, read from the first sentence that
+/// has one, so a phrase wrapped over lines keeps its subject.
+fn first_omission(sentences: &[String]) -> Option<String> {
+    sentences
+        .iter()
+        .find_map(|sentence| omission_subject(sentence))
+}
+
+/// The subject of the first omission phrase in one sentence. The subject ends
+/// at a markdown table cell separator `|`, so a table row yields only the cell
+/// that holds the phrase [ORB-25039].
+fn omission_subject(sentence: &str) -> Option<String> {
+    let lower = sentence.to_ascii_lowercase();
     let mut best: Option<(usize, &str)> = None;
     for cue in ["omits ", "omitted ", "missing from"] {
         if let Some(at) = lower.find(cue)
@@ -449,24 +462,22 @@ fn first_omission(description: &str) -> Option<String> {
     }
     let (at, cue) = best?;
     let subject = if cue == "missing from" {
-        subject_before(description, at)
+        subject_before(sentence, at)
     } else {
-        subject_after(description, at + cue.len())
+        subject_after(sentence, at + cue.len())
     };
     Some(normalize_subject(&subject))
 }
 
-fn subject_after(description: &str, start: usize) -> String {
-    let rest = &description[start..];
-    let end = rest.find(['.', '\n', '!', '?']).unwrap_or(rest.len());
+fn subject_after(sentence: &str, start: usize) -> String {
+    let rest = &sentence[start..];
+    let end = rest.find('|').unwrap_or(rest.len());
     truncate_chars(rest[..end].trim(), 120)
 }
 
-fn subject_before(description: &str, cue_at: usize) -> String {
-    let before = &description[..cue_at];
-    let start = before
-        .rfind(['.', '\n', '!', '?'])
-        .map_or(0, |index| index + 1);
+fn subject_before(sentence: &str, cue_at: usize) -> String {
+    let before = &sentence[..cue_at];
+    let start = before.rfind('|').map_or(0, |index| index + 1);
     let mut subject = before[start..].trim().to_string();
     let lower = subject.to_ascii_lowercase();
     for suffix in [" is", " are", " was", " were"] {
@@ -498,23 +509,136 @@ fn usable_subject(subject: &str) -> bool {
         && !lower.starts_with("nothing ")
 }
 
-fn sentences(description: &str) -> Vec<&str> {
+/// Sentences of a description, each with its whitespace collapsed. A soft line
+/// break inside a paragraph, list item or blockquote is a space, so a
+/// convention wrapped over `>` continuation lines stays one sentence. Sentence
+/// punctuation, blank lines, headings, list items, table rows and a blockquote
+/// that opens after plain text still end a sentence [ORB-25039].
+fn sentences(description: &str) -> Vec<String> {
+    let lines: Vec<Line<'_>> = description.lines().map(Line::from_text).collect();
+    let table_rows = markdown_table_rows(&lines);
     let mut sentences = Vec::new();
-    let mut start = 0;
-    for (index, character) in description.char_indices() {
-        if matches!(character, '.' | '!' | '?' | '\n') {
-            let sentence = description[start..index].trim();
-            if !sentence.is_empty() {
-                sentences.push(sentence);
+    let mut current = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            if block_boundary(
+                &lines[index - 1],
+                line,
+                table_rows[index - 1],
+                table_rows[index],
+            ) {
+                push_sentence(&mut current, &mut sentences);
+            } else {
+                current.push(' ');
             }
-            start = index + character.len_utf8();
+        }
+        for character in line.content.chars() {
+            if matches!(character, '.' | '!' | '?') {
+                push_sentence(&mut current, &mut sentences);
+            } else {
+                current.push(character);
+            }
         }
     }
-    let tail = description[start..].trim();
-    if !tail.is_empty() {
-        sentences.push(tail);
-    }
+    push_sentence(&mut current, &mut sentences);
     sentences
+}
+
+/// One source line with its indentation and blockquote markers removed.
+struct Line<'a> {
+    /// The line is inside a blockquote (`>`).
+    quoted: bool,
+    content: &'a str,
+}
+
+impl<'a> Line<'a> {
+    fn from_text(line: &'a str) -> Self {
+        let mut rest = line.trim_start();
+        let quoted = rest.starts_with('>');
+        while let Some(after) = rest.strip_prefix('>') {
+            rest = after.trim_start();
+        }
+        Self {
+            quoted,
+            content: rest.trim_end(),
+        }
+    }
+}
+
+/// Whether a line break between two lines ends the sentence. A soft break
+/// inside a paragraph, list item or blockquote does not.
+fn block_boundary(
+    previous: &Line<'_>,
+    next: &Line<'_>,
+    previous_is_table_row: bool,
+    next_is_table_row: bool,
+) -> bool {
+    previous.content.is_empty()
+        || next.content.is_empty()
+        || previous_is_table_row
+        || next_is_table_row
+        || previous.content.starts_with('#')
+        || opens_block(next.content)
+        || (next.quoted && !previous.quoted)
+}
+
+/// Mark rows in a Markdown table whose delimiter row establishes the table.
+/// This handles both table styles with and without leading or trailing pipes.
+fn markdown_table_rows(lines: &[Line<'_>]) -> Vec<bool> {
+    let mut rows = vec![false; lines.len()];
+    for (index, line) in lines.iter().enumerate() {
+        if !is_table_delimiter_row(line.content) || index == 0 {
+            continue;
+        }
+        let header = &lines[index - 1];
+        if header.content.is_empty() || !header.content.contains('|') {
+            continue;
+        }
+        rows[index - 1] = true;
+        rows[index] = true;
+        for (row, line) in lines.iter().enumerate().skip(index + 1) {
+            if line.content.is_empty() || !line.content.contains('|') {
+                break;
+            }
+            rows[row] = true;
+        }
+    }
+    rows
+}
+
+fn is_table_delimiter_row(content: &str) -> bool {
+    let cells: Vec<_> = content
+        .split('|')
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    cells.len() >= 2
+        && cells.iter().all(|cell| {
+            let alignment = cell.trim_matches(':');
+            !alignment.is_empty() && alignment.chars().all(|character| character == '-')
+        })
+}
+
+/// A line that begins its own block: a table row, a heading or a list item.
+fn opens_block(content: &str) -> bool {
+    if content.starts_with(['|', '#']) {
+        return true;
+    }
+    let digits = content.bytes().take_while(u8::is_ascii_digit).count();
+    let after_marker = if digits > 0 {
+        content[digits..].strip_prefix(['.', ')'])
+    } else {
+        content.strip_prefix(['-', '*', '+'])
+    };
+    after_marker.is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
+fn push_sentence(current: &mut String, sentences: &mut Vec<String>) {
+    let sentence = current.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !sentence.is_empty() {
+        sentences.push(sentence);
+    }
+    current.clear();
 }
 
 fn contains_term(haystack: &str, term: &str) -> bool {
