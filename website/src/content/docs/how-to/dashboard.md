@@ -346,7 +346,7 @@ The card shows the live window, including windows started from the CLI:
 
 | On the card | Meaning |
 |---|---|
-| **Draining** | A window is admitting work. The card shows time left and `N running / M admitted`. |
+| **Draining** | A window is admitting work. The card shows time left and the live pilots, recovery, and reviewers figures. |
 | **Winding down · N workers still running** | Admissions have stopped; admitted workers are finishing. |
 | A queued window | A window started while another runs waits under the live one. **Cancel** removes it only before it starts. |
 | A line under the capacity bar | Why nothing more can start. |
