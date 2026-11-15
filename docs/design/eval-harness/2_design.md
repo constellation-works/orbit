@@ -60,6 +60,13 @@ Both jobs copy the task and run the copy.
 
 A copy inherits everything a task already has: a lifecycle of its own, drain admission and priority, host pinning by tag, one worktree, one branch, one optional PR, review, artifacts, cost records and GC. The source task is read once and never written. An explicit crew also keeps the candidate out of any crew-bearing live experiment (`crates/orbit-core/src/application/experiment/assignment.rs:63-66`).
 
+**The OS rule.** `os:` tags are any-of (§9): a task runs on any host in its set. A candidate that carried a second `os:` tag beside its source's would therefore run on hosts the source excluded, so construction is restricted:
+
+- A source carrying an `os:` tag other than `os:linux` (`os:macos`, `os:windows`, or a value Orbit does not recognise) is refused: no candidate is built from it. Stripping or replacing that tag is rejected too. The candidate would then measure a different task from the one its source required, and a Linux run would not measure the macOS work the source asked for.
+- A source carrying `os:linux` keeps that tag. A source with no `os:` tag gets `os:linux` added, because an untagged task is unrestricted by tags. Either way the candidate carries exactly one `os:` tag, so its any-of set is `{linux}`.
+
+The rule applies to replay snapshots (§3.3, §4) and to bake-off copies (§8.2). A refused source is recorded with its reason and never dropped silently (§3.1, §8.1).
+
 The two jobs differ in where the copy lives and where its run stops:
 
 | | Replay | Bake-off |
@@ -105,6 +112,8 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 `eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort using the shipped crew-reference syntax (`<crew>@<effort>`, as described in the Crew references section of [CONFIG.md](../../CONFIG.md)). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([CONFIG.md](../../CONFIG.md)). Defining crews stays an operator edit.
 
+**Source eligibility.** A set and a list of closed task ids meet the same two checks. Each source needs a recoverable snapshot (§3.3) and must pass the OS rule (§1.3), so a task that needs macOS is never a source. A source that fails either check is refused with its reason in `refused[]` of the set build (§11); `eval.replay-start` returns that list when it started from ids. Nothing is dropped silently.
+
 ### 3.2 Base commit
 
 The base is the first parent of the commit the task landed as. Orbit already records both: `landed_diff_stats` holds `landed_commit` and `base_commit` per task (`LandedDiffStats`, `crates/orbit-store/src/contracts/landed_diff_stats.rs:62-85`), and the writer defines `base_commit` as the landed commit's first parent, because pull requests land by squash or merge commit (`crates/orbit-core/src/application/codebase/diff_stats.rs:7-18`). Tasks without a row fall back to the landing receipt in task history, read by `crates/orbit-core/src/application/codebase/landed.rs`.
@@ -120,6 +129,8 @@ The exact source is the run audit. Since 2026-10-29 ([ORB-20006]) every provider
 1. **Audit blob (preferred).** The task scope blob of the task's first `agent_implement` invocation gives title, description, acceptance criteria, selectors, type and tier exactly as the first implementer received them. Tags come from `tags_at` at that invocation's start.
 2. **History fallback.** When the blob is gone, use the current record if, and only if, no `updated` event after the first dispatch names the description or acceptance criteria (the test `spec_documents` already makes, `crates/orbit-core/src/application/agents/records.rs`). Selectors are the current ones minus every `context_files_widened` addition; tags come from `tags_at`.
 3. **Otherwise the task is not eligible.**
+
+The OS rule (§1.3) is a further refusal on top of these. It is applied to the snapshot's tags, the ones a candidate would copy, and not to the live record.
 
 Two limits follow. Audit rows carrying the blob start on 2026-10-30 on the box, and `orbit gc audit` prunes blobs after `retention.audit_days` (default 60, `crates/orbit-cli/src/command/gc.rs`). So `eval.set-build` copies the snapshot into the eval set when the entry is added; a set never depends on the audit store again. The blob was added for the delivery-quality grader, which has since been removed (§10.1), and nothing in the tree reads it today (the only non-test use is the writer, `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/provider/execution.rs:320-349`). Task 2 of §13 gives it a reader so that it is not cleaned up as dead.
 
@@ -137,7 +148,7 @@ What reaches an implementer besides the task, and what replay does about each:
 |---|---|---|
 | Task plan, comments, summary, PR link, status | Live record (`task_context.rs:360-427`) | Absent: the candidate is a fresh task |
 | Repository guide (`CLAUDE.md`, `AGENTS.md`), tag-instruction files, agent corpus | The worktree, or files read at the run base | Pinned by the base commit |
-| Tag selection | Live tags | Tags copied from the snapshot |
+| Tag selection | Live tags | Tags copied from the snapshot, under the OS rule (§1.3) |
 | Crew memory | Newest revision at dispatch | Off in the evaluation workspace |
 | Mid-run steering, workspace notices, experiments | Live | Off or empty in the evaluation workspace |
 | Project learnings | Retired; `.orbit/learnings/` is no longer read ([project-learnings](../project-learnings/4_decisions.md)) | Nothing to do |
@@ -223,7 +234,7 @@ Every score is a task artifact on the candidate task (`eval/diff.patch`, `eval/h
 - one task per landed commit (no bundles), and no reviewer-authored repair in the landed range when that can be told;
 - reference size within bounds (default 10 to 400 changed lines), so a set is not dominated by one-line fixes or rewrites.
 
-The admission checks per entry: the base commit builds; the held-out command fails at the base and passes at the reference; the command finishes within the scoring time limit.
+The admission checks per entry: the snapshot passes the OS rule (§1.3); the base commit builds; the held-out command fails at the base and passes at the reference; the command finishes within the scoring time limit.
 
 From what passes, the tool samples to a quota, stratified by tier and by top-level crate, with a fixed seed recorded in the set, and an operator reviews the list before it is frozen. Feature and refactor tasks have no held-out tests by rule; they can enter a set as "review-only" entries once the blind review is calibrated, and are kept out of the first sets.
 
@@ -275,12 +286,12 @@ Bake-off is a separate job with a separate purpose: it delivers one task. It run
 
 ### 8.1 Inputs
 
-`eval.bakeoff-start` takes one task in `backlog` (or `proposed`, once approved) and two to four arms. Four is the ceiling: each candidate is a full delivery with a PR and hosted CI.
+`eval.bakeoff-start` takes one task in `backlog` (or `proposed`, once approved) and two to four arms. Four is the ceiling: each candidate is a full delivery with a PR and hosted CI. T must pass the OS rule (§1.3): a T carrying any `os:` tag other than `os:linux` is refused. The refusal files nothing, does not set `no-drain`, and is recorded with its reason in the response and as a comment on T. Such a task has no bake-off; normal drain delivers it on the host that can run it.
 
 ### 8.2 Lifecycle
 
 - **The original task T** does not run. `bakeoff-start` gives it the `no-drain` tag, which the drain already honours as a hold, and a comment naming its candidates. It stays in `backlog` until the pick.
-- **Candidates C1…Cn** are new tasks: a copy of T's title (suffixed with the arm), description, acceptance criteria, selectors, tags, type and tier; `crew` set to the arm; relations `spawned_from: T` and `alternative_to` between siblings; tag `bakeoff:<T>`. They are filed in `backlog` at T's priority and delivered by the unchanged `task_pr_pipeline` without completion authority, so each stops in `review` with an open PR.
+- **Candidates C1…Cn** are new tasks: a copy of T's title (suffixed with the arm), description, acceptance criteria, selectors, tags, type and tier, made under the OS rule (§1.3) so that each candidate carries exactly one `os:` tag, `os:linux`; `crew` set to the arm; relations `spawned_from: T` and `alternative_to` between siblings; tag `bakeoff:<T>`. They are filed in `backlog` at T's priority and delivered by the unchanged `task_pr_pipeline` without completion authority, so each stops in `review` with an open PR.
 - **After the pick** (§8.5) the winner lands through normal landing, T is completed with the winner's merge as its evidence, and the others are rejected.
 
 T's snapshot is taken at `bakeoff-start` and stored by the plugin: it is exact, with no reconstruction, which is what makes a bake-off a good source of eval entries (§8.6).
@@ -328,7 +339,7 @@ Losing candidates are not a regression record and not an escaped defect. They ar
 
 ## 9. Capacity and spend
 
-**Hosts.** Every candidate task carries `os:linux`, which admission enforces on local and pull drains alike ([CONFIG.md](../../CONFIG.md)), so no candidate is ever admitted on the Mac. The evaluation workspace exists only on a box.
+**Hosts.** Every candidate task carries exactly one `os:` tag, `os:linux` (§1.3). Admission reads `os:` tags as any-of and intersects them with the crew executor's `host_os`, on local and pull drains alike ([CONFIG.md](../../CONFIG.md)). A candidate's any-of set is therefore exactly `{linux}`, and no candidate is ever admitted on the Mac: the OS rule refuses every source that carries another `os:` tag, so no source can widen the set. The evaluation workspace exists only on a box.
 
 **Admission.** Candidates are ordinary tasks, so they run only when a drain admits them: there is no separate launcher and no synthetic load.
 
@@ -414,7 +425,7 @@ Two earlier mechanisms covered nearby ground and were removed. This design shoul
 | `eval.set-build` | mut | `name`, `source_workspace`, `query?` {`type`, `landed_after`, `min_lines`, `max_lines`}, `task_ids?`, `quota`, `seed?`, `from_bakeoffs?` | `set` {`name`, `revision`, `digest`}, `admitted[]` {`task_id`, `base`, `reference`, `held_out_command`}, `refused[]` {`task_id`, `reason`} |
 | `eval.set-show` | ro | `name`, `revision?` | the set file, without snapshots unless `full` |
 | `eval.set-export` / `eval.set-import` | ro / mut | `name`, `revision?`, `path` | `path`, `digest` |
-| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the Crew references section of [CONFIG.md](../../CONFIG.md)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids) |
+| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the Crew references section of [CONFIG.md](../../CONFIG.md)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids), `refused[]` {`task_id`, `reason`} (sources refused by the OS rule or the snapshot checks, §3.1) |
 | `eval.replay-advance` | mut | `replay_id` | `filed[]`, `state` (`running`, `capped`, `complete`), `spent_usd` |
 | `eval.replay-status` | ro | `replay_id?` | per-arm progress, `spent_usd`, `state` |
 | `eval.replay-readout` | ro | `replay_id`, `format?` | the readout (§7) |
@@ -446,7 +457,7 @@ Two reads need a decision in task 2 of §13 because they are not exposed as tool
 - **Replay measures today's harness.** Skills and activity prompts come from the installed binary. Results are comparable only within one Orbit version.
 - **Leakage is detected, not prevented, at first** (§4): git history past the base, the public repository, and training data. A contaminated run is excluded only if the scan recognises it.
 - **Held-out tests reward the reference's shape.** A correct fix with a different internal design can fail to compile against them (`build_error`), and a candidate can pass them while breaking something they do not cover. This is why the reference is called a reference and why build, lint and review follow.
-- **The sets are biased.** Bug tasks with tests, small diffs, recent weeks, one repository. Results do not transfer to feature work or to other repositories.
+- **The sets are biased.** Bug tasks with tests, small diffs, recent weeks, one repository, and Linux only: a task that needs macOS is refused (§1.3), so replay says nothing about macOS work. Results do not transfer to feature work or to other repositories.
 - **25 tasks is a blunt instrument.** It separates crews that differ by roughly 15 points or more. Reading smaller gaps into it is the main way this tool could mislead.
 - **The blind reviewer is not blind to the crew,** and its verdict is uncalibrated until bake-off picks exist.
 - **The snapshot drops any plan and any comment written before dispatch.** For tasks where a pilot plan or an operator comment carried real direction, the candidate gets less than the original implementer did.
@@ -523,6 +534,7 @@ Not filed. Each line is one implementation task: outcome, then what it depends o
 ## Task References
 
 - [ORB-24839] — wrote this design; it changes no code or configuration and files no implementation task.
+- [ORB-24887] — corrected the OS rule for candidate construction, so a candidate carries exactly `os:linux` and never a copied `os:` tag from another host (§1.3, §3.1, §3.3, §4, §6.1, §8.1, §8.2, §9).
 - [ORB-20006] — implemented the since-removed delivery-quality grader and, with it, the dispatch-time task scope blob in the run audit, the snapshot source in §3.3.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
