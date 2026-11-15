@@ -25,7 +25,7 @@
 //! does not know are all failures.
 //!
 //! A non-completed terminal's `payload.text` (falling back to `payload.message`,
-//! `payload.error`, or `payload.error.message`) is provider-owned failure
+//! `payload.error`, `payload.error.message`, or `payload.reason`) is provider-owned failure
 //! prose, not an answer: normalization retains it for invocation traces and
 //! operator diagnostics (see [`muse_terminal_failure_diagnostic`]), while
 //! the answer projection above still reduces it to empty, so it can never
@@ -123,24 +123,32 @@ fn terminal_info(payload: Option<&Value>) -> TerminalInfo {
     if info.is_completed() {
         return info;
     }
+    // [ORB-24935] Diagnostic fallbacks quote provider-owned failure prose.
+    // Present-but-empty strings (including `text: ""`) carry no prose, so
+    // each level falls through to the next; `reason` is last, after the
+    // ORB-16597 `message`/`error` fallbacks.
+    fn prose(value: Option<&Value>) -> Option<String> {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    }
     TerminalInfo {
         terminal: info.terminal,
         text: info
             .text
-            .or_else(|| {
-                payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+            .or_else(|| prose(payload.get("message")))
             .or_else(|| match payload.get("error") {
-                Some(Value::String(text)) => Some(text.clone()),
-                Some(error) => error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                Some(Value::String(_)) => prose(payload.get("error")),
+                Some(error) => prose(error.get("message")),
                 None => None,
-            }),
+            })
+            .or_else(|| prose(payload.get("reason"))),
     }
 }
 
@@ -203,7 +211,8 @@ pub(crate) fn recorded_muse_tool_calls(stdout: &[u8]) -> Option<Vec<ToolCallTrac
 ///
 /// For a completed run this is the final answer. For a failed, cancelled or
 /// unknown terminal it is the provider's own failure reason, including
-/// `message`/`error` fallbacks when `text` is absent or non-string, retained only
+/// `message`/`error`/`reason` fallbacks when `text` is absent, empty or non-string,
+/// retained only
 /// so the operator diagnostic can carry it; the answer projection is
 /// [`project_muse_response`], which never exposes it as an answer.
 pub(crate) fn normalize_muse_stdout(stdout: &[u8]) -> Vec<u8> {
@@ -232,7 +241,7 @@ pub(crate) fn project_muse_response(stdout: &[u8]) -> Vec<u8> {
 
 /// Provider-gated diagnostic for a Muse run whose terminal is not
 /// `completed`: the provider's own failure reason from the terminal frame's
-/// `payload.text` or its `message`/`error` fallbacks, read from no other record,
+/// `payload.text` or its `message`/`error`/`reason` fallbacks, read from no other record,
 /// so prompt echoes, deltas and
 /// child-task records never count as failure evidence. Completed terminals
 /// and malformed streams yield `None`. Unbounded in the prose it selects;
