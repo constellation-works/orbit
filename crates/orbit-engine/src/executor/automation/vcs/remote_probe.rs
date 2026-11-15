@@ -132,16 +132,23 @@ pub(super) fn pre_push_remote_branch(
     })
 }
 
-/// The SHA named by the exact `refs/heads/<branch>` line in `ls-remote`
-/// output. Git's pattern matches slash-delimited tails, so an unrelated
-/// `refs/heads/aaa/refs/heads/<branch>` line must not stand in for it.
-pub(super) fn exact_remote_branch_sha(stdout: &str, branch: &str) -> Option<String> {
-    let wanted = format!("refs/heads/{branch}");
+/// The SHA named by the exact `full_ref` line in `ls-remote` output.
+/// Git's pattern matches slash-delimited tails, so an unrelated
+/// `refs/heads/aaa/<full_ref tail>` line must not stand in for it.
+/// `ls-remote` separates the SHA from the ref with a tab, which a
+/// whitespace split also matches.
+pub(super) fn exact_remote_ref_sha(stdout: &str, full_ref: &str) -> Option<String> {
     stdout.lines().find_map(|line| {
         let mut fields = line.split_whitespace();
         let sha = fields.next()?;
-        (fields.next() == Some(wanted.as_str())).then(|| sha.to_owned())
+        (fields.next() == Some(full_ref)).then(|| sha.to_owned())
     })
+}
+
+/// The SHA named by the exact `refs/heads/<branch>` line in `ls-remote`
+/// output; see [`exact_remote_ref_sha`] for the tail-match invariant.
+pub(super) fn exact_remote_branch_sha(stdout: &str, branch: &str) -> Option<String> {
+    exact_remote_ref_sha(stdout, &format!("refs/heads/{branch}"))
 }
 
 pub(super) struct RemoteRefProbe {
@@ -154,7 +161,8 @@ pub(super) struct RemoteRefProbe {
 /// Retry only supervisor deadlines, never a completed Git refusal. Each child
 /// retains the activity's Git budget and secured environment; backoff is bounded
 /// to 250 ms then 500 ms. The probe acquires no Orbit repository lock. Callers
-/// supply only read-only `ls-remote` arguments and keep their own ref parsing.
+/// supply only read-only `ls-remote` arguments and parse refs through
+/// [`exact_remote_ref_sha`].
 pub(super) fn remote_ref_output(
     repo_root: &Path,
     args: &[&str],

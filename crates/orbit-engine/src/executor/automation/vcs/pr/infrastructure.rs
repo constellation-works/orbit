@@ -1,5 +1,5 @@
 //! Completion's generic infrastructure recovery; the adapter owns forge evidence.
-use super::super::{completion_deadline::Deadline, operations};
+use super::super::{completion_deadline::Deadline, operations, remote_probe::exact_remote_ref_sha};
 use super::{
     answers::{PullRequestStatus, RequiredChecks},
     auto_fix::{hold_auto_fix_stop, stopped, stopped_by},
@@ -82,18 +82,21 @@ fn exact_remote(
             "infrastructure PR identity changed",
         ));
     }
+    let reference = format!("refs/heads/{}", evidence.head_branch);
     let remote = deadline.execute(
         "git",
         vec![
             "ls-remote".into(),
             "--heads".into(),
             "origin".into(),
-            format!("refs/heads/{}", evidence.head_branch),
+            reference.clone(),
         ],
         Path::new(workspace),
         "infrastructure remote head",
     )?;
-    if remote.stdout.split_whitespace().next() != Some(evidence.head_sha.as_str()) {
+    if exact_remote_ref_sha(&remote.stdout, &reference).as_deref()
+        != Some(evidence.head_sha.as_str())
+    {
         return Err(stopped(
             &evidence.pr_number,
             "infrastructure remote head changed or was deleted",
