@@ -239,6 +239,13 @@ A rule is here only when its correction recurred.
   (f09993e5, ORB-25074, F2026-11-310). A fixed width is a guess: it leaves an empty box for
   short names and clips long ones. R39 said how a row shrinks but not how wide a member
   starts. The owner approved sizing it from its longest option, capped by the row.
+- **R43 (a collapse keeps the page you are on).** On the Orbit Tasks page, any click on a
+  dock tab (Drain, Notices, Residents, Log) at two-column width marked the dock as the
+  routed page, deliberately (ORB-19732). Narrowing the window then showed the Drain card in
+  place of the task list. The owner: "once task/drain page collapse into separate pages, the
+  resulting page is "Drain". It should be Tasks page, since that was the page that I was on"
+  (f09993e5, ORB-25093, F2026-11-311). R5 kept neighbours from shifting and R23 said narrow
+  widths drop secondary content, but nothing said which region survives a collapse.
 
 ## Process
 
