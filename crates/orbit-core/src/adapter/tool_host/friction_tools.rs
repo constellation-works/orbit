@@ -63,7 +63,11 @@ fn add(
     input: &OperationInput,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    let (params, substitutions) = add_params(input, model)?;
+    // Ordinary MCP sessions (including federated destinations) have no
+    // execution model. Match task writes by using the receiving process's
+    // resolved actor instead of requiring a caller to supply provenance.
+    let model = model.unwrap_or_else(|| runtime.actor().label.clone());
+    let (params, substitutions) = add_params(input, Some(model))?;
     if let Some(task_id) = params.during_task.as_deref() {
         runtime.ensure_friction_task_exists(task_id)?;
     }

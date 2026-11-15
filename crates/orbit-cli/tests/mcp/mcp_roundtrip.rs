@@ -3970,6 +3970,68 @@ fn federated_client(workspace: &McpWorkspace) -> McpClient {
     client
 }
 
+/// A model-free call must use the owner session's write actor, just like tasks.
+#[test]
+fn federated_friction_add_and_update_use_session_provenance() {
+    let workspace = McpWorkspace::init();
+    let mut client = federated_client(&workspace);
+    let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let selector = array_of(&listed, "workspaces")[0]["selector"]
+        .as_str()
+        .expect("qualified workspace selector")
+        .to_string();
+    let task_input = json!({
+        "workspace": selector, "title": "Friction route comparison", "complexity": "low",
+        "description": "Compare attribution over the same model-free federated session"
+    });
+    let task = client.call_tool_ok("orbit_task_add", task_input.clone());
+    let input = json!({
+        "workspace": selector, "action": "add", "body": "Federated friction reproduction",
+        "during_task": task["id"]
+    });
+    let response = client.call_tool("orbit_friction", input.clone());
+    let _ = writeln!(
+        std::io::stderr(),
+        "task request: {task_input}; response: {task}"
+    );
+    let _ = writeln!(
+        std::io::stderr(),
+        "friction request: {input}; response: {response}"
+    );
+    assert_eq!(response["isError"], false, "{response}");
+    let record = &response["structuredContent"];
+    assert_eq!(record["model"], task["created_by"]);
+    assert!(
+        record["model"]
+            .as_str()
+            .is_some_and(|model| !model.is_empty())
+    );
+    let updated = client.call_tool_ok(
+        "orbit_friction",
+        json!({
+            "workspace": selector, "action": "update", "id": record["id"],
+            "status": "triaged", "body": "Federated update succeeded"
+        }),
+    );
+    assert_eq!(updated["model"], record["model"]);
+    assert_eq!(updated["status"], "triaged");
+    assert_eq!(updated["body"], "Federated update succeeded");
+    drop(client);
+    let stored: Value = serde_json::from_slice(
+        &workspace
+            .run_ok(&[
+                "friction",
+                "show",
+                updated["id"].as_str().unwrap(),
+                "--json",
+            ])
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(stored["body"], updated["body"]);
+    assert_eq!(stored["model"], task["created_by"]);
+}
+
 #[test]
 fn federated_attention_reads_a_replica_only_host_without_a_workspace() {
     if crate::isolated_test::run_in_child(
