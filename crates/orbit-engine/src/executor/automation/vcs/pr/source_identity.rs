@@ -21,7 +21,7 @@ use super::super::{
     git::git_output,
     handoff::HandoffContext,
     operations,
-    remote_probe::{fixed_wait, remote_ref_output},
+    remote_probe::{exact_remote_ref_sha, fixed_wait, remote_ref_output},
 };
 use super::{PullRequestStatus, read_pr_status};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -215,11 +215,8 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             );
             remote = match probe {
                 Ok(probe) => {
-                    let sha = probe.stdout.lines().find_map(|line| {
-                        let (sha, name) = line.split_once('\t')?;
-                        (name == reference).then_some(sha)
-                    });
-                    json!({"reference":safe_text(&reference), "sha":sha.map(safe_text), "attempts":probe.attempts, "waited_ms":probe.waited_ms, "elapsed_ms":probe.elapsed_ms})
+                    let sha = exact_remote_ref_sha(&probe.stdout, &reference);
+                    json!({"reference":safe_text(&reference), "sha":sha.as_deref().map(safe_text), "attempts":probe.attempts, "waited_ms":probe.waited_ms, "elapsed_ms":probe.elapsed_ms})
                 }
                 Err(_) => json!({"reference":safe_text(&reference), "outcome":"unreadable"}),
             };
