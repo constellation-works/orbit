@@ -276,7 +276,7 @@ impl Host<'_> {
         definition: &AutoTaskDefinition,
         fire: &ConditionFire,
     ) -> Result<String, OrbitError> {
-        let mut params = self.runtime.auto_task_mint_task_params(definition);
+        let mut params = self.runtime.auto_task_mint_task_params(definition)?;
         params.title = render_placeholders(&params.title, Some(fire));
         params.description = render_placeholders(&params.description, Some(fire));
         let captured = serde_json::to_string_pretty(&fire.captured)
@@ -346,11 +346,18 @@ impl ConditionHost for Host<'_> {
     }
 
     fn admission_deferral(&self, _fire: &ConditionFire) -> Result<Option<String>, AutomationError> {
-        if let Target::Mint(definition) = self.target
-            && definition.dedupe == DedupePolicy::SkipIfOpen
-            && let Some(open) = self.runtime.open_auto_task_instance_id(definition)?
-        {
-            return Ok(Some(format!("open_instance {open}")));
+        if let Target::Mint(definition) = self.target {
+            // Wait without spending an admission attempt. A failed fire would
+            // not retry after the body is reconciled; mint refuses again if a
+            // pass reaches it anyway.
+            if let Err(error) = self.runtime.auto_task_stale_contract_hold(definition) {
+                return Ok(Some(error.to_string()));
+            }
+            if definition.dedupe == DedupePolicy::SkipIfOpen
+                && let Some(open) = self.runtime.open_auto_task_instance_id(definition)?
+            {
+                return Ok(Some(format!("open_instance {open}")));
+            }
         }
         Ok(None)
     }

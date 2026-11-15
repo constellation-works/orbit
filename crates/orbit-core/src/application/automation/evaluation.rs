@@ -369,6 +369,12 @@ pub(super) fn auto_task_admission_deferral(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
+    // Before skip_if_open, and before the evaluator claims the batch. A
+    // refusal after the claim would leave the consumer on batch_pending
+    // with nothing minted.
+    if let Err(error) = runtime.auto_task_stale_contract_hold(definition) {
+        return Ok(Some(error.to_string()));
+    }
     if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
         && runtime.open_auto_task_instance_id(definition)?.is_some()
     {

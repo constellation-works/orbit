@@ -64,12 +64,15 @@ fn eligible_review_pool(
         return Ok((Vec::new(), Vec::new()));
     }
     let members = runtime.review_pool_members(&pool, orbit_config::REVIEW_CREW_KEY)?;
-    runtime.review_pool_split_by_os(members, &minted_tags(runtime, definition))
+    runtime.review_pool_split_by_os(members, &minted_tags(runtime, definition)?)
 }
 
 /// The tags a review task minted for `definition` carries.
-fn minted_tags(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
-    runtime.auto_task_template_task_params(definition).tags
+fn minted_tags(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<Vec<String>, OrbitError> {
+    Ok(runtime.auto_task_template_task_params(definition)?.tags)
 }
 
 /// Why no review task can be minted for `definition` under the current
@@ -83,7 +86,7 @@ pub(super) fn review_crew_hold(
     definition: &AutoTaskDefinition,
 ) -> Result<Option<CrewOsHold>, OrbitError> {
     let (eligible, excluded) = eligible_review_pool(runtime, definition)?;
-    Ok(crew_os_hold(runtime, definition, &eligible, excluded))
+    crew_os_hold(runtime, definition, &eligible, excluded)
 }
 
 fn crew_os_hold(
@@ -91,20 +94,20 @@ fn crew_os_hold(
     definition: &AutoTaskDefinition,
     eligible: &[ReviewCrewPoolMember],
     excluded: Vec<OsExcludedCrew>,
-) -> Option<CrewOsHold> {
+) -> Result<Option<CrewOsHold>, OrbitError> {
     if !eligible.is_empty() || excluded.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(CrewOsHold {
+    Ok(Some(CrewOsHold {
         definition: definition.name.clone(),
         pool_key: orbit_config::REVIEW_CREW_KEY.to_string(),
-        os_tags: TaskOsRequirement::from_tags(&minted_tags(runtime, definition))
+        os_tags: TaskOsRequirement::from_tags(&minted_tags(runtime, definition)?)
             .any_of
             .iter()
             .map(|os| os.tag())
             .collect(),
         excluded,
-    })
+    }))
 }
 
 /// The crew the review task minted for `attempt` carries, or `None` to keep
@@ -126,7 +129,7 @@ pub(super) fn minted_review_crew(
         return Ok(None);
     }
     let (eligible, excluded) = eligible_review_pool(runtime, definition)?;
-    if let Some(hold) = crew_os_hold(runtime, definition, &eligible, excluded) {
+    if let Some(hold) = crew_os_hold(runtime, definition, &eligible, excluded)? {
         return Err(OrbitError::PolicyDenied(hold.summary()));
     }
     if let ([only], [_]) = (eligible.as_slice(), pool.as_slice()) {
@@ -481,7 +484,7 @@ pub(crate) fn after_landing_health(
     if pool.len() > 1 {
         let candidates =
             eligible_review_pool(runtime, &definition).and_then(|(eligible, excluded)| {
-                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded);
+                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded)?;
                 match crew_hold {
                     Some(_) => Ok(Vec::new()),
                     None => runtime.review_pool_candidates(&eligible),
@@ -502,7 +505,7 @@ pub(crate) fn after_landing_health(
                     .map(|member| member.name.clone())
                     .or_else(|| excluded.first().map(|crew| crew.crew.clone()))
                     .or(definition.template.crew.clone());
-                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded);
+                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded)?;
             }
             Err(error) => {
                 health.crew_error = Some(error.to_string());
