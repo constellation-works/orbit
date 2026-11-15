@@ -156,12 +156,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 
-### Designing (5)
+### Designing (6)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./design/context-index/1_overview.md) | File 2_design.md §13 tasks 1–5 in ws_orbit-graph (retired-tool fix, word_index variant, baselines and gates, options); Daniel answers the questions still open in §14.2 | claude |
+| [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
@@ -243,6 +244,7 @@ a conservative title/status fallback.
 | [Crew Memory](./design/crew-memory/1_overview.md) | Experimental: storage, gated memory delivery, weekly dreaming and operator review of global-memory proposals are built. Adoption depends on the memory-on vs memory-off experiment. | Accepted | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
+| [Eval Harness](./design/eval-harness/1_overview.md) | An evaluation plugin with two jobs: replay closed tasks against chosen crews and score the candidates, and bake off one new task across crews as candidate pull requests a person picks from | Draft | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews, allowlisted config or crew memory on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |

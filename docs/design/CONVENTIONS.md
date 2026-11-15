@@ -266,6 +266,7 @@ Retired features are removed from this table along with their folder.
 | Crew Credentials | [docs/design/crew-credentials/](./crew-credentials/) | claude |
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Experiments | [docs/design/experiments/](./experiments/) | claude |
+| Eval Harness | [docs/design/eval-harness/](./eval-harness/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
 | Fleet Notices | [docs/design/fleet-notices/](./fleet-notices/) | claude |
