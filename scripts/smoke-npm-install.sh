@@ -12,7 +12,9 @@
 #   2. `orbit init`, reject an embedded credential, then `orbit workspace init`
 #   3. drive `orbit mcp serve` over stdio (initialize, notifications/initialized,
 #      tools/list, and tools/call) and assert orbit_-prefixed wire names,
-#      including orbit_workspace_list
+#      including orbit_workspace_list, the advertised orbit_friction tag
+#      taxonomy (ORB-24579), and the keyed one-field `fields` projection
+#      shape (ORB-24275)
 #
 # Pass: exit 0. Fail: non-zero with the relevant stderr captured.
 # Supported: macOS arm64 / x86_64, Linux x86_64 / arm64. Not Windows.
@@ -350,6 +352,7 @@ cat >"$RPC_IN" <<EOF
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"orbit_task_list","arguments":{}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"orbit_workspace_list","arguments":{}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"orbit_task_list","arguments":{"workspace":"$WORKSPACE_DIR"}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"orbit_task_add","arguments":{"workspace":"$WORKSPACE_DIR","title":"Smoke projection probe","description":"Created by the npm smoke to check one-field projection shapes","complexity":"low","fields":["status"]}}}
 EOF
 
 # Feed the requests, then keep stdin open briefly so the server has time
@@ -412,8 +415,12 @@ if (!/operator/i.test(operatorMessage)) process.exit(1);
 if (!workspaceMessage.includes("orbit_workspace_list") || !workspaceMessage.includes("returned `ws_*` ID") || !workspaceMessage.includes("orbit workspace init") || !workspaceMessage.includes("never infers one from the server process cwd")) process.exit(1);
 if (discovery?.machine_name !== "smoke-npm-install" || discovery.workspaces?.length !== 1 || discovery.workspaces[0].id !== "ws_workspace") process.exit(1);
 if (!tasks || byId[6]?.error || tasks.isError || !Array.isArray(tasks.structuredContent?.tasks)) process.exit(1);
+const frictionTags = tools.find(tool => tool.name === "orbit_friction")?.inputSchema?.properties?.tags?.items?.enum;
+if (!Array.isArray(frictionTags) || frictionTags.length === 0) process.exit(1);
+const added = byId[7]?.result?.structuredContent;
+if (!added || byId[7]?.error || byId[7]?.result?.isError || added.status !== "proposed" || "value" in added || "items" in added) process.exit(1);
 ' "$RPC_OUT"; then
-  echo "FAIL: registry launch did not initialize, list tools, remain agent-only, and fail closed without a workspace" >&2
+  echo "FAIL: registry launch did not initialize, list tools, remain agent-only, fail closed without a workspace, advertise the friction tag taxonomy, and answer a keyed one-field projection" >&2
   cat "$RPC_OUT" >&2
   exit 1
 fi

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.50.0 — 2026-11-15
+
+### Breaking Changes
+
+- **Plugin exact-file writes**: Plugin manifests can declare a persisted `write_files` field for narrow regular-file writes, which older Orbit binaries reject when loading the manifest. ([ORB-24200])
+  Manifests declaring `write_files` refused by older binaries → use Orbit 0.50.0+ on hosts loading them
+- **One-field MCP projections keyed**: A one-element `fields` projection now returns the same keyed shape as a multi-field one instead of a `{value}` or `{items}` wrapper. ([ORB-24275])
+  `{value}`/`{items}` wrappers removed → read `result[field]`, or use the `field` alias for a bare value
+- **Store schema 89**: The `task_reservations` migration adds partial indexes; it is additive, so older binaries keep reading and writing the store and no user migration is needed. ([ORB-24410])
+- **Store schema 90**: The `task_coordination_rows` migration adds indexes; it is additive, so older binaries keep reading and writing the store and no user migration is needed. ([ORB-24411])
+- **Codebase layer names configured**: The compiled-in `orbit codebase {show,analytics} --layer` value list, including `ci_tests`, is gone; accepted names now come from workspace configuration. ([ORB-24520])
+  Compiled-in `--layer` values removed → define names in `workflow.regression_layers`
+- **Agent-facts schema 91**: A new additive cache table raises the store schema; older binaries keep reading and writing the store and no user migration is needed. ([ORB-24423])
+- **Friction tags constrained**: Arbitrary `orbit_friction` tag strings are refused; tags must come from the active workspace taxonomy the tool advertises. ([ORB-24579])
+  Free-form friction tags refused → choose a tag from the advertised `tags.items.enum`
+- **Destructive-command confirmation flag**: The canonical confirmation flag for `orbit gc audit`, `orbit gc runs`, `orbit gc journal` and `orbit plugin remove` is now `--confirm`; the old spellings remain as visible aliases.
+  `--apply`/`--yes` deprecated → use `--confirm`
+- **Doctor retired-backend fix removed**: `orbit doctor --fix-retired-activity-backends` is retired, so affected activity files must be cleaned up by hand before the doctor passes.
+  `--fix-retired-activity-backends` removed → delete obsolete `spec.backend: http|auto` manually, then rerun `orbit doctor`
+- **Host-wide job-run IDs**: Job-run IDs are allocated uniquely across every workspace on a host, and schema 92 adds indexes only, so old IDs stay readable with no user migration. ([ORB-24769])
+  Run IDs now host-wide → use the host-wide run ID the updated Orbit returns
+
+### Highlights
+
+- **Find tasks and runs anywhere**: Global dashboard search finds tasks across statuses and workspaces and opens full task and run pages, while board paging and navigation keep the selected view and history. ([ORB-24679])
+- **Rankings easier to read**: The agent rank board opens on the leading rows and reveals the rest or unranked rows on demand, and scorecards attribute effort whenever the crew label or launch evidence supplies it. ([ORB-24177])
+- **Pause and resume experiments**: Operators can pause a running experiment or resume a paused one from its dashboard page, with the change recorded in the event log. ([ORB-24173])
+- **Clearer CLI and MCP inspection**: Run-inspection help shows JSON shapes and fields, one-field task projections match the multi-field keyed shape, and `orbit_friction` advertises the workspace tag taxonomy. ([ORB-24275])
+
 ## 0.49.0 — 2026-11-12
 
 ### Breaking Changes
