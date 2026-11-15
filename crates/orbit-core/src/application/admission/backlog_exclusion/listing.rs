@@ -221,6 +221,12 @@ pub(crate) fn list_backlog_tasks(
             }
         })?;
         let kit_verified = runtime.browser_kit_verified();
+        // An operator's explicit ship overrides the drain's readiness gates
+        // (see `operator_override`); a drain child carrying task ids does not.
+        let operator_override = input
+            .get(crate::application::job::OPERATOR_READINESS_OVERRIDE_INPUT)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         for task_id in &explicit_task_ids {
             let task = runtime.get_task(task_id).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
@@ -290,10 +296,11 @@ pub(crate) fn list_backlog_tasks(
             }
             // An override picks which task ships, not whether it may reserve
             // nothing: an inherited-only root is withheld here exactly as the
-            // drain withholds it, and for the same reason. The cheap test is a
-            // superset of the rule — every inherited-only root is tagged and
-            // undeclared — so it decides only who pays for the hierarchy read,
-            // never who is withheld.
+            // drain withholds it, and for the same reason; even an operator's
+            // ship keeps this, since the gate's reservation refuses it on every
+            // path. The cheap test is a superset of the rule — every
+            // inherited-only root is tagged and undeclared — so it decides only
+            // who pays for the hierarchy read, never who is withheld.
             if has_epic_tag(&task.tags) && task.context_files.is_empty() {
                 if epic_roots.is_none() {
                     let workspace_tasks = runtime.list_task_metadata().map_err(|err| {
@@ -326,7 +333,7 @@ pub(crate) fn list_backlog_tasks(
                 excluded.push(exclusion);
                 continue;
             }
-            if !clears_complexity_gate(&task) {
+            if !operator_override && !clears_complexity_gate(&task) {
                 excluded.push(BacklogTaskExclusion {
                     id: task.id,
                     reason: BacklogTaskExclusionReason::UnassessedComplexity,

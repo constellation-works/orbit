@@ -3,8 +3,8 @@
 //!
 //! The auto drain's listing and readiness report the task waiting
 //! `scheduled` with its time; an explicit ship, through the runtime and the
-//! `orbit.workflow.ship` tool, is refused with `task_scheduled`; only the
-//! operator's `--ignore-schedule` starts it, recording `schedule_overridden`.
+//! `orbit.workflow.ship` tool, is refused with `task_scheduled`; only an
+//! operator's explicit ship starts it, recording `schedule_overridden`.
 //! Fixed far-future and past times stand in for waiting, so no test sleeps.
 
 use orbit_core::application::task::TaskAddParams;
@@ -95,7 +95,7 @@ fn readiness_entry(runtime: &OrbitRuntime, task: &str) -> Value {
 fn ship(
     runtime: &OrbitRuntime,
     task: &str,
-    ignore_schedule: bool,
+    operator_override: bool,
 ) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
     runtime.submit_ship_run(orbit_core::ShipRunRequest {
         mode: ShipMode::Local,
@@ -108,7 +108,7 @@ fn ship(
         trigger: JobRunTrigger::cli(),
         strict_containment: false,
         review: None,
-        ignore_schedule,
+        operator_override,
     })
 }
 
@@ -179,7 +179,9 @@ fn a_future_schedule_holds_the_task_until_the_operator_overrides_it() {
         "{refused:?}"
     );
     assert!(
-        refused.to_string().contains("--ignore-schedule"),
+        refused
+            .to_string()
+            .contains(&format!("orbit run ship {}`", scheduled.id)),
         "{refused}"
     );
     let tool = ship_tool(
@@ -205,7 +207,7 @@ fn a_future_schedule_holds_the_task_until_the_operator_overrides_it() {
         overrides(&runtime, &scheduled.id),
         vec![format!(
             "operator:fixture: scheduled for {FUTURE}; operator `operator:fixture` started it \
-             early with `orbit run ship --ignore-schedule`"
+             early with an explicit ship"
         )]
     );
     let after = backlog(&runtime);
@@ -276,7 +278,7 @@ fn a_fractional_schedule_retains_its_instant_through_show_and_override() {
     assert_eq!(
         overrides(&runtime, &id),
         vec![format!(
-            "operator:fixture: scheduled for {SHOWN}; operator `operator:fixture` started it early with `orbit run ship --ignore-schedule`"
+            "operator:fixture: scheduled for {SHOWN}; operator `operator:fixture` started it early with an explicit ship"
         )]
     );
     let after = backlog(&runtime);
@@ -284,32 +286,6 @@ fn a_fractional_schedule_retains_its_instant_through_show_and_override() {
         excluded(&after, &id).is_none_or(|entry| entry["reason"] != "scheduled"),
         "the precise override lifts the hold: {after}"
     );
-}
-
-/// The override names the tasks it starts: without task ids it is refused
-/// before any run exists.
-fn the_override_needs_named_tasks() {
-    let (_root, runtime) = super::review_run_option::open(ShipMode::Local, CONFIG, true);
-    let refused = runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
-            mode: ShipMode::Local,
-            base_branch: Some("main"),
-            task_ids: &[],
-            completion: CompletionPolicy::Review,
-            allowed_crews: &[],
-            actor: Some("operator:fixture"),
-            claim_token: None,
-            trigger: JobRunTrigger::cli(),
-            strict_containment: false,
-            review: None,
-            ignore_schedule: true,
-        })
-        .expect_err("an auto ship has no task to override");
-    assert!(
-        matches!(&refused, OrbitError::InvalidInput(message) if message.contains("--ignore-schedule")),
-        "{refused:?}"
-    );
-    assert_eq!(runs(&runtime), 0);
 }
 
 /// `orbit.task.add` and `orbit.task.update` set `not_before` (stored in
@@ -411,6 +387,5 @@ crate::scenario_table!(
     a_future_schedule_holds_the_task_until_the_operator_overrides_it_scenarios,
     a_future_schedule_holds_the_task_until_the_operator_overrides_it,
     a_fractional_schedule_retains_its_instant_through_show_and_override,
-    the_override_needs_named_tasks,
     add_and_update_set_clear_and_refuse_the_schedule
 );

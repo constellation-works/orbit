@@ -3,8 +3,8 @@
 //!
 //! The hold is an admission reason, not a lifecycle state: it lifts by itself
 //! on the first admission pass after the time, with no timer. An operator may
-//! start the task early from the CLI (`orbit run ship --ignore-schedule`),
-//! which records a [`SCHEDULE_OVERRIDDEN_EVENT`] naming the scheduled time
+//! start the task early with an explicit ship (`orbit run ship <id>` or the
+//! dashboard's Ship), which records a [`SCHEDULE_OVERRIDDEN_EVENT`] naming the scheduled time
 //! before the run is submitted. Every admission route reads that event, so
 //! the override covers the run from submission through dispatch and resume.
 //! Changing `not_before` afterwards reinstates the hold for the new time.
@@ -58,7 +58,7 @@ pub fn scheduled_wait(not_before: DateTime<Utc>) -> String {
 #[must_use]
 pub fn schedule_override_note(not_before: DateTime<Utc>, by: &str) -> String {
     format!(
-        "{}; operator `{by}` started it early with `orbit run ship --ignore-schedule`",
+        "{}; operator `{by}` started it early with an explicit ship",
         override_note_lead(not_before)
     )
 }

@@ -99,7 +99,7 @@ an exact time.
 |---|---|
 | `orbit task update <id> --not-before <time>` | Set the earliest start: an RFC 3339 instant or a local `YYYY-MM-DDTHH:MM`. `--clear-not-before` clears it. |
 | `orbit task list --scheduled` | List future schedules, soonest first. |
-| `orbit run ship <id> --ignore-schedule` | Start the named tasks before their scheduled time. Records a `schedule_overridden` history event. |
+| `orbit run ship <id>` | Start the named tasks now, even before their scheduled time. Records `schedule_overridden` and `readiness_overridden` history events. |
 
 ### Friction and search
 
@@ -115,7 +115,7 @@ an exact time.
 
 | Command | Purpose |
 |---|---|
-| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. `--mode pr\|local` chooses a pull request or in-place delivery. |
+| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. Named tasks ship even when a drain would wait on them (scheduled start, unassessed complexity, no context files, context locks another in-flight task holds); their history records the overridden gates and lock holders. `--mode pr\|local` chooses a pull request or in-place delivery. |
 | `orbit run auto [--for <duration>] [--concurrency <n>]` | [Drain the backlog](/how-to/continuous-delivery/) for a time window; one pass without `--for`. |
 | `orbit run auto --approve-proposed` | Also [approve `proposed` tasks](/how-to/continuous-delivery/#2-authorize-the-backlog) that pass task-pilot verification. |
 | `orbit run auto --auto-fix` | Also [repair failing checks and conflicts](/how-to/continuous-delivery/#repair-blocked-pull-requests) on the pull requests the drain opens. |

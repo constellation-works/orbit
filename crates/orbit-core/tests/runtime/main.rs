@@ -102,6 +102,7 @@ mod held_child_guard;
 mod local_provider_holds;
 #[cfg(target_os = "linux")]
 mod muse_state_grant;
+mod operator_ship_override;
 #[cfg(unix)]
 mod origin_fetch_hold;
 mod pilot_warning_cards;

@@ -92,6 +92,14 @@ spec:
     exclusions; it does not report status-based admission or `max_tasks`
     truncation. Explicit `task_ids` input is treated as an override and skips
     conflict filtering, but still reports the eligibility exclusions it applies.
+    `operator_readiness_override: true`, set only by an operator's explicit
+    ship from the CLI or dashboard, also skips the `unassessed_complexity`
+    readiness gate for those tasks (that ship already recorded a
+    `schedule_overridden` event for a pending `not_before`, so `scheduled`
+    does not apply either); its gate then overrides context-lock waits (see
+    `reserve_locks`). Host, human-crew, inherited-only epic root, live-claim,
+    pilot-preparation and pilot-finding exclusions still apply, as does an
+    overlap with a live execution claim's footprint.
     Automatic ordering puts critical tasks first, then corrective tasks (`bug`
     type or an exact `code-review` / `security-review` tag), then all remaining
     work. Within each band it sorts critical → high → medium → low,
@@ -113,6 +121,8 @@ spec:
       mode:
         type: string
         enum: [pr, local]
+      operator_readiness_override:
+        type: boolean
   output_schema_json:
     type: object
     required: [tasks, task_ids, task_count, bundles]

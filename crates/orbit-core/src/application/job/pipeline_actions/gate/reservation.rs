@@ -20,8 +20,9 @@ use crate::OrbitRuntime;
 use crate::application::job::JobAdmissionPort;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, emit_expired_reservation_events,
-    merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
-    task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
+    merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed,
+    reserve_deferred_footprint, reserve_with_index, task_lock_conflicts_indexed,
+    workspace_orbit_dir, workspace_task_reservation_id,
 };
 
 /// Whether the bundle's footprint is clear: task locks held by other tasks,
@@ -143,6 +144,10 @@ pub(crate) fn reserve_locks(
     } else {
         None
     };
+    if published_delivery.is_none() {
+        output = operator_lock_override(runtime, input, output, tool_context, &task_ids)
+            .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
+    }
     let waiting_on_locks = waiting_locks_from_reserve_output(&output);
     update_run_waiting_reasons(runtime, input, None, non_empty(waiting_on_locks), action)?;
     let mut output = output.into_step_output(Vec::new());
@@ -150,6 +155,65 @@ pub(crate) fn reserve_locks(
         output["published_delivery"] = serde_json::json!(publication);
     }
     Ok(output)
+}
+
+/// [ORB-25082] An operator's explicit ship does not wait on another in-flight
+/// task's context locks: a reservation `denied` on them is granted holding no
+/// files, so the leaf edits beside their holders, and each task's history
+/// names the holders the ship overrode. The leaf does not defer its footprint:
+/// once the task is `in-progress` its own context locks hold against later
+/// admissions. Any other run, and any grant, passes `denied` through.
+fn operator_lock_override(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    denied: ReservationOutcome,
+    tool_context: &ToolContext,
+    task_ids: &[String],
+) -> Result<ReservationOutcome, OrbitError> {
+    let operator_override = input
+        .get(crate::application::job::OPERATOR_READINESS_OVERRIDE_INPUT)
+        .and_then(Value::as_bool)
+        == Some(true);
+    let conflicts = match &denied {
+        ReservationOutcome::Denied { conflicts } if operator_override && !conflicts.is_empty() => {
+            conflicts.clone()
+        }
+        _ => return Ok(denied),
+    };
+    let granted = reserve_deferred_footprint(
+        runtime,
+        input,
+        tool_context.agent_name.clone(),
+        tool_context.model_name.clone(),
+        tool_context.reservation_owner.clone(),
+        conflicts.clone(),
+    )?;
+    let gate = runtime.lock_conflict_gate(&conflicts);
+    let actor = runtime.actor().label.clone();
+    for task_id in task_ids {
+        JobAdmissionPort::record_readiness_override(
+            runtime,
+            task_id,
+            std::slice::from_ref(&gate),
+            &actor,
+        )?;
+    }
+    Ok(match granted {
+        ReservationOutcome::Granted {
+            reservation_id,
+            expires_at,
+            reserved_files,
+            deferred_conflicts,
+            ..
+        } => ReservationOutcome::Granted {
+            reservation_id,
+            expires_at,
+            reserved_files,
+            footprint_deferred: false,
+            deferred_conflicts,
+        },
+        denied @ ReservationOutcome::Denied { .. } => denied,
+    })
 }
 
 /// The dependency picture for a bundle, split by what the caller should do
