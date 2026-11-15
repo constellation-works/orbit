@@ -1,7 +1,8 @@
 //! "Did this work actually reach that commit?", asked from local Git history.
 //!
-//! Every Orbit commit subject carries the bracketed task id (see
-//! `vcs::commit::message`), and the marker survives merge, squash and rebase.
+//! Every Orbit commit names its task ids in `Orbit-Task` trailers and, room
+//! permitting, as bracketed subject markers (see `vcs::commit::message`); both
+//! survive merge, squash and rebase.
 //! So delivery is decided by "is a *message match* reachable from this commit",
 //! never by "is a particular sha reachable" — a squash merge rewrites the sha
 //! and keeps the marker.
@@ -15,6 +16,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
+use orbit_types::workflow::{Trailer, TrailerKey};
+
 use super::git::git_output;
 
 /// Task-id markers are short, bracketed, whitespace-free, and mix letters with
@@ -22,14 +25,27 @@ use super::git::git_output;
 /// keeps an unrelated bracketed prose fragment out of the marker set.
 const MAX_MARKER_LEN: usize = 64;
 
-/// Commits whose message contains `marker` (brackets included) within `scope`.
+/// Commits whose message names `marker` (brackets included) within `scope`:
+/// as a bracketed marker, as one id of an older comma-separated bracket list
+/// (`[ORB-1, ORB-2]`), or as an `Orbit-Task` trailer value.
 pub(super) fn commits_matching(
     repo_root: &Path,
     marker: &str,
     scope: &[&str],
 ) -> Result<Vec<String>, OrbitError> {
-    let grep = format!("--grep={marker}");
-    let mut args = vec!["log", "--no-color", "--format=%H", "--fixed-strings", &grep];
+    let id = marker
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(marker);
+    let id = escape_extended_regex(id);
+    let grep = format!("--grep=(\\[|, ){id}(\\]|,)|^Orbit-Task: {id}$");
+    let mut args = vec![
+        "log",
+        "--no-color",
+        "--format=%H",
+        "--extended-regexp",
+        &grep,
+    ];
     args.extend_from_slice(scope);
     Ok(git_output(repo_root, &args)?
         .lines()
@@ -59,21 +75,51 @@ pub(super) fn marker_reachable(
 /// A `Fixes:` trailer quotes the subject of the commit a repair fixes, so any
 /// marker inside it names someone else's delivery. Trailer lines after the
 /// subject are skipped; only the commit's own subject and body carry ownership.
+///
+/// An `Orbit-Task: <id>` trailer yields `[<id>]`, so a bundle whose subject
+/// had no room for every id still reports each one. An older subject's
+/// comma-separated list (`[ORB-1, ORB-2]`) yields one marker per id.
 pub(super) fn delivery_markers(message: &str) -> Vec<String> {
     let owned = owned_text(message);
     let mut markers: Vec<String> = Vec::new();
-    for candidate in owned.split('[').skip(1) {
-        let Some((token, _)) = candidate.split_once(']') else {
-            continue;
-        };
+    let mut push = |token: &str| {
         if is_marker(token) {
             let marker = format!("[{token}]");
             if !markers.contains(&marker) {
                 markers.push(marker);
             }
         }
+    };
+    for candidate in owned.split('[').skip(1) {
+        let Some((token, _)) = candidate.split_once(']') else {
+            continue;
+        };
+        if token.contains(',') {
+            token.split(',').map(str::trim).for_each(&mut push);
+        } else {
+            push(token);
+        }
+    }
+    for line in owned.lines().skip(1) {
+        if let Some(trailer) = Trailer::parse_line(line)
+            && trailer.key == TrailerKey::OrbitTask
+        {
+            push(trailer.value.trim());
+        }
     }
     markers
+}
+
+/// `text` with every POSIX extended-regex metacharacter escaped.
+fn escape_extended_regex(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if r"\.[]()*+?{}|^$".contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 /// `message` without its quoted-attribution trailers (`Fixes: <sha> ("<subject>")`).

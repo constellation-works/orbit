@@ -4,8 +4,22 @@
 /// mention name with a zero-width joiner. The same representation works in
 /// plain-text titles/commit subjects and prose, and repeated rendering is safe.
 /// Emails with a dotted domain, `scheme://` URLs, closed Markdown link
-/// destinations, co-author trailers and Markdown code are kept.
+/// destinations, co-author trailers and Markdown code are kept, and so is a
+/// final paragraph of registered commit trailers
+/// ([`orbit_types::workflow::TrailerKey`]), byte for byte: a trailer value
+/// such as `Orbit-Review-Crew: haiku@xhigh` is data, not a mention.
 pub(super) fn neutralize_mentions(text: &str) -> String {
+    match orbit_types::workflow::trailer_block_start(text) {
+        Some(start) => {
+            let mut output = neutralize_mentions_in(&text[..start]);
+            output.push_str(&text[start..]);
+            output
+        }
+        None => neutralize_mentions_in(text),
+    }
+}
+
+fn neutralize_mentions_in(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut fence = None;
     let mut prose_start = 0;

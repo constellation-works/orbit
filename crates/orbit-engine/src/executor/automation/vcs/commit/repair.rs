@@ -5,7 +5,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 
 use super::super::git::git_success;
-use super::author::{GitAuthor, reviewer_author};
+use super::author::{orbit_committers_accepted, reviewer_author, reviewer_authors_accepted};
 use super::git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, staged_changed_files,
 };
@@ -35,13 +35,19 @@ pub(in crate::executor::automation::vcs) fn commit_reviewer_repairs_in(
     git_commit_as(workspace_path, message, &reviewer_author(reviewer_model))
 }
 
-/// The `name <email>` author and committer Git records on a reviewer repair
-/// commit.
-pub(in crate::executor::automation::vcs) fn reviewer_repair_identity(
+/// The `name <email>` author and committer pairs Git may record on a
+/// reviewer repair commit: the current identities, and for the
+/// compatibility window the ones written before the single scheme.
+pub(in crate::executor::automation::vcs) fn reviewer_repair_identities(
     reviewer_model: &str,
-) -> (String, String) {
-    (
-        reviewer_author(reviewer_model).spec(),
-        GitAuthor::orbit().spec(),
-    )
+) -> Vec<(String, String)> {
+    let committers = orbit_committers_accepted();
+    reviewer_authors_accepted(reviewer_model)
+        .iter()
+        .flat_map(|author| {
+            committers
+                .iter()
+                .map(|committer| (author.spec(), committer.spec()))
+        })
+        .collect()
 }

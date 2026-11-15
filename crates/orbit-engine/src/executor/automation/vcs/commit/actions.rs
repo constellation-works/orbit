@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::task::{ContextWideningStep, NO_DIFF_EXPECTED_TAG};
+use orbit_types::workflow::CommitType;
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -19,7 +20,7 @@ use super::super::git::git_output;
 use super::super::handoff::{
     claimed_attempt_summary, reject_failed_attempt, reject_failed_delivery,
 };
-use super::author::{append_co_author_trailers, commit_author_for_tasks};
+use super::author::commit_author_for_tasks;
 use super::checkpoint::{
     PinnedHead, head_descends_from_pin, head_matches_final_recovery, head_matches_settled_review,
     validate_pinned_head, verify_clean_tree,
@@ -30,7 +31,7 @@ use super::git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_paths_with_identity,
     git_commit_with_identity, stage_paths, staged_changed_files,
 };
-use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
+use super::message::delivery_commit_message;
 use super::published_replay::final_recovery_published_candidate;
 use super::recovery::{RecoveryCommit, RecoveryCommitRequest, commit_recovery_repair};
 use super::regression::resolve_regression_landed_commits;
@@ -132,7 +133,8 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         }
 
         stage_paths(&workspace_path, &changed_files)?;
-        let message = task_commit_message(&task, &pr_config, &landed);
+        let message =
+            delivery_commit_message(std::slice::from_ref(&task), &pr_config, &landed, &[]);
         git_commit_paths_with_identity(
             &workspace_path,
             &message,
@@ -197,9 +199,8 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     let pr_config = host.pr_config();
     let landed =
         resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, &pr_config);
-    let mut message = finalize_commit_message(&affected_tasks, &pr_config, &landed);
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
-    append_co_author_trailers(&mut message, &coauthors);
+    let message = delivery_commit_message(&affected_tasks, &pr_config, &landed, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
     git_commit_paths_with_identity(
         &workspace_path,
@@ -383,6 +384,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             failed_step_id: "commit",
             recovery_activity: "final_recovery",
             task_ids: std::slice::from_ref(&task.id),
+            commit_type: CommitType::for_task_type(task.task_type),
             recovery_model: host.resolved_crew_model(batch_id)?,
             repair_paths: None,
             no_diff_route: no_diff_expected,
@@ -510,7 +512,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         std::slice::from_ref(&task),
         &pr_config,
     );
-    let message = batch_commit_message(&task, &pr_config, &landed);
+    let message = delivery_commit_message(std::slice::from_ref(&task), &pr_config, &landed, &[]);
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
     git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
@@ -566,7 +568,7 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
             std::slice::from_ref(task),
             &pr_config,
         );
-        let message = batch_commit_message(task, &pr_config, &landed);
+        let message = delivery_commit_message(std::slice::from_ref(task), &pr_config, &landed, &[]);
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;
     }

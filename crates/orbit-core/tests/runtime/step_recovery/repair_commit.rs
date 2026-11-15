@@ -99,14 +99,17 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
                 &["show", "-s", "--format=%an <%ae>|%cn <%ce>", retried]
             ),
             format!(
-                "{} <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>",
+                "{} <recovery@orbit.invalid>|orbit <orbit@orbit.invalid>",
                 recovery_model
                     .map(|model| format!("orbit[{model}]"))
-                    .unwrap_or_else(|| "orbit-recovery".to_string())
+                    .unwrap_or_else(|| "orbit".to_string())
             ),
             "{name}"
         );
         let message = git_stdout(worktree, &["show", "-s", "--format=%B", retried]);
+        // [ORB-25009] The recovery commit meets the commit-message standard.
+        orbit_types::workflow::validate(&message)
+            .unwrap_or_else(|violation| panic!("{name}: {violation}\n{message}"));
         for trailer in [
             format!("Orbit-Recovery-Run: run-{name}"),
             "Orbit-Recovery-Step: validate".to_string(),

@@ -23,6 +23,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::create_private_dir_all;
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
+use orbit_types::workflow::{
+    CommitMessage, CommitRole, CommitType, Trailer, TrailerKey, compose_subject, orbit_identity,
+};
 use orbit_types::workspace::{
     canonicalize_publication_branch, redact_git_remote, validate_git_commit_id,
     validate_last_success, validate_source_repository_fingerprint,
@@ -554,19 +557,35 @@ impl PublicationCache {
         let stamp = request
             .published_at
             .to_rfc3339_opts(SecondsFormat::Secs, true);
-        let identity = format!("{}@orbit.invalid", request.authority_machine_id);
+        // [ORB-25009] Orbit's one identity and commit-message standard; the
+        // authority machine is named in the body.
+        let (name, email) = orbit_identity(CommitRole::Orbit, None);
         let commit_runner = runner().with_env(vec![
-            ("GIT_AUTHOR_NAME", request.authority_machine_id.clone()),
-            ("GIT_AUTHOR_EMAIL", identity.clone()),
+            ("GIT_AUTHOR_NAME", name.clone()),
+            ("GIT_AUTHOR_EMAIL", email.clone()),
             ("GIT_AUTHOR_DATE", stamp.clone()),
-            ("GIT_COMMITTER_NAME", request.authority_machine_id.clone()),
-            ("GIT_COMMITTER_EMAIL", identity),
+            ("GIT_COMMITTER_NAME", name),
+            ("GIT_COMMITTER_EMAIL", email),
             ("GIT_COMMITTER_DATE", stamp),
         ]);
-        let message = format!(
-            "publication {} generation {generation}",
-            request.publication_id
-        );
+        let message = CommitMessage {
+            subject: compose_subject(
+                CommitType::Chore,
+                &format!("publish task records, generation {generation}"),
+                &[],
+                None,
+            )
+            .subject,
+            body: vec![format!(
+                "Task-record snapshot published by authority machine {}.",
+                request.authority_machine_id
+            )],
+            trailers: vec![Trailer::new(
+                TrailerKey::OrbitPublication,
+                format!("{} generation {generation}", request.publication_id),
+            )],
+        }
+        .render();
         let mut args = vec![
             "--git-dir",
             self.git_dir_str()?,

@@ -102,10 +102,10 @@ pub use executor::automation::vcs::{
     BaselineHoldStatus, CheckState, ClaimedKnownRed, KnownRedUnconfirmed, PullRequestStatus,
     WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult,
     WorktreeReclaimReport, baseline_hold_status, classify_rollup_context, collect_worktrees,
-    fetch_remote_base, judge_light_delivery, judge_light_delivery_with_key,
-    recorded_baseline_hold_status, review_skip_decision, run_deferral_probe, run_review_skip_guard,
-    run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
-    verify_claimed_known_red, verify_claimed_known_red_base,
+    compose_squash_merge_message, fetch_remote_base, judge_light_delivery,
+    judge_light_delivery_with_key, recorded_baseline_hold_status, review_skip_decision,
+    run_deferral_probe, run_review_skip_guard, run_worktree_has_reclaim_output, run_worktree_paths,
+    validate_claim_new_paths, verify_claimed_known_red, verify_claimed_known_red_base,
 };
 pub use orbit_agent::provider_supports_continuity;
 

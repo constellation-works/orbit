@@ -1,7 +1,13 @@
+//! The Git identities Orbit commits under: one scheme,
+//! `orbit[<model>] <<role>@orbit.invalid>` (`orbit <<role>@orbit.invalid>`
+//! without a model), from [`orbit_types::workflow::orbit_identity`].
+
 use std::collections::BTreeSet;
 
-use orbit_types::identity::infer_agent_family_from_model;
 use orbit_types::task::Task;
+use orbit_types::workflow::{CommitRole, Trailer, TrailerKey};
+
+use super::message::role_author;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct GitAuthor {
@@ -17,12 +23,14 @@ impl GitAuthor {
         }
     }
 
+    /// Orbit itself: every workflow commit's committer.
     pub(super) fn orbit() -> Self {
-        Self::new("orbit", "orbit@orbit.local")
+        role_author(CommitRole::Orbit, None)
     }
 
+    /// The implementer whose resolved crew model made the change.
     pub(super) fn resolved_model(model: &str) -> Self {
-        Self::new(format!("orbit[{model}]"), "agent@orbit.invalid")
+        role_author(CommitRole::Implementer, Some(model))
     }
 
     pub(super) fn name(&self) -> &str {
@@ -37,60 +45,53 @@ impl GitAuthor {
         format!("{} <{}>", self.name, self.email)
     }
 
-    fn trailer(&self) -> String {
-        format!("Co-Authored-By: {}", self.spec())
+    pub(super) fn co_author_trailer(&self) -> Trailer {
+        Trailer::new(TrailerKey::CoAuthoredBy, self.spec())
     }
 }
 
-/// The reviewer's own agent-family identity [ORB-11333]. Repair commits
-/// are never amended into implementer commits; this author string is what
-/// keeps the two distinguishable through squash and rebase evidence.
-///
-/// [ORB-16768] The name also carries the reviewer's resolved model, so the
-/// repair stays attributable to the agent that made it: the role address is
-/// unchanged.
+/// The reviewer's own identity [ORB-11333]. Repair commits are never
+/// amended into implementer commits; this author is what keeps the two
+/// distinguishable through squash and rebase evidence. The name carries the
+/// reviewer's resolved model [ORB-16768].
 pub(super) fn reviewer_author(reviewer_model: &str) -> GitAuthor {
-    let family = implementer_family(reviewer_model).unwrap_or_else(|| author_slug(reviewer_model));
-    match repair_model(reviewer_model) {
-        Some(model) => GitAuthor::new(
-            format!("orbit[{model}]"),
-            format!("{family}-reviewer@orbit.local"),
-        ),
-        None => GitAuthor::new(
-            format!("{family}-reviewer"),
-            format!("{family}-reviewer@orbit.local"),
-        ),
-    }
+    role_author(CommitRole::Reviewer, Some(reviewer_model))
+}
+
+/// The identities a reviewer repair commit of `reviewer_model` may carry:
+/// the current one first, then the one written before the single scheme,
+/// so a repair committed by an older binary on an in-flight branch is still
+/// recognised as the reviewer's own.
+pub(super) fn reviewer_authors_accepted(reviewer_model: &str) -> Vec<GitAuthor> {
+    vec![
+        reviewer_author(reviewer_model),
+        legacy_reviewer_author(reviewer_model),
+    ]
+}
+
+/// The committer identities accepted beside [`reviewer_authors_accepted`].
+pub(super) fn orbit_committers_accepted() -> Vec<GitAuthor> {
+    vec![
+        GitAuthor::orbit(),
+        GitAuthor::new("orbit", "orbit@orbit.local"),
+    ]
 }
 
 /// The author of a step recovery's working-tree repair, which Orbit commits
-/// for the agent: the recovery sandbox keeps Git metadata read-only.
-///
-/// [ORB-16768] The name carries the recovery activity's resolved crew model,
-/// so the repair stays attributable to the agent that made it. Without a
-/// model it keeps the historical role identity.
+/// for the agent: the recovery sandbox keeps Git metadata read-only. The
+/// name carries the recovery activity's resolved crew model [ORB-16768].
 pub(super) fn recovery_author(recovery_model: Option<&str>) -> GitAuthor {
-    match recovery_model
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
-        Some(model) => GitAuthor::new(format!("orbit[{model}]"), "orbit-recovery@orbit.local"),
-        None => GitAuthor::new("orbit-recovery", "orbit-recovery@orbit.local"),
-    }
+    role_author(CommitRole::Recovery, recovery_model)
 }
 
-/// The bare model inside a repair author label: the text after the
-/// `provider / model` separator when one is present, else the whole label.
-/// `None` when nothing names a model.
-fn repair_model(label: &str) -> Option<&str> {
-    let model = label.rsplit(" / ").next().map(str::trim).unwrap_or("");
-    (!model.is_empty()).then_some(model)
-}
-
+/// The implementer identity of a task, from `implemented_by`.
 pub(super) fn git_author_for_task(task: &Task) -> Option<GitAuthor> {
-    git_author_for_implemented_by(task.implemented_by.as_deref())
+    let implemented_by = task.implemented_by.as_deref()?.trim();
+    (!implemented_by.is_empty()).then(|| role_author(CommitRole::Implementer, Some(implemented_by)))
 }
 
+/// The author and co-authors of a commit delivering `tasks`: their one
+/// implementer, or Orbit with every distinct implementer as a co-author.
 pub(super) fn commit_author_for_tasks(tasks: &[Task]) -> (Option<GitAuthor>, Vec<GitAuthor>) {
     let authors = tasks
         .iter()
@@ -106,58 +107,36 @@ pub(super) fn commit_author_for_tasks(tasks: &[Task]) -> (Option<GitAuthor>, Vec
     }
 }
 
-pub(super) fn append_co_author_trailers(message: &mut String, coauthors: &[GitAuthor]) {
-    if coauthors.is_empty() {
-        return;
-    }
-
-    message.push_str("\n\n");
-    message.push_str(
-        &coauthors
-            .iter()
-            .map(GitAuthor::trailer)
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
-}
-
-fn git_author_for_implemented_by(implemented_by: Option<&str>) -> Option<GitAuthor> {
-    let implemented_by = implemented_by?.trim();
-    if implemented_by.is_empty() {
-        return None;
-    }
-
-    match implementer_family(implemented_by).as_deref() {
-        Some("claude") => Some(GitAuthor::new("claude", "claude@orbit.local")),
-        Some("gemini") => Some(GitAuthor::new("gemini", "gemini@orbit.local")),
-        Some("codex") => Some(GitAuthor::new("codex", "codex@orbit.local")),
-        Some("grok") => Some(GitAuthor::new("grok", "grok@orbit.local")),
-        _ => {
-            let slug = author_slug(implemented_by);
-            Some(GitAuthor::new(slug.clone(), format!("{slug}@orbit.local")))
-        }
+/// The reviewer identity written before the single scheme (ORB-16768):
+/// `orbit[<model>] <<family>-reviewer@orbit.local>`. Recognised only, never
+/// written.
+fn legacy_reviewer_author(reviewer_model: &str) -> GitAuthor {
+    let family = legacy_family(reviewer_model).unwrap_or_else(|| author_slug(reviewer_model));
+    let model = reviewer_model
+        .rsplit(" / ")
+        .next()
+        .map(str::trim)
+        .unwrap_or("");
+    let email = format!("{family}-reviewer@orbit.local");
+    if model.is_empty() {
+        GitAuthor::new(format!("{family}-reviewer"), email)
+    } else {
+        GitAuthor::new(format!("orbit[{model}]"), email)
     }
 }
 
-fn implementer_family(implemented_by: &str) -> Option<String> {
-    let lower = implemented_by.trim().to_ascii_lowercase();
+/// The agent family the legacy reviewer address was named after.
+fn legacy_family(label: &str) -> Option<String> {
+    let lower = label.trim().to_ascii_lowercase();
     if lower.is_empty() {
         return None;
     }
-
     let model_hint = lower
         .rsplit_once(" / ")
         .map(|(_, model)| model.trim())
         .unwrap_or(lower.as_str());
-
-    infer_agent_family_from_model(model_hint)
-        .or_else(|| {
-            if model_hint.starts_with("o4") {
-                Some("codex".to_string())
-            } else {
-                None
-            }
-        })
+    orbit_types::identity::infer_agent_family_from_model(model_hint)
+        .or_else(|| model_hint.starts_with("o4").then(|| "codex".to_string()))
         .or_else(|| {
             if lower.starts_with("codex") || lower.starts_with("openai") {
                 Some("codex".to_string())

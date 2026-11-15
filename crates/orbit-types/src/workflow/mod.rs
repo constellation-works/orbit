@@ -5,6 +5,7 @@ mod auto_concurrency;
 mod auto_task;
 pub use auto_concurrency::*;
 mod child_dispatch;
+mod commit_message;
 mod completion_hold;
 mod crew_purpose;
 mod delivery_conventions;
@@ -33,6 +34,7 @@ mod ship;
 mod skill;
 mod tag_instructions;
 pub use agent_corpus::*;
+pub use commit_message::*;
 pub use delivery_conventions::*;
 pub use error::*;
 

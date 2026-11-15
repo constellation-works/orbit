@@ -18,6 +18,7 @@ use super::git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, stage_paths,
     staged_changed_files,
 };
+use super::message::recovery_commit_message;
 use super::scope::{NewPathPolicy, irregular_candidate_paths, task_candidate_paths};
 
 /// Prefix of a step failure whose recovery repair Orbit refused to commit.
@@ -32,6 +33,8 @@ pub(crate) struct RecoveryCommitRequest<'a> {
     /// Exact paths explained by an admitted CI repair, if applicable.
     pub(crate) repair_paths: Option<&'a [String]>,
     pub(crate) task_ids: &'a [String],
+    /// The commit type of the tasks the repair belongs to.
+    pub(crate) commit_type: orbit_types::workflow::CommitType,
     /// The recovery activity's resolved crew model, which authors the repair
     /// commit [ORB-16768]. `None` keeps the historical role identity.
     pub(crate) recovery_model: Option<String>,
@@ -198,20 +201,11 @@ pub(crate) fn commit_recovery_repair(
 }
 
 fn message(request: &RecoveryCommitRequest<'_>) -> String {
-    let markers = if request.task_ids.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", request.task_ids.join(", "))
-    };
-    format!(
-        "fix: repair failed `{step}` step from recovery{markers}\n\n\
-         Recovery repaired the working tree with Git metadata read-only; Orbit \
-         committed the repair and retries `{step}` on this commit.\n\n\
-         Orbit-Recovery-Run: {run}\n\
-         Orbit-Recovery-Step: {step}\n\
-         Orbit-Recovery-Activity: {activity}",
-        step = request.failed_step_id,
-        run = request.run_id,
-        activity = request.recovery_activity,
+    recovery_commit_message(
+        request.commit_type,
+        request.task_ids,
+        request.run_id,
+        request.failed_step_id,
+        request.recovery_activity,
     )
 }

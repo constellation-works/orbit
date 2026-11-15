@@ -63,7 +63,7 @@ spec:
       with `worktree_mismatch`.
     - Run no Git command that writes (add, commit, stash, rebase, checkout, reset,
       push, branch). Leave fixes uncommitted: the host commits them as a second
-      commit, `review: <summary>`. Revert a change by editing the file back.
+      commit. Revert a change by editing the file back.
     - Do not change task status, acceptance criteria, plan or description. Do not
       approve, merge or dispatch, and never delegate edits, validation, commits or
       dispatch.

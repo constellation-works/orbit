@@ -1645,6 +1645,27 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(fallback["task_source"], "commit-subjects")
         self.assertEqual(fallback["detected_untagged"], ["ORB-31"])
 
+    def test_bundle_commits_attribute_every_task_id(self):
+        # A bundle's second id lives only in its Orbit-Task trailer (the
+        # subject had no room), and an older subject brackets a comma list:
+        # each tagged task still reaches the report.
+        self.repo.commit("feat: A bundle of two changes [ORB-40] (#5)\n\n"
+                         "- ORB-40: first\n- ORB-41: second\n\n"
+                         "Orbit-Task: ORB-40\nOrbit-Task: ORB-41")
+        self.repo.commit("feat(dashboard): drain card [ORB-42, ORB-43] (#6)")
+        tagged = {"tags": ["breaking-change"],
+                  "execution_summary": "Breaking: x removed → use y"}
+        tasks = {task_id: dict(tagged, title=task_id)
+                 for task_id in ("ORB-40", "ORB-41", "ORB-42", "ORB-43")}
+
+        report = self.report("--range", "v0.35.0..HEAD", tasks=tasks)
+        self.assertEqual(report["task_source"], "orbit")
+        self.assertEqual(report["tasks_unread"], [])
+        self.assertEqual(sorted(task["id"] for task in report["breaking"]),
+                         ["ORB-40", "ORB-41", "ORB-42", "ORB-43"])
+        self.assertEqual(report["tagged_without_signal"],
+                         ["ORB-40", "ORB-41", "ORB-42", "ORB-43"])
+
     def test_each_mechanical_signal(self):
         # A subcommand's copy of a global option moves to the condensed
         # Global options list: the option still exists at the program root.

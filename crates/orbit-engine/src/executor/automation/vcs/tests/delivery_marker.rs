@@ -24,6 +24,14 @@ fn delivery_markers_preserve_valid_inner_candidates_and_marker_grammar() {
             &["[ORB-21300]"],
         ),
         ("fix: x\n\n  Fixes: abc (\"feat: y [ORB-1]\")", &[]),
+        (
+            "feat(dashboard): drain card [ORB-20509, ORB-20510] (#7304)",
+            &["[ORB-20509]", "[ORB-20510]"],
+        ),
+        (
+            "fix: a long bundle subject [ORB-1]\n\nBody.\n\nOrbit-Task: ORB-1\nOrbit-Task: ORB-2",
+            &["[ORB-1]", "[ORB-2]"],
+        ),
     ];
     for (message, expected) in cases {
         assert_eq!(delivery_markers(message), *expected, "message: {message:?}");

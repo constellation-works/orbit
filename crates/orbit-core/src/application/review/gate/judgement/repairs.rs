@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
 use orbit_engine::review_gate::{
-    REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
+    commit_reviewer_repairs, reviewer_repair_message, uncommitted_paths,
 };
 use orbit_types::task::{ContextWideningStep, Task};
 use orbit_types::workflow::{CommitIdentity, FindingDisposition, ReviewAttempt, ReviewerIdentity};
@@ -18,7 +18,7 @@ use super::Judgement;
 
 impl Judgement {
     /// Commit whatever the reviewer changed as its own attributed work: the
-    /// candidate's one reviewer commit, `review: <summary>`, on top of the
+    /// candidate's one reviewer commit, `<type>: <summary> [ID]`, on top of the
     /// untouched implementation commits [ORB-13989].
     ///
     /// A reviewer may change any path a fix requires: a changed path no
@@ -45,27 +45,13 @@ impl Judgement {
             .filter(|finding| finding.disposition == FindingDisposition::Repaired)
             .map(|finding| finding.id.clone())
             .collect::<Vec<_>>();
-        let message = format!(
-            "review: {} [{}]\n\nFindings: {}\nPaths: {}\n{REVIEW_ATTEMPT_TRAILER}: {}\nOrbit-Review-Crew: {}",
-            if self.summary.trim().is_empty() {
-                "reviewer repairs".to_string()
-            } else {
-                self.summary
-                    .trim()
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
-            },
-            context.task_ids.join(", "),
-            if finding_ids.is_empty() {
-                "none named".to_string()
-            } else {
-                finding_ids.join(", ")
-            },
-            changed.join(", "),
-            attempt.attempt_id,
-            reviewer.crew,
+        let message = reviewer_repair_message(
+            &context.tasks,
+            &self.summary,
+            &finding_ids,
+            &changed,
+            &attempt.attempt_id,
+            &reviewer.crew,
         );
         // The provider names the agent family the repair commit is attributed
         // to; the model alone may carry no family hint.

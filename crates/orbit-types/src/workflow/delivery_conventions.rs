@@ -139,12 +139,9 @@ pub const DEFAULT_BRANCH_PREFIX: &str = "orbit";
 /// Built-in single-task branch shape: `<prefix>/<task>-<hash8>`.
 pub const DEFAULT_BRANCH_TEMPLATE: &str = "{{prefix}}/{{task_id}}-{{hash}}";
 
-/// Characters a templated commit subject may use; longer subjects are
-/// shortened with [`SUBJECT_ELLIPSIS`].
+/// Characters a commit subject may use, ` (#PR)` included; longer summaries
+/// are cut at a word boundary, never with an ellipsis.
 pub const COMMIT_SUBJECT_BUDGET: usize = 72;
-
-/// Marks a shortened commit subject.
-pub const SUBJECT_ELLIPSIS: char = '…';
 
 /// Hex digits of the run hash in a branch name.
 pub const BRANCH_HASH_LEN: usize = 8;

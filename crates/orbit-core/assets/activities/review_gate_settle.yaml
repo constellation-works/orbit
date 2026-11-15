@@ -7,7 +7,7 @@ spec:
   description: >
     Settle the admitted before-PR review attempt: read the reviewer's
     persisted report, commit the reviewer's changes as the candidate's one
-    reviewer commit (`review: <summary>`, attributed to the reviewer) over the
+    reviewer commit (`<type>: <summary> [<task>]`, attributed to the reviewer) over the
     untouched implementation, cross-check the claimed verdict against the
     repository, validation records, task meaning, and the lineage budget,
     post the findings and what changed for each as a task comment, then issue

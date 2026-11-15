@@ -57,13 +57,17 @@ def export(workspace, orbit, as_of, cutoff):
             events[tid] = []
 
     # Git supplies historical line counts where recorded landed numstats are absent.
-    # A subject ID is an attribution proxy; original task -> SHA proof is not reconstructed.
+    # A subject or `Orbit-Task` trailer ID is an attribution proxy; original
+    # task -> SHA proof is not reconstructed.
     commits = {}
     current = None
-    for line in run(['git','-C',str(checkout),'--no-optional-locks','log',shown['workspace']['base_branch'],'--no-merges','--since='+cutoff,'--numstat','--format=@@%H%x09%cI%x09%s']).splitlines():
+    for line in run(['git','-C',str(checkout),'--no-optional-locks','log',shown['workspace']['base_branch'],'--no-merges','--since='+cutoff,'--numstat','--format=@@%H%x09%cI%x09%(trailers:key=Orbit-Task,valueonly,separator=%x2C)%x09%s']).splitlines():
         if line.startswith('@@'):
-            sha, at, subject = line[2:].split('\t', 2)
-            ids = [tid for tid in re.findall(r'\[([^\]]+)\]', subject) if tid in bindings]
+            sha, at, trailer_ids, subject = line[2:].split('\t', 3)
+            # Each bracketed id, an older `[A, B]` list, then the trailer values.
+            named = [part.strip() for group in re.findall(r'\[([^\]]+)\]', subject) for part in group.split(',')]
+            named += [part.strip() for part in trailer_ids.split(',')]
+            ids = list(dict.fromkeys(tid for tid in named if tid in bindings))
             current = {'sha':sha,'at':stamp(at),'lines':0,'files':0} if len(ids)==1 else None
             if current is not None:
                 current['id'] = ids[0]

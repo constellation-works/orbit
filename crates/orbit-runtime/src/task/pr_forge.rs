@@ -19,6 +19,7 @@ use std::sync::Arc;
 use orbit_common::OrbitError;
 use orbit_engine::{CheckState, classify_rollup_context};
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
+use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
 /// One open pull request as the closure policy matches it.
@@ -225,12 +226,14 @@ pub trait TaskPrForge: Send + Sync {
     /// rule the forge enforces. An error means the outcome is unknown or no
     /// request was made; a refusal the forge answered is
     /// [`PullRequestMergeOutcome::Refused`]. The default refuses before a
-    /// request.
+    /// request. A squash or merge commit carries `message`, Orbit's composed
+    /// title and body, never the forge's default.
     fn merge_pull_request(
         &self,
         _repo_root: &Path,
         number: u64,
         _head_sha: &str,
+        _message: &MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         Err(OrbitError::Execution(format!(
             "this forge cannot merge pull request #{number}"
@@ -512,6 +515,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
         head_sha: &str,
+        message: &MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         if !matches!(head_sha.len(), 40 | 64) || !head_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(OrbitError::InvalidInput(format!(
@@ -537,8 +541,9 @@ impl TaskPrForge for GhTaskPrForge {
                 reason: "the repository permits no merge method".to_string(),
             });
         };
-        let mut request =
-            orbit_tools::github_cli::merge_pull_request_at_head_request(number, head_sha, method);
+        let mut request = orbit_tools::github_cli::merge_pull_request_at_head_request(
+            number, head_sha, method, message,
+        );
         request.current_dir = Some(repo_root.to_string_lossy().into_owned());
         let result = run_process(&request, &NoSandbox)?;
         if !result.success {

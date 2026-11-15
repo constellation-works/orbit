@@ -47,7 +47,10 @@ SEEDED_ASSET_DIRS = tuple(f"crates/orbit-core/assets/{kind}/"
 # CLI and tool-input types elsewhere are read only from input the user writes.
 PERSISTED_TYPE_ROOTS = ("crates/orbit-types/src/", "crates/orbit-store/src/")
 
-TASK_ID = re.compile(r"\[([A-Z][A-Z0-9]*-\d+)\]")
+# One id of a bracketed list: `[ORB-1]`, `[ORB-1] [ORB-2]`, or the older
+# comma-separated `[ORB-1, ORB-2]`.
+BRACKETED_IDS = re.compile(r"\[([A-Z][A-Z0-9]*-\d+(?:,\s*[A-Z][A-Z0-9]*-\d+)*)\]")
+TASK_ID_VALUE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
 VERSION_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 BREAKING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(?:\*\*)?Breaking:(?:\*\*)?\s*(.+?)\s*$")
 
@@ -1185,6 +1188,21 @@ def next_versions(base):
             {"minor": f"{major}.{minor + 1}.0", "patch": f"{major}.{minor}.{patch + 1}"})
 
 
+def commit_task_ids(subject, trailer_ids):
+    """Every task id a commit names, in first-seen order: the subject's
+    bracketed ids (each `[ID]`, or an older `[ID, ID]` list), then its
+    `Orbit-Task` trailer values, which carry the ids a bundle subject had no
+    room for."""
+    ids = []
+    candidates = [part.strip() for group in BRACKETED_IDS.findall(subject)
+                  for part in group.split(",")]
+    candidates += [value.strip() for value in trailer_ids.split(",")]
+    for candidate in candidates:
+        if TASK_ID_VALUE.match(candidate) and candidate not in ids:
+            ids.append(candidate)
+    return ids
+
+
 def survey(repo, revision_range, orbit, offline):
     git = Git(repo)
     revision_range = revision_range or default_range(git)
@@ -1192,23 +1210,31 @@ def survey(repo, revision_range, orbit, offline):
         raise SystemExit("release-breaking-changes: --range must be A..B")
     base, head = revision_range.split("..", 1)
     head = head or "HEAD"
-    log = git.run("log", "--no-merges", "--reverse", "--pretty=%H%x09%s",
+    log = git.run("log", "--no-merges", "--reverse",
+                  "--pretty=%H%x1f%s%x1f%(trailers:key=Orbit-Task,valueonly,separator=%x2C)%x1e",
                   f"{base}..{head}").stdout
     commits, tasks, signals = [], {}, []
-    for line in log.splitlines():
-        sha, _, subject = line.partition("\t")
-        ids = TASK_ID.findall(subject)
+    for record in log.split("\x1e"):
+        record = record.strip("\n")
+        if not record:
+            continue
+        sha, _, rest = record.partition("\x1f")
+        subject, _, trailer_ids = rest.partition("\x1f")
+        ids = commit_task_ids(subject, trailer_ids)
         task_id = ids[-1] if ids else None
-        commits.append({"commit": sha[:10], "subject": subject, "task": task_id})
-        key = task_id or sha[:10]
-        task = tasks.setdefault(key, {"id": task_id, "title": None, "commits": [],
-                                      "tags": [], "tagged": False, "signals": [],
-                                      "breaking_notes": [], "subject": subject})
-        task["commits"].append(sha[:10])
-        for found in detect_commit(git, sha):
+        commits.append({"commit": sha[:10], "subject": subject, "task": task_id,
+                        "tasks": ids})
+        found_signals = detect_commit(git, sha)
+        for found in found_signals:
             found.update(commit=sha[:10], task=task_id, subject=subject)
             signals.append(found)
-            task["signals"].append(found)
+        for key in ids or [sha[:10]]:
+            task = tasks.setdefault(key, {"id": key if ids else None, "title": None,
+                                          "commits": [], "tags": [], "tagged": False,
+                                          "signals": [], "breaking_notes": [],
+                                          "subject": subject})
+            task["commits"].append(sha[:10])
+            task["signals"].extend(found_signals)
 
     source, unread = "commit-subjects", []
     if not offline:
@@ -1232,7 +1258,7 @@ def survey(repo, revision_range, orbit, offline):
     for task in tasks.values():
         if not task["title"]:
             subject = re.sub(r"\s*\(#\d+\)\s*$", "", task["subject"])
-            task["title"] = TASK_ID.sub("", subject).strip() or None
+            task["title"] = BRACKETED_IDS.sub("", subject).strip() or None
 
     breaking = [task for task in tasks.values() if task["tagged"] or task["signals"]]
     bump = "minor" if breaking else "patch"

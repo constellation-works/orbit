@@ -215,6 +215,7 @@ impl TaskPrForge for FakeForge {
         _: &Path,
         number: u64,
         head_sha: &str,
+        _: &orbit_types::workflow::MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         let mut state = self.0.lock().unwrap();
         state.merges.push((number, head_sha.into()));

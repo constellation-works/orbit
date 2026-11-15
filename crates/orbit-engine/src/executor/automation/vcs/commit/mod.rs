@@ -16,6 +16,7 @@ mod recovery;
 mod regression;
 mod repair;
 mod scope;
+mod squash;
 mod summary;
 mod tagged_no_diff;
 
@@ -30,12 +31,16 @@ pub(super) use checkpoint::{
     verify_clean_tree_handoff_at_revision,
 };
 pub(super) use detached::{commit_claimed_partial, commit_worktree_detached};
+pub use message::reviewer_repair_message;
+pub(super) use message::{is_partial_repair_message, partial_repair_message};
 pub(crate) use recovery::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };
 pub(super) use repair::{
-    commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
+    commit_reviewer_repairs_in, reviewer_repair_identities, stage_everything, staged_paths,
 };
+pub use squash::compose_squash_merge_message;
+pub(super) use squash::squash_merge_fields;
 pub(super) use tagged_no_diff::DECISION as NO_DIFF_EXPECTED_SKIP;
 
 #[cfg(test)]

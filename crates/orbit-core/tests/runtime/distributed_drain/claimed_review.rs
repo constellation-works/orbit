@@ -634,7 +634,7 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
     assert_eq!(
         git(&leaf.pair.follower_repo, &["log", "-1", "--format=%s"]).trim(),
         format!(
-            "review: Checked the change against the criteria. [{}]",
+            "chore: Checked the change against the criteria. [{}]",
             leaf.task
         ),
         "the reviewer's fix is the candidate's second commit"
