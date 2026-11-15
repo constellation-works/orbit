@@ -9,7 +9,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{ActorIdentity, OrbitRuntime, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::{fixture_crew, isolated_cli_fixture};
+use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
 #[test]
@@ -20,7 +20,6 @@ fn operator_closes_rescued_blocked_task_without_force_while_another_run_claims_i
         return;
     }
     let fixture = Fixture::new();
-    fixture_crew::configure_sol(&fixture.root);
     fs::write(fixture.repo.join("shared.txt"), "fixture\n").unwrap();
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
     let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
