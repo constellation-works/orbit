@@ -1187,6 +1187,11 @@ fn await_auto_task_park(
         thread::sleep(Duration::from_millis(50));
     }
     let reaped = guard.terminate_and_reap();
+    // Once reaped, a park that landed before the kill is still the run's
+    // outcome; the pre-existing post-kill grace loop reported it the same way.
+    if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
+        return reason;
+    }
     let run = runtime
         .show_job_run(run_id)
         .unwrap_or_else(|error| panic!("{job} show {run_id}: {error}"));
