@@ -90,7 +90,7 @@ const OWN_PUBLICATION_KEYS: [&str; 5] = ["push", "pr_open", "landing_push", "re_
 
 /// `run` stopped `held` because its deferred footprint stayed busy
 /// ([`HeldFailure::FootprintUnavailable`]): no editor started.
-fn footprint_held(run: &JobRun) -> bool {
+pub(super) fn footprint_held(run: &JobRun) -> bool {
     run.job_id == workflow::TASK_PR_PIPELINE_JOB
         && run.state == JobRunState::Held
         && source_owner_is_gone(run)
@@ -162,7 +162,10 @@ impl OrbitRuntime {
     /// lookups judge that source instead [ORB-24993]. The adoption is
     /// authenticated as recorded ([`Self::read_owner_publication_binding`]);
     /// anything unproven answers `None` and keeps the ordinary refusal.
-    fn footprint_held_adopted_source(&self, run: &JobRun) -> Result<Option<String>, OrbitError> {
+    pub(super) fn footprint_held_adopted_source(
+        &self,
+        run: &JobRun,
+    ) -> Result<Option<String>, OrbitError> {
         if !footprint_held(run) {
             return Ok(None);
         }
