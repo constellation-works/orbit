@@ -1,6 +1,6 @@
 // Orbit dashboard task comment thread: expansion, raw/rendered toggle and thread order.
 
-import { el, makeDisclosure, copyWithFeedback, clockStamp, formatDateTime } from './common.js';
+import { el, makeDisclosure, copyWithFeedback, clockStamp, formatDateTime, runHref, taskHref } from './common.js';
 import { taskState, absTimeNode, taskDispatchIdentity } from './task-shared.js';
 import { explicitCrewValue, isConfiguredCrewValue } from './task-crew.js';
 import * as taskFields from './task-fields.js';
@@ -171,6 +171,80 @@ function pilotAssessmentView({ receipt, assessment }) {
   return view;
 }
 
+// Resident records are persisted JSON. Only recognize the known shapes; malformed
+// or future records retain the ordinary comment renderer and original text.
+function residentComment(comment) {
+  try {
+    const record = JSON.parse(commentMessage(comment));
+    if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+    if (record.kind === "resident.checkpoint" && typeof record.cycle === "string" &&
+        typeof record.run_id === "string" && typeof record.outcome === "string" &&
+        typeof record.notes === "string" && record.next_wake &&
+        typeof record.next_wake.not_before === "string" &&
+        [record.actions, record.decisions, record.requests].every(Array.isArray)) return record;
+    if (record.kind === "resident.request" && typeof record.question === "string") return record;
+    if (record.kind === "resident.answer" && typeof record.quote === "string") return record;
+  } catch (_) { /* Keep the ordinary text view. */ }
+  return null;
+}
+
+// Link only known identifiers and HTTPS URLs, never interpret comment text as HTML.
+function residentText(text, decisionTask) {
+  const value = typeof text === "string" ? text : "";
+  const nodes = [];
+  const pattern = /https:\/\/[^\s<>"']+|\bORB-\d+\b|\bjrun-[a-zA-Z0-9-]+\b|\b(?:DR|dr)-[a-zA-Z0-9-]+\b/g;
+  let offset = 0;
+  for (const match of value.matchAll(pattern)) {
+    nodes.push(value.slice(offset, match.index));
+    const id = match[0];
+    let href = null;
+    if (id.startsWith("https://")) {
+      try { if (new URL(id).hostname === "github.com") href = id; } catch (_) { /* plain text */ }
+    } else if (id.startsWith("ORB-")) href = taskHref(id);
+    else if (id.startsWith("jrun-")) href = runHref(id);
+    else if (decisionTask) href = taskHref(decisionTask);
+    nodes.push(href ? el("a", { href, text: id }) : id);
+    offset = match.index + id.length;
+  }
+  nodes.push(value.slice(offset));
+  return nodes;
+}
+
+function residentCommentView(record) {
+  const view = el("div", { class: "resident-comment" });
+  const line = (text, decisionTask) => el("div", {}, residentText(text, decisionTask));
+  if (record.kind === "resident.checkpoint") {
+    const title = el("div", { class: "resident-comment-title" }, [
+      el("a", { href: runHref(record.run_id), text: record.cycle }),
+      ` · ${record.outcome}`,
+    ]);
+    view.appendChild(title);
+    const wake = record.next_wake;
+    view.appendChild(el("div", { class: "resident-comment-meta", text: `Next wake: ${formatDateTime(wake.not_before)}${wake.reason ? ` · ${wake.reason}` : ""}` }));
+    if (record.notes) view.appendChild(el("p", { class: "resident-comment-notes", text: record.notes }));
+    for (const [field, label, format] of [
+      ["actions", "Actions", item => [item.kind, item.subject, item.result, item.ref]],
+      ["decisions", "Decisions", item => [item.id, item.summary]],
+      ["requests", "Requests", item => [item.id, item.decision_request, item.task, item.blocking ? "blocking" : ""]],
+    ]) {
+      const items = record[field].filter(item => item && typeof item === "object");
+      if (!items.length) continue;
+      view.appendChild(el("div", { class: "resident-comment-label", text: label }));
+      view.appendChild(el("ul", {}, items.map(item => el("li", {}, [line(format(item).filter(value => typeof value === "string" && value.trim()).join(" · "), item.task || record.mandate)]))));
+    }
+  } else if (record.kind === "resident.request") {
+    view.appendChild(el("div", { class: "resident-comment-title", text: "Request" }));
+    view.appendChild(line(record.question));
+    if (record.recommended) view.appendChild(line(`Recommended: ${record.recommended}`));
+    const refs = [record.decision_request, record.task].filter(Boolean).join(" · ");
+    if (refs) view.appendChild(el("div", { class: "resident-comment-meta" }, residentText(refs, record.task)));
+  } else {
+    view.appendChild(el("div", { class: "resident-comment-title", text: "Answer" }));
+    view.appendChild(el("p", { class: "resident-comment-notes", text: record.quote }));
+  }
+  return view;
+}
+
 export function commentKey(task, index) {
   return `${taskDispatchIdentity(task)}#${index}`;
 }
@@ -293,8 +367,9 @@ function buildCommentCard(task, comment, index) {
   const message = commentMessage(comment);
   const writer = comment && comment.by ? String(comment.by) : "?";
   const pilot = pilotAssessment(comment);
-  const titles = pilot ? [] : commentSections(message);
-  const long = !pilot && commentIsLong(message);
+  const resident = residentComment(comment);
+  const titles = pilot || resident ? [] : commentSections(message);
+  const long = !pilot && !resident && commentIsLong(message);
 
   const card = el("article", { class: "comment-card" });
   card.id = commentAnchorId(task.id, index);
@@ -331,8 +406,8 @@ function buildCommentCard(task, comment, index) {
     actions,
   ]);
 
-  const view = pilot ? pilotAssessmentView(pilot) : taskFields.markdownView(message);
-  view.className = "markdown-body comment-body";
+  const view = pilot ? pilotAssessmentView(pilot) : resident ? residentCommentView(resident) : taskFields.markdownView(message);
+  view.classList.add("markdown-body", "comment-body");
   const headings = renderedCommentHeadings(view);
   const raw = el("pre", { class: "comment-raw", text: message });
   raw.style.display = "none";
@@ -566,7 +641,7 @@ export function renderCommentsPanel(panel, task) {
     renderCommentsPanel(panel, task);
   });
   actions.appendChild(order);
-  if (comments.some((comment) => commentIsLong(commentMessage(comment)))) {
+  if (comments.some((comment) => !pilotAssessment(comment) && !residentComment(comment) && commentIsLong(commentMessage(comment)))) {
     const collapseAll = el("button", {
       class: "comment-pref",
       text: "collapse all",

@@ -1633,6 +1633,12 @@ input.field-editor-input {
   max-width: 72ch;
 }
 .comment-body h2 { scroll-margin-top: 48px; }
+.resident-comment { overflow-wrap: anywhere; }
+.resident-comment-title { color: var(--fg); }
+.resident-comment-meta { color: var(--fg-dim); }
+.resident-comment-notes { white-space: pre-wrap; margin: 8px 0; }
+.resident-comment-label { color: var(--fg-dim); margin-top: 8px; }
+.resident-comment ul { margin: 0; padding-left: 20px; }
 .pilot-assessment-fields {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
