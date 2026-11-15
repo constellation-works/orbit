@@ -636,6 +636,25 @@ holds for the host run instead of blocking as `validation_incomplete`
 each deferred test as above; settlement's synthesis is the backstop, and a
 Bubblewrap notice it cannot name a command for still blocks.
 
+Settlement owes that synthesized run only when the candidate can reach the
+deferred test [ORB-25096]. A candidate that changes only Markdown and Rust
+sources under a `tests` directory outside `tests/support`, none of which names
+the test or mentions
+`sandbox`, `bwrap` or `bubblewrap` (in its path or its content before or
+after the change), cannot: the notice is cleared with a `not owed` note, a
+reviewer-named Linux run covering only that notice leaves the named
+evidence (its `not_run` record becomes `excluded`), and the review settles
+on its other records. A host whose kernel refuses user namespaces would
+never produce the run, and the pull request's required checks still execute
+the test before landing, so such a delivery no longer ends in an evidence
+hold that final recovery escalates to an operator. Any other changed path —
+production code, a manifest, a build script, configuration, a script or an
+asset — or a workspace `[[review.host_evidence]]` rule that owes the same
+check keeps the run owed, and the review holds for real execution evidence
+as before. Any changed Rust source under `tests/support` keeps the run owed:
+shared test support can affect the deferred sandbox test even when its source
+does not mention the test or sandbox.
+
 A test runner may instead exit nonzero because nested Seatbelt application
 or a required child-process spawn was refused by the review sandbox. Record
 that affected check as `required` and `denied`, with the exact command,
