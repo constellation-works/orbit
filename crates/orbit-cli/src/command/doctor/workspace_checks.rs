@@ -1,125 +1,14 @@
-use clap::{Args, Subcommand};
 use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, RetiredConfigKeyRepair, WorkspaceDoctorResult,
     WorkspaceDoctorStatus,
 };
 use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
-use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use super::command::DoctorCommand;
+use super::support::status_label;
+use crate::command::{Block, CommandOut, Payload};
 use crate::output::color::{Domain, Role};
-
-mod tool_telemetry;
-
-/// `orbit doctor` — workspace-level self-diagnostics [ORB-10005].
-#[derive(Args)]
-#[command(
-    about = "Diagnose workspace health, provider CLIs, and filesystem access",
-    long_about = "Diagnose workspace health, provider CLIs, and filesystem access\n\n\
-        With no subcommand, checks the workspace: config, database, disk, indexes, locks, and \
-        runs. Default database checks read the header and schema; --deep also scans every \
-        database page with SQLite quick_check. The subcommands run focused diagnostics for provider CLIs, filesystem access, and admission receipt storage.",
-    args_conflicts_with_subcommands = true
-)]
-pub struct DoctorCommand {
-    /// Run a focused diagnostic instead of the workspace health checks.
-    #[command(subcommand)]
-    pub command: Option<DoctorSubcommand>,
-
-    /// Scan every database page with SQLite quick_check; default checks only read the header and schema.
-    #[arg(long)]
-    pub deep: bool,
-
-    /// Print only failures and warnings.
-    #[arg(long)]
-    pub problems: bool,
-
-    /// Print one check with its complete message and remediation (exact CHECK name)
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["problems", "doctor_repairs", "confirm"])]
-    pub check: Option<String>,
-
-    #[command(flatten)]
-    pub repairs: DoctorRepairFlags,
-
-    /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
-    #[arg(long)]
-    pub confirm: bool,
-}
-
-#[derive(Args, Default, PartialEq, Eq)]
-#[group(id = "doctor_repairs", multiple = true)]
-pub struct DoctorRepairFlags {
-    /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
-    #[arg(long)]
-    pub fix_stale_locks: bool,
-
-    /// Release only task reservations whose owner/task state is conclusively inactive.
-    #[arg(long)]
-    pub fix_stale_task_locks: bool,
-
-    /// Restrict writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only).
-    #[arg(long)]
-    pub fix_state_directory_permissions: bool,
-
-    /// Remove retired graph state from this worktree and the shared workspace.
-    #[arg(long)]
-    pub remove_graph: bool,
-
-    /// Retire deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted.
-    #[arg(long)]
-    pub fix_stale_artifacts: bool,
-
-    /// Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles). Unowned or unreachable populated partitions are never touched. Requires --confirm.
-    #[arg(long)]
-    pub fix_orphan_task_stores: bool,
-
-    /// Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs.
-    #[arg(long)]
-    pub fix_automation_pins: bool,
-
-    /// Back up config.toml and remove retired, deprecated or unknown keys, preserving translated review settings. Refuses legacy after-landing policies until manually migrated.
-    #[arg(long)]
-    pub fix_retired_config_keys: bool,
-
-    /// Restore missing review-task pull request references from the owner's accepted follower handoffs, preserving claim and landing state.
-    #[arg(long)]
-    pub fix_missing_pr_refs: bool,
-}
-
-impl DoctorRepairFlags {
-    fn any_requested(&self) -> bool {
-        self != &Self::default()
-    }
-}
-
-#[derive(Subcommand)]
-pub enum DoctorSubcommand {
-    /// Show admission receipt counts and logical payload bytes, with separate claim-mutation receipt usage
-    AdmissionReceipts(AdmissionReceiptsArgs),
-    /// Show each executor's provider CLI, configured sandbox, Linux sandbox readiness, and usage limits
-    Providers(ProvidersArgs),
-    /// Dry-run a workspace-relative path against a filesystem profile's read and modify rules
-    FsAccess(FsAccessArgs),
-}
-
-#[derive(Args)]
-pub struct ProvidersArgs {}
-
-#[derive(Args)]
-pub struct AdmissionReceiptsArgs {
-    /// Compact idle and settled admission receipts to permanent tombstones; retain full receipts for unsettled claims and failed or revoked claims with a preserved PR.
-    #[arg(long)]
-    pub compact: bool,
-}
-
-#[derive(Args)]
-pub struct FsAccessArgs {
-    /// Filesystem profile name (for example `implementer`)
-    pub profile: String,
-    /// Path to check, matched as written against the profile's workspace-relative rules
-    pub path: String,
-}
 
 impl DoctorCommand {
     /// The report `orbit doctor` can still give when the runtime would not
@@ -164,23 +53,14 @@ impl DoctorCommand {
     }
 }
 
-impl Execute for DoctorCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        match self.command {
-            Some(DoctorSubcommand::AdmissionReceipts(args)) => {
-                return admission_receipts(runtime, args.compact);
-            }
-            Some(DoctorSubcommand::Providers(_)) => return provider_diagnostics(runtime),
-            Some(DoctorSubcommand::FsAccess(args)) => {
-                return fs_access(runtime, &args.profile, &args.path);
-            }
-            None => {}
-        }
+impl DoctorCommand {
+    /// The bare `orbit doctor` body: optional repairs, then the workspace report.
+    pub(super) fn workspace_checks(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.repairs.fix_orphan_task_stores && !self.confirm {
             return Err(orbit_core::OrbitError::InvalidInput(
-                "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
-                    .to_string(),
-            ));
+                    "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
+                        .to_string(),
+                ));
         }
         let mut results = vec![WorkspaceDoctorResult {
             duration_ms: 0,
@@ -439,29 +319,6 @@ fn report_output(
     Ok(payload.into())
 }
 
-fn admission_receipts(runtime: &OrbitRuntime, compact: bool) -> CommandOut {
-    let (compacted_receipts, storage) = if compact {
-        let report = runtime.compact_admission_receipts()?;
-        (report.compacted_receipts, report.storage)
-    } else {
-        (0, runtime.inspect_admission_receipt_storage()?)
-    };
-    let text = format!(
-        "Compacted admission receipts: {compacted_receipts}\nFull admission receipts: {} ({} logical payload bytes)\nPermanent tombstones: {} ({} logical payload bytes)\nClaim mutation receipts: {} ({} logical payload bytes; pruned separately on settlement after 7 days)\nLogical payload bytes exclude row keys, indexes, free pages and WAL.",
-        storage.full_receipts.count,
-        storage.full_receipts.logical_payload_bytes,
-        storage.tombstones.count,
-        storage.tombstones.logical_payload_bytes,
-        storage.claim_mutation_receipts.count,
-        storage.claim_mutation_receipts.logical_payload_bytes,
-    );
-    Ok(Payload::blocks(
-        json!({"compacted_receipts": compacted_receipts, "storage": storage}),
-        vec![Block::prose(text)],
-    )
-    .into())
-}
-
 /// The audit message for a completed run that reported failed checks, e.g.
 /// `doctor reported findings: 1 failure (review), 3 warnings`. The prefix is
 /// what lets the incident classifier tell this verdict from a crash.
@@ -482,206 +339,6 @@ fn findings_audit_message(results: &[WorkspaceDoctorResult], warnings: usize) ->
         failed.join(", "),
         if warnings == 1 { "warning" } else { "warnings" },
     )
-}
-
-/// `orbit doctor fs-access`: the active policy's read and modify verdicts for
-/// one path under one fsProfile, without running anything.
-fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
-    let def = runtime
-        .get_policy_def(DEFAULT_POLICY_NAME)?
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!("policy not found: {DEFAULT_POLICY_NAME}"))
-        })?;
-    let read = def.check_path(profile, FsOperation::Read, path)?;
-    let modify = def.check_path(profile, FsOperation::Modify, path)?;
-
-    let doc = json!({
-        "policy": DEFAULT_POLICY_NAME,
-        "profile": profile,
-        "path": path,
-        "read": {
-            "allowed": read.allowed,
-            "matched_rule": read.matched_rule,
-        },
-        "modify": {
-            "allowed": modify.allowed,
-            "matched_rule": modify.matched_rule,
-        },
-    });
-    let verdict = |allowed: bool| if allowed { "allowed" } else { "denied" };
-    let text = format!(
-        "Policy:  {DEFAULT_POLICY_NAME}\nProfile: {profile}\nPath:    {path}\nread:    {} ({})\nmodify:  {} ({})",
-        verdict(read.allowed),
-        read.matched_rule,
-        verdict(modify.allowed),
-        modify.matched_rule
-    );
-    Ok(Payload::detail(doc, text).into())
-}
-
-/// `orbit doctor providers`: one row per executor definition, naming the
-/// provider CLI it launches, where dispatch would find that CLI, and the
-/// sandbox mode the effective definition resolves to.
-fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
-    use crate::output::table::{Column, Table};
-
-    let defs = runtime.list_executor_defs()?;
-    // One fresh user-scoped probe for this diagnostic. The configured executor
-    // mode alone does not establish that the host can create the namespace.
-    let linux_probe = defs
-        .iter()
-        .any(|def| {
-            def.sandbox
-                .is_some_and(|kind| kind.as_str() == "linux-bwrap")
-        })
-        .then(orbit_core::bootstrap::linux_sandbox_host::probe_bwrap_fresh);
-    // [ORB-14698] The same provider-limit rows `orbit doctor` reports, under
-    // the executor of the provider each concerns.
-    let limit_findings = orbit_cmd::provider_limit_findings(runtime);
-    let mut values = Vec::with_capacity(defs.len());
-    let mut telemetry_notes: Vec<String> = Vec::new();
-    let mut table = Table::new(vec![
-        Column::new("EXECUTOR").fixed(),
-        Column::new("TYPE").fixed(),
-        Column::new("CLI").fixed(),
-        Column::new("FOUND").fixed(),
-        Column::new("SANDBOX").fixed(),
-        Column::new("READY").fixed(),
-        Column::new("BWRAP").fixed(),
-        Column::new("LIMITS").fixed(),
-        Column::new("TOOLS").fixed(),
-        Column::new("LAUNCHER").path(),
-    ])
-    .empty_message("no executors defined");
-    for def in &defs {
-        let launcher = def
-            .command
-            .as_deref()
-            .and_then(|program| runtime.locate_provider_launcher(program));
-        // An executor without a `command` (e.g. `local-shell`) launches no
-        // provider CLI, so availability does not apply rather than failing.
-        let cli_available = def.command.as_ref().map(|_| launcher.is_some());
-        // A declared `host_os` that excludes this host is not a missing
-        // binary. An omitted declaration keeps the path probe.
-        let unsupported_on_this_os = def.host_os.as_ref().is_some_and(|hosts| {
-            !orbit_types::task::HostOs::current().is_some_and(|host| hosts.contains(&host))
-        });
-        let availability = if unsupported_on_this_os {
-            Some("unsupported on this OS")
-        } else {
-            match cli_available {
-                Some(true) => Some("installed"),
-                Some(false) => Some("not installed"),
-                None => None,
-            }
-        };
-        let found = if unsupported_on_this_os {
-            "unsupported"
-        } else {
-            match cli_available {
-                Some(true) => "yes",
-                Some(false) => "no",
-                None => "-",
-            }
-        };
-        let sandbox = def.sandbox.map_or("unspecified", |kind| kind.as_str());
-        let readiness = (sandbox == "linux-bwrap")
-            .then_some(linux_probe.as_ref())
-            .flatten();
-        // Which trusted Bubblewrap the probe selected — the host's or the
-        // one bundled with Orbit — and its version once it passed.
-        let wrapper = readiness.and_then(|probe| probe.source.map(|source| (source, probe)));
-        let limits = limit_findings
-            .iter()
-            .filter(|(provider, _)| provider.as_deref().is_none_or(|name| name == def.name))
-            .map(|(_, row)| row)
-            .collect::<Vec<_>>();
-        // The worst of them, as `orbit doctor` ranks a row.
-        let limit_status = [
-            WorkspaceDoctorStatus::Error,
-            WorkspaceDoctorStatus::Warning,
-            WorkspaceDoctorStatus::Ok,
-            WorkspaceDoctorStatus::Info,
-            WorkspaceDoctorStatus::Skipped,
-        ]
-        .into_iter()
-        .find(|status| limits.iter().any(|row| row.status == *status));
-        // Whether the effective args yield tool-call traces, independent of
-        // whether the binary or sandbox is available.
-        let telemetry = tool_telemetry::classify(def);
-        // Only a row the operator can act on gets prose under the table; the
-        // rest stay in the TOOLS column and the JSON `tool_telemetry` object.
-        if let (Some(cause), Some(remediation)) =
-            (telemetry.cause.as_deref(), telemetry.remediation.as_deref())
-        {
-            telemetry_notes.push(format!(
-                "{} tool telemetry {}: {cause} {remediation}",
-                def.name,
-                telemetry.label()
-            ));
-        }
-        values.push(json!({
-            "name": def.name,
-            "executor_type": def.executor_type.to_string(),
-            "command": def.command,
-            "args": def.args,
-            "cli_available": cli_available,
-            "availability": availability,
-            "launcher": launcher.as_ref().map(|path| path.display().to_string()),
-            "sandbox": def.sandbox,
-            "sandbox_ready": readiness.map(|probe| probe.available),
-            "sandbox_readiness_detail": readiness.map(|probe| probe.detail.as_str()),
-            "sandbox_wrapper": wrapper.map(|(source, _)| source.as_str()),
-            "sandbox_wrapper_path": wrapper.map(|(_, probe)| probe.trusted_path.as_str()),
-            "sandbox_wrapper_version": wrapper.and_then(|(_, probe)| probe.version.as_deref()),
-            "allow_fallback": def.allow_fallback,
-            "tool_telemetry": telemetry.to_json(),
-            "provider_limits": limits
-                .iter()
-                .map(|row| orbit_cmd::doctor_row_json(row))
-                .collect::<Vec<_>>(),
-        }));
-        table.add_row(vec![
-            def.name.clone(),
-            def.executor_type.to_string(),
-            def.command.clone().unwrap_or_else(|| "-".to_string()),
-            found.to_string(),
-            sandbox.to_string(),
-            readiness.map_or_else(
-                || "-".to_string(),
-                |probe| if probe.available { "yes" } else { "no" }.to_string(),
-            ),
-            wrapper.map_or_else(
-                || "-".to_string(),
-                |(source, probe)| match &probe.version {
-                    Some(version) => format!("{} {version}", source.as_str()),
-                    None => source.as_str().to_string(),
-                },
-            ),
-            limit_status.map_or_else(
-                || "-".to_string(),
-                |status| status_label(status).to_string(),
-            ),
-            telemetry.label(),
-            launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
-        ]);
-    }
-    let mut blocks = vec![Block::table(table)];
-    blocks.extend(telemetry_notes.into_iter().map(Block::notice));
-    let records = values.clone();
-    Ok(Payload::blocks(Value::Array(values), blocks)
-        .with_records(records)
-        .into())
-}
-
-fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
-    match status {
-        WorkspaceDoctorStatus::Ok => "ok",
-        WorkspaceDoctorStatus::Warning => "warning",
-        WorkspaceDoctorStatus::Error => "ERROR",
-        WorkspaceDoctorStatus::Skipped => "skipped",
-        WorkspaceDoctorStatus::Info => "info",
-    }
 }
 
 /// Render `--fix-orphan-task-stores --confirm`'s outcome, naming the empty
