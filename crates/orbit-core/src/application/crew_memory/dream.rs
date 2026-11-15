@@ -78,6 +78,14 @@ pub(crate) fn dreaming_task_key(task: &Task) -> Option<MemoryKey> {
     memory_key(Some(&reference.id))
 }
 
+/// The open (non-terminal) dreaming task for `key` among `dreaming_tasks`,
+/// if any.
+fn open_dreaming_task<'a>(dreaming_tasks: &'a [Task], key: &MemoryKey) -> Option<&'a Task> {
+    dreaming_tasks
+        .iter()
+        .find(|task| !task.status.is_terminal() && dreaming_task_key(task).as_ref() == Some(key))
+}
+
 /// `2026-W45`: the ISO week a mint belongs to.
 fn iso_week(at: DateTime<Utc>) -> String {
     let week = at.iso_week();
@@ -116,7 +124,11 @@ impl OrbitRuntime {
             }));
         }
         self.ensure_coordination_task_write_permitted()?;
-        let no_revision = self.settle_dreaming_tasks(now)?;
+        // One tag-indexed read serves the settle step and every key's
+        // open-task check; a per-key filtered listing reads every task
+        // bundle in the workspace once for each model.
+        let dreaming_tasks = self.list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?;
+        let no_revision = self.settle_dreaming_tasks(now, &dreaming_tasks)?;
         let facts = self.agent_scan()?;
         let mut minted = Vec::new();
         let mut skipped = Vec::new();
@@ -129,7 +141,7 @@ impl OrbitRuntime {
                 below_support.push(json!({ "key": key, "units": units }));
                 continue;
             }
-            if let Some(open) = self.open_dreaming_task(&key)? {
+            if let Some(open) = open_dreaming_task(&dreaming_tasks, &key) {
                 self.record_dream_skip(&key, &week, now, "open_task", Some(&open.id))?;
                 skipped.push(json!({ "key": key, "reason": "open_task", "task_id": open.id }));
                 continue;
@@ -196,16 +208,6 @@ impl OrbitRuntime {
         }))
     }
 
-    /// The open (non-terminal) dreaming task for `key`, if any.
-    fn open_dreaming_task(&self, key: &MemoryKey) -> Result<Option<Task>, OrbitError> {
-        Ok(self
-            .list_tasks_filtered(None, None, None, None, Some(&key_reference(key)), None)?
-            .into_iter()
-            .find(|task| {
-                !task.status.is_terminal() && dreaming_task_key(task).as_ref() == Some(key)
-            }))
-    }
-
     /// The crew a model's dreaming task runs on: an enabled crew of that
     /// model at its own effort, else the one at the lowest configured
     /// effort, by name on a tie. `None` when no enabled crew runs the model.
@@ -248,11 +250,15 @@ impl OrbitRuntime {
 
     /// Record `no_revision` for each finished dreaming task whose run wrote
     /// no revision of its key, once. Returns what it recorded.
-    fn settle_dreaming_tasks(&self, now: DateTime<Utc>) -> Result<Vec<Value>, OrbitError> {
-        let mut finished: BTreeMap<MemoryKey, Vec<Task>> = BTreeMap::new();
-        for task in self.list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])? {
+    fn settle_dreaming_tasks(
+        &self,
+        now: DateTime<Utc>,
+        dreaming_tasks: &[Task],
+    ) -> Result<Vec<Value>, OrbitError> {
+        let mut finished: BTreeMap<MemoryKey, Vec<&Task>> = BTreeMap::new();
+        for task in dreaming_tasks {
             if task.status.is_terminal()
-                && let Some(key) = dreaming_task_key(&task)
+                && let Some(key) = dreaming_task_key(task)
             {
                 finished.entry(key).or_default().push(task);
             }
