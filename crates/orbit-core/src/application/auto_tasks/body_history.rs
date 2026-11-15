@@ -202,6 +202,10 @@ pub(super) fn historical_overrides(
             overrides.settings.crew = settings.crew.clone().or(overrides.settings.crew);
             overrides.settings.priority = settings.priority.or(overrides.settings.priority);
             overrides.settings.complexity = settings.complexity.or(overrides.settings.complexity);
+            overrides.settings.granted_tools = settings
+                .granted_tools
+                .clone()
+                .or(overrides.settings.granted_tools);
             for tag in &settings.tags {
                 if !overrides.settings.tags.contains(tag) {
                     overrides.settings.tags.push(tag.clone());
