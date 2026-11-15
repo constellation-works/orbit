@@ -4,7 +4,7 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 10
+version: 11
 created: 2026-11-09
 updated: 2026-11-15
 last_validated: 2026-11-15
@@ -210,6 +210,13 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   A select's width follows its whole option set, not the selected option, so changing the
   selection moves nothing (R5). A field meant to fill its row, such as a search box, is
   exempt.
+- **R43.** When regions shown side by side collapse into one column, the page's primary
+  region (the one its nav entry names, such as the task list on Tasks) MUST stay shown. A
+  secondary region (a dock, side panel or detail pane) replaces it only when the operator
+  navigated to that region at the collapsed width, through its nav entry or a link to it.
+  Choosing a tab or item inside a secondary region while both are visible is not such a
+  navigation. The secondary region keeps its selection for when it is reached, and widening
+  again shows both regions.
 
 ### Process
 
