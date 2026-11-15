@@ -33,7 +33,9 @@ const NATIVE_FACILITY_TERMS: &[&str] = &[
 /// A criterion that names none of [`NATIVE_FACILITY_TERMS`] cannot justify
 /// the finding unless its evidence cites a `#[cfg(target_os = "<os>")]` gate
 /// that the pinned source confirms, on an item the criterion names, with
-/// `os` equal to that gate. Any other citation is rejected so the repair
+/// `os` equal to that gate, or a repository guide rule the pinned source
+/// confirms is triggered by a tag this task carries and only Linux can
+/// satisfy (see `guide_gate`). Any other citation is rejected so the repair
 /// pilot leaves `required_os` empty instead of holding a portable task on a
 /// native host.
 pub(in super::super) fn required_os(
@@ -41,6 +43,7 @@ pub(in super::super) fn required_os(
     task_id: &str,
     assessment: &Value,
     criteria: &[String],
+    tags: &[String],
     workspace_root: &Path,
     source: Option<&SourceSnapshot>,
 ) -> Result<Vec<NativeOsRequirement>, DispatchError> {
@@ -93,11 +96,27 @@ pub(in super::super) fn required_os(
                 source,
             })? {
                 super::super::cfg_gate::CfgGateDecision::NotCited => {
-                    return Err(invalid(&format!(
-                        "criterion {criterion} names no OS or native facility ({}); leave required_os \
-                         empty for portable criteria",
-                        NATIVE_FACILITY_TERMS.join(", ")
-                    )));
+                    match super::super::guide_gate::admit_guide_gate(
+                        &super::super::guide_gate::GuideGateCheck {
+                            action,
+                            task_id,
+                            criterion_index: criterion,
+                            evidence,
+                            os,
+                            tags,
+                            workspace_root,
+                            source,
+                        },
+                    )? {
+                        super::super::guide_gate::GuideGateDecision::Admit => {}
+                        super::super::guide_gate::GuideGateDecision::NotCited => {
+                            return Err(invalid(&format!(
+                                "criterion {criterion} names no OS or native facility ({}); leave required_os \
+                                 empty for portable criteria",
+                                NATIVE_FACILITY_TERMS.join(", ")
+                            )));
+                        }
+                    }
                 }
                 super::super::cfg_gate::CfgGateDecision::Admit => {}
             }

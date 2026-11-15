@@ -48,6 +48,7 @@ mod cfg_gate;
 mod consequential;
 mod drain_promotion;
 mod freshness;
+mod guide_gate;
 pub(crate) mod input;
 mod no_diff;
 mod persist;

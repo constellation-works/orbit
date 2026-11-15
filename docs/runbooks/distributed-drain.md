@@ -432,7 +432,12 @@ entry's `os` is that OS. A portable criterion, a gate on an unnamed item, an
 `os` that differs from the gate, an unconfirmed path or line, and a
 `cfg(unix)` or `cfg(not(windows))` gate that does not determine one OS are
 still rejected. The rejection tells the pilot to leave `required_os` empty,
-and the repair pilot re-answers. When every
+and the repair pilot re-answers. A tag-triggered repository validation is
+the other admitted citation: when the workspace guide ties a tag the task
+carries to a required CodeQL run and states only Linux can produce it, the
+pilot cites both guide lines and apply confirms them in the pinned source
+before admitting `os: linux`; an explicit owner/external-evidence route
+for that check, and any mere platform mention, admit no such finding. When every
 `required_os` entry names one OS and the task carries no `os:` tag, the pilot's
 atomic apply adds that tag, so tag routing sends the task to a host of that OS
 and a follower of another OS sees it as `host_os_mismatch`. An `os:` tag the
