@@ -10,12 +10,12 @@ type: design
 summary: "Design of the task-history inverted index built in orbit-graph: symbol-first labels from merged diffs, tokeniser, posting and id-table format, association scoring with posting-weight and added-versus-modified options, the rebuilt window and its routine, the query surface, the consumers, both evaluations, the build order, the open questions and the deferred tag and task-type idea"
 tags: [context-index, plugins, evaluation, task-pilot, context-files]
 related_features: [plugins, task-pilot, agent-scorecards, symbol-risk-index, routines, path-leases]
-related_artifacts: [ORB-24844, ORB-24851, ORB-24861]
+related_artifacts: [ORB-24844, ORB-24851, ORB-24861, ORB-24864]
 ---
 
 # Context Index — Design
 
-This document specifies the context index introduced in [1_overview.md](./1_overview.md): what it indexes, how it scores, where it lives, who reads it, and how it is evaluated before anything is wired. Nothing here is built, and this document files no task. It was written for [ORB-24844] and revised by [ORB-24851] and [ORB-24861]. Sections 1 to 8 are the design; §9 answers the eight recommendations of [ORB-24844] one by one; §10 and §11 are the two evaluations; §13 and §14 are the build order, the decisions Daniel has made and the questions still open; §15 holds one idea that is deferred and is not part of what is built.
+This document specifies the context index introduced in [1_overview.md](./1_overview.md): what it indexes, how it scores, where it lives, who reads it, and how it is evaluated before anything is wired. Nothing here is built, and this document files no task. It was written for [ORB-24844], revised by [ORB-24851] and [ORB-24861], and corrected by [ORB-24864] where it said the history index holds line lengths. Sections 1 to 8 are the design; §9 answers the eight recommendations of [ORB-24844] one by one; §10 and §11 are the two evaluations; §13 and §14 are the build order, the decisions Daniel has made and the questions still open; §15 holds one idea that is deferred and is not part of what is built.
 
 The revisions record two decisions and specify two options. The decisions: the index is built in the orbit-graph plugin (§1.1, §14), and its first version is built from words only (§14.1). The options, each built as an option of the plugin's `word_index` ranking variant:
 
@@ -40,7 +40,7 @@ Figures marked *measured* were read from the ws_orbit checkout and store on 2026
 
 | Need | What orbit-graph already has |
 |---|---|
-| Files and symbols a delivery changed | An extractor that diffs two commit trees with rename detection and maps changed lines to the smallest enclosing named symbol, in ten languages plus Markdown headings. Its history index keeps each changed symbol once per side of the diff (before, after) with its line span and its changed lines, and each file with its change kind and added and deleted line counts |
+| Files and symbols a delivery changed | An extractor that diffs two commit trees with rename detection and maps changed lines to the smallest enclosing named symbol, in ten languages plus Markdown headings. Its history index keeps each changed symbol once per side of the diff (before, after) with its byte span in the historical blob and its changed lines, and each file with its change kind and added and deleted line counts. It holds no line span and no file line count, so the line lengths of §2.4 need a schema extension |
 | Task text beside those changes | A history index (SQLite, in the workspace's `.orbit-graph/` directory) that stores each delivery with its tasks' title, description and acceptance criteria, and marks whether the text is known to predate execution. It stores no task type and no tags, and the first version adds neither (§15) |
 | Renames and deletions | Per-delivery path lineage, followed at query time; results must exist in the target tree |
 | A query tool | `recommend`: free text or a task id in, ranked `file:` or `symbol:` selectors out, with a `cutoff` for historical replay |
@@ -102,7 +102,9 @@ Daniel's direction (2026-11-14): since labels come from the actual diff, go to f
 
 The remainder is where changes with no enclosing symbol go. It is scored like a symbol but is never returned as a selector and never earns the symbol boost; its uses are in §5.2.
 
-**What is recorded for each task and leaf.** `added` and `deleted` line counts, `len_before` and `len_after` (the leaf's line count on each side, 0 on a side where it does not exist) and `status` (§2.5). For a remainder, the length on a side is the file's line count minus the lines inside its named symbols. The plugin's history index already holds each changed symbol's span and changed lines per side, so these are read from it and no second extraction is needed.
+**What is recorded for each task and leaf.** `added` and `deleted` line counts, `len_before` and `len_after` (the leaf's line count on each side, 0 on a side where it does not exist) and `status` (§2.5). For a remainder, the length on a side is the file's line count minus the lines covered by the union of its named symbols' line ranges, so a method inside its `impl` block is counted once.
+
+The plugin's history index does not hold these lengths. It stores each changed symbol's span as *byte* offsets in the historical blob (`span_start`, `span_end`) with its changed lines per side, and each file's added and deleted counts, but no line span for a symbol, no line count for a file on either side, and no blob text. A byte range gives no line count without the blob. So the history index is extended to hold, per side, each symbol's line span and each file's line count. The extractor records them for each new delivery; a one-time backfill fills them for the deliveries already recorded, by re-extracting each recorded side from its Git revision (§13, task 2). After that, `len_before`, `len_after`, a remainder's length and a file's two lengths are read from the index, and no second extraction is needed for any delivery recorded after the extension.
 
 **File roll-up.** A file context is not a leaf. For each task, the file's record is the sum of its leaves' line counts, with the file's own lengths and status. A task that changed three symbols in one file therefore counts once for the file and once for each symbol. The file's postings are computed from these per-task records at build time and stored; they cannot be derived by adding up leaf postings, which would count that task three times.
 
@@ -170,7 +172,7 @@ A generation is one SQLite file with the tables of §4.1 (`postings` keyed by `(
 
 Publication is atomic: the build writes a temporary file, validates it, renames it into place, then removes generations beyond `retain_generations` (default 2) by exact file-name grammar only. A reader opens the newest complete generation read-only and is never blocked by a build. The index is a derived cache: deleting it loses nothing that the next build does not recreate. It is not replicated between hosts; the owner of a workspace builds and queries its own.
 
-The layer beneath the generation is the plugin's existing history index: one immutable record per landed delivery (task text, files, symbols with their line counts and status, lineage). That layer is append-only and is where extraction cost is paid, once per task. Generations are rebuilt from it (§6).
+The layer beneath the generation is the plugin's history index: one record per landed delivery (task text, files, symbols with their changed lines and status, lineage, and the line lengths of §2.4). That layer is append-only, apart from the one-time backfill of §2.4, and is where extraction cost is paid, once per task. Generations are rebuilt from it (§6).
 
 ## 5. Scoring
 
@@ -242,6 +244,8 @@ assoc(w,c) = max(0, ln( (t(w,c) + κ) / (E(w,c) + κ) ))
 
 A file's weight is the same expression over its rolled-up record: for `symbol_fraction` the file's changed lines over the file's two lengths, for `diff_share` the sum of its leaves' shares. Excluded paths (§2.3) are outside every total.
 
+Only `symbol_fraction` reads line lengths: its denominators, the remainder's length and the file's two lengths are the stored values of §2.4. `presence` and `diff_share` need none of them.
+
 **How `symbol_fraction` enters, and the concern raised against it.** A two-line fix in a 200-line function changes 1% of it (4 changed lines over 400), although that function is the whole task. A one-line tweak to a three-line helper changes 33% (2 over 6). Daniel's reply was that the formula's normalisation may offset this. It does so in part, and the part can be stated exactly:
 
 - *What the normalisation offsets.* `t(w,c)` and `E(w,c)` are both sums of the same context's weights. Multiply every weight of one context by a constant and both scale together, so their ratio does not move. A function that is always changed by about 1% is not ranked below a helper that is always changed by about 33%: the context's usual fraction cancels.
@@ -294,10 +298,10 @@ Added contexts never count as truth in the evaluation (§10.2), under any α: th
 
 **Update: rebuild, don't adjust.** Each run does two things:
 
-1. *Sync labels.* Read the feed from the stored cursor and import each new landed task into the history index (text, files, symbols, lineage). This is incremental and append-only. It is the only expensive step, and it runs once per task.
+1. *Sync labels.* Read the feed from the stored cursor and import each new landed task into the history index (text, files, symbols, lineage, and the line lengths of §2.4). This is incremental and append-only, apart from the one-time backfill of §2.4. It is the only expensive step, and it runs once per task.
 2. *Rebuild the generation.* Take the newest n eligible tasks from the history index, tokenise, count, and publish a new generation (§4.2). No count is ever decremented: a task that fell out of the window is simply absent from the next build.
 
-Rebuilding costs a pass over n short texts and their labels; no Git or parsing work is repeated. It makes the sweep over n free (any n is one more build over the same layer), and it removes the failure Daniel's increment-and-decrement scheme invites: if the tokeniser, the stopwords, the exclusions or the extractor change between runs, subtracting with the new rules what was added with the old ones leaves counts that are wrong and look fine. A generation records the versions that built it, and a query refuses a generation whose tokeniser version it does not implement.
+Rebuilding costs a pass over n short texts and their labels; no Git or parsing work is repeated, since the line lengths are already in the layer. It makes the sweep over n free (any n is one more build over the same layer), and it removes the failure Daniel's increment-and-decrement scheme invites: if the tokeniser, the stopwords, the exclusions or the extractor change between runs, subtracting with the new rules what was added with the old ones leaves counts that are wrong and look fine. A generation records the versions that built it, and a query refuses a generation whose tokeniser version it does not implement.
 
 **Routine.** The plugin ships an activity (`type: deterministic`, `action: plugin.tool_call`, calling the plugin's `maintain` tool with a `context_index_build` operation), a one-step job with `max_active_runs: 1`, and a routine targeting that job, seeded `enabled: false` like every plugin routine:
 
@@ -523,7 +527,7 @@ Tasks 1 to 5 are the dataset and the offline evaluation, built inside orbit-grap
 | # | Task | Where | Depends on | Outcome |
 |---|---|---|---|---|
 | 1 | Retired-tool fix | orbit-graph | — | The manifest and the history sync read deliveries through `orbit.task.show`; the plugin installs and syncs against the current Orbit tool surface |
-| 2 | Dataset in the history index | orbit-graph history sync, `evaluate` | 1 | One record per landed ws_orbit task: text, dispatch-time text where recoverable, landed and base commit, and the label with per-leaf line counts and status (§2.4, §2.5); `evaluate` reports the dataset statistics of §10.1 |
+| 2 | Dataset in the history index | orbit-graph history sync, `evaluate` | 1 | One record per landed ws_orbit task: text, dispatch-time text where recoverable, landed and base commit, and the label with per-leaf line counts, line lengths and status (§2.4, §2.5); the history-schema extension and backfill of §2.4; `evaluate` reports the dataset statistics of §10.1 |
 | 3 | `word_index` variant | orbit-graph `recommend` | 2 | The tokeniser, the generation built from a `cutoff`, the scoring of §5.1 to §5.3 at the baseline configuration, evidence, the check against HEAD and empty reasons (§7) |
 | 4 | Baselines, protocol and gates | orbit-graph `evaluate` | 3 | The rolling-origin protocol, the five baselines and two combinations, the n × b and secondary sweeps, and the verdicts of G1 to G3; measured generation size and build time |
 | 5 | Options | orbit-graph `recommend`, `evaluate` | 3, 4 | `posting_weight` with `smoothing_unit`, and `added_weight`, as options of `word_index`; the option grid and the G4 verdict; G1 to G3 re-read on the configuration G4 keeps |
@@ -537,6 +541,8 @@ Tasks 1 to 5 are the dataset and the offline evaluation, built inside orbit-grap
 | 12 | Selector conditions in replay; oracle-first run | Eval-harness plugin | The eval-harness build through its replay readout; 8 | The §11 result, oracle step first |
 | 13 | Pre-fill for tasks with no footprint | Orbit core | G3, 11 | High-confidence selectors written at filing, replaceable by the pilot |
 | 14 | Implementer hint | Orbit core | 12 passing | Only if replay shows seeded selectors reduce exploration |
+
+Task 2 carries the one schema change the line lengths need (§2.4): the history index stores byte spans, so each symbol's line span and each file's line count per side are added to it. That is an orbit-graph change, not an Orbit core seam, so §10's statement that the evaluation needs no Orbit core change still holds. The backfill re-extracts the recorded sides from their Git revisions, so a delivery whose commits are no longer in the local clone cannot be backfilled. Such a delivery is reported in the dataset statistics of §10.1, not dropped silently.
 
 Task 5 is separate from task 3 so that the baseline configuration is measured first and every option is a measured difference from it. If G1 fails at the baseline configuration and no option configuration passes it either, tasks 6 to 14 are not filed.
 
@@ -643,6 +649,7 @@ The first version's evaluation (§10). Daniel's instruction is to see how the si
 - [ORB-24844] — wrote this design
 - [ORB-24851] — recorded the orbit-graph decision and specified the posting-weight and added-versus-modified options, and the type-and-tag option that §15 now defers
 - [ORB-24861] — recorded the decision to leave tags and task type out of the first version and moved that material to §15
+- [ORB-24864] — corrected the claim that the history index holds line lengths (§1.1, §2.4) and added the schema extension and backfill to task 2 (§13)
 - [ORB-24839] — designed the eval-harness plugin and its replay job, which §11 uses and extends with selector conditions
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
