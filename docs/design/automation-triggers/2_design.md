@@ -740,7 +740,9 @@ settles.
 Local automatic admission rejects any
 still-unassessed task, including urgent security work, except
 one tagged exactly `no-diff-expected`, which is admitted without an assessment
-because an implementation lane sizes no diff for it [ORB-12118]; missing
+because an implementation lane sizes no diff for it [ORB-12118], and a backlog
+task an operator tagged `readiness-waived`, which is admitted with its
+configured or default crew [ORB-25084]; missing
 validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.

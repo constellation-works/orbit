@@ -610,11 +610,13 @@ Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
 enabled task pilot to prepare it (`awaiting_footprint`), and otherwise runs
-only alone (`awaiting_exclusive_slot`). A single-slot run, an explicit `orbit
-run ship <id>` and owner pull admission still admit it. Do not invent paths to
-satisfy admission. Task-pilot can prepare unknown targets, and a live
-pilot's preparation (its reservation from prepare, then its checkpoint)
-still holds its tasks until that run settles.
+only alone (`awaiting_exclusive_slot`), unless an operator has tagged it
+`readiness-waived`. A single-slot run, an explicit `orbit run ship <id>` and
+owner pull admission still admit it. Do not invent paths to satisfy admission,
+and do not add `readiness-waived` yourself: only an operator adds it, and an
+agent's write that adds it is refused. Task-pilot can prepare unknown
+targets, and a live pilot's preparation (its reservation from prepare, then
+its checkpoint) still holds its tasks until that run settles.
 
 **Never file with `--status backlog`, or promote to `backlog`, a task with
 empty `context_files` while a drain is live.** File it `proposed`, run the
@@ -631,6 +633,11 @@ and `orbit.task.update` responses carry it, `orbit task show` prints a
 blocks drain approval of a proposed task and is advisory in the backlog,
 where it names the missing file lock;
 `unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
+An operator's `readiness-waived` tag makes a backlog task's gaps advisory: the
+task is admitted with its configured or default crew, even with unassessed
+complexity. It does not reach the proposed stage, so approval still needs a
+prepared task. Host OS, labels, browser kit, human-crew assignment,
+dependencies, real lock holders and live pilot holds still apply.
 Read the gaps after filing and fix what blocks, or leave it to task-pilot.
 
 ### When to skip the pilot
