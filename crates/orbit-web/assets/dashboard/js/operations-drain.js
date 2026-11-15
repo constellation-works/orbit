@@ -163,7 +163,7 @@ function hostFleetFailure(row) {
 // workspace name is the part shortened (the group label and the title carry it
 // in full) and the host and role stay visible.
 const DRAIN_TARGET_SEPARATOR = "\u001f";
-const DRAIN_TARGET_NAME_CHARS = 12;
+const DRAIN_TARGET_NAME_CHARS = 18;
 function drainTargetValue(workspaceId, host) {
   return `${workspaceId}${DRAIN_TARGET_SEPARATOR}${host}`;
 }
@@ -190,7 +190,7 @@ function paintDrainTargetSelect(groups, selected) {
       const target = parseDrainTarget(select.value);
       if (target) onDrainTargetChanged(target, option?.dataset.role);
     });
-    phase.before(select);
+    phase.after(select);
   }
   const shown = groups.filter(group => group.hosts.length);
   const signature = JSON.stringify(shown);
@@ -312,10 +312,6 @@ function renderAutoDrainHead(payload) {
     text.textContent = pulling ? pullLabel
       : phase === "idle" ? (!isAggregateView() && workspaceReadOnlyReason() ? "Read-only" : "Idle") : label;
   }
-  // The window's deadline sits beside its phase; the pill already says when
-  // admissions have stopped.
-  const when = $("auto-drain-when");
-  if (when) when.textContent = !pulling && phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
   // Full header values stay in the row's name/title when members shrink or drop.
   const header = card?.querySelector(":scope > header");
   if (header) {
@@ -324,7 +320,6 @@ function renderAutoDrainHead(payload) {
     if (hostName) parts.push(hostName);
     const phaseText = text?.textContent?.trim();
     if (phaseText) parts.push(phaseText);
-    if (when?.textContent?.trim()) parts.push(when.textContent.trim());
     const summary = parts.join(" · ");
     header.setAttribute("aria-label", summary);
     header.title = summary;
@@ -379,16 +374,28 @@ function liveAgentStats(live) {
   return stats;
 }
 
-// The live window: pilots, recovery and reviewers running now. A payload
-// without those counts shows no figures. The approval line under them stays
-// for holds the figures do not already count. Empty when no auto window is
-// live.
+// Counts and deadline share one row. Older payloads may omit the counts;
+// their deadline still renders, without inventing zero figures.
 function autoDrainWindow(payload) {
-  const { phase, pulling } = autoDrainPhase(payload);
+  const { phase, pulling, capacity } = autoDrainPhase(payload);
   if (pulling || phase === "idle") return null;
   const stats = liveAgentStats(payload && payload.live_agents);
+  const timeLeft = phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
+  if (!stats && !timeLeft) return null;
+  const row = el("div", { class: "drain-window-summary" }, stats ? [stats] : []);
+  if (timeLeft) row.append(el("span", { class: "drain-when", id: "auto-drain-when", text: timeLeft }));
+  const summary = [stats?.getAttribute("aria-label"), timeLeft].filter(Boolean).join(" · ");
+  row.setAttribute("aria-label", summary);
+  row.title = summary;
+  return row;
+}
+
+// Approval holds belong beside the capacity summary, below the slot bar.
+function autoDrainApprovalSummary(payload) {
+  const { phase, pulling } = autoDrainPhase(payload);
+  if (pulling || phase === "idle") return null;
   const approvals = autoDrainApprovals(payload.approvals);
-  if (!approvals || !approvals.reasons.length) return stats;
+  if (!approvals || !approvals.reasons.length) return null;
   const summary = el("div", { class: "drain-approval-summary" });
   approvals.reasons.forEach(([reason, count], index) => {
     if (index) summary.append(" · ");
@@ -400,7 +407,7 @@ function autoDrainWindow(payload) {
     }
     summary.append(item);
   });
-  return el("div", { class: "drain-window" }, stats ? [stats, summary] : [summary]);
+  return summary;
 }
 
 // The card's last row: the coordinator run (or the replica's pull drain), the
@@ -606,14 +613,14 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   // A follower scope keeps Start and Stop on the card, disabled, the way All
   // workspaces does. Only the board's own read-only reason replaces the body.
   if (reasons.submit && !isAggregateView() && !scope) {
-    body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
+    body.append(...[autoDrainWindow(payload), autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
     retargetDrainLinks(body, scope);
     renderAutoDrainStart(payload, reasons);
     return;
   }
   body.append(...[
     autoDrainWindow(payload),
-    autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length, { pull: drainCheckout(payload).replica }),
+    autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length, { pull: drainCheckout(payload).replica, approvalSummary: autoDrainApprovalSummary(payload) }),
     ...holds,
     autoDrainForecast(payload),
     autoDrainFoot(payload),
@@ -632,8 +639,8 @@ function clearStartCard(id) {
   if (card) card.hidden = true;
 }
 
-// The shared panel reset clears the body and shows Loading. The phase pill,
-// its dot and the window's time left sit outside that body, so clear them
+// The shared panel reset clears the body and shows Loading. The phase pill
+// and its dot sit outside that body, so clear them
 // here or the previous host's drain stays on the card until the next paint.
 function clearDrainChrome() {
   const card = $("auto-drain-panel");
@@ -648,8 +655,6 @@ function clearDrainChrome() {
   if (dot) dot.className = "drain-dot";
   const text = $("auto-drain-phase-label");
   if (text) text.textContent = "—";
-  const when = $("auto-drain-when");
-  if (when) when.textContent = "";
 }
 
 registerOperationsReset(() => {

@@ -845,8 +845,9 @@ main.tasks-layout > .controls {
    dock starts below it with the list. An open task takes the dock's place,
    and below 1000px, where shell.css stacks every main grid, the task list
    takes the full width. */
+/* Keep the drain title and a workspace-host target readable side by side. */
 main.tasks-layout {
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px);
+  grid-template-columns: minmax(0, 1fr) clamp(440px, 32%, 520px);
   grid-template-rows: auto minmax(0, 1fr);
   row-gap: 0;
 }
