@@ -171,11 +171,19 @@ function parseDrainTarget(value) {
   const at = String(value || "").indexOf(DRAIN_TARGET_SEPARATOR);
   return at < 0 ? null : { workspaceId: value.slice(0, at), host: value.slice(at + 1) };
 }
+// A name that starts with a digit or punctuation needs a leading left-to-right
+// mark, or the bidi algorithm in the right-to-left select moves those characters
+// to the visual end (in the option text and in the group label). A letter already
+// reads correctly, and a leading mark stops type-ahead from matching the first
+// character, so only the names that need it get one.
+function drainTargetName(name) {
+  return /^\p{L}/u.test(name) ? name : "\u200E" + name;
+}
 function drainTargetText(name, host, role) {
   const short = name.length > DRAIN_TARGET_NAME_CHARS ? `${name.slice(0, DRAIN_TARGET_NAME_CHARS - 1)}…` : name;
   // The closing mark keeps the right-to-left select from moving the ")" when
   // the head of the text is clipped.
-  return `${short} · ${host} (${role})\u200E`;
+  return `${drainTargetName(short)} · ${host} (${role})\u200E`;
 }
 // The header row keeps every member at full size while it fits (STD-07 R39).
 // A fixed breakpoint cannot tell fitting from overflowing rows, so the row's
@@ -261,7 +269,7 @@ function paintDrainTargetSelect(groups, selected) {
   if (select.dataset.targets !== signature) {
     select.replaceChildren(...shown.map(group => {
       const node = el("optgroup");
-      node.label = group.name;
+      node.label = drainTargetName(group.name);
       node.append(...group.hosts.map(({ host, role }) => {
         const option = el("option", { text: drainTargetText(group.name, host, role) });
         option.value = drainTargetValue(group.id, host);
