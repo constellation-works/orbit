@@ -204,6 +204,11 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
   rows are probed. This detects dead owners before reconciliation records `Interrupted`, and
   live owners past `run_stuck_after_minutes`, but misses live wedged processes inside the bound.
   These are existing platform paths, not a new heartbeat or process-control implementation.
+  A run that declares a deadline (a drain's stamped/extended window, or an explicit input
+  deadline/timeout) is instead bounded by that deadline: it reads as stuck only past the
+  deadline plus the `run_stuck_after_minutes` grace, or when its pipeline `updated_at` / step
+  activity has stalled for that bound; the fixed bound remains the fallback for runs that
+  declare none [ORB-24862].
 - **Claim inspection is diagnostic.** Only the workspace owner derives `claim_stale`, using
   the non-repairing inspection behind `orbit.drain.claims`. Unsettled claims qualify on expired
   reservation, absent/terminal host-local bound run, unresolved merge intent or invalidated

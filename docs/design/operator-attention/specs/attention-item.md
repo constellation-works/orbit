@@ -42,7 +42,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision` action `list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
 | `review_waiting` | task | the newest single-task delivery run and `current_completion_hold`, else the review gate record (`crates/orbit-core/src/application/review/`) and the `review_approval` decision gate | status is `review`, and either the newest delivery run ended `held` on a `delivery_*` code (`detail.waiting_on`: `delivery_hold`), a completion hold is current (`completion_hold`), or no review run is active and the task waits on an approval or an exhausted review budget (`approval` or `review_budget`). A live delivery run suppresses the hold item | the hold's finish or record time, else the time the review settled |
 | `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
-| `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
+| `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past its bound: a run that declares a deadline (a drain's stamped/extended window from its pipeline state, or an explicit `deadline`/`for_seconds`/`timeout_seconds`/`ttl_seconds` in its input) is past that deadline plus the 120-minute grace, or its last progress (pipeline `updated_at` or recorded step activity) has stalled for 120 minutes; a run that declares no bound has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's `updated_at`, labelled as an onset-time proxy (`detail.since_source: updated_at`, `since_is_proxy: true`); the provider projection supplies no exact completion timestamp |
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
@@ -80,9 +80,13 @@ Notes that bind implementations:
 - **`ci_red` and repair tasks.** When Orbit's CI sweep has already filed a repair task for the
   failing run (the filing evidence in `task/ci_sweep_filing.rs`), the item sets `refs.task_id`
   to it and `next` points at that task instead of suggesting another filing.
-- **No source, no kind.** The pilot found no durable "last activity" heartbeat on job runs.
-  `run_stuck` is therefore the liveness check above plus a wall-clock bound, not a heartbeat
-  stall; slice 2 documents the existing process probe on each platform.
+- **Progress, not just age.** The pilot found no durable "last activity" heartbeat on job
+  runs, but a workflow run's pipeline state is durable progress: its `updated_at` advances
+  with step activity, and recorded steps carry their own start/finish times. `run_stuck`
+  therefore reads that progress (a raw store read, never a reconciling one) alongside the
+  liveness check. A drain inside its declared window whose pipeline is still advancing is
+  not stuck, however long it has run; `detail` names `declared_deadline` and
+  `last_progress_at` when a declared bound was used.
 
 ### Runtime liveness and locality
 
@@ -93,7 +97,9 @@ fallback. Unix uses `kill(pid, 0)` as a presence fallback. Missing or mismatched
 stopped; probe unavailability with a present PID is not death; foreign PID namespaces and
 non-Unix platforms are unknown. A pending run with no recorded pid waits for the age bound.
 The wall-clock bound applies even when identity is unknown, and active rows are not cut by
-the 48-hour run window (it bounds failure history). Host-local rows alone are probed;
+the 48-hour run window (it bounds failure history). For a run that declares a deadline the
+bound is the grace after that deadline and the stall threshold on its last progress; the
+deadline in force for a drain is its stamped deadline or the later operator extension. Host-local rows alone are probed;
 a remote bound run missing locally is not a stale-claim diagnostic. See the design's
 [platform details](../2_design.md#7-concerns--honest-limitations).
 
