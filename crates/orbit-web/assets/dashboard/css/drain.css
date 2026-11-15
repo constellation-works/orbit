@@ -53,7 +53,13 @@
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
   }
-  #auto-drain-panel .drain-phase { padding: 0 7px; }
+  /* Narrow cards show a bare state dot: no ring, border, background,
+     padding or gap, so the dot sits centred. The word stays in the
+     pill's accessible name and title, and the pill itself clips nothing,
+     so the draining pulse (4px) clears the header's `overflow: hidden`. */
+  #auto-drain-panel .drain-phase {
+    gap: 0; padding: 0; border: 0; background: transparent; overflow: visible;
+  }
 }
 @container drain-card (max-width: 340px) {
   #auto-drain-panel .drain-title {
