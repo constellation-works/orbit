@@ -234,7 +234,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
 | `review.baseline_commands` | Default `[]`; commands the owner trusts review settlement to rerun on the host for a reviewer's red-base claim, in addition to required validation commands. Entries are trimmed strings; blank entries are dropped. A configured command is binding during settlement. |
-| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths match. This TOML array replaces the whole global list at workspace scope; see [review baseline commands and owed host evidence](#review-baseline-commands-and-owed-host-evidence). |
+| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths or listed task tags match. This TOML array replaces the whole global list at workspace scope; see [review baseline commands and owed host evidence](#review-baseline-commands-and-owed-host-evidence). |
 | `workflow.purpose_crews.review` | Crew or pool for after-landing review tasks the `delivery-code-review` auto-task mints. Before-PR and before-landing review use `workflow.purpose_crews.pre_landing_review` when non-empty, falling back to this pool when it is unset or empty. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
 | `workflow.distributed_completion` | Standing owner authority for accepted distributed-drain handoffs: `review` (default, each handoff waits for operator approval) or `done` (acceptance authorizes owner landing). Owner configuration only; landing rechecks it. See [Distributed-drain completion policy](#distributed-drain-completion-policy). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
@@ -839,8 +839,8 @@ hosted_check = "CodeQL / Analyze"
 ```
 
 Each rule admits only these fields: `kind`, `name`, `paths`, `os`,
-`command`, `artifact`, and optional `hosted_check`; unknown fields are
-rejected. `kind` is exactly `codeql` or `host_sandbox_test`, `os` is
+`command`, `artifact`, and optional `hosted_check` and `tags`; unknown
+fields are rejected. `kind` is exactly `codeql` or `host_sandbox_test`, `os` is
 `linux` or `macos`, `name` and `command` must be non-empty, and `paths`
 must contain at least one valid workspace-relative glob. The `artifact` must
 be a unique relative `.json` path across rules. A `host_sandbox_test`
@@ -863,6 +863,13 @@ executable bit cannot run.
 Configuration accepts any non-empty `codeql` command, and a custom command
 is not fulfilled by the built-in path: the hold stays, and the refusal names
 this contract and that download.
+
+A rule applies when the candidate changes a path matching `paths`, or when
+the claimed task carries any tag listed in optional `tags` (compared
+case-insensitively; a blank tag fails load), such as
+`tags = ["security", "security-review"]` for a check every security task
+owes whatever it changed. Followers need a matching Orbit build to claim
+work under a rule that lists tags.
 
 A `codeql` rule is owed when the claimed review host has a different OS from
 the rule's `os`, and the owner fulfils it on the named OS. A

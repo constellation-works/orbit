@@ -242,6 +242,91 @@ fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
     }
 }
 
+/// [ORB-24940] A rule listing task tags owes its check for a task carrying
+/// one, though the candidate changes no matching path: a security-tagged
+/// Mac leaf whose reviewer records the CodeQL command `not_run` holds for
+/// the owner's Linux run instead of ending incomplete. Without a listed tag,
+/// a Linux leaf, or with the tag absent from the rule, nothing is owed.
+fn a_security_tagged_leaf_owes_a_tag_rule_without_a_matching_path() {
+    let rule = format!("{}tags = [\" Security \"]\n", codeql_rule("website/**"));
+    for (os, tags, owed) in [
+        (HostOs::Macos, vec!["security"], true),
+        (HostOs::Macos, vec!["chore"], false),
+        (HostOs::Linux, vec!["security"], false),
+    ] {
+        // A claimed task's tags are frozen, so tag it before the leaf claims
+        // it.
+        let owner = format!(
+            "{}{rule}",
+            super::claimed_review::before_pr_owner(REVIEW_CREW)
+        );
+        let mut leaf = ReviewedLeaf::admit_launched(&owner, "", |pair, drain| {
+            pair.wire
+                .owner
+                .update_task_as_human(
+                    &pair.tasks[0],
+                    orbit_core::application::task::TaskUpdateParams {
+                        tags: Some(tags.iter().map(|tag| tag.to_string()).collect()),
+                        ..Default::default()
+                    },
+                    "fixture operator".into(),
+                )
+                .unwrap();
+            pair.launched_leaf(drain, 1, std::process::id())
+        });
+        leaf.bound = leaf.bound.clone().with_host_os(Some(os));
+        let admitted = leaf.admit_review();
+        let expected = if owed {
+            json!([owed_codeql_requirement()])
+        } else {
+            json!([])
+        };
+        assert_eq!(
+            admitted["owed_evidence"], expected,
+            "{os:?} {tags:?}: {admitted}"
+        );
+        let mut validation = vec![ci_fast()];
+        if owed {
+            validation.push(review_validation_record(
+                "V2",
+                CODEQL,
+                ValidationOutcome::NotRun,
+            ));
+        }
+        leaf.put_report(&claimed_review_report(
+            &admitted,
+            if owed {
+                ReviewVerdict::Incomplete
+            } else {
+                ReviewVerdict::Accept
+            },
+            Vec::new(),
+            validation,
+            owed.then_some("Rust CodeQL exits 3 on macOS; a Linux run is owed"),
+        ));
+        let hold =
+            || leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+        if owed {
+            let refused = leaf
+                .settle()
+                .expect_err("a held review opens no pull request");
+            assert!(!refused.contains("review_gate_blocked"), "{refused}");
+            assert_eq!(
+                hold()
+                    .expect("the gate holds for the owed check")
+                    .requirements,
+                vec![owed_codeql_requirement()]
+            );
+        } else {
+            let settled = leaf
+                .settle()
+                .unwrap_or_else(|error| panic!("{os:?} {tags:?}: {error}"));
+            assert_eq!(settled["verdict"], "accept", "{settled}");
+            assert!(hold().is_none(), "{os:?} {tags:?}: no hold");
+        }
+    }
+}
+
 /// A candidate that renames a file out of the rule's paths still owes the
 /// rule's evidence: the rename's source name is a changed path too.
 fn a_rename_out_of_a_rule_still_owes_its_evidence() {
@@ -1183,7 +1268,8 @@ crate::scenario_table!(
     a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it,
     a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping,
     a_linux_leaf_or_an_unmatched_rule_owes_no_evidence,
-    a_rename_out_of_a_rule_still_owes_its_evidence
+    a_rename_out_of_a_rule_still_owes_its_evidence,
+    a_security_tagged_leaf_owes_a_tag_rule_without_a_matching_path
 );
 
 crate::scenario_table!(

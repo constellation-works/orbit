@@ -98,8 +98,8 @@ pub struct ReviewEvidenceCandidateCarry {
 }
 
 /// A workspace rule naming a check a claimed leaf's host owes for the paths
-/// it changed, so Orbit synthesizes the requirement instead of relying on
-/// the reviewer to name it. A `codeql` rule is owed by a host of another OS
+/// it changed, or for the tags its task carries, so Orbit synthesizes the
+/// requirement instead of relying on the reviewer to name it. A `codeql` rule is owed by a host of another OS
 /// and fulfilled by the owner on `os`; a `host_sandbox_test` rule is owed by
 /// a host of `os`, which runs it outside the agent sandbox at settlement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -110,6 +110,12 @@ pub struct HostEvidenceRule {
     /// Workspace-relative globs; a changed path matching any of them owes
     /// the check.
     pub paths: Vec<String>,
+    /// [ORB-24940] Task tags; a task carrying any of them owes the check
+    /// whatever paths its candidate changed. Compared case-insensitively.
+    /// Omitted from the wire when empty, so a rule without tags keeps the
+    /// shape older followers read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub os: EvidenceHostOs,
     pub command: String,
     pub artifact: String,
@@ -153,6 +159,16 @@ impl HostEvidenceRule {
         })
     }
 
+    /// Whether any of a task's `tags` is one the rule lists.
+    pub fn matches_any_tag(&self, tags: &[String]) -> bool {
+        tags.iter().any(|tag| {
+            let tag = tag.trim();
+            self.tags
+                .iter()
+                .any(|listed| listed.trim().eq_ignore_ascii_case(tag))
+        })
+    }
+
     pub fn requirement(&self) -> ReviewEvidenceRequirement {
         ReviewEvidenceRequirement {
             kind: self.kind,
@@ -165,11 +181,14 @@ impl HostEvidenceRule {
     }
 }
 
-/// The requirements `rules` owe for a candidate that changed `changed` on a
-/// host running `host`, in rule order.
+/// The requirements `rules` owe for a candidate that changed `changed`, for
+/// tasks carrying `task_tags`, on a host running `host`, in rule order. A
+/// rule is owed when a changed path matches its globs or a task tag matches
+/// one it lists.
 pub fn owed_requirements(
     rules: &[HostEvidenceRule],
     changed: &[String],
+    task_tags: &[String],
     host: Option<EvidenceHostOs>,
 ) -> Vec<ReviewEvidenceRequirement> {
     rules
@@ -177,7 +196,7 @@ pub fn owed_requirements(
         .filter(|rule| {
             HostEvidenceRule::admits_kind(rule.kind)
                 && rule.owed_on(host)
-                && rule.matches_any(changed)
+                && (rule.matches_any(changed) || rule.matches_any_tag(task_tags))
         })
         .map(HostEvidenceRule::requirement)
         .collect()

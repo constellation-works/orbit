@@ -29,7 +29,7 @@ use orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT;
 pub(super) const REVIEW_CREW: &str = "sol";
 const REPOSITORY: &str = "owner/repository";
 
-fn before_pr_owner(crew: &str) -> String {
+pub(super) fn before_pr_owner(crew: &str) -> String {
     format!("[review]\nbefore_pr = true\n\n[operation]\nreview_crew = \"{crew}\"\n")
 }
 

@@ -57,6 +57,11 @@ pub(super) fn host_evidence_rules(
                     .iter()
                     .map(|path| path.trim().to_string())
                     .collect(),
+                tags: rule
+                    .tags
+                    .iter()
+                    .map(|tag| tag.trim().to_lowercase())
+                    .collect(),
                 ..rule
             };
             if !HostEvidenceRule::admits_kind(rule.kind) {
@@ -70,6 +75,9 @@ pub(super) fn host_evidence_rules(
             }
             if rule.paths.is_empty() {
                 return Err(invalid(index, "needs at least one path glob".to_string()));
+            }
+            if rule.tags.iter().any(String::is_empty) {
+                return Err(invalid(index, "has an empty tag".to_string()));
             }
             for pattern in &rule.paths {
                 compile_glob_regex(pattern).map_err(|error| {
