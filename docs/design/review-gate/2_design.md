@@ -857,10 +857,12 @@ uncovered deferral.
 Synthesis owes the run only for a deferred test the candidate can reach
 [ORB-25096] (`BubblewrapReach`). The rule is conservative: the candidate
 reaches every deferred test when it changes any path other than Markdown and
-Rust sources under a `tests` directory, or a test source whose path mentions
-a sandbox; it reaches a test when a changed test source, at the reviewed base
-or the final candidate, names the test or mentions `sandbox`, `bwrap` or
-`bubblewrap`. For an unreached test the notice is cleared with a `not owed`
+Rust sources under a `tests` directory, any Rust source under `tests/support`,
+or a test source whose path mentions a sandbox; it reaches a test when a
+changed test source, at the reviewed base or the final candidate, names the
+test or mentions `sandbox`, `bwrap` or `bubblewrap`. Shared test support can
+affect a sandbox test even when the helper does not mention it. For an
+unreached test the notice is cleared with a `not owed`
 note, a reviewer-named Linux requirement that covers only that notice leaves
 `external_evidence` and its required `not_run` record becomes `excluded`, and
 no hold is raised. A workspace `host_evidence` rule owing the same check

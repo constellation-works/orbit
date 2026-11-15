@@ -569,7 +569,9 @@ const UNREACHED_TEST: &str = "cli_and_mcp_reach_host_backends_with_authoritative
 fn settle_deferred_bubblewrap_candidate(
     files: &[(&str, &str)],
     named: bool,
+    named_run_failed: bool,
 ) -> (Fixture, Result<Value, orbit_engine::DispatchError>) {
+    assert!(!named_run_failed || named, "a failed run must be named");
     let mut fixture = Fixture::new();
     git(&fixture, &["checkout", "HEAD^", "--", "candidate.txt"]);
     for (path, content) in files {
@@ -592,8 +594,13 @@ fn settle_deferred_bubblewrap_candidate(
     ];
     let mut external = Vec::new();
     if named {
+        let outcome = if named_run_failed {
+            "failed"
+        } else {
+            "not_run"
+        };
         validation
-            .push(json!({"id": "V3", "command": narrow, "outcome": "not_run", "role": "required"}));
+            .push(json!({"id": "V3", "command": narrow, "outcome": outcome, "role": "required"}));
         external.push(json!({
             "kind": "host_sandbox_test", "name": UNREACHED_TEST, "command": narrow,
             "artifact": "evidence/host-sandbox/plugin-broker.json", "os": "linux",
@@ -622,7 +629,7 @@ fn an_unreached_bubblewrap_deferral_is_not_owed_as_host_evidence() {
         let (fixture, settled) = settle_deferred_bubblewrap_candidate(
             &[
                 (
-                    "crates/orbit-cli/tests/support/isolated_cli_fixture.rs",
+                    "crates/orbit-cli/tests/task/tool_lifecycle.rs",
                     "pub fn fixture() {}\n",
                 ),
                 (
@@ -632,6 +639,7 @@ fn an_unreached_bubblewrap_deferral_is_not_owed_as_host_evidence() {
                 ("docs/notes.md", "A note.\n"),
             ],
             named,
+            false,
         );
         settled.unwrap_or_else(|error| {
             panic!("named={named}: an unreached deferral must not hold or block: {error}")
@@ -673,11 +681,11 @@ fn an_unreached_bubblewrap_deferral_is_not_owed_as_host_evidence() {
 
 /// [ORB-25096] The same deferral is still owed, and the review holds for the
 /// Linux run of the test, when the candidate can reach it: it changes
-/// production code, changes a test source that names the test or mentions a
-/// sandbox, or changes a source under a sandbox path.
+/// production code, shared test support, a test source that names the test
+/// or mentions a sandbox, or a source under a sandbox path.
 fn a_reached_bubblewrap_deferral_still_holds_for_host_evidence() {
     let named_test = format!("fn {UNREACHED_TEST}() {{}}\n");
-    let cases: [(&str, &[(&str, &str)]); 4] = [
+    let cases: [(&str, &[(&str, &str)]); 5] = [
         (
             "production code",
             &[(
@@ -700,6 +708,13 @@ fn a_reached_bubblewrap_deferral_still_holds_for_host_evidence() {
             )],
         ),
         (
+            "shared test support",
+            &[(
+                "crates/orbit-cli/tests/support/git_repo.rs",
+                "pub fn repository_fixture() {}\n",
+            )],
+        ),
+        (
             "a sandbox path",
             &[(
                 "crates/orbit-cli/tests/tool/sandbox_support.rs",
@@ -709,7 +724,7 @@ fn a_reached_bubblewrap_deferral_still_holds_for_host_evidence() {
     ];
     for (case, files) in cases {
         for named in [false, true] {
-            let (fixture, settled) = settle_deferred_bubblewrap_candidate(files, named);
+            let (fixture, settled) = settle_deferred_bubblewrap_candidate(files, named, false);
             let refused = settled
                 .expect_err("a reachable deferred sandbox test holds for host evidence")
                 .to_string();
@@ -730,6 +745,41 @@ fn a_reached_bubblewrap_deferral_still_holds_for_host_evidence() {
     }
 }
 
+/// [ORB-25096] Releasing a deferral for a changed sandbox test must not turn
+/// a named failed run into an evidence hold or a passing review.
+fn a_failed_named_bubblewrap_run_still_blocks() {
+    let (fixture, settled) = settle_deferred_bubblewrap_candidate(
+        &[(
+            "crates/orbit-exec/src/linux_sandbox/probe.rs",
+            "pub fn probe() {}\n",
+        )],
+        true,
+        true,
+    );
+    let refused = settled.expect_err("a failed reached sandbox test cannot land");
+    assert!(
+        refused.to_string().contains("review_gate_blocked"),
+        "a failed run blocks instead of becoming a hold: {refused}"
+    );
+    assert_eq!(status(&fixture), TaskStatus::InProgress);
+    let certificate: ReviewCertificate = artifact(&fixture, REVIEW_GATE_ARTIFACT);
+    assert!(!certificate.verdict.passed(), "{certificate:?}");
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .is_none(),
+        "failed test evidence blocks, without an evidence hold"
+    );
+    let failed = certificate
+        .validation
+        .iter()
+        .find(|record| record.id.as_deref() == Some("V3"))
+        .expect("the named host run stays on the certificate");
+    assert_eq!(failed.outcome, ValidationOutcome::Failed, "{failed:?}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission_scenarios,
@@ -740,5 +790,6 @@ crate::scenario_table!(
     a_named_run_of_the_same_test_in_another_package_does_not_cover_a_bubblewrap_deferral,
     synthesized_bubblewrap_requirements_avoid_derived_log_collisions,
     an_unreached_bubblewrap_deferral_is_not_owed_as_host_evidence,
-    a_reached_bubblewrap_deferral_still_holds_for_host_evidence
+    a_reached_bubblewrap_deferral_still_holds_for_host_evidence,
+    a_failed_named_bubblewrap_run_still_blocks
 );

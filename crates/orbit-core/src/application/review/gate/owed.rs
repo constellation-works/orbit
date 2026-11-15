@@ -182,10 +182,11 @@ const SANDBOX_MARKERS: [&str; 3] = ["sandbox", "bwrap", "bubblewrap"];
 ///
 /// The rule is conservative. The candidate reaches every deferred test when
 /// it changes any path other than Markdown and Rust sources under a `tests`
-/// directory: production code, a manifest, a build script, configuration,
-/// a script or an asset. It reaches a test when a changed test source,
-/// before or after the change, names the test or mentions a sandbox, or the
-/// source's path does.
+/// directory, or a shared Rust source under `tests/support`: production code,
+/// a manifest, a build script, configuration, a script, an asset or shared
+/// test support. It reaches a test when a changed test source, before or
+/// after the change, names the test or mentions a sandbox, or the source's
+/// path does.
 pub(super) struct BubblewrapReach {
     beyond_tests: bool,
     test_sources: Vec<String>,
@@ -221,7 +222,12 @@ impl BubblewrapReach {
             let lower = path.to_ascii_lowercase();
             let test_source =
                 path.ends_with(".rs") && path.split('/').any(|component| component == "tests");
-            if !test_source || SANDBOX_MARKERS.iter().any(|marker| lower.contains(marker)) {
+            let shared_test_support =
+                test_source && path.split('/').any(|component| component == "support");
+            if !test_source
+                || shared_test_support
+                || SANDBOX_MARKERS.iter().any(|marker| lower.contains(marker))
+            {
                 return Ok(Self::everything());
             }
             for commit in [base, head] {
