@@ -17,6 +17,67 @@ use super::queries::STEP_RUN_ID_CHUNK;
 use crate::Store;
 
 impl Store {
+    /// The run's serialized pipeline state, unparsed; `None` when the run
+    /// has none or does not exist.
+    pub fn read_job_run_state_json_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let conn = self.read()?;
+        read_state_json_conn(&conn, workspace_id, run_id)
+    }
+
+    /// Serialized pipeline states for a page of runs, unparsed, in one
+    /// query per chunk. A run with no state row maps to `None`.
+    pub fn read_job_run_state_jsons_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
+        let mut states: HashMap<String, Option<String>> = HashMap::new();
+        if run_ids.is_empty() {
+            return Ok(states);
+        }
+        let conn = self.read()?;
+        for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
+            let placeholders = (0..chunk.len())
+                .map(|index| format!("?{}", index + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT run_id, pipeline_state_json FROM job_run_states \
+                     WHERE workspace_id = ?1 AND run_id IN ({placeholders})"
+                ))
+                .map_err(sqlite_store_error)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(workspace_id.to_string())];
+            params.extend(
+                chunk
+                    .iter()
+                    .map(|run_id| Box::new(run_id.clone()) as Box<dyn rusqlite::types::ToSql>),
+            );
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    let run_id: String = row.get(0)?;
+                    let raw: String = row.get(1)?;
+                    Ok((run_id, raw))
+                })
+                .map_err(sqlite_store_error)?;
+            for row in rows {
+                let (run_id, raw) = row.map_err(sqlite_store_error)?;
+                states.insert(run_id, Some(raw));
+            }
+            for run_id in chunk {
+                states.entry(run_id.clone()).or_insert(None);
+            }
+        }
+        Ok(states)
+    }
+
     pub fn read_job_run_state_for_workspace(
         &self,
         workspace_id: &str,

@@ -121,34 +121,22 @@ impl TaskV2Store {
         self.settled_task_history(id)
     }
 
-    /// Filesystem evidence of a task's event and comment logs, taken without
-    /// reading them: each log's byte length, modification time, device and
-    /// inode, as the registry's envelope stamps record a `task.yaml`.
+    /// Filesystem evidence of each listed task's event and comment logs,
+    /// taken without reading them: each log's byte length, modification
+    /// time, device and inode, as the registry's envelope stamps record a
+    /// `task.yaml`. The partition is checked for a commit to recover once
+    /// rather than per task.
     ///
     /// The logs only grow by appends, a rollback truncates them and a bundle
     /// rewrite renames new files over them, so any write that changes what
     /// [`Self::read_task_history`] or [`Self::read_task_comments`] would
     /// return changes the stamp. Taken before a read, it labels what that
     /// read saw or something older, never newer: a racing write costs the
-    /// caller one more read later. `None` when no stamp can vouch for the
-    /// logs: the partition or the bundle has a write to settle, the task is
-    /// missing, there is no commit boundary, or the platform reports no file
-    /// identity.
-    pub(crate) fn task_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
-        orbit_types::task::validate_orb_task_id(id)?;
-        let Some(boundary) = &self.coordination else {
-            return Ok(None);
-        };
-        if !boundary.has_nothing_to_recover()? {
-            return Ok(None);
-        }
-        self.settled_history_stamp(id)
-    }
-
-    /// [`Self::task_history_stamp`] for each of `ids`, checking the
-    /// partition for a commit to recover once rather than per task. A task
-    /// is absent when nothing can vouch for its logs, and every task is when
-    /// there is no commit boundary or the partition has a commit to recover.
+    /// caller one more read later. A task is absent when no stamp can
+    /// vouch for its logs: the partition or the bundle has a write to
+    /// settle, the task is missing, there is no commit boundary, or the
+    /// platform reports no file identity; every task is absent when there
+    /// is no commit boundary or the partition has a commit to recover.
     pub(crate) fn task_history_stamps(
         &self,
         ids: &[String],
@@ -186,7 +174,7 @@ impl TaskV2Store {
     /// A store write that changes what a whole-bundle read returns, or
     /// whether it succeeds, changes the stamp: it appends to a log, truncates
     /// one, or renames a new file into a directory. It carries the limits
-    /// [`Self::task_history_stamp`] states: taken before a read it labels
+    /// [`Self::task_history_stamps`] states: taken before a read it labels
     /// that read or something older, and it is evidence that the store
     /// wrote nothing, not proof the bytes are identical: an out-of-band
     /// in-place edit of a renamed-into-place document, manifest or blob,

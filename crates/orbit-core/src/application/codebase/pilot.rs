@@ -16,13 +16,16 @@
 //! Task links distinguish fan-out invocations; ambiguous evidence stays unknown.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunQuery};
+use orbit_store::contracts::{
+    InvocationAccountingFact, InvocationAccountingQuery, InvocationQuery, InvocationRecord,
+    JobRunQuery,
+};
 use orbit_types::workflow::{
-    JobRun, JobV2Step, JobV2StepBody, PipelineState, TASK_PILOT_PIPELINE_JOB,
+    ActivityCrewDraw, JobRun, JobV2Step, JobV2StepBody, TASK_PILOT_PIPELINE_JOB,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,21 +56,232 @@ pub(in crate::application) struct PilotRun {
     pub(in crate::application) tokens: Option<u64>,
 }
 
+/// The slice of one invocation record pilot identity reads: its activity,
+/// task links, model and token total (`input + output`, as
+/// [`InvocationRecord::total_tokens`] is derived).
+struct PilotInvocation {
+    activity_id: String,
+    task_ids: Vec<String>,
+    model: Option<String>,
+    total_tokens: u64,
+}
+
+impl From<InvocationRecord> for PilotInvocation {
+    fn from(record: InvocationRecord) -> Self {
+        Self {
+            activity_id: record.activity_id,
+            task_ids: record.task_ids,
+            model: record.model,
+            total_tokens: record.total_tokens,
+        }
+    }
+}
+
+impl From<InvocationAccountingFact> for PilotInvocation {
+    fn from(fact: InvocationAccountingFact) -> Self {
+        Self {
+            activity_id: fact.activity_id.unwrap_or_default(),
+            task_ids: fact.task_ids,
+            model: fact.model,
+            total_tokens: fact.input_tokens.saturating_add(fact.output_tokens),
+        }
+    }
+}
+
 struct RunRecord {
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     run: PilotRun,
     /// Loaded once per attributed run, shared across its tasks and receipts.
-    invocations: RefCell<Option<Vec<InvocationRecord>>>,
-    /// The run's pipeline state, read once per scan. `None` until the first
-    /// attribution touching the run; `Some(None)` when the state is absent
-    /// or unreadable, treated as absent without failing the scan.
-    state: RefCell<Option<Option<PipelineState>>>,
+    invocations: RefCell<Option<Vec<PilotInvocation>>>,
+    /// The run's pipeline state projection, read once per scan. `None`
+    /// until the first attribution touching the run; `Some(None)` when the
+    /// state is absent or unreadable, treated as absent without failing
+    /// the scan.
+    state: RefCell<Option<Option<PilotRunStateView>>>,
+}
+
+/// The slice of a task-pilot run's pipeline state attribution reads: its
+/// frozen crew draws and, per apply step, the operation id and recorded
+/// crew of each applied task. A run's state carries every task it assessed
+/// in its accumulated pipeline value and per-step outputs, so deserializing
+/// the whole checkpoint to read this slice costs a scan over thousands of
+/// pilot runs seconds; this projection skips everything else as it parses.
+/// A state whose projection does not parse reads as absent, as an
+/// unreadable checkpoint did when it was parsed whole.
+#[derive(Deserialize)]
+struct PilotRunStateView {
+    #[serde(default)]
+    activity_crew_draws: BTreeMap<String, ActivityCrewDraw>,
+    pipeline: BTreeMap<String, PilotStepOutputView>,
+}
+
+impl PilotRunStateView {
+    /// The applied tasks the step named `step_id` checkpointed into
+    /// `pipeline`, as `PipelineState::pipeline_step_output` reads them.
+    fn step_tasks(&self, step_id: &str) -> Option<&[PilotTaskRef]> {
+        self.pipeline.get(step_id)?.tasks.as_deref()
+    }
+}
+
+/// One applied task an apply step's output names.
+#[derive(Deserialize)]
+struct PilotTaskRef {
+    #[serde(default)]
+    operation_id: Option<String>,
+    /// The partition crew the applied result recorded; the field
+    /// `PILOT_CREW_FIELD` names.
+    #[serde(default, rename = "pilot_crew")]
+    crew: Option<String>,
+}
+
+/// An apply step's checkpointed output: only its applied tasks. Any other
+/// shape — a scalar or array pipeline value, a `tasks` that is no array —
+/// reads as no tasks, as indexing the whole value did.
+struct PilotStepOutputView {
+    tasks: Option<Vec<PilotTaskRef>>,
+}
+
+impl<'de> Deserialize<'de> for PilotStepOutputView {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OutputVisitor;
+        impl<'de> serde::de::Visitor<'de> for OutputVisitor {
+            type Value = PilotStepOutputView;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a pipeline step output")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut tasks = None;
+                while let Some(key) = access.next_key::<String>()? {
+                    if key == "tasks" {
+                        tasks = access.next_value::<PilotTasks>()?.0;
+                    } else {
+                        access.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(PilotStepOutputView { tasks })
+            }
+
+            fn visit_seq<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while access.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(PilotStepOutputView { tasks: None })
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(PilotStepOutputView { tasks: None })
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(PilotStepOutputView { tasks: None })
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(PilotStepOutputView { tasks: None })
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(PilotStepOutputView { tasks: None })
+            }
+
+            fn visit_str<E>(self, _: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(PilotStepOutputView { tasks: None })
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(PilotStepOutputView { tasks: None })
+            }
+        }
+        deserializer.deserialize_any(OutputVisitor)
+    }
+}
+
+/// An apply output's `tasks`: the array's task refs, or nothing for any
+/// other shape.
+struct PilotTasks(Option<Vec<PilotTaskRef>>);
+
+impl<'de> Deserialize<'de> for PilotTasks {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct TasksVisitor;
+        impl<'de> serde::de::Visitor<'de> for TasksVisitor {
+            type Value = PilotTasks;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("applied tasks")
+            }
+
+            fn visit_seq<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut tasks = Vec::new();
+                while let Some(task) = access.next_element()? {
+                    tasks.push(task);
+                }
+                Ok(PilotTasks(Some(tasks)))
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                while access
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(PilotTasks(None))
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(PilotTasks(None))
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(PilotTasks(None))
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(PilotTasks(None))
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(PilotTasks(None))
+            }
+
+            fn visit_str<E>(self, _: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(PilotTasks(None))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(PilotTasks(None))
+            }
+        }
+        deserializer.deserialize_any(TasksVisitor)
+    }
 }
 
 impl RunRecord {
     /// The run's invocation records, read once.
-    fn invocations(&self, runtime: &OrbitRuntime) -> std::cell::RefMut<'_, Vec<InvocationRecord>> {
+    fn invocations(&self, runtime: &OrbitRuntime) -> std::cell::RefMut<'_, Vec<PilotInvocation>> {
         std::cell::RefMut::map(self.invocations.borrow_mut(), |invocations| {
             invocations.get_or_insert_with(|| self.load_invocations(runtime))
         })
@@ -84,37 +298,32 @@ impl RunRecord {
         })
     }
 
-    /// The run's pipeline state, read once per scan and shared across its
-    /// tasks and receipts. A failed read is `None` (absent), never a scan
-    /// failure, matching the previous per-call `ok().flatten()` handling.
-    fn cached_state(&self, runtime: &OrbitRuntime) -> Option<PipelineState> {
+    /// Read with the run's pipeline state projection, read once per scan
+    /// and shared across its tasks and receipts. A failed read is `None`
+    /// (absent), never a scan failure, matching the previous per-call
+    /// `ok().flatten()` handling. The state is borrowed, not cloned: a
+    /// task-pilot run's state carries every task it assessed, so cloning
+    /// it per receipt copies the whole batch for each of its tasks.
+    fn with_state<R>(
+        &self,
+        runtime: &OrbitRuntime,
+        read: impl FnOnce(Option<&PilotRunStateView>) -> R,
+    ) -> R {
         let mut slot = self.state.borrow_mut();
         if slot.is_none() {
-            *slot = Some(runtime.read_run_state(&self.run.run_id).ok().flatten());
+            *slot = Some(
+                runtime
+                    .read_run_state_json(&self.run.run_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|raw| serde_json::from_str(&raw).ok()),
+            );
         }
-        slot.as_ref().and_then(|state| state.clone())
+        read(slot.as_ref().and_then(|state| state.as_ref()))
     }
 
-    fn load_invocations(&self, runtime: &OrbitRuntime) -> Vec<InvocationRecord> {
-        // A truncated or failed read cannot establish an identity.
-        const LIMIT: usize = 1000;
-        match runtime.workspace_invocation_records(InvocationQuery {
-            job_run_id: Some(self.run.run_id.clone()),
-            limit: LIMIT,
-            // Pilot identity reads activity, task links, model and token totals only.
-            skip_tool_calls: true,
-            ..Default::default()
-        }) {
-            Ok(records) if records.len() < LIMIT => records,
-            Ok(_) => {
-                tracing::warn!(run_id = %self.run.run_id, "pilot identity: invocation read truncated");
-                Vec::new()
-            }
-            Err(error) => {
-                tracing::warn!(run_id = %self.run.run_id, %error, "pilot identity: invocations unreadable");
-                Vec::new()
-            }
-        }
+    fn load_invocations(&self, runtime: &OrbitRuntime) -> Vec<PilotInvocation> {
+        load_run_invocations(runtime, &self.run.run_id)
     }
 
     /// The producing worker and its recorded model for one receipt:
@@ -176,6 +385,71 @@ pub(in crate::application) struct PilotRuns {
     steps: Vec<(String, String)>,
     /// Linked receipts resolve their run without scanning every record.
     by_run_id: HashMap<String, usize>,
+    /// Whether [`Self::prefetch_attribution_inputs`] already ran for this
+    /// load.
+    prefetched: std::cell::Cell<bool>,
+}
+
+/// The most invocation records one run's identity read accepts; at the
+/// limit the read may be truncated, which cannot establish an identity.
+const PILOT_INVOCATION_LIMIT: usize = 1000;
+
+/// Every listed run's invocation records from one accounting read of the
+/// workspace, grouped by run, instead of one detailed read per run: the
+/// accounting facts carry the activity, task links, model and token
+/// components identity reads, oldest first. `None` when the batch read
+/// fails, so attribution falls back to the per-run detailed read.
+fn batch_invocations_by_run(
+    runtime: &OrbitRuntime,
+    by_run_id: &HashMap<String, usize>,
+) -> Option<HashMap<String, Vec<PilotInvocation>>> {
+    let workspace_id = runtime.stores().jobs().workspace_id().to_string();
+    let facts = runtime
+        .sqlite_store()
+        .and_then(|store| {
+            store.list_invocation_accounting_facts(&InvocationAccountingQuery {
+                workspace_id: Some(workspace_id),
+                since: None,
+                // The detailed read is unbounded; a day of slack covers a
+                // clock that recorded an invocation slightly ahead.
+                until: Utc::now() + chrono::Duration::days(1),
+            })
+        })
+        .ok()?;
+    let mut by_run: HashMap<String, Vec<PilotInvocation>> = HashMap::new();
+    for fact in facts {
+        if by_run_id.contains_key(&fact.job_run_id) {
+            by_run
+                .entry(fact.job_run_id.clone())
+                .or_default()
+                .push(PilotInvocation::from(fact));
+        }
+    }
+    Some(by_run)
+}
+
+/// One run's invocation records, newest first. A truncated or failed read
+/// cannot establish an identity and reads as none.
+fn load_run_invocations(runtime: &OrbitRuntime, run_id: &str) -> Vec<PilotInvocation> {
+    match runtime.workspace_invocation_records(InvocationQuery {
+        job_run_id: Some(run_id.to_string()),
+        limit: PILOT_INVOCATION_LIMIT,
+        // Pilot identity reads activity, task links, model and token totals only.
+        skip_tool_calls: true,
+        ..Default::default()
+    }) {
+        Ok(records) if records.len() < PILOT_INVOCATION_LIMIT => {
+            records.into_iter().map(PilotInvocation::from).collect()
+        }
+        Ok(_) => {
+            tracing::warn!(%run_id, "pilot identity: invocation read truncated");
+            Vec::new()
+        }
+        Err(error) => {
+            tracing::warn!(%run_id, %error, "pilot identity: invocations unreadable");
+            Vec::new()
+        }
+    }
 }
 
 impl PilotRuns {
@@ -219,12 +493,6 @@ impl PilotRuns {
     }
 
     fn from_runs(runtime: &OrbitRuntime, runs: Vec<JobRun>) -> Self {
-        let crews = runtime
-            .recorded_run_crews(runs.iter())
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "pilot scorecard: recorded crews unreadable");
-                Default::default()
-            });
         // Worker ids, rather than activity catalog names, name invocations.
         let steps = pilot_steps(runtime);
         let runs: Vec<RunRecord> = runs
@@ -234,7 +502,11 @@ impl PilotRuns {
                 finished_at: run.finished_at,
                 run: PilotRun {
                     run_id: run.run_id.to_string(),
-                    crew: crews.crews(&run, None).into_iter().next(),
+                    // Resolved from the run's state when a receipt is
+                    // attributed to it; reading every pilot run's state up
+                    // front parses the whole fleet's states for the crews
+                    // of runs no receipt names.
+                    crew: None,
                     model: None,
                     activity_id: None,
                     seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
@@ -255,6 +527,110 @@ impl PilotRuns {
             runs,
             steps,
             by_run_id,
+            prefetched: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Read every run's state projection and invocation records up front
+    /// instead of one run at a time as receipts attribute. A scan
+    /// attributes thousands of receipts, and each state is a serialized
+    /// checkpoint carrying every task its run assessed, so the
+    /// per-receipt lazy reads pay their queries and whole-text scans in
+    /// sequence. Threads fetch and parse their own slices concurrently —
+    /// the store's pooled readers serve the reads, and the parses are
+    /// independent by run. A failed state batch leaves its slots empty,
+    /// so attribution falls back to the per-run read, which treats a
+    /// failed read as absent as before. Runs a receipt never names still
+    /// cost their inputs; detail reads that loaded only their receipts'
+    /// runs therefore skip this.
+    pub(in crate::application) fn prefetch_attribution_inputs(&self, runtime: &OrbitRuntime) {
+        if self.prefetched.get() {
+            return;
+        }
+        self.prefetched.set(true);
+        const CHUNK: usize = 250;
+        let pending: Vec<(usize, String)> = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                record.state.borrow().is_none() || record.invocations.borrow().is_none()
+            })
+            .map(|(index, record)| (index, record.run.run_id.clone()))
+            .collect();
+        let fetch_parse = |part: &[(usize, String)]| -> Vec<(usize, Option<PilotRunStateView>)> {
+            let mut loaded = Vec::new();
+            for chunk in part.chunks(CHUNK) {
+                let ids: Vec<String> = chunk.iter().map(|(_, run_id)| run_id.clone()).collect();
+                let Ok(mut texts) = runtime.read_run_state_jsons(&ids) else {
+                    continue;
+                };
+                for (index, run_id) in chunk {
+                    let view = texts
+                        .remove(run_id)
+                        .flatten()
+                        .and_then(|raw| serde_json::from_str(&raw).ok());
+                    loaded.push((*index, view));
+                }
+            }
+            loaded
+        };
+        let threads = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(4)
+            .clamp(1, 8);
+        // The invocation batch is one sequential read; it runs on its own
+        // thread while the state slices fetch and parse.
+        let needs_invocations = pending
+            .iter()
+            .any(|&(index, _)| self.runs[index].invocations.borrow().is_none());
+        let by_run_id = &self.by_run_id;
+        let (loaded, mut invocations_by_run) = std::thread::scope(|scope| {
+            let invocations = scope.spawn(|| {
+                if needs_invocations {
+                    batch_invocations_by_run(runtime, by_run_id)
+                } else {
+                    None
+                }
+            });
+            let loaded = if threads == 1 || pending.len() < 32 {
+                fetch_parse(&pending)
+            } else {
+                let slice = pending.len().div_ceil(threads);
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = pending
+                        .chunks(slice)
+                        .map(|part| scope.spawn(|| fetch_parse(part)))
+                        .collect();
+                    handles
+                        .into_iter()
+                        .flat_map(|handle| handle.join().unwrap_or_default())
+                        .collect::<Vec<_>>()
+                })
+            };
+            (loaded, invocations.join().unwrap_or_default())
+        });
+        for (index, view) in loaded {
+            let record = &self.runs[index];
+            if record.state.borrow().is_none() {
+                *record.state.borrow_mut() = Some(view);
+            }
+        }
+        if let Some(by_run) = &mut invocations_by_run {
+            for record in &self.runs {
+                if record.invocations.borrow().is_some() {
+                    continue;
+                }
+                let mut invocations = by_run.remove(&record.run.run_id).unwrap_or_default();
+                if invocations.len() >= PILOT_INVOCATION_LIMIT {
+                    tracing::warn!(run_id = %record.run.run_id, "pilot identity: invocation read truncated");
+                    invocations.clear();
+                } else {
+                    // Accounting reads oldest first; identity reads newest first.
+                    invocations.reverse();
+                }
+                *record.invocations.borrow_mut() = Some(invocations);
+            }
         }
     }
 
@@ -285,40 +661,51 @@ impl PilotRuns {
                 .collect()
         };
         let mut found = candidates.iter().filter_map(|record| {
-            let state = record.cached_state(runtime);
-            let producing: Vec<_> = self
-                .steps
-                .iter()
-                .enumerate()
-                .filter_map(|(index, (step, _))| {
-                    let tasks = state.as_ref()?.pipeline_step_output(step)?["tasks"].as_array()?;
-                    let matches = tasks
-                        .iter()
-                        .any(|task| task["operation_id"].as_str() == Some(operation_id));
-                    matches.then_some(index)
-                })
-                .collect();
-            if candidates.len() > 1 && producing.len() != 1 {
-                return None;
-            }
-            let mut run = record.run.clone();
-            // A run that drew a `<crew>@auto` pilot ran each partition at its
-            // own effort; the applied result names that partition's crew.
-            if let Some(crew) = self.steps.iter().find_map(|(step, _)| {
-                state.as_ref()?.pipeline_step_output(step)?["tasks"]
-                    .as_array()?
+            record.with_state(runtime, |state| {
+                let producing: Vec<_> = self
+                    .steps
                     .iter()
-                    .find(|task| task["operation_id"].as_str() == Some(operation_id))?
-                    .get(crate::application::task::pilot::auto_effort::PILOT_CREW_FIELD)?
-                    .as_str()
-                    .map(ToOwned::to_owned)
-            }) {
-                run.crew = Some(crew);
-            }
-            (run.activity_id, run.model) =
-                record.invocation_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
-            run.tokens = record.pilot_run_tokens(runtime);
-            Some(run)
+                    .enumerate()
+                    .filter_map(|(index, (step, _))| {
+                        let tasks = state?.step_tasks(step)?;
+                        let matches = tasks
+                            .iter()
+                            .any(|task| task.operation_id.as_deref() == Some(operation_id));
+                        matches.then_some(index)
+                    })
+                    .collect();
+                if candidates.len() > 1 && producing.len() != 1 {
+                    return None;
+                }
+                let mut run = record.run.clone();
+                // A run that drew a `<crew>@auto` pilot ran each partition at
+                // its own effort; the applied result names that partition's
+                // crew. Else the run's pilots ran as the crew draw its state
+                // froze, the lookup the load used to batch-read every state
+                // for.
+                run.crew = self
+                    .steps
+                    .iter()
+                    .find_map(|(step, _)| {
+                        state?
+                            .step_tasks(step)?
+                            .iter()
+                            .find(|task| task.operation_id.as_deref() == Some(operation_id))?
+                            .crew
+                            .clone()
+                    })
+                    .or_else(|| {
+                        state.and_then(|state| {
+                            crate::application::distributed::pilot_run_crew_from_draws(
+                                &state.activity_crew_draws,
+                            )
+                        })
+                    });
+                (run.activity_id, run.model) =
+                    record.invocation_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
+                run.tokens = record.pilot_run_tokens(runtime);
+                Some(run)
+            })
         });
         let run = found.next()?;
         found.next().is_none().then_some(run)
@@ -493,6 +880,17 @@ pub(in crate::application) fn pilot_evidence(
     facts: &CodebaseFacts,
     runs: &mut Option<PilotRuns>,
 ) -> PilotEvidence {
+    // Denials by the task they named, in recorded order, so each assessed
+    // task reads its own instead of scanning every denial.
+    let mut denials_by_task: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, denial) in facts.lock_denials.iter().enumerate() {
+        for task_id in &denial.task_ids {
+            denials_by_task
+                .entry(task_id.as_str())
+                .or_default()
+                .push(index);
+        }
+    }
     let mut assessments = Vec::new();
     for task in &facts.tasks {
         let (Some(landed), Some(inputs)) = (&task.landed, &task.pilot) else {
@@ -502,6 +900,7 @@ pub(in crate::application) fn pilot_evidence(
             continue;
         }
         let runs = runs.get_or_insert_with(|| PilotRuns::load(runtime));
+        runs.prefetch_attribution_inputs(runtime);
         let run = runs.attribute(
             runtime,
             &task.id,
@@ -525,14 +924,18 @@ pub(in crate::application) fn pilot_evidence(
                 })
             })
             .collect();
-        for denial in &facts.lock_denials {
-            if denial.task_ids.contains(&task.id) {
-                contested.extend(denial.files.iter().map(|path| Contest {
-                    at: denial.at,
-                    path: path.clone(),
-                    kind: "lock conflict",
-                }));
-            }
+        for denial in denials_by_task
+            .get(task.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|&index| &facts.lock_denials[index])
+        {
+            contested.extend(denial.files.iter().map(|path| Contest {
+                at: denial.at,
+                path: path.clone(),
+                kind: "lock conflict",
+            }));
         }
         assessments.push(Assessment {
             task_id: task.id.clone(),

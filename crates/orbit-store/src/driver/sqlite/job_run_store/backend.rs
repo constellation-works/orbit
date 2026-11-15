@@ -879,6 +879,19 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             .read_job_run_state_for_workspace(&self.workspace_id, run_id)
     }
 
+    fn read_run_state_json(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.store
+            .read_job_run_state_json_for_workspace(&self.workspace_id, run_id)
+    }
+
+    fn read_run_state_jsons(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
+        self.store
+            .read_job_run_state_jsons_for_workspace(&self.workspace_id, run_ids)
+    }
+
     fn read_run_states(
         &self,
         run_ids: &[String],

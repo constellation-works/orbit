@@ -462,6 +462,35 @@ pub trait JobRunStoreBackend: Send + Sync {
     fn archive_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
     fn delete_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError>;
+    /// The run's serialized pipeline state, unparsed, for a reader that
+    /// needs only a projection of it: parsing the whole checkpoint (its
+    /// accumulated pipeline value and per-step outputs) to read two small
+    /// fields costs a scan over thousands of runs seconds. The stored text
+    /// is returned as stored, so unreadable JSON is the caller's to
+    /// classify, never an error only for its shape. The default serializes
+    /// the parsed state; the SQLite backend returns the stored text.
+    fn read_run_state_json(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.read_run_state(run_id)?
+            .map(|state| {
+                serde_json::to_string(&state)
+                    .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))
+            })
+            .transpose()
+    }
+    /// [`Self::read_run_state_json`] for many runs: one query per chunk in
+    /// the SQLite backend, so a scan projecting thousands of states does
+    /// not pay a prepared statement per run. A run with no state row maps
+    /// to `None`; a run that does not exist is absent.
+    fn read_run_state_jsons(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
+        let mut states = HashMap::with_capacity(run_ids.len());
+        for run_id in run_ids {
+            states.insert(run_id.clone(), self.read_run_state_json(run_id)?);
+        }
+        Ok(states)
+    }
     /// Pipeline state for a list page in one query per chunk, not one per run.
     ///
     /// Missing runs and unreadable JSON are omitted / `None` rather than failing

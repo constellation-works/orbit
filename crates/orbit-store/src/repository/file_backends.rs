@@ -565,10 +565,6 @@ impl TaskHistoryStoreBackend for TaskV2Store {
         self.read_task_history(id)
     }
 
-    fn task_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
-        self.task_history_stamp(id)
-    }
-
     fn task_history_stamps(
         &self,
         ids: &[String],
