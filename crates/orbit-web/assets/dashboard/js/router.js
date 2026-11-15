@@ -868,13 +868,17 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
     if (ctx.syncTaskControls) ctx.syncTaskControls();
     hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
-    if (ctx.setDockRouteShown) ctx.setDockRouteShown(Boolean(dockView));
+    const dockRouteShown = ctx.setDockRouteShown
+      ? ctx.setDockRouteShown(Boolean(dockView))
+      : Boolean(dockView);
     if (dockView) {
       if (ctx.setDrainView) ctx.setDrainView(dockView);
-      const [route, taskQuery = ""] = hash.split("?");
-      const params = new URLSearchParams(taskQuery);
-      params.set("dock", dockView);
-      hash = `${route}?${params}`;
+      if (dockRouteShown) {
+        const [route, taskQuery = ""] = hash.split("?");
+        const params = new URLSearchParams(taskQuery);
+        params.set("dock", dockView);
+        hash = `${route}?${params}`;
+      }
     }
   } else {
     hash = `#${top}`;
