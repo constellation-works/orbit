@@ -732,7 +732,7 @@ such a task (`awaiting_footprint`, bounded by the trigger's
 it only alone (`awaiting_exclusive_slot`) [ORB-15191]. A pilot assessment that
 leaves the task without selectors ends the wait. An operator's `readiness-waived` tag
 waives the rule and the complexity gate: the task is admitted like ready work
-without the whole-tree reservation, holding no file lock, and counts as editing
+without the whole-tree reservation, holding no file lock unless it declares selectors, and counts as editing
 work in its wave ([decision](4_decisions.md#readiness-waived-is-an-operator-waiver-of-readiness-gaps))
 [ORB-25084]. A live pilot's preparation
 reservation or successful checkpoint still holds its tasks until that run
