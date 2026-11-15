@@ -607,4 +607,25 @@ fn a_failed_plugin_digest_record_does_not_refuse_the_plugin() {
         "finishing the digest must not rewrite the healed manifest again"
     );
     assert_callback_loads(&runtime, &healed);
+
+    // A competing opener can record the new digest before this opener's
+    // failed update restores the old manifest bytes. The next pass must
+    // recognize the digest of the consented rewrite and finish the file.
+    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
+    let mut installed = plugins.get_plugin("callback").unwrap().unwrap();
+    installed.manifest_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
+    plugins.upsert_plugin(&installed).unwrap();
+    drop(plugins);
+    std::fs::write(install.join("plugin.yaml"), CALLBACK_MANIFEST).unwrap();
+    drop(runtime);
+    fixture.forget_migration();
+    let runtime = fixture.open();
+    assert_eq!(
+        std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+        healed,
+        "a recorded healed digest must finish a restored original manifest"
+    );
+    drop(runtime);
+    let runtime = fixture.open();
+    assert_callback_loads(&runtime, &healed);
 }
