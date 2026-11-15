@@ -22,7 +22,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -49,10 +49,6 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// Set in the isolated child that runs a test body.
-const CHILD_ENV: &str = "ORBIT_WORKTREE_LIFECYCLE_CHILD";
-/// Upper bound on one isolated test body, Git calls included.
-const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const BASE: &str = "agent-main";
 
 #[cfg(unix)]
@@ -3450,6 +3446,7 @@ impl PreparedRebase {
         base: impl FnOnce(&Path) -> String,
     ) -> Self {
         let host = LifecycleHost::new(&fixture.repo);
+        host.start_run(run_id);
         let (setup, checkout) = setup_checkout(&host, "T-REBASE", run_id);
         let base_sha = setup["base_sha"].as_str().unwrap().to_string();
         let candidate = candidate(&checkout.path);
@@ -3744,20 +3741,120 @@ impl LifecycleHost {
         }
     }
 
-    /// The same stores, resolving the agent provider to `provider`.
+    /// The same stores, resolving the agent provider to `provider`. Every
+    /// store is copied, so a fixture seeded before the swap behaves the same
+    /// after it. Only the one-shot `preparation_hook` is not carried: a boxed
+    /// closure cannot be cloned, and a test that races preparation installs it
+    /// on the host it dispatches through.
     fn with_provider(&self, provider: &Path) -> Self {
+        fn copied<T: Clone>(store: &Mutex<T>) -> Mutex<T> {
+            Mutex::new(store.lock().unwrap().clone())
+        }
         Self {
+            worker: self.worker.clone(),
+            gate_source: self.gate_source,
+            reclaim_patterns: self.reclaim_patterns.clone(),
             repo: self.repo.clone(),
             provider: Some(provider.to_path_buf()),
-            tasks: Mutex::new(self.tasks.lock().unwrap().clone()),
-            runs: Mutex::new(self.runs.lock().unwrap().clone()),
-            history: Mutex::new(self.history.lock().unwrap().clone()),
-            pr_status: Mutex::new(self.pr_status.lock().unwrap().clone()),
-            unlocked_validation: Mutex::new(self.unlocked_validation.lock().unwrap().clone()),
-            generated_paths: Mutex::new(self.generated_paths.lock().unwrap().clone()),
+            tasks: copied(&self.tasks),
+            runs: copied(&self.runs),
+            admitted: copied(&self.admitted),
+            checkpoints: copied(&self.checkpoints),
+            recovery_attempts: copied(&self.recovery_attempts),
+            owner_answers: copied(&self.owner_answers),
+            settled_claims: copied(&self.settled_claims),
+            lookup_scopes: copied(&self.lookup_scopes),
+            widenings: copied(&self.widenings),
+            run_states: copied(&self.run_states),
+            history: copied(&self.history),
+            required_commands: copied(&self.required_commands),
+            artifacts: copied(&self.artifacts),
+            machine: copied(&self.machine),
+            kept_claim: copied(&self.kept_claim),
+            landing_write: copied(&self.landing_write),
+            stubs: copied(&self.stubs),
+            stub_calls: copied(&self.stub_calls),
+            final_recovery_admissions: copied(&self.final_recovery_admissions),
+            final_recovery_applications: copied(&self.final_recovery_applications),
+            recovery_owner_refusal: copied(&self.recovery_owner_refusal),
+            recovery_revocation: copied(&self.recovery_revocation),
+            preparation_hook: Mutex::new(None),
+            unlocked_validation: copied(&self.unlocked_validation),
+            generated_paths: copied(&self.generated_paths),
+            validated_trees: copied(&self.validated_trees),
+            pr_config: copied(&self.pr_config),
+            pr_status: copied(&self.pr_status),
             publish_task_context: self.publish_task_context,
-            ..Self::default()
         }
+    }
+
+    /// Start `run_id` as a running run with a durable run state, as a host has
+    /// before any recovery certifies a completion for it. Keeps an existing
+    /// run or state.
+    fn start_run(&self, run_id: &str) {
+        let mut runs = self.runs.lock().unwrap();
+        if !runs.iter().any(|run| run.run_id == run_id) {
+            runs.push(job_run(run_id, JobRunState::Running, json!({})));
+        }
+        drop(runs);
+        self.run_states
+            .lock()
+            .unwrap()
+            .entry(run_id.to_string())
+            .or_insert_with(|| pipeline_state(run_id));
+    }
+
+    /// The reserved attempt `output` certifies, or why the authority refuses it.
+    fn certifiable_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<i64, OrbitError> {
+        bound_recovery_fields(run_id, step_id, output)?;
+        let attempt = match output.get("recovery_attempt") {
+            None => {
+                return Err(OrbitError::Execution(format!(
+                    "rebase recovery evidence for run {run_id} step `{step_id}` names no \
+                     host-reserved attempt"
+                )));
+            }
+            Some(value) => value
+                .as_i64()
+                .filter(|attempt| *attempt >= 1)
+                .ok_or_else(|| {
+                    OrbitError::Execution(
+                        "rebase recovery evidence has an invalid `recovery_attempt`".to_string(),
+                    )
+                })?,
+        };
+        let attempts = self.rebase_recovery_attempts(run_id, step_id)?;
+        let reserved = usize::try_from(attempt)
+            .ok()
+            .and_then(|attempt| attempts.get(attempt - 1))
+            .ok_or_else(|| {
+                OrbitError::PolicyDenied(format!(
+                    "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was not \
+                     reserved by this host"
+                ))
+            })?;
+        if attempt as usize != attempts.len() {
+            return Err(OrbitError::PolicyDenied(format!(
+                "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was \
+                 superseded by a later attempt"
+            )));
+        }
+        let field = |name: &str| output.get(name).and_then(Value::as_str);
+        if field("workspace_path") != Some(reserved.workspace_path.as_str())
+            || field("head_sha_before") != Some(reserved.head_sha_before.as_str())
+            || field("target_base_sha") != Some(reserved.target_base_sha.as_str())
+        {
+            return Err(OrbitError::PolicyDenied(format!(
+                "rebase recovery evidence for run {run_id} step `{step_id}` attempt {attempt} \
+                 does not describe the reserved workspace, original HEAD and pinned base"
+            )));
+        }
+        Ok(attempt)
     }
 
     fn set_pr_status(&self, status: Value) {
@@ -4153,17 +4250,23 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         path: &str,
         content: Vec<u8>,
     ) -> Result<(), OrbitError> {
-        assert_eq!(
-            RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref(),
-            Some(run_id)
-        );
+        // As the runtime's host does: validate the path, refuse a run that
+        // does not own the task with a typed error, and store the bytes raw.
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
+            )));
+        }
         let mut artifacts = self.artifacts.lock().unwrap();
         let artifacts = artifacts.entry(task_id.to_string()).or_default();
         artifacts.retain(|artifact| artifact.path != path);
-        artifacts.push(TaskArtifact::from_text(
-            path,
-            String::from_utf8(content).unwrap(),
-        ));
+        artifacts.push(TaskArtifact {
+            path: path.to_string(),
+            content,
+            media_type: "application/json".to_string(),
+            created_by: None,
+        });
         Ok(())
     }
 
@@ -4248,12 +4351,35 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         Ok(paths.iter().map(|path| format!("file:{path}")).collect())
     }
 
+    /// Reserves the next attempt for a run's step as the runtime's recovery
+    /// authority does: an incomplete scope is refused and each reservation
+    /// supersedes the earlier ones.
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,
         step_id: &str,
         scope: &RebaseRecoveryAttemptScope,
     ) -> Result<u64, DispatchError> {
+        let refuse = |error: OrbitError| {
+            DispatchError::JobExecution(format!(
+                "reserve rebase recovery attempt (run {run_id}, step `{step_id}`): {error}"
+            ))
+        };
+        if [
+            run_id,
+            step_id,
+            &scope.workspace_path,
+            &scope.head_sha_before,
+            &scope.target_base_sha,
+        ]
+        .iter()
+        .any(|value| value.is_empty())
+        {
+            return Err(refuse(OrbitError::InvalidInput(
+                "rebase recovery attempt needs a run, step, workspace, original HEAD and pinned base"
+                    .to_string(),
+            )));
+        }
         let mut attempts = self.recovery_attempts.lock().unwrap();
         attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
         Ok(attempts
@@ -4262,24 +4388,75 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             .count() as u64)
     }
 
-    /// Records the certified completion, and copies it into the run store the
-    /// `git_rebase` retry reads, as the runtime does.
+    /// Certifies a completion as the runtime's recovery authority does, then
+    /// copies it into the run store the `git_rebase` retry reads. It refuses
+    /// a payload naming another run or step, or lacking its bindings or a
+    /// `recovery_attempt`; an attempt this host never reserved or a later
+    /// reservation superseded; evidence that does not describe the reserved
+    /// workspace, original HEAD and pinned base; and different evidence for an
+    /// attempt already certified. The copy needs the run to be Running with a
+    /// durable run state: neither is created here.
     fn checkpoint_rebase_recovery(
         &self,
         run_id: &str,
         step_id: &str,
         output: &Value,
     ) -> Result<(), DispatchError> {
-        self.checkpoints.lock().unwrap().push((
-            run_id.to_string(),
-            step_id.to_string(),
-            output.clone(),
-        ));
+        let certify = |error: OrbitError| {
+            DispatchError::JobExecution(format!(
+                "certify rebase recovery (run {run_id}, step `{step_id}`): {error}"
+            ))
+        };
+        let attempt = self
+            .certifiable_attempt(run_id, step_id, output)
+            .map_err(certify)?;
+        let persist = |reason: &str| {
+            DispatchError::JobExecution(format!(
+                "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
+            ))
+        };
+        // Refuse before recording anything: a refused certificate must not stay
+        // in the store `verify_rebase_recovery` reads.
+        let running = self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
+        if !running {
+            return Err(persist("rebase recovery run is no longer running"));
+        }
+        let no_run_state = || persist("rebase recovery has no durable run state");
+        if !self.run_states.lock().unwrap().contains_key(run_id) {
+            return Err(no_run_state());
+        }
+        {
+            let mut certified = self.checkpoints.lock().unwrap();
+            let recorded = certified
+                .iter()
+                .find(|(run, step, payload)| {
+                    run == run_id
+                        && step == step_id
+                        && payload.get("recovery_attempt").and_then(Value::as_i64) == Some(attempt)
+                })
+                .map(|(_, _, payload)| payload.clone());
+            match recorded {
+                Some(payload) if payload == *output => {}
+                Some(_) => {
+                    return Err(certify(OrbitError::Execution(format!(
+                        "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
+                         already certified with different evidence; the accepted certificate is \
+                         immutable"
+                    ))));
+                }
+                None => certified.push((run_id.to_string(), step_id.to_string(), output.clone())),
+            }
+        }
         self.run_states
             .lock()
             .unwrap()
-            .entry(run_id.to_string())
-            .or_insert_with(|| pipeline_state(run_id))
+            .get_mut(run_id)
+            .ok_or_else(no_run_state)?
             .rebase_recovery_checkpoints
             .insert(step_id.to_string(), output.clone());
         if let Some(hook) = self.preparation_hook.lock().unwrap().as_mut() {
@@ -4303,22 +4480,32 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             .collect())
     }
 
-    /// Only the newest completion recorded for a run's step vouches for it,
-    /// matching the runtime's recovery authority.
+    /// Only the newest certified attempt of a run's step vouches for it, and
+    /// only for the exact payload certified, as the runtime's recovery
+    /// authority does. A payload that cannot be bound, or that names no
+    /// attempt, is never vouched for.
     fn verify_rebase_recovery(
         &self,
         run_id: &str,
         step_id: &str,
         checkpoint: &Value,
     ) -> Result<bool, OrbitError> {
-        Ok(self
-            .checkpoints
-            .lock()
-            .unwrap()
+        if bound_recovery_fields(run_id, step_id, checkpoint).is_err() {
+            return Ok(false);
+        }
+        let Some(attempt) = checkpoint.get("recovery_attempt").and_then(Value::as_i64) else {
+            return Ok(false);
+        };
+        let certified = self.checkpoints.lock().unwrap();
+        let latest = certified
             .iter()
-            .rev()
-            .find(|(run, step, _)| run == run_id && step == step_id)
-            .is_some_and(|(_, _, certified)| certified == checkpoint))
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .filter_map(|(_, _, payload)| payload.get("recovery_attempt").and_then(Value::as_i64))
+            .max();
+        Ok(latest == Some(attempt)
+            && certified.iter().any(|(run, step, payload)| {
+                run == run_id && step == step_id && payload == checkpoint
+            }))
     }
 
     fn validate_step_recovery_mutation(
@@ -4613,6 +4800,37 @@ fn workspace(setup: &Value) -> PathBuf {
     Checkout::from_setup(setup).path
 }
 
+/// The bindings the recovery authority derives from a payload: it names the
+/// run and step it is certified under, and carries a workspace, HEAD and base.
+fn bound_recovery_fields(
+    run_id: &str,
+    step_id: &str,
+    checkpoint: &Value,
+) -> Result<(), OrbitError> {
+    let bound = |field: &str| {
+        checkpoint
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "rebase recovery evidence is missing its `{field}` binding"
+                ))
+            })
+    };
+    let (payload_run, payload_step) = (bound("run_id")?, bound("step_id")?);
+    if payload_run != run_id || payload_step != step_id {
+        return Err(OrbitError::Execution(format!(
+            "rebase recovery evidence names run {payload_run} step `{payload_step}`, not run \
+             {run_id} step `{step_id}`"
+        )));
+    }
+    bound("workspace_path")?;
+    bound("head_sha")?;
+    bound("base_sha")?;
+    Ok(())
+}
+
 fn pipeline_state(run_id: &str) -> PipelineState {
     PipelineState::new(
         run_id.to_string(),
@@ -4639,89 +4857,20 @@ fn path_str(path: &Path) -> &str {
 // Isolated child process
 // ---------------------------------------------------------------------------
 
-/// Run `body` in a copy of this test binary that sees only the environment
-/// the fixture sets, and fail if it fails or outlives [`CHILD_DEADLINE`].
+/// Run `body` in a disposable child copy of this test binary and fail if it
+/// fails or goes silent past the canonical child-test deadline. The child runs
+/// as [`crate::git_fixture::isolated`] runs it: `run_child_test`'s
+/// silence-after-first-byte deadline and ceiling, its own process group killed
+/// with an orphan watchdog,
+/// the sandbox as cwd and canonical temp dir, and `ORBIT_*`, `GIT_*` and `GH_*`
+/// stripped from its environment.
 fn isolated(test: &str, body: impl FnOnce()) {
     isolated_in(module_path!(), test, body);
 }
 
 /// [`isolated`] for a test defined in `module`, a submodule of this one.
 fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
-    if std::env::var_os(CHILD_ENV).is_some() {
-        body();
-        return;
-    }
-    let sandbox = TempDir::new().unwrap();
-    let home = sandbox.path().join("home");
-    let tmp = sandbox.path().join("tmp");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&tmp).unwrap();
-    let log_path = sandbox.path().join("child.log");
-    let log = fs::File::create(&log_path).unwrap();
-
-    // libtest names a test by its module path below the crate root.
-    let qualified = format!(
-        "{}::{test}",
-        module.split_once("::").expect("test module").1
-    );
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([&qualified, "--exact", "--nocapture", "--test-threads=1"])
-        .stdin(Stdio::null())
-        .stdout(log.try_clone().unwrap())
-        .stderr(log);
-    // Stream row progress into nextest, including when it terminates the parent.
-    if module.ends_with("::absorbed_candidate") {
-        command.stderr(Stdio::inherit());
-    }
-    for (name, _) in std::env::vars_os() {
-        let name = name.to_string_lossy();
-        if name.starts_with("ORBIT_") || name.starts_with("GIT_") {
-            command.env_remove(name.as_ref());
-        }
-    }
-    super::git_fixture::configure_child(&mut command, &home, sandbox.path());
-    command
-        .env(CHILD_ENV, "1")
-        .env("HOME", &home)
-        .env("XDG_CONFIG_HOME", home.join(".config"))
-        .env("TMPDIR", &tmp)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0");
-
-    let mut child = ReapOnDrop(command.spawn().unwrap());
-    let deadline = Instant::now() + CHILD_DEADLINE;
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            drop(child);
-            panic!(
-                "{test} exceeded {CHILD_DEADLINE:?} in its isolated child:\n{}",
-                fs::read_to_string(&log_path).unwrap_or_default()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    orbit_common::test_env::assert_child_test_passed(
-        &qualified,
-        status,
-        fs::read(&log_path).unwrap(),
-        [],
-    );
-}
-
-/// Kills and reaps the child on every exit path, panics included.
-struct ReapOnDrop(Child);
-
-impl Drop for ReapOnDrop {
-    fn drop(&mut self) {
-        if matches!(self.0.try_wait(), Ok(None)) {
-            let _ = self.0.kill();
-        }
-        let _ = self.0.wait();
-    }
+    crate::git_fixture::isolated(module, test, body);
 }
 
 /// Each family retains its own bounded child and every row's name and cfg.
