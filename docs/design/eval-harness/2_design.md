@@ -160,16 +160,22 @@ For the first two, the first version detects and does not prevent. Each invocati
 
 ### 5.1 The job
 
-Each candidate task carries a `delivery:eval_replay_candidate` tag, which routes it to the plugin's delivery job through the same gate as the shipped pipelines ([plugins 1_scope.md §4.5](../plugins/1_scope.md)). The job declares `task_delivery: { modes: [local] }` and `owns_task_worktree: true`. Its steps:
+Each candidate task carries a `delivery:eval_replay_candidate` tag, which routes it to the plugin's delivery job through the same gate as the shipped pipelines ([plugins 1_scope.md §4.5](../plugins/1_scope.md)). The job declares `task_delivery: { modes: [local] }` and `owns_task_worktree: true`. Its step sequence and the candidate task's lifecycle status at each step:
 
-1. `worktree_setup` at the entry's base commit (§1.4).
-2. `agent_implement`, the shipped activity, unchanged.
-3. `git_commit`.
-4. `eval.candidate-capture` (plugin tool): writes the candidate's diff and commit id as task artifacts and keeps the commit under `refs/orbit/eval/<replay>/<candidate task>`.
-5. Scoring steps (§5.3), each bounded and each writing an artifact.
-6. `task_complete`: the candidate task ends `done`. A candidate task being `done` means "scored", not "passed".
+1. `worktree_setup` at the entry's base commit (§1.4). Admission moves the candidate from `backlog` to `in-progress` and binds the run ID (`setup.rs:195-204`).
+2. `agent_implement`, the shipped activity, unchanged (`in-progress`).
+3. `git_commit` snapshots the candidate changes onto the run branch (`in-progress`).
+4. `eval.candidate-capture` (plugin tool): writes the candidate's diff (`eval/diff.patch`) and commit id as task artifacts and keeps the commit under `refs/orbit/eval/<replay>/<candidate task>` (`in-progress`).
+5. Scoring steps (§5.3), each bounded and each writing an artifact (`eval/held-out.json`, `eval/metrics.json`, `eval/validate.json`, or blind review artifacts; task remains `in-progress`).
+6. `mark_review` (the shipped `update_task` activity, setting `status: review`, as in `task_local_pipeline.yaml:187-198`): explicitly transitions the candidate task from `in-progress` to `review`.
+7. `task_complete`: performs the canonical `review -> done` completion transition (`complete.rs:65-80`). The candidate task ends `done`. A candidate task being `done` means "scored", not "passed".
 
-It never pushes, opens a PR or merges. Worktree GC then removes the worktree and branch as it does for any finished task; the kept ref and the diff artifact are what remain.
+**Completion authorization and completion holds.** The shipped `task_complete` activity requires the candidate to be in `review` and runs only for tasks a run was explicitly authorized to complete (`crates/orbit-core/assets/activities/task_complete.yaml:6-14`, `complete.rs:140-152`). Replay candidate runs receive that authorization either from the evaluation workspace's drain started with `--complete` (`orbit run auto --complete --for <window> --concurrency <n>`, §9) or by `eval_replay_candidate` defaulting `completion: done` in its job input. Under `completion: done`, `task_complete` evaluates the workspace's `completion.hold` rules against the candidate's complexity, type, or tags (`complete.rs:89-104`):
+
+- When no hold matches, the task moves to `done`. It never pushes, opens a PR or merges. Worktree GC then removes the worktree and branch as it does for any settled task (`task_status_permits_deletion`, `crates/orbit-engine/src/executor/automation/vcs/worktree/gc/sweep.rs:29-34`); the kept ref and the task artifacts are what remain.
+- When a `completion.hold` rule matches, `task_complete` leaves the candidate in `review`, records the hold on the task, and reports it in `held_task_ids`. Because worktree GC deletes worktrees and branches only for settled tasks (`done`, `rejected`, or `archived`), GC fails closed: the candidate's worktree, branch, and worktree claim remain intact on disk for operator inspection.
+
+In either outcome, the step sequence ensures the candidate's diff and scores are captured as durable task artifacts (`eval.candidate-capture` and scoring steps) before `task_complete` or worktree GC can remove the branch.
 
 ### 5.2 Pull requests
 
@@ -327,7 +333,7 @@ Losing candidates are not a regression record and not an escaped defect. They ar
 **Admission.** Candidates are ordinary tasks, so they run only when a drain admits them: there is no separate launcher and no synthetic load.
 
 - *Bake-off* candidates enter the live drain at T's own priority. They are real delivery of a task someone chose to pay n times for, and they take n slots.
-- *Replay* candidates enter the evaluation workspace's drain, started as `orbit run auto --for <window> --concurrency <n>` from that workspace on the box.
+- *Replay* candidates enter the evaluation workspace's drain, started as `orbit run auto --complete --for <window> --concurrency <n>` from that workspace on the box (or `eval_replay_candidate` defaulting `completion: done`), granting each replay run the completion authorization required by `task_complete` (§5.1).
 
 **Priority below delivery.** Within one workspace a `low` task sorts last (`automatic_dispatch_cmp_with_affinity`, `crates/orbit-types/src/task/model/task.rs:848-912`), but no slots are reserved and nothing relates two workspaces' drains. Orbit has no job class or lane below delivery. So for replay, "below delivery" is achieved by three existing limits, and one honest gap:
 
