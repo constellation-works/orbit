@@ -12,6 +12,10 @@
 //! Built-in text merges are recognizable by their markers; binary ancestors
 //! can instead leave a side untouched. Custom drivers can leave arbitrary
 //! output, so their earlier repairs require Git's original `AUTO_MERGE` tree.
+//! A modify/delete conflict resolved by keeping one side unchanged looks
+//! exactly like the untouched stop, so it is adopted only through the
+//! leaf's authenticated resolution intent, checked here against the index
+//! stages and the worktree [F2026-11-277].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -20,6 +24,7 @@ use std::path::Path;
 use super::DispatchError;
 use super::boundary_guard::is_host_owned_path;
 use super::fingerprint::{GitWorktreeFingerprint, git_output_raw, git_stdout, git_stdout_bytes};
+use super::rebase_recovery::ResolutionIntent;
 
 /// Git's buffer-is-binary heuristic: a NUL within the first 8000 bytes.
 const BINARY_SNIFF_BYTES: usize = 8000;
@@ -38,6 +43,101 @@ pub(super) fn unrepaired_conflict_paths(
         }
     }
     Ok(unrepaired)
+}
+
+/// Verify each authenticated resolution intent against the stopped index
+/// and the worktree, returning the paths it adopts as repaired. Every intent
+/// must name an authorized, non-host-owned conflict path in `authorized`
+/// that is a modify/delete conflict (exactly one side present). A kept side
+/// must exist in the index stages as a regular file, and the worktree must
+/// hold that exact blob and mode as a regular, marker-free file; a deletion
+/// must leave nothing at the path. Any mismatch refuses the whole intent.
+pub(super) fn adopt_resolution_intents(
+    root: &Path,
+    intents: &[ResolutionIntent],
+    authorized: &[String],
+) -> Result<Vec<String>, String> {
+    let mut adopted = Vec::new();
+    for intent in intents {
+        let path = intent.path.as_str();
+        let refused = |reason: &str| format!("the resolution intent for '{path}' {reason}");
+        if !authorized.iter().any(|authorized| authorized == path) || is_host_owned_path(path) {
+            return Err(refused("names a path outside the authorized conflict set"));
+        }
+        let stages = conflict_stages(root, path).map_err(|error| error.to_string())?;
+        if stages.contains_key(&2) == stages.contains_key(&3) {
+            return Err(refused("does not name a modify/delete conflict"));
+        }
+        let file = root.join(path);
+        let metadata = match fs::symlink_metadata(&file) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(refused(&format!("cannot inspect the path: {error}"))),
+        };
+        let Some(stage) = intent.resolution.kept_stage() else {
+            if metadata.is_some() {
+                return Err(refused("records a deletion, but the path still exists"));
+            }
+            adopted.push(intent.path.clone());
+            continue;
+        };
+        let side = stages
+            .get(&stage)
+            .ok_or_else(|| refused("names a side the index stages do not hold"))?;
+        if !matches!(side.mode.as_str(), "100644" | "100755") {
+            return Err(refused("names a side that is not a regular file"));
+        }
+        let Some(metadata) = metadata.filter(fs::Metadata::is_file) else {
+            return Err(refused(
+                "keeps a side, but the path is missing, a symlink or a directory",
+            ));
+        };
+        let content = fs::read(&file).map_err(|error| refused(&format!("cannot read: {error}")))?;
+        if has_conflict_markers(&content) {
+            return Err(refused("keeps a side, but the file holds conflict markers"));
+        }
+        let blob = git_stdout(root, &["hash-object", "--", path]).map_err(|e| e.to_string())?;
+        if blob != side.oid {
+            return Err(refused("keeps a side the worktree content differs from"));
+        }
+        if !mode_matches(root, &metadata, &side.mode).map_err(|error| error.to_string())? {
+            return Err(refused(
+                "keeps a side whose file mode the worktree differs from",
+            ));
+        }
+        adopted.push(intent.path.clone());
+    }
+    Ok(adopted)
+}
+
+/// Whether the worktree file's executable bit matches the stage mode, where
+/// Git tracks file modes at all.
+fn mode_matches(root: &Path, metadata: &fs::Metadata, mode: &str) -> Result<bool, DispatchError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tracked = git_stdout(
+            root,
+            &[
+                "config",
+                "--type=bool",
+                "--default",
+                "true",
+                "core.fileMode",
+            ],
+        )?;
+        if tracked == "true" {
+            let executable = metadata.permissions().mode() & 0o111 != 0;
+            return Ok(executable == (mode == "100755"));
+        }
+        Ok(true)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (root, metadata, mode);
+        Ok(true)
+    }
 }
 
 /// Tracked paths outside the conflict set that already carried an unstaged
