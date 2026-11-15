@@ -38,7 +38,10 @@ pub(super) fn commits_matching(
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(marker);
     let id = escape_extended_regex(id);
-    let grep = format!("--grep=(\\[|, ){id}(\\]|,)|^Orbit-Task: {id}$");
+    // Anchor the comma-list alternative inside brackets: an id is a list
+    // member only between `[` and the matching `]`, never in prose such as
+    // `Related work: ORB-111, ORB-222, ORB-333`.
+    let grep = format!("--grep=\\[([^]]*, ?)?{id}(, ?[^]]*)?\\]|^Orbit-Task: {id}$");
     let mut args = vec![
         "log",
         "--no-color",
