@@ -308,7 +308,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         completion_deadline_ms,
                         &evidence,
                     )?;
-                    record_landed_repair(host, auto_fix, &evidence)?;
+                    record_landed_repair(host, auto_fix, pr_number, &evidence)?;
                     let mut refresh_input = input.clone();
                     refresh_input["published_head_sha"] = json!(from);
                     // Pin the diagnosed landed base; a second base advance

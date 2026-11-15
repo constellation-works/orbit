@@ -1037,6 +1037,14 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
     let aggregate = host.scripted.lock().unwrap()["test_ci_repair"]["aggregate"]
         .as_str()
         .map(ToOwned::to_owned);
+    if aggregate.as_deref() == Some("missing_owning_run") {
+        host.tasks
+            .lock()
+            .unwrap()
+            .get_mut(TASK_ID)
+            .unwrap()
+            .job_run_id = None;
+    }
     let repair_mode = host.scripted.lock().unwrap()["test_ci_repair"]["mode"]
         .as_str()
         .unwrap_or_default()
@@ -2318,6 +2326,51 @@ fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
                 assert_eq!(fx.head(), fx.candidate, "{aggregate}");
             }
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, aggregate);
+        },
+    );
+}
+
+/// [ORB-25027] Auto-fix stop messages must name the pull request number where
+/// available and must not render an empty "pull request #" clause.
+#[test]
+fn auto_fix_stop_error_names_pull_request_number() {
+    isolated(
+        "auto_fix::auto_fix_stop_error_names_pull_request_number",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = docs_only_pr(row);
+                host.script(
+                    "test_ci_repair",
+                    json!({"mode":"repair","aggregate":"missing_owning_run"}),
+                );
+                host.script(
+                    "test_checkpoint",
+                    json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+                );
+                host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+                fx.script_checks(&["source_aggregate"]);
+                let input = auto_fix_input(&fx);
+                let outcome = run_repair_job(&host, input);
+                let error = match outcome {
+                    Ok(result) => {
+                        assert!(!result.success, "expected auto-fix failure: {result:?}");
+                        result.message.unwrap_or_default()
+                    }
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    error.contains(&format!("pull request #{PR_NUMBER}")),
+                    "expected pull request #{PR_NUMBER} in stop error: {error}"
+                );
+                assert!(
+                    !error.contains("pull request # cannot"),
+                    "stop error must not render empty PR number: {error}"
+                );
+                assert!(
+                    error.contains("missing owning run"),
+                    "expected missing owning run reason: {error}"
+                );
+            });
         },
     );
 }

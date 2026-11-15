@@ -58,14 +58,21 @@ pub(super) fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
 pub(in crate::executor::automation::vcs::pr) fn record_landed_repair<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
+    pr_number: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
+    let pr = if !pr_number.is_empty() {
+        pr_number
+    } else {
+        evidence["pr_number"].as_str().unwrap_or_default()
+    };
     let head = evidence["failed_head"]
         .as_str()
-        .ok_or_else(|| verdict::stopped("", "missing failed head"))?;
+        .ok_or_else(|| verdict::stopped(pr, "missing failed head"))?;
     retain(
         host,
         auto_fix,
+        pr,
         &format!("auto-fix/{}/landed-{head}.json", auto_fix.run_id),
         evidence,
     )?;
@@ -89,7 +96,11 @@ pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: RuntimeH
             orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number } => {
                 number.to_string()
             }
-            _ => return Err(verdict::stopped("", "base refresh requires a pull request")),
+            _ => {
+                return Err(verdict::stopped_without_pr(
+                    "base refresh requires a pull request",
+                ));
+            }
         },
         head_sha: evidence["failed_head"].as_str().unwrap_or_default().into(),
         head_branch: candidate.source_branch.clone(),
@@ -199,6 +210,7 @@ pub(super) fn record_check_annotations<H: RuntimeHost + ?Sized>(
     retain(
         host,
         auto_fix,
+        pr_number,
         &format!("auto-fix/{}/check-annotations-{head}.json", auto_fix.run_id),
         &json!({"pr": pr_number, "failed_head": head, "checks": annotations}),
     )
@@ -231,10 +243,18 @@ pub(in crate::executor::automation::vcs::pr) fn attach_evidence<H: RuntimeHost +
 fn retain<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
+    pr_number: &str,
     path: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    attach_evidence(host, auto_fix, "", "missing owning run", path, evidence)
+    attach_evidence(
+        host,
+        auto_fix,
+        pr_number,
+        "missing owning run",
+        path,
+        evidence,
+    )
 }
 
 /// Record a head this run published on the pull request.
