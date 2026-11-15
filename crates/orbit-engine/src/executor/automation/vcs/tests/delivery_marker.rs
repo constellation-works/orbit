@@ -76,6 +76,10 @@ fn commits_matching_ignores_comma_list_prose_but_matches_delivery_markers() {
             "Related work: ORB-111, ORB-222, ORB-333 were discussed, none delivered here.",
         ],
     );
+    let unclosed = commit(
+        repo.path(),
+        &["fix: parser [ORB-111, ORB-222, ORB-333 handled; see [docs]"],
+    );
     let single = commit(repo.path(), &["feat: single [ORB-222]"]);
     let list = commit(repo.path(), &["feat: list [ORB-111, ORB-222]"]);
     let trailer = commit(
@@ -86,6 +90,7 @@ fn commits_matching_ignores_comma_list_prose_but_matches_delivery_markers() {
     let matched = commits_matching(repo.path(), "[ORB-222]", &["HEAD"]).unwrap();
     assert_eq!(matched, vec![trailer, list, single]);
     assert!(!matched.contains(&prose));
+    assert!(!matched.contains(&unclosed));
 }
 
 fn commit(repo: &Path, messages: &[&str]) -> String {

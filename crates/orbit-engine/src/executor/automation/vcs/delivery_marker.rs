@@ -39,9 +39,10 @@ pub(super) fn commits_matching(
         .unwrap_or(marker);
     let id = escape_extended_regex(id);
     // Anchor the comma-list alternative inside brackets: an id is a list
-    // member only between `[` and the matching `]`, never in prose such as
-    // `Related work: ORB-111, ORB-222, ORB-333`.
-    let grep = format!("--grep=\\[([^]]*, ?)?{id}(, ?[^]]*)?\\]|^Orbit-Task: {id}$");
+    // member only between `[` and the matching `]`, with no other `[` in
+    // between (each `[` opens its own candidate, as in `delivery_markers`),
+    // never in prose such as `Related work: ORB-111, ORB-222, ORB-333`.
+    let grep = format!("--grep=\\[([^][]*, ?)?{id}(, ?[^][]*)?\\]|^Orbit-Task: {id}$");
     let mut args = vec![
         "log",
         "--no-color",
