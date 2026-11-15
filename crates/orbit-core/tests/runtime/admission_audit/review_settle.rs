@@ -192,14 +192,14 @@ fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation
         "the implementation commit is never amended"
     );
     assert!(
-        gated.log("HEAD", "%s").starts_with("review: "),
-        "the reviewer commit is `review: <summary>`"
+        orbit_types::workflow::validate(&gated.log("HEAD", "%B")).is_ok(),
+        "the reviewer commit follows the commit-message standard"
     );
     // [ORB-16768] The reviewer commit names the reviewer's resolved model
     // under the reviewer role address, never the implementer's identity.
     assert_eq!(
         gated.log("HEAD", "%an <%ae>"),
-        "orbit[review-model] <codex-reviewer@orbit.local>",
+        "orbit[review-model] <reviewer@orbit.invalid>",
         "the reviewer commit is attributed to the reviewer, not the implementer"
     );
     assert_ne!(

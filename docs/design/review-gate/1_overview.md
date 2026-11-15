@@ -21,7 +21,7 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989, ORB-13992, ORB-1
 **Shipped.** [ORB-11333] implements an automatic code review that is
 independent of who implemented the work. Before-PR review admits a fresh,
 separately configured reviewer that checks the implementation commit, fixes
-what it finds as one second commit (`review: <summary>`) under its own
+what it finds as one second commit (`<type>: <summary> [<task id>]`) under its own
 identity, and comments every finding with what changed for it [ORB-13989].
 The verdict is `accept` (no fixes), `accept_with_fixes` (owner validation
 reruns on the reviewer commit before the PR opens, and the PR body gains a

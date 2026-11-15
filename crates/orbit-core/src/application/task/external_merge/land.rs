@@ -271,7 +271,18 @@ impl OrbitRuntime {
                 ),
             ));
         }
-        match forge.merge_pull_request(&repo_root, number, &blockers.head_sha)? {
+        let base = forge
+            .lease_pull_request(&repo_root, &format!("#{number}"))?
+            .map(|bound| bound.base_branch);
+        let message = orbit_engine::compose_squash_merge_message(
+            &repo_root,
+            std::slice::from_ref(&self.get_task(id)?),
+            self.pr_config(),
+            base.as_deref(),
+            &blockers.head_sha,
+            number,
+        );
+        match forge.merge_pull_request(&repo_root, number, &blockers.head_sha, &message)? {
             PullRequestMergeOutcome::Merged { merge_commit } => Ok(merge_commit),
             PullRequestMergeOutcome::Refused { reason } => Err(landing_refused(
                 id,

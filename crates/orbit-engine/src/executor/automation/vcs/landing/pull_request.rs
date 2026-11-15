@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingStep, RuntimeHost};
 
 use super::super::base::refresh::RefreshStep;
+use super::super::commit::squash_merge_fields;
 use super::super::completion_hold::pull_request_changed_paths;
 use super::super::git::{fetch_remote_base, git_command_success};
 use super::super::operations;
@@ -866,17 +867,38 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         // The synchronous mutation carries the pinned head, so the
         // provider itself refuses a candidate that moved. A base-modified
         // refusal comes back as a value, so the intent is resolved below.
-        let response = host.run_private_vcs_operation(
-            operations::PR_MERGE,
-            json!({
-                "pr": pr_number,
-                "strategy": capabilities.strategy.as_str(),
-                "auto": false,
-                "reviewed_head_sha": head,
-                "report_base_modified": true,
-                "workspace_path": self.workspace_path,
-            }),
-        )?;
+        let mut request = json!({
+            "pr": pr_number,
+            "strategy": capabilities.strategy.as_str(),
+            "auto": false,
+            "reviewed_head_sha": head,
+            "report_base_modified": true,
+            "workspace_path": self.workspace_path,
+        });
+        // An unreadable task still lands: the squash takes its subject from
+        // the candidate's own commits, which were composed from the task.
+        let tasks = match host.get_task(&context.task_id) {
+            Ok(task) => vec![task],
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %context.task_id,
+                    %error,
+                    "handoff_land: squash message composed from the candidate's commits"
+                );
+                Vec::new()
+            }
+        };
+        if let Value::Object(request) = &mut request {
+            request.extend(squash_merge_fields(
+                host,
+                &self.workspace,
+                &tasks,
+                Some(&candidate.base_branch),
+                &head,
+                &pr_number,
+            )?);
+        }
+        let response = host.run_private_vcs_operation(operations::PR_MERGE, request)?;
         let refusal = match ReviewedMergeOutcome::from_response(&response) {
             // Merged is what the provider reports, not what we asked for.
             ReviewedMergeOutcome::Accepted { .. } => return Ok(Step::Continue),

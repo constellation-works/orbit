@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::MergeMessage;
 use serde_json::{Value, json};
 
 use super::super::input::{optional_string, required_string, valid_expected_remote_sha};
@@ -28,6 +29,9 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
             )));
         }
     };
+    // [ORB-25009] Orbit composes every squash and merge commit message; a
+    // request without one would let the forge write its default.
+    let message = merge_message(input, strategy)?;
     // `--auto` queues GitHub's own auto-merge, which still waits for every
     // required check and branch protection. There is deliberately no
     // administrative bypass (`--admin`) in this surface.
@@ -46,6 +50,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
             selector,
             workspace_path,
             strategy,
+            message.as_ref(),
             reviewed_head,
             report_base_modified,
             input
@@ -60,6 +65,14 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
         selector.to_string(),
         strategy_flag.to_string(),
     ];
+    if let Some(message) = &message {
+        args.extend([
+            "--subject".to_string(),
+            message.title.clone(),
+            "--body".to_string(),
+            message.body.clone(),
+        ]);
+    }
     if auto {
         args.push("--auto".to_string());
     }
@@ -91,6 +104,7 @@ fn pr_merge_reviewed(
     selector: &str,
     workspace_path: &str,
     strategy: &str,
+    message: Option<&MergeMessage>,
     reviewed_head: &str,
     report_base_modified: bool,
     report_ambiguous: bool,
@@ -107,21 +121,26 @@ fn pr_merge_reviewed(
             "reviewed PR merge requires an exact 40- or 64-character reviewed_head_sha".into(),
         ));
     }
-    let result = run_vcs_process(
-        "gh",
-        vec![
-            "api".to_string(),
-            format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
-            "--method".to_string(),
-            "PUT".to_string(),
+    let mut args = vec![
+        "api".to_string(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
+        "--method".to_string(),
+        "PUT".to_string(),
+        "-f".to_string(),
+        format!("sha={reviewed_head}"),
+        "-f".to_string(),
+        format!("merge_method={strategy}"),
+    ];
+    // `-f` sends the raw string: a leading `@` is never read as a file.
+    if let Some(message) = message {
+        args.extend([
             "-f".to_string(),
-            format!("sha={reviewed_head}"),
+            format!("commit_title={}", message.title),
             "-f".to_string(),
-            format!("merge_method={strategy}"),
-        ],
-        Some(Path::new(workspace_path)),
-        SLOW_TIMEOUT_MS,
-    )?;
+            format!("commit_message={}", message.body),
+        ]);
+    }
+    let result = run_vcs_process("gh", args, Some(Path::new(workspace_path)), SLOW_TIMEOUT_MS)?;
     if report_base_modified && is_base_modified_refusal(&result) {
         return Ok(json!({
             "merged": false,
@@ -154,6 +173,28 @@ fn pr_merge_reviewed(
         "stderr": result.stderr,
         "landed_commit": landed_commit,
     }))
+}
+
+/// The Orbit-composed `commit_title` and `commit_message` a squash or merge
+/// request must carry; `None` for a rebase, which writes no new message.
+fn merge_message(input: &Value, strategy: &str) -> Result<Option<MergeMessage>, OrbitError> {
+    if strategy == "rebase" {
+        return Ok(None);
+    }
+    let title = optional_string(input, "commit_title")
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    let body = optional_string(input, "commit_message");
+    match (title, body) {
+        (Some(title), Some(body)) => Ok(Some(MergeMessage {
+            title: title.to_string(),
+            body: body.to_string(),
+        })),
+        _ => Err(OrbitError::InvalidInput(format!(
+            "a {strategy} merge requires the Orbit-composed commit_title and commit_message; \
+             the forge default message is never used"
+        ))),
+    }
 }
 
 /// True only for a completed `gh api` failure whose whole diagnostic is the

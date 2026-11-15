@@ -12,10 +12,10 @@ use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
+use super::super::commit::{is_partial_repair_message, partial_repair_message};
 use super::super::freshness::remote_branch_sha;
 use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
-use super::super::review_gate::{PARTIAL_REPAIR_RUN_TRAILER, PARTIAL_REPAIR_SUBJECT};
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
 use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
@@ -52,17 +52,16 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     let attempt_id = admitted
         .map(|admitted| admitted.attempt_id.trim())
         .filter(|attempt_id| !attempt_id.is_empty());
-    let attempt_trailer = attempt_id
-        .map(|id| format!("\nOrbit-Review-Attempt: {id}"))
-        .unwrap_or_default();
     let partial_repair = match &reviewer_model {
         Some(model) => super::super::review_gate::commit_reviewer_repairs(
             workspace_path,
             model,
-            &format!(
-                "{PARTIAL_REPAIR_SUBJECT} [{}]\n\n{PARTIAL_REPAIR_RUN_TRAILER} {run_id}\n\
-                 Orbit-Review-Step: {failed_step_id}{attempt_trailer}",
-                task.id
+            &partial_repair_message(
+                orbit_types::workflow::CommitType::for_task_type(task.task_type),
+                &task.id,
+                run_id,
+                failed_step_id,
+                attempt_id,
             ),
         )?,
         None => None,
@@ -285,13 +284,7 @@ fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
             workspace_path,
             &["log", "-1", "--format=%B", "--end-of-options", &commit],
         )?;
-        let is_partial_repair = message
-            .lines()
-            .next()
-            .is_some_and(|subject| subject.starts_with(PARTIAL_REPAIR_SUBJECT))
-            && message
-                .lines()
-                .any(|line| line.starts_with(PARTIAL_REPAIR_RUN_TRAILER));
+        let is_partial_repair = is_partial_repair_message(&message, None);
         if !is_partial_repair {
             break;
         }

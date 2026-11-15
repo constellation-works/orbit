@@ -212,12 +212,21 @@ impl OrbitRuntime {
             &receipt.head_sha,
             &receipt.run_id,
         )?;
-        let merge_commit = match forge.merge_pull_request(repo, number, &receipt.head_sha)? {
-            PullRequestMergeOutcome::Merged { merge_commit } => merge_commit,
-            PullRequestMergeOutcome::Refused { reason } => {
-                return Err(handoff_answer_refused(reason));
-            }
-        };
+        let message = orbit_engine::compose_squash_merge_message(
+            repo,
+            std::slice::from_ref(&task),
+            self.pr_config(),
+            Some(&pull.base_branch),
+            &receipt.head_sha,
+            number,
+        );
+        let merge_commit =
+            match forge.merge_pull_request(repo, number, &receipt.head_sha, &message)? {
+                PullRequestMergeOutcome::Merged { merge_commit } => merge_commit,
+                PullRequestMergeOutcome::Refused { reason } => {
+                    return Err(handoff_answer_refused(reason));
+                }
+            };
         let actor = &resolution.answered_by;
         let mut history = vec![answered];
         history.extend(corpus);

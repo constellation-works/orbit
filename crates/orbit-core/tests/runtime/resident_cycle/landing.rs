@@ -100,6 +100,7 @@ impl TaskPrForge for LandingForge {
         _repo_root: &Path,
         number: u64,
         head_sha: &str,
+        _: &orbit_types::workflow::MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         let mut state = self.0.lock().unwrap();
         state.merge_requests.push((number, head_sha.to_string()));
@@ -337,7 +338,7 @@ fn a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again
     let task = review_task(&fx, &[PR]);
     forge.open(PR, &task);
     forge
-        .merge_pull_request(Path::new("."), PR, HEAD)
+        .merge_pull_request(Path::new("."), PR, HEAD, &merge_message())
         .expect("the first attempt merged");
     forge.0.lock().unwrap().merge_requests.clear();
 
@@ -438,7 +439,7 @@ esac
     let _env = orbit_common::test_env::scoped([("PATH", Some(path.as_str()))]);
     let merge = |script: &str| {
         std::fs::write(&answer, script).unwrap();
-        GhTaskPrForge.merge_pull_request(root.path(), PR, HEAD)
+        GhTaskPrForge.merge_pull_request(root.path(), PR, HEAD, &merge_message())
     };
 
     let merged = merge(&format!(
@@ -463,4 +464,11 @@ esac
     assert!(outage.is_err(), "{outage:?}");
     let throttled = merge("echo 'gh: rate limited (HTTP 429)' >&2; exit 1");
     assert!(throttled.is_err(), "{throttled:?}");
+}
+
+fn merge_message() -> orbit_types::workflow::MergeMessage {
+    orbit_types::workflow::MergeMessage {
+        title: "fix: land the reviewed head [T-1] (#7)".to_string(),
+        body: "Orbit-Task: T-1".to_string(),
+    }
 }

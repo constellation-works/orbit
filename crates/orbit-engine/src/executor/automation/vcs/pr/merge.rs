@@ -9,6 +9,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use super::super::super::input::{
     canonicalize_existing_dir, input_string_field, required_job_run_id,
 };
+use super::super::commit::squash_merge_fields;
 use super::super::completion_hold::{
     evaluate_completion_hold, pull_request_changed_paths, record_completion_hold,
 };
@@ -263,15 +264,23 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
 
     let merge_strategy =
         resolve_merge_strategy(host, &workspace_path.to_string_lossy(), &pr_number)?;
-    host.run_private_vcs_operation(
-        operations::PR_MERGE,
-        json!({
-            "pr": pr_number,
-            "strategy": merge_strategy.as_str(),
-            "reviewed_head_sha": reviewed_head_sha,
-            "workspace_path": workspace_path,
-        }),
-    )?;
+    let mut request = json!({
+        "pr": pr_number,
+        "strategy": merge_strategy.as_str(),
+        "reviewed_head_sha": reviewed_head_sha,
+        "workspace_path": workspace_path,
+    });
+    if let Value::Object(request) = &mut request {
+        request.extend(squash_merge_fields(
+            host,
+            &workspace_path,
+            &batch_tasks,
+            Some(&base),
+            &reviewed_head_sha,
+            &pr_number,
+        )?);
+    }
+    host.run_private_vcs_operation(operations::PR_MERGE, request)?;
 
     // Best-effort remote branch cleanup.  Some repos have GitHub's
     // "Automatically delete head branches" enabled, so the remote ref may

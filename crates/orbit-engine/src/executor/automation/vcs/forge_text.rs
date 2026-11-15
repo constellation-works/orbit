@@ -37,6 +37,23 @@ pub(super) fn neutralize_mentions(text: &str) -> String {
     output
 }
 
+/// [`neutralize_mentions`] for a commit or squash message: its final paragraph
+/// of registered commit trailers ([`orbit_types::workflow::TrailerKey`]) is
+/// data, copied byte for byte, so a trailer value such as
+/// `Orbit-Review-Crew: haiku@xhigh` is not a mention. Pull request titles and
+/// bodies do not take this exemption: a body ending in `Fixes: thanks @ada`
+/// is prose and its mention is neutralized.
+pub(super) fn neutralize_commit_message(text: &str) -> String {
+    match orbit_types::workflow::trailer_block_start(text) {
+        Some(start) => {
+            let mut output = neutralize_mentions(&text[..start]);
+            output.push_str(&text[start..]);
+            output
+        }
+        None => neutralize_mentions(text),
+    }
+}
+
 /// Backtick runs pair only with a run of the same length. Backslashes escape
 /// openers in prose, but are literal within code spans. Unmatched runs remain
 /// prose so an agent's stray backtick cannot suppress mention protection.

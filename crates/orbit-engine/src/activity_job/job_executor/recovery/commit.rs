@@ -108,12 +108,20 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect::<Vec<_>>();
+    // The commit type is the tasks' own; an unreadable task counts as a chore.
+    let commit_type = orbit_types::workflow::CommitType::for_bundle(
+        task_ids
+            .iter()
+            .filter_map(|id| ctx.host.get_task(id).ok())
+            .map(|task| task.task_type),
+    );
     let request = RecoveryCommitRequest {
         workspace_path: std::path::Path::new(workspace_path),
         run_id: &ctx.run_id,
         failed_step_id: &step.id,
         recovery_activity: &recovery.name,
         task_ids: &task_ids,
+        commit_type,
         recovery_model: recovery_model.map(str::to_string),
         repair_paths: bound
             .get("ci_repair_paths")

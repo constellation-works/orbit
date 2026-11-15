@@ -128,10 +128,14 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
     // [ORB-16768] The detached repair names the reviewer's resolved model
     // under the reviewer role address; the committer stays Orbit.
     assert_eq!(
-        author, "orbit[gpt-6.1-sol] <codex-reviewer@orbit.local>",
+        author, "orbit[gpt-6.1-sol] <reviewer@orbit.invalid>",
         "{identity}"
     );
-    assert_eq!(committer, "orbit <orbit@orbit.local>", "{identity}");
+    assert_eq!(committer, "orbit <orbit@orbit.invalid>", "{identity}");
+    // [ORB-25009] The preserved partial repair meets the commit-message standard.
+    let message = git(&origin, &["log", "-1", "--format=%B", &repair]);
+    orbit_types::workflow::validate(message.trim_end())
+        .unwrap_or_else(|violation| panic!("{violation}\n{message}"));
     assert_eq!(
         git(&origin, &["show", &format!("{repair}:src/f0.rs")]),
         REPAIRED

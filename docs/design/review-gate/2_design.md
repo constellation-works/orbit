@@ -390,10 +390,13 @@ everything the reviewer left uncommitted as one second commit on top of it:
 
 ```text
 <implementation commit(s)>     authored by the implementer
-review: <first line of the reviewer summary> [<task ids>]
-                               authored orbit[<reviewer model>], <family>-reviewer@orbit.local, Orbit committer
-    Findings: F1, F2
-    Paths: src/a.rs, docs/b.md
+<type>: <first line of the reviewer summary> [<task id>]…
+                               authored orbit[<reviewer model>] <reviewer@orbit.invalid>, Orbit committer
+
+    Repaired findings: F1, F2.
+    Changed paths: src/a.rs, docs/b.md.
+
+    Orbit-Task: <task id>
     Orbit-Review-Attempt: <attempt id>
     Orbit-Review-Crew: <reviewer crew>
 ```
@@ -1167,8 +1170,8 @@ predate the attempt are ignored, the rest merge into the most severe verdict
 with every distinct finding and validation record — (none, a wrong attempt,
 another contract version, or an unreadable report is `incomplete`), commits every
 uncommitted change as the one reviewer commit (§3.1) authored
-`orbit[<reviewer model>] <<family>-reviewer@orbit.local>` (falling back to
-`<family>-reviewer <<family>-reviewer@orbit.local>` when the model is unknown)
+`orbit[<reviewer model>] <reviewer@orbit.invalid>` (`orbit <reviewer@orbit.invalid>`
+when the model is unknown; the [commit-message standard](../../CONFIG.md#the-commit-message-standard))
 with the Orbit committer and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
 tasks' selectors with an exact `file:` entry for every repaired path they do
 not cover, declared in a finding or not, with one `context_files_widened`

@@ -1697,7 +1697,7 @@ records what was kept under `interrupted_review` (`orbit run show <leaf-run>
 worker the orphan reconciler finalizes.
 
 - The host that stopped the leaf commits the reviewer's edits as one
-  reviewer-authored commit, `review: partial reviewer repairs preserved`. The
+  reviewer-authored commit, `<type>: partial reviewer repairs preserved [<task>]`. The
   commit carries the `Orbit-Review-Run`, `Orbit-Review-Step` and
   `Orbit-Review-Attempt` trailers, and its parent is the reviewed candidate
   head. It is kept at `refs/orbit/candidates/<task>/<run>-review`. A cancel

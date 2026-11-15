@@ -91,6 +91,7 @@ impl TaskPrForge for Forge {
         _: &Path,
         number: u64,
         head: &str,
+        _: &orbit_types::workflow::MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         {
             let state = self.0.lock().unwrap();

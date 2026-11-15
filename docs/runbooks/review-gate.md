@@ -102,7 +102,7 @@ review certificate to another head.
 | Verdict | Candidate branch | Delivery |
 | --- | --- | --- |
 | `accept` | the implementation commit(s) only | the PR opens on that head |
-| `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
+| `accept_with_fixes` | the implementation, then one `<type>: <summary> [<task>]` commit authored by `orbit[<model>] <reviewer@orbit.invalid>` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
 | `reject` or other substantive `incomplete` | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
 | Abandoned review: the reviewer exited cleanly but its only report is the initial placeholder (`incomplete`, no escalation, finding or validation record, never revised) | the implementation is pushed; nothing was reviewed | settlement releases the attempt and refuses with `review_abandoned:`, so the candidate's one review is not spent; the task is blocked with a comment saying so, and resuming the run or requeueing it admits a reviewer again within the remaining minutes; no PR opens |
 | Reviewer wall-clock timeout | the implementation and any partial reviewer repairs are pushed; the partial report is retained | the first timeout on a task's implementation tree requeues it to `backlog` with `review_timeout_incomplete`; another timeout on that tree blocks it with `review_timeout_requeue_exhausted`; no PR opens |
@@ -337,7 +337,7 @@ reads another task's record to decide it.
 The timeout bound permits one automatic requeue per task and implementation
 tree, recorded in task history without a time window. The implementation tree
 is the tree of the candidate head after stepping back over the gate's own
-`review: partial reviewer repairs preserved` commits, so the reviewer's partial
+`<type>: partial reviewer repairs preserved [<task>]` commits, so the reviewer's partial
 work, which changes the candidate tree on every timeout, never renews the
 allowance. A fresh run starts a new review lineage with its captured minute
 budget; resuming the same lineage uses its remaining budget. A new commit
@@ -504,7 +504,7 @@ Findings:
 
 - Reviewer: crew `reviewers` (…)
 - Implementation: `<sha>` on base `<sha>` (1 commit(s), unchanged by review)
-- Reviewer commit: `<sha>` `review: …` by <family>-reviewer
+- Reviewer commit: `<sha>` `fix: … [<task>]` by orbit[<model>] <reviewer@orbit.invalid>
 …
 ```
 

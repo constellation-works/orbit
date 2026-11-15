@@ -17,7 +17,7 @@ pub use super::base::claim::{
 };
 pub use super::claim::implementer_summary;
 use super::commit::{
-    commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
+    commit_reviewer_repairs_in, reviewer_repair_identities, stage_everything, staged_paths,
 };
 use super::git::{
     BaseSyncMode, git_failure_error, git_output, git_output_raw, git_run_bytes, git_success,
@@ -33,17 +33,10 @@ pub use super::scratch_target::{
     ScratchHostTarget, ScratchHostTargetLease, lease_scratch_host_target,
 };
 
+pub use super::commit::reviewer_repair_message;
+
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";
-
-/// Subject of the commit that preserves a stopped reviewer's uncommitted
-/// edits.
-pub(in crate::executor::automation::vcs) const PARTIAL_REPAIR_SUBJECT: &str =
-    "review: partial reviewer repairs preserved";
-
-/// Trailer that marks a partial-repair commit as the gate's own.
-pub(in crate::executor::automation::vcs) const PARTIAL_REPAIR_RUN_TRAILER: &str =
-    "Orbit-Review-Run:";
 
 /// The catalog activity a before-PR reviewer runs as.
 pub const REVIEWER_ACTIVITY: &str = "agent_review_repair";
@@ -252,8 +245,9 @@ pub fn review_repair_at_head(
     else {
         return Ok(None);
     };
-    let (author, committer) = reviewer_repair_identity(reviewer_model);
-    let owned = commit.author == author && commit.committer == committer;
+    let owned = reviewer_repair_identities(reviewer_model)
+        .into_iter()
+        .any(|(author, committer)| commit.author == author && commit.committer == committer);
     Ok(owned.then_some(commit))
 }
 

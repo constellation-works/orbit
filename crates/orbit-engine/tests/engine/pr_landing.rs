@@ -201,6 +201,19 @@ fn squash(head: &str) -> Vec<String> {
 }
 fn assert_landed_exactly(fx: &Fixture, host: &DeliveryHost, head: &str, case: &str) {
     assert_eq!(fx.merge_requests(), squash(head), "{case}");
+    // [ORB-25009] The squash carries Orbit's composed message, never the
+    // forge default.
+    let titles = fx.forge_lines("merge-titles");
+    assert!(
+        titles.len() == 1 && titles[0].ends_with(" (#42)"),
+        "{case}: composed squash title {titles:?}"
+    );
+    orbit_types::workflow::validate(&format!(
+        "{}\n\n{}",
+        titles[0],
+        fx.forge_state("merge-message").unwrap_or_default()
+    ))
+    .unwrap_or_else(|violation| panic!("{case}: squash message {violation}"));
     assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
 }
 /// One table row per line: expands to an array of `(name, fields...)` tuples.
@@ -731,6 +744,8 @@ fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sand
             "pr": "42",
             "workspace_path": path_str(&fx.repo),
             "reviewed_head_sha": fx.candidate,
+            "commit_title": "fix: land the candidate [T1] (#42)",
+            "commit_message": "Orbit-Task: T1",
         }),
     )
     .unwrap_err();
@@ -6854,13 +6869,20 @@ land() {
 merge() {
     sha=""
     method=""
+    title=""
+    message=""
     for arg in "$@"; do
         case "$arg" in
             sha=*) sha=${arg#sha=} ;;
             merge_method=*) method=${arg#merge_method=} ;;
+            commit_title=*) title=${arg#commit_title=} ;;
+            commit_message=*) message=${arg#commit_message=} ;;
         esac
     done
     printf 'sha=%s merge_method=%s\n' "$sha" "$method" >> "$forge/merge-requests"
+    # The composed squash message Orbit sent with the request [ORB-25009].
+    printf '%s\n' "${title:-}" >> "$forge/merge-titles"
+    printf '%s\n' "${message:-}" > "$forge/merge-message"
     # `merge-outcomes` scripts the answer to each merge request in turn; an
     # unscripted request is an ordinary conditional merge.
     attempt=$(( $(wc -l < "$forge/merge-requests") ))
