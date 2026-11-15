@@ -1,6 +1,6 @@
 import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
-import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
+import { drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
 import { loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
@@ -504,17 +504,11 @@ function autoDrainQueuedCancel(payload, runId) {
 
 // Whether the live window was started with approve-proposed, and what its
 // passes have done so far. The payload's `approvals` reports the status
-// drain's own input: `approved_total` counts the whole window, while the
-// held figures describe the latest pass. Findings live on each task.
+// drain's own input; findings live on each task.
 function autoDrainApprovals(approvals) {
   if (!approvals || approvals.enabled !== true) return null;
-  const approved = Number(approvals.approved_total);
-  const held = Number(approvals.held_total);
   const reasons = Object.entries(approvals.held_by_reason || {});
   return {
-    approved: Number.isFinite(approved) ? approved : "—",
-    held: Number.isFinite(held) && held > 0 ? `${held} held` : "",
-    title: `Approving proposed tasks. ${AUTO_DRAIN_APPROVE_RULE}`,
     reasons,
   };
 }

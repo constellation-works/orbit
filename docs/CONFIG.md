@@ -797,9 +797,9 @@ Pilot preparation reserves its selection atomically inside the task commit bound
 
 A routine's `eligibility` block decides which never-assessed tasks receive their first automatic pilot. Description/criteria edits renew automatic preparation eligibility for proposed and backlog tasks. Once a task has an applied assessment, a description or criteria edit queues a fresh pilot through the routine when no live execution claim or unresolved failed pilot holds the task; other material or freshness-policy edits do not. An `--approve-proposed` drain does queue a fresh pilot automatically when a task's certified description/criteria or other material (selectors, complexity, crew/provenance, relations, or a configured material field) changed after its applied assessment and no live execution claim holds it, and scheduled discovery does so only when its certified description/criteria changed and no live execution claim holds it, the same way they pilot a new proposal; a failed repilot holds the task until its meaning changes again or an operator acts. An operator can still request one explicitly with `orbit task repilot <id>`, `orbit.task.recover` action `repilot`, task update `repilot: true`, or a decision option action `re_pilot`. Description/criteria edits hold dispatch as `pilot_assessment_stale` until a new assessment completes, unless an operator skips pilot admission with `no-pilot`; adding the tag after a receipt or while a pilot is pending requires operator authority. Other readiness and delivery holds still apply. A task-pilot routine's `trigger.state.freshness` overrides either key (routine, then this table, then defaults); the resolved value still guards prepare/apply drift. See [automation triggers](design/automation-triggers/5_operations.md).
 
-The dashboard's Auto-drain card shows approval and hold counts with a short
-breakdown by reason. The pilot-warning count links to proposed tasks filtered
-by their holding findings. Task rows (including the grouped status cards) carry
+The dashboard's Auto-drain card shows a hold breakdown by reason. The
+pilot-warning count links to proposed tasks filtered by their holding findings.
+Task rows (including the grouped status cards) carry
 an amber **⚠ pilot warnings · N** chip, and the detail's **Pilot warnings**
 callout lists the full findings by kind. These come from the task's latest
 durable pilot verification, so they remain visible without a live drain.
