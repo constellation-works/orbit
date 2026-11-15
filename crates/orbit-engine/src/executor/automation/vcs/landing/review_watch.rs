@@ -30,8 +30,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use super::super::super::ci::bounded_u64;
 use super::super::super::input::input_string_field;
 use super::super::completion_deadline::now_ms;
-use super::super::freshness::commit_sha;
-use super::super::git::{base_sync_mode_from_input, git_output, resolve_worktree_start_point};
+use super::super::git;
 use super::super::pr::{
     CheckState, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status_before,
 };
@@ -287,17 +286,8 @@ fn fork_point(
         .head_sha
         .as_deref()
         .ok_or_else(|| "the pull request reported no head".to_string())?;
-    let sync = base_sync_mode_from_input(input).map_err(|error| error.to_string())?;
-    let base_ref = resolve_worktree_start_point(workspace, &base_name, sync)
-        .map_err(|error| format!("base '{base_name}' could not be resolved: {error}"))?;
-    let tip = commit_sha(workspace, &base_ref).map_err(|error| error.to_string())?;
-    let base = git_output(workspace, &["merge-base", head, &tip])
-        .map_err(|error| format!("the fork point of {head} could not be read: {error}"))?;
-    let branch = base_name
-        .strip_prefix("origin/")
-        .unwrap_or(&base_name)
-        .to_string();
-    Ok((base.trim().to_string(), branch, tip))
+    let (fork, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))?;
+    Ok((fork.unwrap_or_default(), branch, tip))
 }
 
 /// Append the observation once: an identical note already recorded (a
