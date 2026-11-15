@@ -657,7 +657,17 @@ entry's `os` is that OS. A portable criterion, a gate on an item the
 criterion does not name, an `os` that differs from the gate, a path or line
 the pin does not confirm, and a `cfg(unix)` or `cfg(not(windows))` gate that
 does not determine one OS are still rejected, and the rejection tells the
-pilot to leave `required_os` empty. When every
+pilot to leave `required_os` empty. One further exception is a
+repository-required validation: when a tag the task carries triggers a
+validation the workspace guide (`AGENTS.md`/`CLAUDE.md`) requires and states
+only Linux can produce — a `security`-tagged task's local CodeQL run in this
+repository — the pilot may cite both guide lines at their `path:line`
+(the tag-to-CodeQL requirement and the only-Linux statement) instead of a
+cfg gate, and apply confirms both in the pinned source before admitting
+`os: linux`. The pilot makes no such finding when the task or a workspace
+rule explicitly routes that check to owner/external evidence after handoff,
+and a platform mention, cross-compilation target or mocked check is never
+such a finding. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
 of another OS waits as `host_os_mismatch` (see [Executor definitions](../../orbit-setup/references/configuration.md#executor-definitions)). The pilot never removes or replaces

@@ -1112,6 +1112,138 @@ fn a_cfg_gate_citation_is_refused_for_each_neighbouring_miss() {
     }
 }
 
+const GUIDE_PATH: &str = "CLAUDE.md";
+const GUIDE_SOURCE: &str = "\
+# Fixture guide
+Run a local CodeQL run when a task is tagged `security` or `security-review`.
+Only Linux extracts every module; elsewhere the script exits 3.
+";
+
+fn guide_evidence() -> String {
+    format!(
+        "Repository-required CodeQL validation for the `security` tag: \
+         {GUIDE_PATH}:2 ties the tag to the CodeQL run and {GUIDE_PATH}:3 \
+         states only Linux extracts every module."
+    )
+}
+
+/// A security-tagged task whose criteria name no OS is routed to Linux when
+/// the pilot cites the repository guide's tag-triggered CodeQL rule and
+/// apply confirms both cited lines in the pinned source.
+fn a_security_task_with_a_guide_cited_codeql_rule_routes_to_linux() {
+    let mut workspace = Workspace::new();
+    on(&mut workspace, HostOs::Macos);
+    workspace.commit_file(GUIDE_PATH, GUIDE_SOURCE, "add repository guide");
+    let task = backlog_task(
+        &workspace,
+        &[
+            "Bump the fixture dependency to a non-vulnerable version.",
+            "The repository's documented pre-handoff checks pass.",
+        ],
+        &["security"],
+    );
+    assess(
+        &workspace,
+        &task,
+        Some(json!([{
+            "criterion": 2, "os": "linux", "evidence": guide_evidence(),
+        }])),
+    );
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit: Value = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
+    assert_eq!(
+        audit["native_os_hold"]["requirements"],
+        json!([{"criterion": 2, "os": "linux"}]),
+        "{audit}"
+    );
+    assert_eq!(tags(&workspace, &task), ["security", "os:linux"]);
+    let (reason, detail) = exclusion(&workspace, &task).expect("a macOS host waits");
+    assert_eq!(reason, "host_os_mismatch");
+    assert!(
+        detail.contains("waits for a linux host (os:linux)"),
+        "{detail}"
+    );
+    on(&mut workspace, HostOs::Linux);
+    assert_eq!(exclusion(&workspace, &task), None);
+}
+
+/// Neighbouring guide citations stay refused: no triggering tag on the
+/// task, the wrong OS, or no cited only-Linux line.
+fn a_guide_cited_codeql_finding_is_refused_for_each_neighbouring_miss() {
+    for (task_tags, os, evidence, expected) in [
+        (
+            Vec::new(),
+            "linux",
+            guide_evidence(),
+            "names CodeQL together with a tag this task carries",
+        ),
+        (
+            vec!["security"],
+            "macos",
+            guide_evidence(),
+            "must name os linux",
+        ),
+        (
+            vec!["security"],
+            "linux",
+            format!("CodeQL for the `security` tag at {GUIDE_PATH}:2 and {GUIDE_PATH}:1."),
+            "states that only Linux can produce",
+        ),
+    ] {
+        let workspace = Workspace::new();
+        workspace.commit_file(GUIDE_PATH, GUIDE_SOURCE, "add repository guide");
+        let task = backlog_task(
+            &workspace,
+            &["The repository's documented pre-handoff checks pass."],
+            &task_tags,
+        );
+        let applied = apply(
+            &workspace,
+            &task,
+            Some(json!([{"criterion": 1, "os": os, "evidence": evidence}])),
+        );
+        refused(&applied, expected);
+        assert!(
+            tags(&workspace, &task)
+                .iter()
+                .all(|tag| !tag.starts_with("os:")),
+            "{expected}: {applied}"
+        );
+        assert_eq!(exclusion(&workspace, &task), None, "{expected}");
+    }
+}
+
+/// A security task whose check is explicitly routed to owner external
+/// evidence, and portable platform criteria, get no OS lock: the pilot
+/// records no guide finding for them and admission stays unchanged.
+fn a_security_task_with_an_external_evidence_route_is_not_pinned() {
+    let mut workspace = Workspace::new();
+    on(&mut workspace, HostOs::Macos);
+    workspace.commit_file(GUIDE_PATH, GUIDE_SOURCE, "add repository guide");
+    let routed = backlog_task(
+        &workspace,
+        &[
+            "Bump the fixture dependency to a non-vulnerable version.",
+            "Linux CodeQL evidence is supplied as owner external evidence \
+             after handoff; the leaf records the run not_run.",
+        ],
+        &["security"],
+    );
+    assess(&workspace, &routed, None);
+    assert_eq!(tags(&workspace, &routed), ["security"]);
+    assert_eq!(exclusion(&workspace, &routed), None);
+
+    let workspace = Workspace::new();
+    let portable = backlog_task(
+        &workspace,
+        &["`cargo build --target aarch64-apple-darwin` cross-compiles the fixture."],
+        &["security"],
+    );
+    assess(&workspace, &portable, None);
+    assert_eq!(tags(&workspace, &portable), ["security"]);
+    assert_eq!(exclusion(&workspace, &portable), None);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_native_os_finding_tags_an_untagged_task_for_that_os_scenarios,
@@ -1140,4 +1272,11 @@ crate::scenario_table!(
     a_verified_cfg_gate_on_a_named_test_routes_to_that_os,
     an_uncommitted_cfg_gate_is_not_verified,
     a_cfg_gate_citation_is_refused_for_each_neighbouring_miss
+);
+
+crate::scenario_table!(
+    guide_cited_codeql_routes_to_linux_scenarios,
+    a_security_task_with_a_guide_cited_codeql_rule_routes_to_linux,
+    a_guide_cited_codeql_finding_is_refused_for_each_neighbouring_miss,
+    a_security_task_with_an_external_evidence_route_is_not_pinned
 );

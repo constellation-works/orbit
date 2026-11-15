@@ -57,6 +57,7 @@ pub(super) fn assess_with(
         task_id,
         &assessment,
         &current.acceptance_criteria,
+        &current.tags,
         context.workspace_root,
         context.source,
     )
