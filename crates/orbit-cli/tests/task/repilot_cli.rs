@@ -13,7 +13,6 @@ fn repilot_and_update_flag_submit_once_and_refuse_pending_duplicates() {
         return;
     }
     let fixture = Fixture::new();
-    crate::fixture_crew::configure_sol(&fixture.root);
     let gate = crate::workflow_gate::WorkflowGate::new();
     let jobs = fixture.root.join("resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
@@ -118,7 +117,6 @@ fn repilot_full_requests_a_full_assessment() {
         return;
     }
     let fixture = Fixture::new();
-    crate::fixture_crew::configure_sol(&fixture.root);
     let gate = crate::workflow_gate::WorkflowGate::new();
     let jobs = fixture.root.join("resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
