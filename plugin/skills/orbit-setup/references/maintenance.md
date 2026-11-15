@@ -235,6 +235,7 @@ only renamed or moved are translated on load and rewritten by
 | MCP tool-family names | Per-action tool names such as `orbit_friction_add`, `orbit_friction_update`, `orbit_task_artifact_get` and `orbit_task_artifact_put`, in scripts, prompts and MCP client allow-lists. Stored names in existing records migrate on upgrade, so there is nothing to delete there. | The family tool with an `action` field: `orbit_friction` with `add` or `update`, and `orbit_task_artifact` with `get` or `put`. See [tool surface](../../orbit/references/tool-surface.md). | No window stated; removed in 0.48.0. |
 | MCP task schema string forms | A bare string where a list is expected on `orbit_task_add`, `orbit_task_update` and `orbit_task_list`, such as in `acceptance_criteria` or `context_files`. | Send a JSON array for each list field, such as `acceptance_criteria`, `context_files` and `relations`. | No window stated; removed in 0.48.0. |
 | Per-call `model` input and task aliases | The `model` input on MCP task calls, which the MCP schema no longer lists; the `agent` alias of `orbit_task_list`; the `context` alias on `orbit_task_add` and `orbit_task_update`. Orbit still accepts a sent `model` as an unadvertised identity key, and the session's own identity takes precedence over it. | Identity comes from the session's crew configuration or the MCP client's `clientInfo`, not from the call. Use `context_files` in place of `context`. For `agent` on `orbit_task_list`, read the list's field names with `orbit tool show orbit.task.list`. | No window stated; removed in 0.48.0. |
+| Retired activity-backend repair | `orbit doctor --fix-retired-activity-backends` is gone. A schemaVersion 2 `agent_loop` activity file that still declares the scalar `spec.backend: http` or `spec.backend: auto` warns on `orbit doctor`, naming the file and the rejected value. | None. Delete only that scalar key by hand and verify with `orbit doctor`. A structured `spec.backend` command backend (timeout and sandbox settings) stays supported — leave it in place. | No window stated; removed in 0.50.0. |
 
 The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
 while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
@@ -281,6 +282,16 @@ task held on pilot warnings from the dashboard's Triage action.
 
 A key that stays past its recognized date becomes an unknown setting. The same
 `retired-config-keys` check reports it, so one check covers both states.
+
+### Retired activity backends
+
+The `orbit doctor --fix-retired-activity-backends` repair is gone: no flag
+cleans up activity files for you. A schemaVersion 2 `agent_loop` activity file
+that still declares the retired scalar `spec.backend: http` or
+`spec.backend: auto` is a warning naming the file and the rejected value.
+Delete only that scalar key from the activity file by hand — a structured
+`spec.backend` command backend (with its timeout and sandbox settings) is
+still supported, so leave it in place — then verify with `orbit doctor`.
 
 ## Task locks
 
