@@ -395,19 +395,21 @@ pub fn compose_subject(
     pr_number: Option<u64>,
 ) -> ComposedSubject {
     let original = single_line(summary);
-    let mut segments = original.split('[');
-    let mut summary = segments.next().unwrap_or_default().replace('…', "...");
-    for segment in segments {
-        if let Some((token, rest)) = segment.split_once(']')
-            && token.contains(',')
-        {
-            summary.push('[');
-            summary.push_str(&token.replace('…', "...").replace(',', ";"));
-            summary.push(']');
-            summary.push_str(&rest.replace('…', "..."));
-        } else {
-            summary.push('[');
-            summary.push_str(&segment.replace('…', "..."));
+    let mut bracket_depth = 0usize;
+    let mut summary = String::with_capacity(original.len());
+    for character in original.chars() {
+        match character {
+            '[' => {
+                bracket_depth += 1;
+                summary.push('[');
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                summary.push(']');
+            }
+            '…' => summary.push_str("..."),
+            ',' if bracket_depth > 0 => summary.push(';'),
+            character => summary.push(character),
         }
     }
     let altered = summary != original;

@@ -350,6 +350,10 @@ fn composed_subject_sanitizes_literal_ellipsis_and_bracketed_lists() {
             "fix: Handle [alpha; beta] marker cases [ORB-1]",
         ),
         (
+            "Handle [alpha, [beta], gamma] marker cases",
+            "fix: Handle [alpha; [beta]; gamma] marker cases [ORB-1]",
+        ),
+        (
             "Fix the ordinary retry path",
             "fix: Fix the ordinary retry path [ORB-1]",
         ),
