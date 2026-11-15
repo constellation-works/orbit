@@ -32,40 +32,48 @@
 
 #auto-drain-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; min-width: 0; }
 
-/* The title and state dot lead; the target uses the remaining header width. */
+/* The title and the phase (dot and word) lead; the target select takes the
+   rest of the row. Every member keeps its full size wherever the row fits
+   (STD-07 R39). operations-drain.js measures the row's natural width against
+   the header and adds `drain-head-dot` (the pill reduces to its dot) and then
+   `drain-head-notitle` (the title is dropped) only when the full-size row would
+   not fit; the select gives up width first, down to the floor that still shows
+   the host and role. A fixed width breakpoint would also catch widths where the
+   row fits. The dropped words stay in the header's tooltip and accessible name. */
 #dock-pane-drain #auto-drain-panel > header {
   position: relative; justify-content: flex-start; align-items: center; flex-wrap: nowrap;
   overflow: hidden; white-space: nowrap; min-height: 59px; box-sizing: border-box;
 }
 #auto-drain-panel > header > * { flex: 0 0 auto; min-width: 0; }
 #auto-drain-panel .drain-title { white-space: nowrap; }
+/* Width comes from the options: the longest one plus the arrow (STD-07 R42), so
+   changing the selection moves nothing (R5). The row's leftover space is its
+   ceiling. A narrow row clips the workspace name's head, shown with a leading
+   ellipsis: the text runs right to left, the arrow is drawn here so it stays at
+   the right, and the floor (`--drain-target-floor`, set from the longest host
+   and role) keeps them visible. */
 #auto-drain-panel #auto-drain-target {
-  flex: 0 1 330px; min-width: 0; max-width: 360px; width: 330px;
-  margin: 0 0 0 auto; text-overflow: ellipsis;
+  --drain-target-floor: 150px;
+  flex: 0 1 auto; width: auto; min-width: var(--drain-target-floor); max-width: none;
+  margin: 0 0 0 auto; padding: 0 24px 0 8px; text-overflow: ellipsis;
+  direction: rtl; text-align: left; -webkit-appearance: none; appearance: none;
+  background-color: var(--bg-elev);
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%), linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 12px, calc(100% - 8px) 12px;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
-/* The phase stays visible as a dot without competing with the target label.
-   Its word remains available to assistive technology and on hover. */
-#auto-drain-panel #auto-drain-phase-label {
+#auto-drain-panel > header.drain-head-tight #auto-drain-target { min-width: 0; }
+#auto-drain-panel > header.drain-head-dot .drain-phase {
+  gap: 0; padding: 0; border: 0; background: transparent; overflow: visible;
+}
+#auto-drain-panel > header.drain-head-dot #auto-drain-phase-label,
+#auto-drain-panel > header.drain-head-notitle .drain-title {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-}
-#auto-drain-panel .drain-phase {
-  gap: 0; padding: 0; border: 0; background: transparent; overflow: visible;
 }
 .drain-when { color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
 .drain-when::before { content: "·"; margin-right: 8px; }
 .drain-when:only-child::before { content: none; }
-@container drain-card (max-width: 440px) {
-  #dock-pane-drain #auto-drain-panel > header { gap: 8px; }
-}
-@container drain-card (max-width: 400px) {
-  /* Drop the lower-priority title before clipping the host part of the target. */
-  #auto-drain-panel .drain-title {
-    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-  }
-}
-
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;
    only the first load and a failed refresh show. */
 #auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
