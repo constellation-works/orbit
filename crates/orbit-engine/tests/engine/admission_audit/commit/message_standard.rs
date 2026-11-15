@@ -251,3 +251,89 @@ fn every_producer_emits_a_valid_message_typed_by_its_task() {
         assert!(!message.contains('…'), "{producer}: {message}");
     }
 }
+
+/// [ORB-25059] A squash body that is only the trailer block (no prose
+/// paragraph, so no blank line precedes it) kept `Orbit-Review-Crew:
+/// haiku@xhigh` byte-identical. Before, `trailer_block_start` required a
+/// preceding blank line, so the body alone fell back to plain mention
+/// neutralisation and gained a zero-width joiner. Prose mentions in the
+/// title and body outside the trailer block are still neutralised.
+#[test]
+fn squash_with_trailers_only_body_keeps_trailer_values_byte_identical() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::squash_with_trailers_only_body_keeps_trailer_values_byte_identical"
+    )) {
+        return;
+    }
+    // Trailers-only body: unreadable tasks, one old-format review commit.
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    let base = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
+    commit_as(
+        repo,
+        "orbit[haiku]",
+        "reviewer@orbit.invalid",
+        "review: repair the guard\n\n\
+         Orbit-Review-Attempt: a1\n\
+         Orbit-Review-Crew: haiku@xhigh",
+        "a.txt",
+    );
+    let head = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
+    let message = orbit_engine::compose_squash_merge_message(
+        repo,
+        &[],
+        &orbit_engine::PrConfig::default(),
+        Some(&base),
+        &head,
+        42,
+    );
+    assert_eq!(
+        message.body,
+        "Orbit-Review-Attempt: a1\n\
+         Orbit-Review-Crew: haiku@xhigh\n\
+         Co-authored-by: orbit[haiku] <reviewer@orbit.invalid>",
+        "trailers-only squash body stays byte-identical"
+    );
+    assert!(!message.body.contains('\u{200d}'), "{}", message.body);
+
+    // Prose outside the trailer block is still neutralised.
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    let base = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
+    commit_as(
+        repo,
+        "orbit[haiku]",
+        "reviewer@orbit.invalid",
+        "review: repair the guard\n\n\
+         Orbit-Review-Attempt: a1\n\
+         Orbit-Review-Crew: haiku@xhigh",
+        "a.txt",
+    );
+    let head = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
+    let mut task = task_with_file("ORB-1", "Ask @auto to tighten the guard", "a.txt", "codex");
+    task.execution_summary = "Ping @auto about the guard.".to_string();
+    let message = orbit_engine::compose_squash_merge_message(
+        repo,
+        std::slice::from_ref(&task),
+        &orbit_engine::PrConfig::default(),
+        Some(&base),
+        &head,
+        43,
+    );
+    assert!(
+        message.title.contains("Ask @\u{200d}auto"),
+        "title prose mention neutralised: {}",
+        message.title
+    );
+    assert!(
+        message.body.contains("Ping @\u{200d}auto about the guard."),
+        "body prose mention neutralised: {}",
+        message.body
+    );
+    assert!(
+        message.body.contains("\nOrbit-Review-Crew: haiku@xhigh"),
+        "trailer value byte-identical after prose: {}",
+        message.body
+    );
+}
