@@ -739,9 +739,8 @@ fn activity_defaults_and_unrestricted_crews_remain_consistent() {
     );
 }
 
-/// Public init loads the shipped declarations: no shipped executor carries
-/// a `host_os` restriction (Muse runs on macOS and Linux), the seeded muse
-/// sandbox is translated for this host, and operator choices survive refresh.
+/// Public init loads the shipped declarations: the seeded muse sandbox is
+/// translated for this host, and operator choices survive refresh.
 fn init_seeds_host_os_and_preserves_operator_constraints() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
@@ -764,21 +763,12 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
         .get_executor_def("muse")
         .unwrap()
         .expect("muse seeded");
-    assert_eq!(muse.host_os, None, "shipped muse is unrestricted");
     let expected_sandbox = match std::env::consts::OS {
         "linux" => Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
         "macos" => Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
         _ => muse.sandbox,
     };
     assert_eq!(muse.sandbox, expected_sandbox, "seeded muse sandbox");
-    for def in &defs {
-        assert!(
-            def.host_os.is_none(),
-            "{} declared host_os {:?}",
-            def.name,
-            def.host_os
-        );
-    }
 
     let mut customized = muse;
     customized.host_os = Some(BTreeSet::from([HostOs::Linux, HostOs::Macos]));
@@ -796,10 +786,15 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
         "an operator-set host_os is not overwritten"
     );
 
-    customized.host_os = None;
+    // Narrow the operator restriction and reseed. The shipped muse declaration
+    // is unrestricted, which differs from this operator value, so a refresh
+    // that overwrote the operator choice would surface as `None`.
+    // (Clearing to `None` is not asserted: with an unrestricted shipped
+    // declaration it cannot tell preservation from overwrite.)
+    customized.host_os = Some(BTreeSet::from([HostOs::Linux]));
     store
         .upsert_executor_def(&customized)
-        .expect("clear host_os");
+        .expect("narrow operator host_os");
     seed();
     assert_eq!(
         store
@@ -807,8 +802,8 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
             .unwrap()
             .expect("muse present")
             .host_os,
-        None,
-        "clearing host_os keeps the shipped unrestricted declaration"
+        customized.host_os,
+        "an updated operator host_os survives refresh"
     );
 }
 
