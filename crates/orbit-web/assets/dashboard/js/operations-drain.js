@@ -1,4 +1,4 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
+import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
@@ -122,70 +122,113 @@ function aggregateWorkspaceOptions(fleet) {
     .map(workspace => ({ id: workspace.id, name: names.get(workspace.id) || workspaceDisplayName(workspace.id) || workspace.id }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
-// The hosts that can show this workspace's drain: its owner first, then the
-// follower hosts holding a replica of it. A fleet row names its owner only
-// on a replica (`owner_machine_id`); the owner's own row names none. A host
-// whose fleet read failed has one row with no workspace, so it cannot be
-// placed on the workspace; it is kept in the list rather than dropped, since
-// it may hold the workspace and the card must be able to show its error.
-function aggregateWorkspaceHosts(fleet, workspaceId, hosts) {
-  const rows = (fleet?.items || []).filter(row => row.workspace_id === workspaceId && !row.pending);
-  let owner = rows.find(row => !row.owner_machine_id)?.host || null;
+// The hosts that can show this workspace's drain, each with its role: the
+// owner first, then the follower hosts holding a replica of it. A fleet row
+// names its owner only on a replica (`owner_machine_id`); the owner's own row
+// names none. When no healthy row names the owner, the host whose catalog
+// listed the workspace (`ownerFallback`) is the owner, so a failed fleet read
+// still lists it. A replica whose row failed, and a host whose fleet read
+// failed outright (one row with no workspace), are kept with the role
+// "unknown": either may hold the workspace and the card must be able to show
+// its error. A host with no row for the workspace holds no replica and is not
+// listed.
+function aggregateWorkspaceHosts(fleet, workspaceId, ownerFallback) {
+  const items = fleet?.items || [];
+  const rows = items.filter(row => row.workspace_id === workspaceId && !row.pending);
+  let owner = rows.find(row => row.host && !row.error && !row.owner_machine_id)?.host || null;
   if (!owner) {
     for (const row of rows) {
       owner = findRegisteredHost(row.owner_machine_id)?.name || null;
       if (owner) break;
     }
   }
-  const ordered = [];
-  if (owner) ordered.push(owner);
-  for (const row of rows) {
-    if (row.host && !ordered.includes(row.host)) ordered.push(row.host);
+  const entries = [];
+  const add = (host, role) => {
+    if (host && !entries.some(entry => entry.host === host)) entries.push({ host, role });
+  };
+  add(owner || ownerFallback, "owner");
+  for (const row of rows) add(row.host, row.error ? "unknown" : "pull");
+  for (const row of items) {
+    if (hostFleetFailure(row)) add(row.host, "unknown");
   }
-  if (!ordered.length) return hosts.map(host => host.name);
-  for (const row of fleet?.items || []) {
-    if (hostFleetFailure(row) && !ordered.includes(row.host)) ordered.push(row.host);
-  }
-  return ordered;
+  return entries;
 }
 // The host-level error row of a host whose fleet read failed. Workspace rows
 // carry their own `error` and are left to the readiness read.
 function hostFleetFailure(row) {
   return Boolean(row?.host && row.error && !row.workspace_id && !row.pending);
 }
-// The Drain host select shared by All workspaces and an owner's concrete
-// board. One listener covers both: the select is removed when the scope resets.
-function paintDrainHostSelect(ordered, selected) {
+// One option per workspace-host pair, so a pair with no replica cannot be
+// formed. A select shows the head of its text and clips the tail, so the
+// workspace name is the part shortened (the group label and the title carry it
+// in full) and the host and role stay visible.
+const DRAIN_TARGET_SEPARATOR = "\u001f";
+const DRAIN_TARGET_NAME_CHARS = 12;
+function drainTargetValue(workspaceId, host) {
+  return `${workspaceId}${DRAIN_TARGET_SEPARATOR}${host}`;
+}
+function parseDrainTarget(value) {
+  const at = String(value || "").indexOf(DRAIN_TARGET_SEPARATOR);
+  return at < 0 ? null : { workspaceId: value.slice(0, at), host: value.slice(at + 1) };
+}
+function drainTargetText(name, host, role) {
+  const short = name.length > DRAIN_TARGET_NAME_CHARS ? `${name.slice(0, DRAIN_TARGET_NAME_CHARS - 1)}…` : name;
+  return `${short} · ${host} (${role})`;
+}
+// The Drain target select shared by All workspaces (every owned workspace, as
+// groups) and an owner's concrete board (its one workspace). One listener
+// covers both: the select is removed when the scope resets. `groups` are
+// `{id, name, hosts: [{host, role}]}`; `selected` is `{workspaceId, host}`.
+function paintDrainTargetSelect(groups, selected) {
   const phase = $("auto-drain-phase");
   if (!phase) return;
-  let select = $("auto-drain-host");
+  let select = $("auto-drain-target");
   if (!select) {
-    select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
-    select.addEventListener("change", () => onDrainHostChanged(select.value));
+    select = el("select", { id: "auto-drain-target", class: "workspace-select", "aria-label": "Drain target (workspace and host)" });
+    select.addEventListener("change", () => {
+      const option = select.selectedOptions[0];
+      const target = parseDrainTarget(select.value);
+      if (target) onDrainTargetChanged(target, option?.dataset.role);
+    });
     phase.before(select);
   }
-  const signature = JSON.stringify(ordered);
-  if (select.dataset.hosts !== signature) {
-    select.replaceChildren(...ordered.map(name => {
-      const node = el("option", { text: name });
-      node.value = name;
+  const shown = groups.filter(group => group.hosts.length);
+  const signature = JSON.stringify(shown);
+  if (select.dataset.targets !== signature) {
+    select.replaceChildren(...shown.map(group => {
+      const node = el("optgroup");
+      node.label = group.name;
+      node.append(...group.hosts.map(({ host, role }) => {
+        const option = el("option", { text: drainTargetText(group.name, host, role) });
+        option.value = drainTargetValue(group.id, host);
+        option.dataset.role = role;
+        option.title = `${group.name} · ${host} (${role})`;
+        return option;
+      }));
       return node;
     }));
-    select.dataset.hosts = signature;
+    select.dataset.targets = signature;
   }
-  select.value = selected || "";
-  select.title = selected ? `Drain host: ${selected}` : "Drain host";
+  select.value = selected ? drainTargetValue(selected.workspaceId, selected.host) : "";
+  const option = select.selectedOptions[0];
+  select.dataset.host = selected?.host || "";
+  select.title = option?.value ? `Drain target: ${option.title}` : "Drain target";
 }
-function onDrainHostChanged(value) {
+function onDrainTargetChanged({ workspaceId, host }, role) {
   if (isAggregateView()) {
-    chooseAggregateWorkspace(aggregateDrainWorkspace);
-    chooseAggregateHost(value);
-    aggregateDrainHost = value || null;
+    chooseAggregateWorkspace(workspaceId);
+    // The owner is the default and is not stored, so it keeps following the
+    // fleet; a follower or unknown host is the operator's own pick.
+    chooseAggregateHost(role === "owner" ? null : host);
+    // The panel's scope key reads the shown selection, so the pick is shown
+    // now; the next paint resolves it the same way from storage.
+    aggregateDrainWorkspace = workspaceId;
+    aggregateDrainHost = host;
   } else {
     const workspace = selectedWorkspace();
-    const follower = Boolean(value) && Boolean(boardHostName()) && value !== boardHostName();
-    if (workspace) chooseBoardHost(workspace.id, follower ? value : null);
-    boardDrainHost = follower ? value : null;
+    const follower = Boolean(host) && Boolean(boardHostName()) && host !== boardHostName();
+    if (workspace) chooseBoardHost(workspace.id, follower ? host : null);
+    boardDrainHost = follower ? host : null;
   }
   resetAggregateDrainSelection();
   fetchAndRenderAutoDrain().catch(error => console.error(error));
@@ -217,18 +260,19 @@ async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation
   aggregateDrainScopes.set(readiness, scope);
   return readiness;
 }
-// Hosts for this workspace once a fleet row places it. Before that, the
-// all-hosts fallback would offer machines that do not hold a replica.
+// Hosts for this workspace once a fleet row places it. Before that, only the
+// workspace's own board host is known, so no pair is offered.
 function concreteHostOptions(fleet, workspaceId) {
   const items = fleet?.items || [];
   if (!items.some(row => row.workspace_id === workspaceId && !row.pending)) return null;
-  return aggregateWorkspaceHosts(fleet, workspaceId, getRegisteredHosts());
+  return aggregateWorkspaceHosts(fleet, workspaceId, boardHostName());
 }
 function paintConcreteHostSelect(fleet, workspace) {
   if (!workspace || isAggregateView()) return null;
-  const ordered = concreteHostOptions(fleet, workspace.id);
-  if (!ordered?.length) {
-    $("auto-drain-host")?.remove();
+  const entries = concreteHostOptions(fleet, workspace.id);
+  const ordered = (entries || []).map(entry => entry.host);
+  if (!ordered.length) {
+    $("auto-drain-target")?.remove();
     return null;
   }
   const own = boardHostName();
@@ -236,7 +280,7 @@ function paintConcreteHostSelect(fleet, workspace) {
   // The board's own host stays the default even when the fleet lists it after
   // a failed read. A stored follower applies only while it is still listed.
   const selected = ordered.includes(remembered) ? remembered : ordered.includes(own) ? own : ordered[0];
-  paintDrainHostSelect(ordered, selected);
+  paintDrainTargetSelect([{ id: workspace.id, name: workspaceDisplayName(workspace.id), hosts: entries }], { workspaceId: workspace.id, host: selected });
   return { ordered, selected, follower: Boolean(own) && selected !== own };
 }
 function renderAutoDrainHead(payload) {
@@ -276,8 +320,8 @@ function renderAutoDrainHead(payload) {
   const header = card?.querySelector(":scope > header");
   if (header) {
     const parts = [isAggregateView() ? "Auto-draining" : "Auto-drain"];
-    const hostSelect = $("auto-drain-host");
-    if (hostSelect?.value) parts.push(hostSelect.value);
+    const hostName = $("auto-drain-target")?.dataset.host;
+    if (hostName) parts.push(hostName);
     const phaseText = text?.textContent?.trim();
     if (phaseText) parts.push(phaseText);
     if (when?.textContent?.trim()) parts.push(when.textContent.trim());
@@ -618,8 +662,7 @@ registerOperationsReset(() => {
   boardDrainHost = null;
   chosenBoardHost = null;
   chosenBoardWorkspace = null;
-  $("auto-drain-host")?.remove();
-  $("auto-drain-workspace")?.remove();
+  $("auto-drain-target")?.remove();
   clearDrainChrome();
   updateDrainIndicators("idle", "idle");
   repaintRailDrainFromFleet();
@@ -637,46 +680,23 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       const fleet = await loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } });
       if (!guard()) return null;
       paintAggregateFleet(fleet);
-      const hosts = getRegisteredHosts();
       const options = aggregateWorkspaceOptions(fleet);
       const rememberedWorkspace = rememberedAggregateWorkspace();
       const liveDefault = options.find(option => (fleet.items || []).some(row => row.workspace_id === option.id && !row.error && LIVE_DRAIN_PHASES.includes(row.phase)));
       aggregateDrainWorkspace = options.some(option => option.id === rememberedWorkspace)
         ? rememberedWorkspace
         : (liveDefault || options[0])?.id || null;
-      let workspaceSelect = $("auto-drain-workspace");
-      if (!workspaceSelect) {
-        workspaceSelect = el("select", { id: "auto-drain-workspace", class: "workspace-select", "aria-label": "Drain workspace" });
-        workspaceSelect.addEventListener("change", () => {
-          chooseAggregateWorkspace(workspaceSelect.value);
-          // Changing the workspace resets the host to its owner.
-          chooseAggregateHost(null);
-          // The panel's scope key reads the shown selection, so the pick is
-          // shown now; the next paint resolves it the same way from storage.
-          aggregateDrainWorkspace = workspaceSelect.value || null;
-          aggregateDrainHost = null;
-          resetAggregateDrainSelection();
-          fetchAndRenderAutoDrain().catch(error => console.error(error));
-        });
-        $("auto-drain-phase").before(workspaceSelect);
-      }
-      const workspaceSignature = JSON.stringify(options.map(option => [option.id, option.name]));
-      if (workspaceSelect.dataset.workspaces !== workspaceSignature) {
-        workspaceSelect.replaceChildren(...options.map(option => {
-          const node = el("option", { text: option.name });
-          node.value = option.id;
-          return node;
-        }));
-        workspaceSelect.dataset.workspaces = workspaceSignature;
-      }
-      workspaceSelect.value = aggregateDrainWorkspace || "";
-      const ordered = aggregateDrainWorkspace ? aggregateWorkspaceHosts(fleet, aggregateDrainWorkspace, hosts) : hosts.map(host => host.name);
+      // This select lists the selected host's owned workspaces, so that host
+      // is each one's owner whenever no healthy fleet row says otherwise.
+      const catalogHost = boardHostName();
+      const groups = options.map(option => ({ id: option.id, name: option.name, hosts: aggregateWorkspaceHosts(fleet, option.id, catalogHost) }));
+      const ordered = (groups.find(group => group.id === aggregateDrainWorkspace)?.hosts || []).map(entry => entry.host);
       // A remembered host applies only to the workspace it was picked with. One
       // missing from this paint's list (its fleet read is briefly unreachable)
       // shows the owner for now and stays stored.
       const rememberedHost = aggregateDrainWorkspace === rememberedWorkspace ? rememberedAggregateHost() : null;
       aggregateDrainHost = ordered.includes(rememberedHost) ? rememberedHost : ordered[0] || null;
-      paintDrainHostSelect(ordered, aggregateDrainHost);
+      paintDrainTargetSelect(groups, aggregateDrainWorkspace && aggregateDrainHost ? { workspaceId: aggregateDrainWorkspace, host: aggregateDrainHost } : null);
       if (!aggregateDrainWorkspace || !aggregateDrainHost) return { capacity: { drain_phase: "idle" } };
       const chosenWorkspace = options.find(option => option.id === aggregateDrainWorkspace);
       if (!chosenWorkspace) return { capacity: { drain_phase: "idle" } };

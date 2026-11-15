@@ -438,15 +438,20 @@ a dot and words on every view at those widths: `3/5` slots in use,
 `pull`, `winding down`, `· held` while the host holds new tasks, or `2 live` under
 All workspaces. The Tasks view paints it from the drain card's reading and every
 other view from the fleet read. In All workspaces mode Drain shows the same
-Auto-drain body with a header ordered **Auto-draining**, workspace select, host select, phase pill.
-The workspace select lists the selected host's owned workspaces — replicas are never listed —
-in alphabetical order; its default is the first of those with a live
-drain on any host, or the first when none is live. The host select follows the
-workspace: that workspace's owner host first and selected by default, then the
-follower hosts holding a replica of it, and changing the workspace resets the
-host to its owner. A host whose fleet read failed stays in the host select, since
-it may hold the workspace, and when it is the chosen host the card shows that
-read's error rather than Idle. Reads of another host use `/api/on/<host>/...` for the chosen
+Auto-drain body with a header ordered **Auto-draining**, one drain-target select, phase pill.
+The target select holds one option per workspace-host pair, `workspace · host (role)`,
+grouped by workspace. The groups are the selected host's owned workspaces — replicas are never listed —
+in alphabetical order; the default is the owner of the first of those with a live
+drain on any host, or of the first when none is live. Within a group the owner host
+comes first, labelled `(owner)`, then the follower hosts holding a replica of the
+workspace, labelled `(pull)`; a host with no replica forms no pair. The workspace
+name in the option text is shortened so the host and role stay visible in the closed
+select; the group label and the option's title carry it in full. Choosing another
+workspace's option selects that workspace on its owner by default. A host whose fleet
+read failed, or whose replica row for the workspace failed, stays in the group
+labelled `(unknown)`, since it may hold the workspace, and when it is the chosen host
+the card shows that read's error rather than Idle. When the fleet read fails for a
+workspace the owner is still listed, from the host whose catalog lists the workspace. Reads of another host use `/api/on/<host>/...` for the chosen
 workspace; the card shows exactly the chosen workspace's drain on the chosen
 host, and no live window there shows Idle. The chosen workspace and host are
 remembered across reloads, falling back to the defaults when a remembered
@@ -465,8 +470,8 @@ snapshot still reports Idle. A forwarding-write refusal disables Start and
 Stop with the existing read-only reason; a missing replica or unavailable
 owner disables Start with the replica card's existing unavailable-owner
 message. Switching either select retires pending readbacks from the previous
-pair. An owner's concrete workspace board shows the same Drain host select,
-without the workspace select: that workspace's owner first and selected by
+pair. An owner's concrete workspace board shows the same drain-target select,
+holding only that workspace's pairs: the owner first and selected by
 default, then each follower holding a replica. The owner's selection keeps
 the board's existing request path and body. Choosing a follower says **Start
 pulling on <host>** and uses the same pull start, stop, confirmation and

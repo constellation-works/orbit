@@ -41,13 +41,16 @@
 }
 #auto-drain-panel > header > * { flex: 0 1 auto; min-width: 0; }
 #auto-drain-panel .drain-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#auto-drain-panel #auto-drain-host { flex: 0 1 140px; min-width: 56px; text-overflow: ellipsis; }
+/* One select of workspace-host options ("name · host (role)"). A select clips
+   the end of its text, and the workspace name is already shortened in the
+   option, so the floor keeps the host and role visible; the title yields first. */
+#auto-drain-panel #auto-drain-target { flex: 1 0 auto; min-width: 230px; max-width: 300px; text-overflow: ellipsis; }
 #auto-drain-panel .drain-phase { flex: 0 0 auto; }
 .drain-when { margin-left: auto; color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .drain-when:empty { display: none; }
 @container drain-card (max-width: 480px) {
   #auto-drain-panel > header { gap: 4px 8px; }
-  #auto-drain-panel #auto-drain-host { flex-basis: 88px; max-width: 88px; }
+  #auto-drain-panel #auto-drain-target { flex: 0 0 230px; max-width: 100%; }
   /* The pill keeps its dot; its word lives in its name and title. */
   #auto-drain-panel #auto-drain-phase-label {
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -68,6 +71,7 @@
   }
 }
 @container drain-card (max-width: 260px) {
+  #auto-drain-panel #auto-drain-target { flex-shrink: 1; min-width: 0; }
   #auto-drain-panel .drain-when {
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
@@ -424,5 +428,3 @@
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }
 
 .drain-backlog-forecast-scope { order: 2; flex: 1 1 100%; overflow-wrap: anywhere; }
-
-#auto-drain-host { min-width: 0; max-width: 140px; }

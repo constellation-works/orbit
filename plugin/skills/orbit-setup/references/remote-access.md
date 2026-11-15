@@ -233,8 +233,9 @@ quick-start card headed **Start a window**. When the target is a replica checkou
 the heading and the toggle read **Start pulling on** followed by the host name. On
 narrow layouts (1000px wide or less), a live window folds the quick-start card
 behind **Start another window**, which expands the form. Under **All workspaces**,
-pick the target in the Auto-drain panel's **Drain workspace** and **Drain host**
-selects before starting a window.
+pick the target in the Auto-drain panel's **Drain target** select, whose options
+are workspace-host pairs such as `site · owner-host (owner)` and
+`site · follower-host (pull)`, before starting a window.
 
 A visible dashboard with a workspace selected opens a change stream for that
 workspace; **All workspaces** has no single-workspace stream. In the Tasks tab,

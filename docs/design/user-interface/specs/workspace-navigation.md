@@ -122,20 +122,23 @@ jobs of these four workspaces" has to visit four boards.
 ## 4. Drain windows under All workspaces
 
 The host × **All workspaces** view reuses the existing Auto-drain card's
-workspace and host selects, **Start a window** card and **Stop** control. It
+drain-target select (workspace-host pairs), **Start a window** card and **Stop** control. It
 adds no Hosts list, lane controls, fields, markup or styles. An owner's
-concrete workspace board shows that same Drain host select and no workspace
-select: the owner first and selected by default, then each follower with a
-replica of that workspace. Choosing a follower uses the Start and Stop path
+concrete workspace board shows that same drain-target select with only that
+workspace's pairs: the owner first and selected by default, then each follower
+with a replica of that workspace. Choosing a follower uses the Start and Stop path
 in this section. With the owner selected, the card keeps the board's existing
 request path and body. A replica board stays as it is.
 
-1. The Auto-drain card's workspace select lists the selected host's owned
-   workspaces (the same owned list as the rail, not the Tasks chip filter). Its host select lists the workspace's owner first, then the
-   followers holding a replica. A host whose fleet read failed stays in the
-   select, and when it is the chosen host the card shows that read's error.
-   Both selections survive reloads; changing workspace resets the host to its
-   owner.
+1. The Auto-drain card's target select groups its `workspace · host (role)`
+   options by the selected host's owned workspaces (the same owned list as the
+   rail, not the Tasks chip filter). A group lists the workspace's owner first
+   (`owner`), then the followers holding a replica (`pull`); a host with no
+   replica forms no pair. A host whose fleet read failed stays in the group as
+   `unknown`, and when it is the chosen host the card shows that read's error.
+   The owner stays listed when the fleet read fails. The workspace and host
+   survive reloads; choosing another workspace's option selects its owner by
+   default.
 2. The card reads `GET /api/on/<host>/workflows/auto/readiness?workspace=<id>`
    for the chosen pair, including when Idle. It shows that host's window,
    capacity, checkout and start policy rather than an aggregate of the hosts.
@@ -195,16 +198,16 @@ controls that build on it.
 Replica entries have since left the workspace dropdown: the rail and the
 All workspaces aggregate list only the selected host's owned workspaces, and
 the Auto-drain card's workspace select follows that owned list rather than
-the Tasks chip filter (its host select still lists follower hosts). A
+the Tasks chip filter (its groups still list follower hosts). A
 remembered or linked replica falls back to the host's owned workspaces. The
-owner's concrete board shows that same host select, so a follower pull drain
+owner's concrete board shows that same target select, so a follower pull drain
 starts and stops there without opening All workspaces. The owner stays selected
 by default and keeps the board's existing request path.
 
 | Phase | Change | Removes |
 |---|---|---|
 | 1 | Catalog and owner routing (§1, §2 rules 1 to 3 and 5). The host picker gains **All hosts** as its first and default entry, which shows the catalog. Choosing one host still shows that host's own board, as today, so a follower's pull drain stays reachable. | Duplicate workspace entries in the default view. |
-| 2 | Reuse Start a window and Stop for the workspace/host selected in the All workspaces Auto-drain card (§4), including follower pull drains. No new controls, styles or mocks. The owner's concrete board uses the same host select; a replica board stays unchanged. Replica entries can then leave the workspace dropdown. The host facet (§5) and `?host=` normalization (§2 rule 4) remain later work. | The need to open a follower board to start or stop a pull drain. |
+| 2 | Reuse Start a window and Stop for the workspace/host selected in the All workspaces Auto-drain card (§4), including follower pull drains. No new controls, styles or mocks. The owner's concrete board uses the same target select; a replica board stays unchanged. Replica entries can then leave the workspace dropdown. The host facet (§5) and `?host=` normalization (§2 rule 4) remain later work. | The need to open a follower board to start or stop a pull drain. |
 | 3 | Multi-workspace scope in every view (§3). | The aggregate placeholder. |
 | 4 | Hosts page; the host picker is removed (§6). | Host as a navigation level. |
 

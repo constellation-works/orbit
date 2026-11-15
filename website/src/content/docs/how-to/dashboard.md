@@ -377,8 +377,9 @@ Click one to filter the list.
 - When no window is admitting, a replica shows **Send pending results** in
   place of **Stop**. It delivers pull settlements this replica has recorded
   but not yet delivered to its owner.
-- When the fleet lists followers, a **Drain host** select chooses the owner
-  (the default) or a follower to run the pull.
+- When the fleet lists followers, the **Drain target** select lists the workspace
+  on its owner (`(owner)`, the default) and on each follower that holds a replica
+  (`(pull)`), so you choose the host that runs the pull.
 - Stopping a pull drain leaves admitted tasks claimed by their owner. See
   [Stop, cancel, and settle](/how-to/distributed-drain/#stop-cancel-and-settle).
 
