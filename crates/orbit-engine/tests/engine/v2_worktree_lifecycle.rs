@@ -63,6 +63,7 @@ mod auto_fix_conflict;
 mod conflict_adoption;
 #[cfg(unix)]
 mod declared_reclaim;
+mod dependency_delivery;
 #[cfg(unix)]
 mod dirty_rescue;
 #[cfg(unix)]

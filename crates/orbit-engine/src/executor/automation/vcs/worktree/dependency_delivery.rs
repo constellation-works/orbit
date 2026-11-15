@@ -174,15 +174,11 @@ fn undelivered_commits(
     base_sha: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
     let marker = format!("[{dependency_id}]");
-    if !commits_matching(repo_root, &marker, &["--max-count=1", base_sha])?.is_empty() {
+    if !commits_matching(repo_root, &marker, &[base_sha], Some(1))?.is_empty() {
         return Ok(None);
     }
 
-    let elsewhere = commits_matching(
-        repo_root,
-        &marker,
-        &[&format!("--max-count={MAX_EVIDENCE_COMMITS}"), "--all"],
-    )?;
+    let elsewhere = commits_matching(repo_root, &marker, &["--all"], Some(MAX_EVIDENCE_COMMITS))?;
     Ok((!elsewhere.is_empty()).then_some(elsewhere))
 }
 
