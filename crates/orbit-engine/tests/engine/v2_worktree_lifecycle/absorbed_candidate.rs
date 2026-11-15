@@ -768,7 +768,6 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
     );
 }
 
-/// The newest checkpoint the host certified.
 /// Certify `payload` under `run_id` / `step_id` the way the host does for a
 /// recovery of that run and step: reserve the next attempt for the payload's
 /// own scope, stamp it, and issue it. The recovery authority refuses a
@@ -792,6 +791,7 @@ fn certify_as(host: &LifecycleHost, run_id: &str, step_id: &str, mut payload: Va
     payload
 }
 
+/// The newest checkpoint the host certified.
 fn certified(host: &LifecycleHost) -> Value {
     host.checkpoints()
         .last()

@@ -4409,6 +4409,26 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         let attempt = self
             .certifiable_attempt(run_id, step_id, output)
             .map_err(certify)?;
+        let persist = |reason: &str| {
+            DispatchError::JobExecution(format!(
+                "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
+            ))
+        };
+        // Refuse before recording anything: a refused certificate must not stay
+        // in the store `verify_rebase_recovery` reads.
+        let running = self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
+        if !running {
+            return Err(persist("rebase recovery run is no longer running"));
+        }
+        let no_run_state = || persist("rebase recovery has no durable run state");
+        if !self.run_states.lock().unwrap().contains_key(run_id) {
+            return Err(no_run_state());
+        }
         {
             let mut certified = self.checkpoints.lock().unwrap();
             let recorded = certified
@@ -4431,25 +4451,11 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
                 None => certified.push((run_id.to_string(), step_id.to_string(), output.clone())),
             }
         }
-        let persist = |reason: &str| {
-            DispatchError::JobExecution(format!(
-                "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
-            ))
-        };
-        let running = self
-            .runs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
-        if !running {
-            return Err(persist("rebase recovery run is no longer running"));
-        }
         self.run_states
             .lock()
             .unwrap()
             .get_mut(run_id)
-            .ok_or_else(|| persist("rebase recovery has no durable run state"))?
+            .ok_or_else(no_run_state)?
             .rebase_recovery_checkpoints
             .insert(step_id.to_string(), output.clone());
         if let Some(hook) = self.preparation_hook.lock().unwrap().as_mut() {
@@ -4851,9 +4857,10 @@ fn path_str(path: &Path) -> &str {
 // ---------------------------------------------------------------------------
 
 /// Run `body` in a disposable child copy of this test binary and fail if it
-/// fails or goes silent past the canonical child-test deadline. The child is
-/// [`crate::git_fixture::isolated`]'s: `run_child_test`'s silence-after-first-byte
-/// deadline and ceiling, its own process group killed with an orphan watchdog,
+/// fails or goes silent past the canonical child-test deadline. The child runs
+/// as [`crate::git_fixture::isolated`] runs it: `run_child_test`'s
+/// silence-after-first-byte deadline and ceiling, its own process group killed
+/// with an orphan watchdog,
 /// the sandbox as cwd and canonical temp dir, and `ORBIT_*`, `GIT_*` and `GH_*`
 /// stripped from its environment.
 fn isolated(test: &str, body: impl FnOnce()) {
