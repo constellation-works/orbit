@@ -54,11 +54,19 @@ export function compareDisplayNames(left, right) {
   return displayNameCollator.compare(String(left), String(right));
 }
 
+/// Deterministic tie-break for ids: code-unit order, so ids that differ
+/// only by case still sort deterministically.
+export function compareIds(left, right) {
+  const l = String(left);
+  const r = String(right);
+  return l < r ? -1 : l > r ? 1 : 0;
+}
+
 /// Picker order for workspaces: alphabetical by the name the picker shows,
 /// case-insensitive, with ties broken by workspace id.
 export function compareWorkspacePickerOrder(left, right) {
   return compareDisplayNames(left.name || left.id, right.name || right.id)
-    || compareDisplayNames(left.id, right.id);
+    || compareIds(left.id, right.id);
 }
 
 /// The owned rows of a `/api/workspaces` list in picker order. This is the one

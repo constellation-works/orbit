@@ -12,6 +12,7 @@
 
 import {
   compareDisplayNames,
+  compareIds,
   el,
   fetchJson,
   findRegisteredHost,
@@ -161,7 +162,7 @@ function buildPicker() {
   if (current && !findRegisteredHost(current)) {
     choices.push({ name: current, value: current, text: `${current} (not registered)` });
   }
-  choices.sort((left, right) => compareDisplayNames(left.name, right.name) || compareDisplayNames(left.value, right.value));
+  choices.sort((left, right) => compareDisplayNames(left.name, right.name) || compareIds(left.value, right.value));
   for (const choice of choices) {
     const option = el("option", { text: choice.text || choice.name });
     option.value = choice.value;
