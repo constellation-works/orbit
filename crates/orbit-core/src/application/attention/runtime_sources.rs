@@ -1,17 +1,15 @@
 //! Observational runtime sources. Never use run listing/show or resume planners
 //! here: those entry points may reconcile owners or recover coordination journals.
 use super::sources::{
-    AttentionCandidates, SharedOpenTasks, attention_reason, attention_task, workspace_degraded,
+    AttentionCandidates, AttentionSourceContext, SharedOpenTasks, attention_reason, attention_task,
+    workspace_degraded,
 };
 use crate::{
     OrbitRuntime,
     application::job::{self, RunOwnerLiveness},
 };
 use chrono::{DateTime, Duration, Utc};
-use orbit_common::{
-    OrbitError,
-    governance::attention::{cursor, filter::AttentionFilter},
-};
+use orbit_common::{OrbitError, governance::attention::cursor};
 use orbit_store::contracts::{ClaimInspection, JobRunQuery, LocalPullPhase};
 use orbit_types::{
     task::Task,
@@ -522,17 +520,17 @@ fn parse_claim_time(time: &str) -> Result<DateTime<Utc>, OrbitError> {
         .map_err(|error| OrbitError::Store(format!("invalid claim timestamp: {error}")))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn read_runtime_attention(
-    runtime: &OrbitRuntime,
-    workspace: &AttentionWorkspace,
-    host: &AttentionHost,
-    filter: &AttentionFilter,
-    now: DateTime<Utc>,
+    context: &AttentionSourceContext<'_>,
     operator: bool,
     candidates: &mut AttentionCandidates,
     open_tasks: &SharedOpenTasks,
 ) {
+    let runtime = context.runtime;
+    let workspace = context.workspace;
+    let host = context.host;
+    let filter = context.filter;
+    let now = context.now;
     let kinds = RUNTIME_KINDS
         .into_iter()
         .filter(|kind| filter.selected(*kind))

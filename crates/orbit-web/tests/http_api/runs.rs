@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRun, JobRunState, JobTargetType};
+use orbit_core::{JobRun, JobRunState, JobTargetType, V2AuditEventInsertParams};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
     DrainCancelRequest, RunCancellationProvenance, RunRootCause, TaskCancellationPolicy,
@@ -55,15 +55,19 @@ fn run_event_tail_pages_body(fixture: &Fixture) {
             json!({"event_id": format!("event-{index}"), "body_kind": kind, "ts": ts.to_rfc3339()});
         insert_audit(
             fixture,
-            ws,
-            source,
-            &format!("event-{index}"),
-            &run.run_id,
-            ts,
-            kind,
-            "fixture",
-            None,
-            payload,
+            V2AuditEventInsertParams {
+                workspace_id: ws.into(),
+                event_id: format!("event-{index}"),
+                source: source.into(),
+                schema_version: 1,
+                event_type: kind.into(),
+                ts,
+                run_id: run.run_id.clone(),
+                agent_identity: "fixture".into(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: payload.to_string(),
+            },
         );
     }
     let server = fixture.server(false);
