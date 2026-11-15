@@ -166,6 +166,14 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
+Global search sits in the top bar of the dashboard served by `orbit web serve`,
+on every destination; press `/` or choose the search field. It finds tasks
+across statuses and workspaces: typing part of a task ID or title lists compact
+matches, and entering an exact task ID or run ID opens the full task page or
+run page. There is nothing to configure. To verify a match, type a known title
+fragment, choose the suggested entry and confirm the full task page opens;
+repeat with a known run ID and confirm the full run page opens.
+
 In the left rail, the **Workspace** picker is single-select. It lists the workspaces
 for the selected host, marks unavailable ones *(unavailable)* and leaves them
 unchosen, and offers **All workspaces** as its first option. Its button shows the
