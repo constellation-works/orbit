@@ -361,7 +361,10 @@ fn an_open_request_fires_once_per_binding_and_does_not_refire() {
         now + Duration::minutes(6),
     )
     .unwrap();
-    assert_ne!(again.reason, "would_fire", "{again:?}");
+    // A non-dry pass over an already-assessed request reports nothing new
+    // and starts no attempt.
+    assert_eq!(again.reason, "fresh", "{again:?}");
+    assert!(again.batch.is_empty(), "{again:?}");
     assert!(
         fx.members().active.is_none(),
         "the same request never refires"

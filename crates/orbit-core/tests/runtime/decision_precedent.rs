@@ -893,16 +893,17 @@ fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
         "{}\n```yaml\nid: \"drop-model\"\nquestion: \"Drop it?\"\nanswer: \"3\"\nwhy: \"Also approved.\"\ncitations: []\ndepends_on: []\nstatus: \"current\"\nreview_by: \"{FUTURE}\"\nauto: true\nauto_set_by: \"operator\"\n```\n",
         rule_doc("1", "current", FUTURE, true, &digest)
     );
+    // `sign-off` names an auto rule in pricing.md and another in shipping.md,
+    // so the bare id is ambiguous and keeps the request open. `drop-model` is
+    // unique in the same corpus and answers, so the open request comes from
+    // the collision rather than from an unreadable file.
     fx.write_rules_committed(&ambiguous);
+    fx.write_decision_file_committed("shipping", &rule_doc("1", "current", FUTURE, true, &digest));
     let task = fx.task("ambiguous topic");
     let raised = fx
         .raise_as(
             "gemini",
-            raise_input(
-                &task,
-                "Which file-level price rule applies?",
-                Some("pricing"),
-            ),
+            raise_input(&task, "Which price do we ship?", Some("sign-off")),
         )
         .unwrap();
     assert_eq!(raised["state"], "open", "{raised}");
@@ -910,6 +911,12 @@ fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
         fx.runtime.get_task(&task).unwrap().status,
         TaskStatus::Backlog
     );
+    let unique = fx.task("unique rule id");
+    let raised = fx
+        .raise(raise_input(&unique, "Drop the model?", Some("drop-model")))
+        .unwrap();
+    assert_eq!(raised["state"], "answered", "{raised}");
+    assert_eq!(raised["resolution"]["answered_by"], "precedent");
 }
 
 fn uncommitted_auto_rule_and_dependency_do_not_answer() {
@@ -994,6 +1001,17 @@ fn bare_file_stem_topic_does_not_auto_answer() {
             &by_id,
             "Which price do we ship?",
             Some("sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "answered", "{raised}");
+    assert_eq!(raised["resolution"]["answered_by"], "precedent");
+
+    let by_path = fx.task("File and rule topic");
+    let raised = fx
+        .raise(raise_input(
+            &by_path,
+            "Which price do we ship?",
+            Some("pricing/sign-off"),
         ))
         .unwrap();
     assert_eq!(raised["state"], "answered", "{raised}");

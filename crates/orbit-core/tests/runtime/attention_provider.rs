@@ -330,8 +330,27 @@ fn ci_red_pending_commit_skips_repair_lookup_and_preserves_journal() {
 
 fn ci_red_lists_newest_failed_run_on_head() {
     let fixture = Fixture::new(true);
-    let old = (chrono::Utc::now() - chrono::Duration::hours(100)).to_rfc3339();
-    fixture.set_runs(json!([fixture.run(42, "failure", &old, &fixture.head)]));
+    let hours_ago = |hours: i64| (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+    // An older failure that a newer success on the same workflow and head
+    // supersedes is not red.
+    fixture.set_runs(json!([
+        fixture.run(41, "failure", &hours_ago(200), &fixture.head),
+        fixture.run(42, "success", &hours_ago(100), &fixture.head),
+    ]));
+    let superseded = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        superseded["items"].as_array().unwrap().is_empty(),
+        "an older failure must not survive a newer success: {superseded}"
+    );
+
+    // Advancing the base head invalidates the CI run cache the first read
+    // filled. Here an older success sits beneath a newer failure: only the
+    // failure surfaces.
+    let head = fixture.advance_remote_head();
+    fixture.set_runs(json!([
+        fixture.run(44, "failure", &hours_ago(100), &head),
+        fixture.run(43, "success", &hours_ago(200), &head),
+    ]));
     let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
     let items = response["items"].as_array().unwrap();
     assert_eq!(items.len(), 1, "{response}");
@@ -340,7 +359,7 @@ fn ci_red_lists_newest_failed_run_on_head() {
         items[0]["severity"], "critical",
         "both age thresholds passed: {response}"
     );
-    assert_eq!(items[0]["refs"]["run_id"], "42");
+    assert_eq!(items[0]["refs"]["run_id"], "44", "{response}");
     assert_eq!(items[0]["next"]["tool"], "github.run.view");
     assert!(items[0]["fingerprint"].as_str().unwrap().starts_with("fp_"));
 }

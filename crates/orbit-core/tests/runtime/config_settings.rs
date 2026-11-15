@@ -242,7 +242,7 @@ fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
 
     // Removing or breaking a crew the workspace pool names.
     config::delete_crew(&runtime, "terra", ConfigScope::Global)
-        .expect_err("a global crew the workspace default names cannot be deleted");
+        .expect_err("a global crew the workspace pool names cannot be deleted");
     unchanged();
     config::set_crew(
         &runtime,
