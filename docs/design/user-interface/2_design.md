@@ -438,7 +438,7 @@ a dot and words on every view at those widths: `3/5` slots in use,
 `pull`, `winding down`, `· held` while the host holds new tasks, or `2 live` under
 All workspaces. The Tasks view paints it from the drain card's reading and every
 other view from the fleet read. In All workspaces mode Drain shows the same
-Auto-drain body with the **Auto-drain** title at the left, then the phase dot/pill,
+Auto-drain body with the **Auto-draining** title at the left, then the phase dot/pill,
 and a right-aligned drain-target select.
 The target select holds one option per workspace-host pair, `workspace · host (role)`,
 grouped by workspace. The groups are the selected host's owned workspaces — replicas are never listed —
